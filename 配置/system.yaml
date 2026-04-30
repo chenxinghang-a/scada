@@ -1,0 +1,107 @@
+# 系统配置文件
+
+# 系统信息
+system:
+  name: "工业数据采集与监控系统"
+  version: "1.0.0"
+  description: "基于Python的工业数据采集与监控系统"
+  author: "陈星行"
+
+# Web服务配置
+web:
+  host: "0.0.0.0"
+  port: 5000
+  debug: true
+  secret_key: "industrial-scada-secret-key"
+  
+  # CORS配置
+  cors:
+    enabled: true
+    origins: ["*"]
+
+# 数据库配置
+database:
+  type: "sqlite"
+  path: "data/scada.db"
+  
+  # 数据保留策略
+  retention:
+    raw_data_days: 30      # 原始数据保留30天
+    compressed_data_days: 365  # 压缩数据保留365天
+    alarm_days: 90         # 报警记录保留90天
+    
+  # 数据压缩配置
+  compression:
+    enabled: true
+    interval_hours: 24     # 每24小时压缩一次
+    method: "average"      # 压缩方法: average, min_max, first_last
+
+# 采集配置
+collection:
+  # 默认采集间隔（秒）
+  default_interval: 5
+  
+  # 最大并发采集数
+  max_concurrent: 10
+  
+  # 采集超时（秒）
+  timeout: 10
+  
+  # 重试配置
+  retry:
+    max_attempts: 3
+    interval_seconds: 5
+
+# 报警配置
+alarm:
+  # 报警检查间隔（秒）
+  check_interval: 10
+  
+  # 报警确认超时（秒）
+  confirm_timeout: 300
+  
+  # 报警升级时间（秒）
+  escalation_time: 600
+
+# 日志配置
+logging:
+  level: "DEBUG"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # 文件日志
+  file:
+    enabled: true
+    path: "logs/scada.log"
+    max_size_mb: 10
+    backup_count: 5
+    
+  # 控制台日志
+  console:
+    enabled: true
+
+# 导出配置
+export:
+  # 导出目录
+  directory: "exports"
+  
+  # 支持的格式
+  formats:
+    - csv
+    - excel
+    - json
+    
+  # 导出限制
+  max_rows: 100000
+
+# 性能配置
+performance:
+  # 缓存配置
+  cache:
+    enabled: true
+    type: "memory"  # memory, redis
+    ttl_seconds: 300
+    
+  # 连接池配置
+  connection_pool:
+    size: 10
+    timeout: 30

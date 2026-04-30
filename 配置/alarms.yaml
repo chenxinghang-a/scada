@@ -1,0 +1,118 @@
+# 报警配置文件
+# 配置报警规则和通知方式
+
+# 报警级别
+# - critical: 严重报警，需要立即处理
+# - warning: 警告报警，需要关注
+# - info: 信息提示，仅记录
+
+alarm_rules:
+  # 温度报警规则（模拟数据范围20-35°C）
+  - id: temp_high
+    name: "温度过高"
+    description: "温度超过上限"
+    device_id: temp_sensor_01
+    register_name: "temperature"
+    condition: "greater_than"
+    threshold: 32.0  # 调整到32度，模拟数据会触发
+    level: "critical"
+    enabled: true
+    delay: 0  # 立即确认
+    
+  - id: temp_low
+    name: "温度过低"
+    description: "温度低于下限"
+    device_id: temp_sensor_01
+    register_name: "temperature"
+    condition: "less_than"
+    threshold: 22.0  # 调整到22度，模拟数据会触发
+    level: "warning"
+    enabled: true
+    delay: 0
+    
+  # 压力报警规则（模拟数据范围0.3-0.7 MPa）
+  - id: pressure_high
+    name: "压力过高"
+    description: "压力超过上限"
+    device_id: pressure_sensor_01
+    register_name: "pressure"
+    condition: "greater_than"
+    threshold: 0.65  # 调整到0.65，模拟数据会触发
+    level: "critical"
+    enabled: true
+    delay: 0
+    
+  - id: pressure_low
+    name: "压力过低"
+    description: "压力低于下限"
+    device_id: pressure_sensor_01
+    register_name: "pressure"
+    condition: "less_than"
+    threshold: 0.35  # 调整到0.35，模拟数据会触发
+    level: "warning"
+    enabled: true
+    delay: 0
+    
+  # 电力报警规则（电压220±10，电流50-70）
+  - id: voltage_high
+    name: "电压过高"
+    description: "电压超过上限"
+    device_id: power_meter_01
+    register_name: "voltage"
+    condition: "greater_than"
+    threshold: 225.0  # 调整到225，模拟数据偶尔触发
+    level: "critical"
+    enabled: true
+    delay: 0
+    
+  - id: voltage_low
+    name: "电压过低"
+    description: "电压低于下限"
+    device_id: power_meter_01
+    register_name: "voltage"
+    condition: "less_than"
+    threshold: 215.0  # 调整到215，模拟数据偶尔触发
+    level: "warning"
+    enabled: true
+    delay: 0
+    
+  - id: current_high
+    name: "电流过高"
+    description: "电流超过上限"
+    device_id: power_meter_01
+    register_name: "current"
+    condition: "greater_than"
+    threshold: 65.0  # 调整到65，模拟数据会触发
+    level: "critical"
+    enabled: true
+    delay: 0
+
+# 通知配置
+notification:
+  # 邮件通知
+  email:
+    enabled: false
+    smtp_server: "smtp.example.com"
+    smtp_port: 587
+    username: ""
+    password: ""
+    recipients:
+      - "admin@example.com"
+      - "engineer@example.com"
+    
+  # 短信通知（示例）
+  sms:
+    enabled: false
+    provider: "aliyun"
+    access_key: ""
+    secret_key: ""
+    sign_name: ""
+    template_code: ""
+    phone_numbers:
+      - "13800138000"
+    
+  # 声音报警
+  sound:
+    enabled: true
+    critical_sound: "alarm_critical.mp3"
+    warning_sound: "alarm_warning.mp3"

@@ -1,0 +1,57 @@
+{
+  "test_time": "2026-04-29T18:51:46.953328",
+  "results": {
+    "采集精度测试": {},
+    "响应时间测试": {
+      "设备列表": {
+        "avg_ms": 9.76,
+        "p50_ms": 12.56,
+        "p95_ms": 25.66,
+        "p99_ms": 27.23
+      },
+      "实时数据": {
+        "avg_ms": 36.36,
+        "p50_ms": 30.86,
+        "p95_ms": 50.65,
+        "p99_ms": 52.34
+      },
+      "最新数据": {
+        "avg_ms": 7.19,
+        "p50_ms": 3.27,
+        "p95_ms": 24.2,
+        "p99_ms": 27.27
+      },
+      "报警列表": {
+        "avg_ms": 11.94,
+        "p50_ms": 14.78,
+        "p95_ms": 27.05,
+        "p99_ms": 28.87
+      },
+      "系统状态": {
+        "avg_ms": 17.22,
+        "p50_ms": 10.11,
+        "p95_ms": 32.06,
+        "p99_ms": 33.02
+      }
+    },
+    "稳定性测试": {
+      "duration_seconds": 30,
+      "total_requests": 29,
+      "success_count": 29,
+      "fail_count": 0,
+      "success_rate": 100.0,
+      "avg_data_points": 5
+    },
+    "报警触发测试": {
+      "total_alarms": 20,
+      "critical_count": 11,
+      "warning_count": 9,
+      "active_alarms": 2,
+      "enabled_rules": 7
+    },
+    "数据导出测试": {
+      "device_export": true,
+      "alarm_export": true
+    }
+  }
+}

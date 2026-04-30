@@ -1,0 +1,227 @@
+2026-04-29 13:44:21,511 - __main__ - INFO - ÕıÔÚÆô¶¯¹¤ÒµÊı¾İ²É¼¯Óë¼à¿ØÏµÍ³...
+2026-04-29 13:44:21,999 - __main__ - INFO - ³õÊ¼»¯Êı¾İ¿â...
+2026-04-29 13:44:22,002 - ´æ´¢²ã.database - INFO - Êı¾İ¿â³õÊ¼»¯Íê³É
+2026-04-29 13:44:22,003 - __main__ - INFO - ¼ÓÔØÉè±¸ÅäÖÃ...
+2026-04-29 13:44:22,007 - ²É¼¯²ã.device_manager - INFO - ¼ÓÔØÉè±¸ÅäÖÃ: temp_sensor_01 - ÎÂ¶È´«¸ĞÆ÷1ºÅ
+2026-04-29 13:44:22,008 - ²É¼¯²ã.device_manager - INFO - ¼ÓÔØÉè±¸ÅäÖÃ: pressure_sensor_01 - Ñ¹Á¦´«¸ĞÆ÷1ºÅ
+2026-04-29 13:44:22,008 - ²É¼¯²ã.device_manager - INFO - ¼ÓÔØÉè±¸ÅäÖÃ: power_meter_01 - µçÁ¦ÒÇ±í1ºÅ
+2026-04-29 13:44:22,009 - ²É¼¯²ã.device_manager - INFO - ¹²¼ÓÔØ 3 ¸öÉè±¸ÅäÖÃ
+2026-04-29 13:44:22,009 - __main__ - INFO - ¼ÓÔØ±¨¾¯ÅäÖÃ...
+2026-04-29 13:44:22,013 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: temp_high - ÎÂ¶È¹ı¸ß
+2026-04-29 13:44:22,013 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: temp_low - ÎÂ¶È¹ıµÍ
+2026-04-29 13:44:22,014 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: pressure_high - Ñ¹Á¦¹ı¸ß
+2026-04-29 13:44:22,014 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: pressure_low - Ñ¹Á¦¹ıµÍ
+2026-04-29 13:44:22,014 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: voltage_high - µçÑ¹¹ı¸ß
+2026-04-29 13:44:22,014 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: voltage_low - µçÑ¹¹ıµÍ
+2026-04-29 13:44:22,015 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: current_high - µçÁ÷¹ı¸ß
+2026-04-29 13:44:22,015 - ±¨¾¯²ã.alarm_manager - INFO - ¹²¼ÓÔØ 7 Ìõ±¨¾¯¹æÔò
+2026-04-29 13:44:22,015 - __main__ - INFO - ³õÊ¼»¯Êı¾İ²É¼¯Æ÷...
+2026-04-29 13:44:22,015 - __main__ - INFO - ´´½¨WebÓ¦ÓÃ...
+2026-04-29 13:44:22,051 - Õ¹Ê¾²ã.websocket - INFO - Êı¾İÍÆËÍÏß³ÌÒÑÆô¶¯
+2026-04-29 13:44:22,055 - __main__ - INFO - Á¬½ÓÉè±¸...
+2026-04-29 13:44:22,055 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ ÎÂ¶È´«¸ĞÆ÷1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:44:22,057 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ ÎÂ¶È´«¸ĞÆ÷1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:44:22,057 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ Ñ¹Á¦´«¸ĞÆ÷1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:44:22,057 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ Ñ¹Á¦´«¸ĞÆ÷1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:44:22,058 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ µçÁ¦ÒÇ±í1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:44:22,058 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ µçÁ¦ÒÇ±í1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:44:22,058 - __main__ - INFO -   Éè±¸ temp_sensor_01: ³É¹¦
+2026-04-29 13:44:22,059 - __main__ - INFO -   Éè±¸ pressure_sensor_01: ³É¹¦
+2026-04-29 13:44:22,059 - __main__ - INFO -   Éè±¸ power_meter_01: ³É¹¦
+2026-04-29 13:44:22,059 - __main__ - INFO - Æô¶¯Êı¾İ²É¼¯...
+2026-04-29 13:44:22,060 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:22,061 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:22,062 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:22,063 - ²É¼¯²ã.data_collector - INFO - Êı¾İ²É¼¯Æ÷ÒÑÆô¶¯£¬¹² 3 ¸öÉè±¸
+2026-04-29 13:44:22,064 - __main__ - INFO - Æô¶¯Web·şÎñ...
+2026-04-29 13:44:22,064 - __main__ - INFO - ==================================================
+2026-04-29 13:44:22,065 - __main__ - INFO - ¹¤ÒµÊı¾İ²É¼¯Óë¼à¿ØÏµÍ³ÒÑÆô¶¯
+2026-04-29 13:44:22,065 - __main__ - INFO - ·ÃÎÊµØÖ·: http://localhost:5000
+2026-04-29 13:44:22,065 - __main__ - INFO - £¨Ä£ÄâÄ£Ê½£ºÊ¹ÓÃ·ÂÕæÊı¾İ£©
+2026-04-29 13:44:22,065 - __main__ - INFO - ==================================================
+2026-04-29 13:44:22,070 - werkzeug - WARNING - Werkzeug appears to be used in a production deployment. Consider switching to a production web server instead.
+2026-04-29 13:44:22,089 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.17.128.49:5000
+2026-04-29 13:44:22,089 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-04-29 13:44:23,112 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:24,126 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:25,137 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:26,141 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:28,106 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:29,108 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:30,120 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:31,131 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:32,068 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:32,069 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:32,069 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:33,126 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:34,137 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:35,139 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:36,156 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:38,138 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:39,153 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:40,165 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:41,178 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:42,070 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:42,071 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:42,071 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:43,132 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:44,143 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:45,158 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:46,169 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:48,148 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:49,162 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:50,176 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:51,190 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:52,079 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:52,080 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:52,081 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:44:53,145 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:54,155 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:55,171 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:56,178 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:58,149 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:44:59,162 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:00,175 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:01,184 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:02,087 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:02,088 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:02,091 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:03,169 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:04,175 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:05,186 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:06,201 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:08,169 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:09,182 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:10,196 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:11,201 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:12,109 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:12,110 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:12,110 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:13,186 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:14,195 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:15,205 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:16,219 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:18,201 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:19,218 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:20,232 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:21,236 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:22,117 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:22,117 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:22,118 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:23,209 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:24,223 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:25,226 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:26,243 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:28,219 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:29,233 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:30,236 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:31,250 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:32,126 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:32,126 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:32,126 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:33,215 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:34,228 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:35,242 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:36,245 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:38,228 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:39,240 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:40,252 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:41,260 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:42,131 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:42,132 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:42,132 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:43,239 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:44,248 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:45,263 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:46,270 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:48,242 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:49,249 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:50,262 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:51,265 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:52,139 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:52,140 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:52,140 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:45:53,276 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:54,284 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:55,299 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:56,310 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:58,260 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:45:59,276 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:00,280 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:01,282 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:02,143 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:02,144 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:02,144 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:03,270 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:04,286 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:05,297 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:06,305 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:08,268 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:09,278 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:10,291 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:11,306 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:12,150 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:12,150 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:12,151 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:13,272 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:14,286 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:15,294 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:16,306 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:18,300 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:19,315 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:20,328 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:21,341 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:22,153 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:22,163 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:22,163 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:23,309 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:24,321 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:25,337 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:26,344 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:28,306 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:29,314 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:30,334 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:31,348 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:32,163 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:32,164 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:32,164 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:33,312 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:34,326 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:35,335 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:36,352 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:38,320 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:39,336 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:40,338 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:41,342 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:42,174 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:42,175 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:42,176 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:43,331 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:44,343 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:45,354 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:46,360 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:48,342 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:49,345 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:50,350 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:51,365 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:52,178 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:52,179 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:52,179 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:46:53,347 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:54,360 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:55,375 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:56,386 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:58,349 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:46:59,362 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:47:00,367 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:47:01,381 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:47:02,192 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:47:02,192 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:47:02,193 - ²É¼¯²ã.data_collector - ERROR - ¶ÁÈ¡¼Ä´æÆ÷Òì³£: list index out of range
+2026-04-29 13:47:03,362 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:47:04,369 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:47:05,383 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 
+2026-04-29 13:47:06,396 - ²É¼¯²ã.data_collector - ERROR - Êı¾İ´¦ÀíÒì³£: 

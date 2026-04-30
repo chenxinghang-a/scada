@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}工业数据采集与监控系统{% endblock %}</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    
+    <!-- ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.0/dist/echarts.min.js"></script>
+    
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+    
+    <!-- 自定义样式 -->
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-gear-fill"></i> 工业SCADA系统
+            </a>
+            
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/dashboard' %}active{% endif %}" href="/dashboard">
+                            <i class="bi bi-speedometer2"></i> 仪表盘
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/devices' %}active{% endif %}" href="/devices">
+                            <i class="bi bi-hdd-rack"></i> 设备管理
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/control' %}active{% endif %}" href="/control">
+                            <i class="bi bi-joystick"></i> 设备控制
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/history' %}active{% endif %}" href="/history">
+                            <i class="bi bi-graph-up"></i> 历史数据
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/alarms' %}active{% endif %}" href="/alarms">
+                            <i class="bi bi-bell"></i> 报警管理
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/config' %}active{% endif %}" href="/config">
+                            <i class="bi bi-sliders"></i> 系统配置
+                        </a>
+                    </li>
+                </ul>
+                
+                <!-- 系统状态指示器 -->
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <span class="nav-link" id="system-status">
+                            <i class="bi bi-circle-fill text-success"></i> 系统正常
+                        </span>
+                    </li>
+                    <li class="nav-item">
+                        <span class="nav-link" id="alarm-count">
+                            <i class="bi bi-bell-fill text-warning"></i> <span id="active-alarms">0</span>
+                        </span>
+                    </li>
+                    <!-- 用户菜单 -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-person-circle"></i> <span id="nav-username">用户</span>
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><span class="dropdown-item-text"><small class="text-muted">角色: <span id="nav-role">-</span></small></span></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="/users"><i class="bi bi-people me-2"></i>用户管理</a></li>
+                            <li><a class="dropdown-item" href="#" onclick="changePassword()"><i class="bi bi-key me-2"></i>修改密码</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item text-danger" href="#" onclick="logout()"><i class="bi bi-box-arrow-right me-2"></i>退出登录</a></li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+    
+    <!-- 主内容区 -->
+    <main class="container-fluid mt-3">
+        {% block content %}{% endblock %}
+    </main>
+    
+    <!-- 页脚 -->
+    <footer class="footer mt-auto py-3 bg-light">
+        <div class="container text-center">
+            <span class="text-muted">工业数据采集与监控系统 v1.0.0 | 基于Python开发</span>
+        </div>
+    </footer>
+    
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- 自定义JS -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    
+    <!-- 认证和用户信息脚本 -->
+    <script>
+        // 检查登录状态
+        function checkAuth() {
+            const token = localStorage.getItem('scada_token');
+            if (!token) {
+                window.location.href = '/login';
+                return false;
+            }
+            
+            // 验证token
+            fetch('/api/auth/verify', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.valid) {
+                    localStorage.removeItem('scada_token');
+                    localStorage.removeItem('scada_user');
+                    window.location.href = '/login';
+                }
+            })
+            .catch(() => {});
+            
+            return true;
+        }
+        
+        // 更新导航栏用户信息
+        function updateNavUserInfo() {
+            const userStr = localStorage.getItem('scada_user');
+            if (userStr) {
+                try {
+                    const user = JSON.parse(userStr);
+                    document.getElementById('nav-username').textContent = user.display_name || user.username;
+                    document.getElementById('nav-role').textContent = user.role_name || user.role;
+                } catch(e) {}
+            }
+        }
+        
+        // 获取认证头
+        function getAuthHeaders() {
+            const token = localStorage.getItem('scada_token');
+            return token ? { 'Authorization': `Bearer ${token}` } : {};
+        }
+        
+        // 退出登录
+        function logout() {
+            localStorage.removeItem('scada_token');
+            localStorage.removeItem('scada_user');
+            localStorage.removeItem('scada_refresh_token');
+            window.location.href = '/login';
+        }
+        
+        // 修改密码
+        function changePassword() {
+            const oldPwd = prompt('请输入旧密码:');
+            if (!oldPwd) return;
+            const newPwd = prompt('请输入新密码(至少6位):');
+            if (!newPwd || newPwd.length < 6) {
+                alert('密码长度至少6位');
+                return;
+            }
+            
+            fetch('/api/auth/change-password', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                },
+                body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+            })
+            .then(r => r.json())
+            .then(data => {
+                alert(data.message);
+                if (data.success) {
+                    logout();
+                }
+            });
+        }
+        
+        // 页面加载时检查认证
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAuth();
+            updateNavUserInfo();
+        });
+    </script>
+    
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

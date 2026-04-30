@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用户管理 - 工业数据采集与监控系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { background-color: #f5f5f5; }
+        .sidebar {
+            background: linear-gradient(135deg, #1a237e, #0d47a1);
+            min-height: 100vh;
+            color: white;
+            padding-top: 20px;
+        }
+        .sidebar .nav-link {
+            color: rgba(255,255,255,0.8);
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin: 2px 10px;
+            transition: all 0.3s;
+        }
+        .sidebar .nav-link:hover, .sidebar .nav-link.active {
+            background: rgba(255,255,255,0.15);
+            color: white;
+        }
+        .sidebar .nav-link i { width: 24px; }
+        .main-content { padding: 20px; }
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        .card-header {
+            background: white;
+            border-bottom: 1px solid #eee;
+            font-weight: 600;
+        }
+        .badge-role {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+        }
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1565c0, #0d47a1);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        .modal-header {
+            background: linear-gradient(135deg, #1565c0, #0d47a1);
+            color: white;
+        }
+        .modal-header .btn-close { filter: brightness(0) invert(1); }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- 侧边栏 -->
+            <div class="col-md-2 sidebar">
+                <div class="text-center mb-4">
+                    <i class="bi bi-gear-wide-connected" style="font-size: 2rem;"></i>
+                    <h5 class="mt-2">SCADA系统</h5>
+                </div>
+                <nav class="nav flex-column">
+                    <a class="nav-link" href="/dashboard">
+                        <i class="bi bi-speedometer2"></i> 仪表盘
+                    </a>
+                    <a class="nav-link" href="/devices">
+                        <i class="bi bi-cpu"></i> 设备管理
+                    </a>
+                    <a class="nav-link" href="/history">
+                        <i class="bi bi-graph-up"></i> 历史数据
+                    </a>
+                    <a class="nav-link" href="/alarms">
+                        <i class="bi bi-bell"></i> 报警管理
+                    </a>
+                    <a class="nav-link" href="/config">
+                        <i class="bi bi-sliders"></i> 系统配置
+                    </a>
+                    <a class="nav-link active" href="/users">
+                        <i class="bi bi-people"></i> 用户管理
+                    </a>
+                    <hr class="text-white-50 mx-3">
+                    <a class="nav-link" href="#" onclick="logout()">
+                        <i class="bi bi-box-arrow-right"></i> 退出登录
+                    </a>
+                </nav>
+                <div class="mt-auto p-3">
+                    <small class="text-white-50">
+                        <span id="currentUser">-</span><br>
+                        <span id="currentRole" class="badge bg-light text-dark">-</span>
+                    </small>
+                </div>
+            </div>
+            
+            <!-- 主内容区 -->
+            <div class="col-md-10 main-content">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h4><i class="bi bi-people me-2"></i>用户管理</h4>
+                    <button class="btn btn-primary" onclick="showAddUserModal()">
+                        <i class="bi bi-person-plus me-1"></i>添加用户
+                    </button>
+                </div>
+                
+                <!-- 统计卡片 -->
+                <div class="row mb-4">
+                    <div class="col-md-3">
+                        <div class="card">
+                            <div class="card-body text-center">
+                                <h3 id="totalUsers" class="text-primary">0</h3>
+                                <small class="text-muted">总用户数</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card">
+                            <div class="card-body text-center">
+                                <h3 id="activeUsers" class="text-success">0</h3>
+                                <small class="text-muted">活跃用户</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card">
+                            <div class="card-body text-center">
+                                <h3 id="adminCount" class="text-warning">0</h3>
+                                <small class="text-muted">管理员</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card">
+                            <div class="card-body text-center">
+                                <h3 id="todayLogins" class="text-info">0</h3>
+                                <small class="text-muted">今日登录</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 用户列表 -->
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-list-ul me-2"></i>用户列表</span>
+                        <button class="btn btn-sm btn-outline-primary" onclick="loadUsers()">
+                            <i class="bi bi-arrow-clockwise"></i> 刷新
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>用户</th>
+                                        <th>角色</th>
+                                        <th>邮箱</th>
+                                        <th>手机</th>
+                                        <th>最后登录</th>
+                                        <th>状态</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="userTableBody">
+                                    <tr>
+                                        <td colspan="7" class="text-center text-muted py-4">
+                                            <div class="spinner-border spinner-border-sm me-2"></div>加载中...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 操作日志 -->
+                <div class="card mt-4">
+                    <div class="card-header">
+                        <i class="bi bi-journal-text me-2"></i>操作日志
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>时间</th>
+                                        <th>用户</th>
+                                        <th>操作</th>
+                                        <th>目标</th>
+                                        <th>详情</th>
+                                        <th>IP</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="logTableBody">
+                                    <tr>
+                                        <td colspan="6" class="text-center text-muted">暂无日志</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加/编辑用户模态框 -->
+    <div class="modal fade" id="userModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="userModalTitle">添加用户</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="userForm">
+                        <input type="hidden" id="editUsername" value="">
+                        <div class="mb-3">
+                            <label class="form-label">用户名 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="formUsername" required 
+                                   minlength="3" maxlength="20" placeholder="3-20个字符">
+                        </div>
+                        <div class="mb-3" id="passwordGroup">
+                            <label class="form-label">密码 <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control" id="formPassword" 
+                                   minlength="6" placeholder="至少6位">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">角色 <span class="text-danger">*</span></label>
+                            <select class="form-select" id="formRole" required>
+                                <option value="admin">管理员 - 全部权限</option>
+                                <option value="engineer">工程师 - 设备管理+数据导出</option>
+                                <option value="operator" selected>操作员 - 查看+确认报警</option>
+                                <option value="viewer">观察者 - 仅查看</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">显示名称</label>
+                            <input type="text" class="form-control" id="formDisplayName" placeholder="真实姓名">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">邮箱</label>
+                            <input type="email" class="form-control" id="formEmail" placeholder="user@example.com">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">手机</label>
+                            <input type="tel" class="form-control" id="formPhone" placeholder="13800138000">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveUser()">
+                        <i class="bi bi-check-lg me-1"></i>保存
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const API_BASE = '/api';
+        let currentUser = null;
+        let userModal = null;
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            userModal = new bootstrap.Modal(document.getElementById('userModal'));
+            checkAuth();
+            loadUsers();
+            loadLogs();
+        });
+
+        function getToken() {
+            return localStorage.getItem('scada_token');
+        }
+
+        function checkAuth() {
+            const token = getToken();
+            if (!token) {
+                window.location.href = '/login';
+                return;
+            }
+            
+            const userStr = localStorage.getItem('scada_user');
+            if (userStr) {
+                currentUser = JSON.parse(userStr);
+                document.getElementById('currentUser').textContent = currentUser.display_name || currentUser.username;
+                document.getElementById('currentRole').textContent = currentUser.role_name || currentUser.role;
+            }
+            
+            // 验证token
+            fetch(`${API_BASE}/auth/verify`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.valid) {
+                    window.location.href = '/login';
+                }
+            });
+        }
+
+        async function loadUsers() {
+            const token = getToken();
+            try {
+                const response = await fetch(`${API_BASE}/auth/users`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.status === 403) {
+                    alert('需要管理员权限');
+                    window.location.href = '/dashboard';
+                    return;
+                }
+                
+                const data = await response.json();
+                renderUsers(data.users || []);
+                updateStats(data.users || []);
+            } catch (error) {
+                console.error('加载用户失败:', error);
+            }
+        }
+
+        function renderUsers(users) {
+            const tbody = document.getElementById('userTableBody');
+            
+            if (users.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">暂无用户</td></tr>';
+                return;
+            }
+            
+            const roleColors = {
+                'admin': 'danger',
+                'engineer': 'warning',
+                'operator': 'info',
+                'viewer': 'secondary'
+            };
+            
+            const roleNames = {
+                'admin': '管理员',
+                'engineer': '工程师',
+                'operator': '操作员',
+                'viewer': '观察者'
+            };
+            
+            tbody.innerHTML = users.map(user => `
+                <tr>
+                    <td>
+                        <div class="d-flex align-items-center">
+                            <div class="user-avatar me-2">
+                                ${(user.display_name || user.username).charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                                <div class="fw-bold">${user.display_name || user.username}</div>
+                                <small class="text-muted">@${user.username}</small>
+                            </div>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge bg-${roleColors[user.role] || 'secondary'} badge-role">
+                            ${roleNames[user.role] || user.role}
+                        </span>
+                    </td>
+                    <td>${user.email || '-'}</td>
+                    <td>${user.phone || '-'}</td>
+                    <td>${user.last_login ? new Date(user.last_login).toLocaleString('zh-CN') : '从未登录'}</td>
+                    <td>
+                        <span class="badge bg-${user.is_active ? 'success' : 'danger'}">
+                            ${user.is_active ? '活跃' : '已禁用'}
+                        </span>
+                    </td>
+                    <td>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-primary" onclick="editUser('${user.username}')" title="编辑">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            ${user.username !== 'admin' ? `
+                                <button class="btn btn-outline-${user.is_active ? 'warning' : 'success'}" 
+                                        onclick="toggleUser('${user.username}', ${!user.is_active})" 
+                                        title="${user.is_active ? '禁用' : '启用'}">
+                                    <i class="bi bi-${user.is_active ? 'pause' : 'play'}"></i>
+                                </button>
+                            ` : ''}
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function updateStats(users) {
+            document.getElementById('totalUsers').textContent = users.length;
+            document.getElementById('activeUsers').textContent = users.filter(u => u.is_active).length;
+            document.getElementById('adminCount').textContent = users.filter(u => u.role === 'admin').length;
+        }
+
+        function showAddUserModal() {
+            document.getElementById('userModalTitle').textContent = '添加用户';
+            document.getElementById('editUsername').value = '';
+            document.getElementById('userForm').reset();
+            document.getElementById('formUsername').disabled = false;
+            document.getElementById('passwordGroup').style.display = 'block';
+            document.getElementById('formPassword').required = true;
+            userModal.show();
+        }
+
+        function editUser(username) {
+            document.getElementById('userModalTitle').textContent = '编辑用户';
+            document.getElementById('editUsername').value = username;
+            document.getElementById('formUsername').value = username;
+            document.getElementById('formUsername').disabled = true;
+            document.getElementById('passwordGroup').style.display = 'none';
+            document.getElementById('formPassword').required = false;
+            
+            // 加载用户信息
+            fetch(`${API_BASE}/auth/users`, {
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            })
+            .then(r => r.json())
+            .then(data => {
+                const user = (data.users || []).find(u => u.username === username);
+                if (user) {
+                    document.getElementById('formRole').value = user.role;
+                    document.getElementById('formDisplayName').value = user.display_name || '';
+                    document.getElementById('formEmail').value = user.email || '';
+                    document.getElementById('formPhone').value = user.phone || '';
+                }
+            });
+            
+            userModal.show();
+        }
+
+        async function saveUser() {
+            const editUsername = document.getElementById('editUsername').value;
+            const isEdit = !!editUsername;
+            
+            const data = {
+                role: document.getElementById('formRole').value,
+                display_name: document.getElementById('formDisplayName').value,
+                email: document.getElementById('formEmail').value,
+                phone: document.getElementById('formPhone').value
+            };
+            
+            if (!isEdit) {
+                data.username = document.getElementById('formUsername').value;
+                data.password = document.getElementById('formPassword').value;
+                
+                if (!data.username || !data.password) {
+                    alert('请填写用户名和密码');
+                    return;
+                }
+            }
+            
+            const token = getToken();
+            const url = isEdit ? `${API_BASE}/auth/users/${editUsername}` : `${API_BASE}/auth/register`;
+            const method = isEdit ? 'PUT' : 'POST';
+            
+            try {
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    userModal.hide();
+                    loadUsers();
+                    loadLogs();
+                } else {
+                    alert(result.message || '操作失败');
+                }
+            } catch (error) {
+                alert('网络错误');
+            }
+        }
+
+        async function toggleUser(username, enable) {
+            if (!confirm(`确定要${enable ? '启用' : '禁用'}用户 ${username} 吗？`)) {
+                return;
+            }
+            
+            const token = getToken();
+            try {
+                const response = await fetch(`${API_BASE}/auth/users/${username}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ is_active: enable })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    loadUsers();
+                    loadLogs();
+                } else {
+                    alert(result.message || '操作失败');
+                }
+            } catch (error) {
+                alert('网络错误');
+            }
+        }
+
+        async function loadLogs() {
+            const token = getToken();
+            try {
+                const response = await fetch(`${API_BASE}/auth/logs?limit=50`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                const data = await response.json();
+                renderLogs(data.logs || []);
+            } catch (error) {
+                console.error('加载日志失败:', error);
+            }
+        }
+
+        function renderLogs(logs) {
+            const tbody = document.getElementById('logTableBody');
+            
+            if (logs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">暂无日志</td></tr>';
+                return;
+            }
+            
+            const actionNames = {
+                'login': '登录',
+                'login_failed': '登录失败',
+                'register': '注册',
+                'change_password': '改密',
+                'update_user': '更新用户',
+                'delete_user': '删除用户'
+            };
+            
+            tbody.innerHTML = logs.map(log => `
+                <tr>
+                    <td><small>${new Date(log.timestamp).toLocaleString('zh-CN')}</small></td>
+                    <td>${log.username}</td>
+                    <td><span class="badge bg-${log.action.includes('failed') ? 'danger' : 'primary'}">${actionNames[log.action] || log.action}</span></td>
+                    <td>${log.target || '-'}</td>
+                    <td><small>${log.detail || '-'}</small></td>
+                    <td><small>${log.ip_address || '-'}</small></td>
+                </tr>
+            `).join('');
+        }
+
+        function logout() {
+            localStorage.removeItem('scada_token');
+            localStorage.removeItem('scada_user');
+            localStorage.removeItem('scada_refresh_token');
+            window.location.href = '/login';
+        }
+    </script>
+</body>
+</html>

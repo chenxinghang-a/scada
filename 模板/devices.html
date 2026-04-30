@@ -1,0 +1,631 @@
+{% extends "base.html" %}
+
+{% block title %}设备管理 - 工业数据采集与监控系统{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h2><i class="bi bi-hdd-rack me-2"></i>设备管理</h2>
+        <p class="text-muted">添加、编辑和监控工业设备</p>
+    </div>
+    <div class="col-auto">
+        <button class="btn btn-primary" onclick="showAddDeviceModal()">
+            <i class="bi bi-plus-circle me-1"></i>添加设备
+        </button>
+        <button class="btn btn-outline-secondary" onclick="loadDevices()">
+            <i class="bi bi-arrow-clockwise me-1"></i>刷新
+        </button>
+    </div>
+</div>
+
+<!-- 设备列表 -->
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>设备ID</th>
+                        <th>设备名称</th>
+                        <th>协议</th>
+                        <th>地址</th>
+                        <th>状态</th>
+                        <th>寄存器数</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="devices-table-body">
+                    <tr>
+                        <td colspan="7" class="text-center text-muted">加载中...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 添加/编辑设备模态框 -->
+<div class="modal fade" id="deviceModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deviceModalTitle">添加设备</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="deviceForm">
+                    <input type="hidden" id="device-id-old" value="">
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">设备ID <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="device-id" required 
+                                   placeholder="如: temp_sensor_01" pattern="[a-zA-Z0-9_]+">
+                            <small class="text-muted">仅支持字母、数字和下划线</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">设备名称 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="device-name" required
+                                   placeholder="如: 温度传感器1号">
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label">设备描述</label>
+                            <input type="text" class="form-control" id="device-description"
+                                   placeholder="如: 车间A温度监测点">
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">通信协议</label>
+                            <select class="form-select" id="device-protocol">
+                                <option value="modbus_tcp" selected>Modbus TCP</option>
+                                <option value="modbus_rtu" disabled>Modbus RTU (即将支持)</option>
+                                <option value="mqtt" disabled>MQTT (即将支持)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">IP地址 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="device-host" required
+                                   placeholder="192.168.1.100">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">端口 <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" id="device-port" required
+                                   value="502" min="1" max="65535">
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">从站地址</label>
+                            <input type="number" class="form-control" id="device-slave-id"
+                                   value="1" min="1" max="247">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">采集间隔(秒)</label>
+                            <input type="number" class="form-control" id="device-interval"
+                                   value="5" min="1" max="3600">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">启用状态</label>
+                            <select class="form-select" id="device-enabled">
+                                <option value="true" selected>启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <hr>
+                    <h6 class="mb-3">
+                        寄存器配置
+                        <button type="button" class="btn btn-sm btn-outline-primary float-end" onclick="addRegisterRow()">
+                            <i class="bi bi-plus"></i> 添加寄存器
+                        </button>
+                    </h6>
+                    
+                    <div id="registers-container">
+                        <!-- 寄存器行将在这里动态添加 -->
+                    </div>
+                    
+                    <div class="text-center text-muted py-3" id="no-registers-hint">
+                        <i class="bi bi-info-circle"></i> 点击上方按钮添加寄存器，或使用模板快速配置
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-info" onclick="showTemplatesModal()">
+                    <i class="bi bi-file-earmark-code me-1"></i>使用模板
+                </button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveDevice()">
+                    <i class="bi bi-check-lg me-1"></i>保存
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 模板选择模态框 -->
+<div class="modal fade" id="templatesModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">选择设备模板</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row" id="templates-container">
+                    <!-- 模板卡片将在这里动态加载 -->
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 连接测试结果模态框 -->
+<div class="modal fade" id="testResultModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">连接测试结果</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="test-result-content">
+                <!-- 测试结果将在这里显示 -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 设备列表缓存
+let devicesList = [];
+
+// 页面加载时获取设备列表
+document.addEventListener('DOMContentLoaded', function() {
+    loadDevices();
+});
+
+// 加载设备列表
+async function loadDevices() {
+    try {
+        const response = await fetch('/api/devices', {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+        
+        if (data.devices) {
+            devicesList = data.devices;
+            renderDevicesTable(data.devices);
+        }
+    } catch (error) {
+        console.error('加载设备列表失败:', error);
+        showAlert('加载设备列表失败', 'danger');
+    }
+}
+
+// 渲染设备表格
+function renderDevicesTable(devices) {
+    const tbody = document.getElementById('devices-table-body');
+    
+    if (devices.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center text-muted py-4">
+                    <i class="bi bi-inbox" style="font-size: 2rem;"></i>
+                    <p class="mt-2">暂无设备，点击"添加设备"开始</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    tbody.innerHTML = devices.map(device => `
+        <tr>
+            <td><code>${device.device_id}</code></td>
+            <td>${device.name}</td>
+            <td><span class="badge bg-info">${device.protocol || 'modbus_tcp'}</span></td>
+            <td>${device.host}:${device.port}</td>
+            <td>
+                <span class="badge ${device.connected ? 'bg-success' : 'bg-secondary'}">
+                    ${device.connected ? '在线' : '离线'}
+                </span>
+                ${device.enabled === false ? '<span class="badge bg-warning ms-1">已禁用</span>' : ''}
+            </td>
+            <td>${device.registers ? device.registers.length : 0}</td>
+            <td>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-primary" onclick="testDevice('${device.device_id}')" title="测试连接">
+                        <i class="bi bi-wifi"></i>
+                    </button>
+                    <button class="btn btn-outline-secondary" onclick="editDevice('${device.device_id}')" title="编辑">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <button class="btn btn-outline-danger" onclick="deleteDevice('${device.device_id}')" title="删除">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// 显示添加设备模态框
+function showAddDeviceModal() {
+    document.getElementById('deviceModalTitle').textContent = '添加设备';
+    document.getElementById('device-id-old').value = '';
+    document.getElementById('deviceForm').reset();
+    document.getElementById('device-port').value = '502';
+    document.getElementById('device-slave-id').value = '1';
+    document.getElementById('device-interval').value = '5';
+    document.getElementById('device-enabled').value = 'true';
+    document.getElementById('registers-container').innerHTML = '';
+    document.getElementById('no-registers-hint').style.display = 'block';
+    document.getElementById('device-id').disabled = false;
+    
+    const modal = new bootstrap.Modal(document.getElementById('deviceModal'));
+    modal.show();
+}
+
+// 编辑设备
+function editDevice(deviceId) {
+    const device = devicesList.find(d => d.device_id === deviceId);
+    if (!device) return;
+    
+    document.getElementById('deviceModalTitle').textContent = '编辑设备';
+    document.getElementById('device-id-old').value = deviceId;
+    document.getElementById('device-id').value = deviceId;
+    document.getElementById('device-id').disabled = true; // ID不可编辑
+    document.getElementById('device-name').value = device.name || '';
+    document.getElementById('device-description').value = device.description || '';
+    document.getElementById('device-protocol').value = device.protocol || 'modbus_tcp';
+    document.getElementById('device-host').value = device.host || '';
+    document.getElementById('device-port').value = device.port || 502;
+    document.getElementById('device-slave-id').value = device.slave_id || 1;
+    document.getElementById('device-interval').value = device.collection_interval || 5;
+    document.getElementById('device-enabled').value = device.enabled !== false ? 'true' : 'false';
+    
+    // 加载寄存器
+    const container = document.getElementById('registers-container');
+    container.innerHTML = '';
+    
+    if (device.registers && device.registers.length > 0) {
+        device.registers.forEach(reg => addRegisterRow(reg));
+        document.getElementById('no-registers-hint').style.display = 'none';
+    } else {
+        document.getElementById('no-registers-hint').style.display = 'block';
+    }
+    
+    const modal = new bootstrap.Modal(document.getElementById('deviceModal'));
+    modal.show();
+}
+
+// 添加寄存器行
+function addRegisterRow(reg = null) {
+    const container = document.getElementById('registers-container');
+    const index = container.children.length;
+    
+    const row = document.createElement('div');
+    row.className = 'card mb-2';
+    row.innerHTML = `
+        <div class="card-body p-2">
+            <div class="row align-items-center">
+                <div class="col-md-2">
+                    <input type="text" class="form-control form-control-sm" placeholder="名称" 
+                           value="${reg ? reg.name : ''}" data-field="name" required>
+                </div>
+                <div class="col-md-2">
+                    <input type="text" class="form-control form-control-sm" placeholder="描述" 
+                           value="${reg ? reg.description : ''}" data-field="description">
+                </div>
+                <div class="col-md-1">
+                    <input type="number" class="form-control form-control-sm" placeholder="地址" 
+                           value="${reg ? reg.address : 0}" data-field="address" min="0">
+                </div>
+                <div class="col-md-1">
+                    <input type="number" class="form-control form-control-sm" placeholder="长度" 
+                           value="${reg ? reg.length : 1}" data-field="length" min="1">
+                </div>
+                <div class="col-md-2">
+                    <select class="form-select form-select-sm" data-field="data_type">
+                        <option value="float32" ${reg && reg.data_type === 'float32' ? 'selected' : ''}>Float32</option>
+                        <option value="float64" ${reg && reg.data_type === 'float64' ? 'selected' : ''}>Float64</option>
+                        <option value="uint16" ${reg && reg.data_type === 'uint16' ? 'selected' : ''}>UInt16</option>
+                        <option value="int16" ${reg && reg.data_type === 'int16' ? 'selected' : ''}>Int16</option>
+                        <option value="uint32" ${reg && reg.data_type === 'uint32' ? 'selected' : ''}>UInt32</option>
+                    </select>
+                </div>
+                <div class="col-md-1">
+                    <input type="number" class="form-control form-control-sm" placeholder="缩放" 
+                           value="${reg ? reg.scale : 1}" data-field="scale" step="0.001">
+                </div>
+                <div class="col-md-1">
+                    <input type="text" class="form-control form-control-sm" placeholder="单位" 
+                           value="${reg ? reg.unit : ''}" data-field="unit">
+                </div>
+                <div class="col-md-1">
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('.card').remove()">
+                        <i class="bi bi-x"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    container.appendChild(row);
+    document.getElementById('no-registers-hint').style.display = 'none';
+}
+
+// 保存设备
+async function saveDevice() {
+    const deviceId = document.getElementById('device-id').value.trim();
+    const deviceIdOld = document.getElementById('device-id-old').value;
+    const isEdit = !!deviceIdOld;
+    
+    // 验证必填字段
+    if (!deviceId) {
+        showAlert('请输入设备ID', 'warning');
+        return;
+    }
+    
+    const name = document.getElementById('device-name').value.trim();
+    if (!name) {
+        showAlert('请输入设备名称', 'warning');
+        return;
+    }
+    
+    const host = document.getElementById('device-host').value.trim();
+    if (!host) {
+        showAlert('请输入IP地址', 'warning');
+        return;
+    }
+    
+    // 收集寄存器配置
+    const registers = [];
+    document.querySelectorAll('#registers-container .card').forEach(card => {
+        const reg = {};
+        card.querySelectorAll('[data-field]').forEach(input => {
+            const field = input.dataset.field;
+            let value = input.value;
+            
+            if (['address', 'length'].includes(field)) {
+                value = parseInt(value) || 0;
+            } else if (field === 'scale') {
+                value = parseFloat(value) || 1;
+            }
+            
+            reg[field] = value;
+        });
+        
+        if (reg.name) {
+            registers.push(reg);
+        }
+    });
+    
+    const deviceConfig = {
+        id: deviceId,
+        name: name,
+        description: document.getElementById('device-description').value.trim(),
+        protocol: document.getElementById('device-protocol').value,
+        host: host,
+        port: parseInt(document.getElementById('device-port').value) || 502,
+        slave_id: parseInt(document.getElementById('device-slave-id').value) || 1,
+        collection_interval: parseInt(document.getElementById('device-interval').value) || 5,
+        enabled: document.getElementById('device-enabled').value === 'true',
+        registers: registers
+    };
+    
+    try {
+        const url = isEdit ? `/api/devices/${deviceIdOld}` : '/api/devices';
+        const method = isEdit ? 'PUT' : 'POST';
+        
+        const response = await fetch(url, {
+            method: method,
+            headers: {
+                'Content-Type': 'application/json',
+                ...getAuthHeaders()
+            },
+            body: JSON.stringify(deviceConfig)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showAlert(result.message, 'success');
+            bootstrap.Modal.getInstance(document.getElementById('deviceModal')).hide();
+            loadDevices();
+        } else {
+            showAlert(result.message || '保存失败', 'danger');
+        }
+    } catch (error) {
+        console.error('保存设备失败:', error);
+        showAlert('保存失败: ' + error.message, 'danger');
+    }
+}
+
+// 删除设备
+async function deleteDevice(deviceId) {
+    if (!confirm(`确定要删除设备 "${deviceId}" 吗？此操作不可恢复。`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/devices/${deviceId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showAlert(result.message, 'success');
+            loadDevices();
+        } else {
+            showAlert(result.message || '删除失败', 'danger');
+        }
+    } catch (error) {
+        console.error('删除设备失败:', error);
+        showAlert('删除失败: ' + error.message, 'danger');
+    }
+}
+
+// 测试设备连接
+async function testDevice(deviceId) {
+    showAlert('正在测试连接...', 'info');
+    
+    try {
+        const response = await fetch(`/api/devices/${deviceId}/test`, {
+            method: 'POST',
+            headers: getAuthHeaders()
+        });
+        
+        const result = await response.json();
+        
+        // 显示测试结果
+        const content = document.getElementById('test-result-content');
+        content.innerHTML = `
+            <div class="text-center mb-3">
+                <i class="bi ${result.success ? 'bi-check-circle text-success' : 'bi-x-circle text-danger'}" 
+                   style="font-size: 3rem;"></i>
+            </div>
+            <h5 class="text-center ${result.success ? 'text-success' : 'text-danger'}">
+                ${result.success ? '连接成功' : '连接失败'}
+            </h5>
+            <p class="text-center">${result.message}</p>
+            ${result.sample_data ? `
+                <div class="alert alert-info">
+                    <strong>示例数据：</strong><br>
+                    寄存器: ${result.sample_data.register}<br>
+                    值: ${result.sample_data.value}
+                </div>
+            ` : ''}
+            ${result.warning ? `
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle me-1"></i>${result.warning}
+                </div>
+            ` : ''}
+        `;
+        
+        const modal = new bootstrap.Modal(document.getElementById('testResultModal'));
+        modal.show();
+        
+    } catch (error) {
+        console.error('测试连接失败:', error);
+        showAlert('测试连接失败: ' + error.message, 'danger');
+    }
+}
+
+// 显示模板选择模态框
+async function showTemplatesModal() {
+    try {
+        const response = await fetch('/api/devices/templates', {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+        
+        const container = document.getElementById('templates-container');
+        container.innerHTML = data.templates.map(template => `
+            <div class="col-md-6 mb-3">
+                <div class="card h-100 template-card" onclick="applyTemplate('${template.id}')" style="cursor: pointer;">
+                    <div class="card-body">
+                        <h6 class="card-title">
+                            <i class="bi bi-cpu me-2"></i>${template.name}
+                        </h6>
+                        <p class="card-text text-muted small">${template.description}</p>
+                        <div class="mb-2">
+                            <span class="badge bg-info">${template.protocol}</span>
+                            <span class="badge bg-secondary">端口: ${template.port}</span>
+                        </div>
+                        <small class="text-muted">
+                            寄存器: ${template.registers.map(r => r.name).join(', ')}
+                        </small>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+        
+        const modal = new bootstrap.Modal(document.getElementById('templatesModal'));
+        modal.show();
+        
+    } catch (error) {
+        console.error('加载模板失败:', error);
+        showAlert('加载模板失败', 'danger');
+    }
+}
+
+// 应用模板
+async function applyTemplate(templateId) {
+    try {
+        const response = await fetch('/api/devices/templates', {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+        
+        const template = data.templates.find(t => t.id === templateId);
+        if (!template) return;
+        
+        // 关闭模板模态框
+        bootstrap.Modal.getInstance(document.getElementById('templatesModal')).hide();
+        
+        // 填充表单
+        document.getElementById('device-protocol').value = template.protocol;
+        document.getElementById('device-port').value = template.port;
+        
+        // 清空并添加寄存器
+        const container = document.getElementById('registers-container');
+        container.innerHTML = '';
+        
+        template.registers.forEach(reg => addRegisterRow(reg));
+        document.getElementById('no-registers-hint').style.display = 'none';
+        
+        showAlert(`已应用模板: ${template.name}`, 'success');
+        
+    } catch (error) {
+        console.error('应用模板失败:', error);
+        showAlert('应用模板失败', 'danger');
+    }
+}
+
+// 显示提示信息
+function showAlert(message, type = 'info') {
+    // 移除现有的提示
+    const existingAlert = document.querySelector('.alert-floating');
+    if (existingAlert) {
+        existingAlert.remove();
+    }
+    
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${type} alert-dismissible fade show alert-floating`;
+    alert.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 9999; min-width: 300px;';
+    alert.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(alert);
+    
+    // 3秒后自动关闭
+    setTimeout(() => {
+        if (alert.parentNode) {
+            alert.remove();
+        }
+    }, 3000);
+}
+</script>
+
+<style>
+.template-card:hover {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+}
+</style>
+{% endblock %}

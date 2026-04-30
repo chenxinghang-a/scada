@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 工业数据采集与监控系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #1a237e 0%, #0d47a1 50%, #01579b 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+        }
+        .login-container {
+            width: 100%;
+            max-width: 420px;
+            padding: 15px;
+        }
+        .login-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+        }
+        .login-header {
+            background: linear-gradient(135deg, #1565c0, #0d47a1);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .login-header h2 {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        .login-header p {
+            margin: 8px 0 0;
+            opacity: 0.85;
+            font-size: 0.9rem;
+        }
+        .login-header .system-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+        .login-body {
+            padding: 30px;
+        }
+        .form-floating {
+            margin-bottom: 16px;
+        }
+        .form-floating .form-control {
+            border-radius: 10px;
+            border: 2px solid #e0e0e0;
+            padding: 12px 16px;
+            height: 56px;
+            transition: all 0.3s;
+        }
+        .form-floating .form-control:focus {
+            border-color: #1565c0;
+            box-shadow: 0 0 0 3px rgba(21, 101, 192, 0.15);
+        }
+        .btn-login {
+            width: 100%;
+            padding: 12px;
+            border-radius: 10px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, #1565c0, #0d47a1);
+            border: none;
+            transition: all 0.3s;
+        }
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(21, 101, 192, 0.4);
+            background: linear-gradient(135deg, #1976d2, #1565c0);
+        }
+        .btn-login:active {
+            transform: translateY(0);
+        }
+        .login-footer {
+            text-align: center;
+            padding: 0 30px 20px;
+            color: #666;
+            font-size: 0.85rem;
+        }
+        .alert {
+            border-radius: 10px;
+            font-size: 0.9rem;
+        }
+        .default-accounts {
+            background: #e3f2fd;
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-top: 16px;
+            font-size: 0.85rem;
+        }
+        .default-accounts .title {
+            font-weight: 600;
+            color: #1565c0;
+            margin-bottom: 8px;
+        }
+        .default-accounts code {
+            background: rgba(21, 101, 192, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .loading-spinner {
+            display: none;
+        }
+        .loading .loading-spinner {
+            display: inline-block;
+        }
+        .loading .btn-text {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <div class="login-header">
+                <div class="system-icon">
+                    <i class="bi bi-gear-wide-connected"></i>
+                </div>
+                <h2>工业数据采集与监控系统</h2>
+                <p>Industrial SCADA System</p>
+            </div>
+            
+            <div class="login-body">
+                <div id="alertBox" class="alert alert-danger d-none" role="alert">
+                    <i class="bi bi-exclamation-circle me-2"></i>
+                    <span id="alertMessage"></span>
+                </div>
+                
+                <form id="loginForm" onsubmit="handleLogin(event)">
+                    <div class="form-floating">
+                        <input type="text" class="form-control" id="username" 
+                               placeholder="用户名" required autocomplete="username">
+                        <label for="username">
+                            <i class="bi bi-person me-1"></i>用户名
+                        </label>
+                    </div>
+                    
+                    <div class="form-floating">
+                        <input type="password" class="form-control" id="password" 
+                               placeholder="密码" required autocomplete="current-password">
+                        <label for="password">
+                            <i class="bi bi-lock me-1"></i>密码
+                        </label>
+                    </div>
+                    
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="rememberMe">
+                        <label class="form-check-label" for="rememberMe">
+                            记住我
+                        </label>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary btn-login" id="loginBtn">
+                        <span class="btn-text">
+                            <i class="bi bi-box-arrow-in-right me-2"></i>登 录
+                        </span>
+                        <span class="loading-spinner spinner-border spinner-border-sm" role="status"></span>
+                    </button>
+                </form>
+                
+                <div class="default-accounts">
+                    <div class="title">
+                        <i class="bi bi-info-circle me-1"></i>默认账户
+                    </div>
+                    <div>管理员: <code>admin</code> / <code>admin123</code></div>
+                    <div class="mt-1 text-muted" style="font-size: 0.8rem;">
+                        首次登录请修改默认密码
+                    </div>
+                </div>
+            </div>
+            
+            <div class="login-footer">
+                <small>
+                    <i class="bi bi-shield-check me-1"></i>
+                    基于JWT的安全认证 | v2.0
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 检查是否已登录
+        const token = localStorage.getItem('scada_token');
+        if (token) {
+            // 验证token是否有效
+            fetch('/api/auth/verify', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.valid) {
+                    window.location.href = '/dashboard';
+                } else {
+                    localStorage.removeItem('scada_token');
+                    localStorage.removeItem('scada_user');
+                }
+            })
+            .catch(() => {
+                localStorage.removeItem('scada_token');
+            });
+        }
+
+        function showAlert(message) {
+            const alertBox = document.getElementById('alertBox');
+            const alertMessage = document.getElementById('alertMessage');
+            alertMessage.textContent = message;
+            alertBox.classList.remove('d-none');
+            
+            // 3秒后自动隐藏
+            setTimeout(() => {
+                alertBox.classList.add('d-none');
+            }, 5000);
+        }
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const rememberMe = document.getElementById('rememberMe').checked;
+            const loginBtn = document.getElementById('loginBtn');
+            
+            if (!username || !password) {
+                showAlert('请输入用户名和密码');
+                return;
+            }
+            
+            // 显示加载状态
+            loginBtn.classList.add('loading');
+            loginBtn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // 保存token和用户信息
+                    localStorage.setItem('scada_token', data.token);
+                    localStorage.setItem('scada_user', JSON.stringify(data.user));
+                    
+                    if (rememberMe) {
+                        localStorage.setItem('scada_refresh_token', data.refresh_token);
+                    }
+                    
+                    // 跳转到仪表盘
+                    window.location.href = '/dashboard';
+                } else {
+                    showAlert(data.message || '登录失败');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                showAlert('网络错误，请检查服务器是否运行');
+            } finally {
+                loginBtn.classList.remove('loading');
+                loginBtn.disabled = false;
+            }
+        }
+
+        // 回车键登录
+        document.getElementById('password').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                handleLogin(e);
+            }
+        });
+    </script>
+</body>
+</html>

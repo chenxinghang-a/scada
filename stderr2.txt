@@ -1,0 +1,44 @@
+2026-04-29 13:47:12,375 - __main__ - INFO - ÕıÔÚÆô¶¯¹¤ÒµÊı¾İ²É¼¯Óë¼à¿ØÏµÍ³...
+2026-04-29 13:47:12,798 - __main__ - INFO - ³õÊ¼»¯Êı¾İ¿â...
+2026-04-29 13:47:12,799 - ´æ´¢²ã.database - INFO - Êı¾İ¿â³õÊ¼»¯Íê³É
+2026-04-29 13:47:12,800 - __main__ - INFO - ¼ÓÔØÉè±¸ÅäÖÃ...
+2026-04-29 13:47:12,805 - ²É¼¯²ã.device_manager - INFO - ¼ÓÔØÉè±¸ÅäÖÃ: temp_sensor_01 - ÎÂ¶È´«¸ĞÆ÷1ºÅ
+2026-04-29 13:47:12,805 - ²É¼¯²ã.device_manager - INFO - ¼ÓÔØÉè±¸ÅäÖÃ: pressure_sensor_01 - Ñ¹Á¦´«¸ĞÆ÷1ºÅ
+2026-04-29 13:47:12,806 - ²É¼¯²ã.device_manager - INFO - ¼ÓÔØÉè±¸ÅäÖÃ: power_meter_01 - µçÁ¦ÒÇ±í1ºÅ
+2026-04-29 13:47:12,806 - ²É¼¯²ã.device_manager - INFO - ¹²¼ÓÔØ 3 ¸öÉè±¸ÅäÖÃ
+2026-04-29 13:47:12,806 - __main__ - INFO - ¼ÓÔØ±¨¾¯ÅäÖÃ...
+2026-04-29 13:47:12,810 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: temp_high - ÎÂ¶È¹ı¸ß
+2026-04-29 13:47:12,810 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: temp_low - ÎÂ¶È¹ıµÍ
+2026-04-29 13:47:12,810 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: pressure_high - Ñ¹Á¦¹ı¸ß
+2026-04-29 13:47:12,811 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: pressure_low - Ñ¹Á¦¹ıµÍ
+2026-04-29 13:47:12,811 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: voltage_high - µçÑ¹¹ı¸ß
+2026-04-29 13:47:12,811 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: voltage_low - µçÑ¹¹ıµÍ
+2026-04-29 13:47:12,811 - ±¨¾¯²ã.alarm_manager - INFO - ¼ÓÔØ±¨¾¯¹æÔò: current_high - µçÁ÷¹ı¸ß
+2026-04-29 13:47:12,812 - ±¨¾¯²ã.alarm_manager - INFO - ¹²¼ÓÔØ 7 Ìõ±¨¾¯¹æÔò
+2026-04-29 13:47:12,812 - __main__ - INFO - ³õÊ¼»¯Êı¾İ²É¼¯Æ÷...
+2026-04-29 13:47:12,812 - __main__ - INFO - ´´½¨WebÓ¦ÓÃ...
+2026-04-29 13:47:12,841 - Õ¹Ê¾²ã.websocket - INFO - Êı¾İÍÆËÍÏß³ÌÒÑÆô¶¯
+2026-04-29 13:47:12,843 - __main__ - INFO - Á¬½ÓÉè±¸...
+2026-04-29 13:47:12,844 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ ÎÂ¶È´«¸ĞÆ÷1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:47:12,844 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ ÎÂ¶È´«¸ĞÆ÷1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:47:12,844 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ Ñ¹Á¦´«¸ĞÆ÷1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:47:12,844 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ Ñ¹Á¦´«¸ĞÆ÷1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:47:12,844 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ µçÁ¦ÒÇ±í1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:47:12,844 - ²É¼¯²ã.simulated_client - INFO - [Ä£Äâ] Éè±¸ µçÁ¦ÒÇ±í1ºÅ Á¬½Ó³É¹¦
+2026-04-29 13:47:12,845 - __main__ - INFO -   Éè±¸ temp_sensor_01: ³É¹¦
+2026-04-29 13:47:12,845 - __main__ - INFO -   Éè±¸ pressure_sensor_01: ³É¹¦
+2026-04-29 13:47:12,845 - __main__ - INFO -   Éè±¸ power_meter_01: ³É¹¦
+2026-04-29 13:47:12,845 - __main__ - INFO - Æô¶¯Êı¾İ²É¼¯...
+2026-04-29 13:47:12,846 - ²É¼¯²ã.data_collector - INFO - Êı¾İ²É¼¯Æ÷ÒÑÆô¶¯£¬¹² 3 ¸öÉè±¸
+2026-04-29 13:47:12,846 - __main__ - INFO - Æô¶¯Web·şÎñ...
+2026-04-29 13:47:12,846 - __main__ - INFO - ==================================================
+2026-04-29 13:47:12,847 - __main__ - INFO - ¹¤ÒµÊı¾İ²É¼¯Óë¼à¿ØÏµÍ³ÒÑÆô¶¯
+2026-04-29 13:47:12,847 - __main__ - INFO - ·ÃÎÊµØÖ·: http://localhost:5000
+2026-04-29 13:47:12,847 - __main__ - INFO - £¨Ä£ÄâÄ£Ê½£ºÊ¹ÓÃ·ÂÕæÊı¾İ£©
+2026-04-29 13:47:12,848 - __main__ - INFO - ==================================================
+2026-04-29 13:47:12,851 - werkzeug - WARNING - Werkzeug appears to be used in a production deployment. Consider switching to a production web server instead.
+2026-04-29 13:47:12,865 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.17.128.49:5000
+2026-04-29 13:47:12,865 - werkzeug - INFO - [33mPress CTRL+C to quit[0m

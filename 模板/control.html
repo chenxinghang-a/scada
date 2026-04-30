@@ -1,0 +1,503 @@
+{% extends "base.html" %}
+
+{% block title %}设备控制 - 工业数据采集与监控系统{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h2><i class="bi bi-joystick me-2"></i>设备控制</h2>
+        <p class="text-muted">远程控制工业设备，写入寄存器和线圈</p>
+    </div>
+</div>
+
+<!-- 权限提示 -->
+<div class="alert alert-warning" id="permission-warning" style="display: none;">
+    <i class="bi bi-exclamation-triangle me-2"></i>
+    <strong>权限不足：</strong>设备控制功能仅限管理员和工程师使用。
+</div>
+
+<!-- 控制面板 -->
+<div class="row" id="control-panel">
+    <!-- 设备选择 -->
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-hdd-rack me-2"></i>设备选择</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">选择设备</label>
+                    <select id="device-select" class="form-select">
+                        <option value="">请选择设备</option>
+                    </select>
+                </div>
+                <div id="device-info" class="mt-3" style="display: none;">
+                    <h6>设备信息</h6>
+                    <table class="table table-sm">
+                        <tr><td>设备ID</td><td id="info-device-id">-</td></tr>
+                        <tr><td>设备名称</td><td id="info-device-name">-</td></tr>
+                        <tr><td>连接状态</td><td id="info-connection">-</td></tr>
+                        <tr><td>IP地址</td><td id="info-host">-</td></tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 寄存器写入 -->
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-pencil-square me-2"></i>寄存器写入</h5>
+            </div>
+            <div class="card-body">
+                <form id="register-form">
+                    <div class="mb-3">
+                        <label class="form-label">寄存器地址</label>
+                        <input type="number" class="form-control" id="register-address" 
+                               min="0" max="65535" placeholder="0-65535" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">写入值</label>
+                        <input type="number" class="form-control" id="register-value" 
+                               min="0" max="65535" placeholder="0-65535" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">常用寄存器</label>
+                        <select id="register-preset" class="form-select">
+                            <option value="">自定义</option>
+                            <option value="0|100">温度设定值 (地址0, 值100=10.0°C)</option>
+                            <option value="1|500">压力设定值 (地址1, 值500=5.00MPa)</option>
+                            <option value="100|1">启动设备 (地址100, 值1)</option>
+                            <option value="100|0">停止设备 (地址100, 值0)</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100" id="btn-write-register">
+                        <i class="bi bi-send me-1"></i>写入寄存器
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 线圈控制 -->
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-toggle-on me-2"></i>线圈控制</h5>
+            </div>
+            <div class="card-body">
+                <form id="coil-form">
+                    <div class="mb-3">
+                        <label class="form-label">线圈地址</label>
+                        <input type="number" class="form-control" id="coil-address" 
+                               min="0" max="65535" placeholder="0-65535" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">控制状态</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="coil-value" id="coil-on" value="true" checked>
+                            <label class="btn btn-outline-success" for="coil-on">
+                                <i class="bi bi-toggle-on me-1"></i>ON
+                            </label>
+                            <input type="radio" class="btn-check" name="coil-value" id="coil-off" value="false">
+                            <label class="btn btn-outline-danger" for="coil-off">
+                                <i class="bi bi-toggle-off me-1"></i>OFF
+                            </label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">常用控制</label>
+                        <select id="coil-preset" class="form-select">
+                            <option value="">自定义</option>
+                            <option value="0|true">启动设备 (地址0, ON)</option>
+                            <option value="0|false">停止设备 (地址0, OFF)</option>
+                            <option value="1|true">开启阀门 (地址1, ON)</option>
+                            <option value="1|false">关闭阀门 (地址1, OFF)</option>
+                            <option value="2|true">启动电机 (地址2, ON)</option>
+                            <option value="2|false">停止电机 (地址2, OFF)</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-warning w-100" id="btn-write-coil">
+                        <i class="bi bi-lightning me-1"></i>写入线圈
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 批量控制 -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-list-check me-2"></i>批量控制</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>快速操作</h6>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button class="btn btn-success" onclick="batchControl('start')">
+                                <i class="bi bi-play-circle me-1"></i>启动所有设备
+                            </button>
+                            <button class="btn btn-danger" onclick="batchControl('stop')">
+                                <i class="bi bi-stop-circle me-1"></i>停止所有设备
+                            </button>
+                            <button class="btn btn-info" onclick="batchControl('reset')">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i>复位所有设备
+                            </button>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>操作说明</h6>
+                        <ul class="list-unstyled text-muted">
+                            <li><i class="bi bi-info-circle me-1"></i> 所有控制操作需要二次确认</li>
+                            <li><i class="bi bi-info-circle me-1"></i> 操作记录会自动保存到日志</li>
+                            <li><i class="bi bi-info-circle me-1"></i> 仅管理员和工程师有控制权限</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 操作日志 -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0"><i class="bi bi-journal-text me-2"></i>操作日志</h5>
+                <button class="btn btn-sm btn-outline-secondary" onclick="loadControlLogs()">
+                    <i class="bi bi-arrow-clockwise me-1"></i>刷新
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>操作人</th>
+                                <th>操作类型</th>
+                                <th>操作详情</th>
+                            </tr>
+                        </thead>
+                        <tbody id="control-logs-body">
+                            <tr>
+                                <td colspan="4" class="text-center text-muted">暂无操作记录</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 确认对话框 -->
+<div class="modal fade" id="confirmModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning">
+                <h5 class="modal-title"><i class="bi bi-exclamation-triangle me-2"></i>操作确认</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="confirm-message">
+                确定要执行此操作吗？
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-warning" id="btn-confirm">确定执行</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 待执行的操作
+let pendingAction = null;
+
+// 页面加载
+document.addEventListener('DOMContentLoaded', function() {
+    // 检查权限
+    checkPermission();
+    
+    // 加载设备列表
+    loadDevices();
+    
+    // 加载操作日志
+    loadControlLogs();
+    
+    // 设备选择变化
+    document.getElementById('device-select').addEventListener('change', function() {
+        loadDeviceInfo(this.value);
+    });
+    
+    // 寄存器预设
+    document.getElementById('register-preset').addEventListener('change', function() {
+        if (this.value) {
+            const [addr, val] = this.value.split('|');
+            document.getElementById('register-address').value = addr;
+            document.getElementById('register-value').value = val;
+        }
+    });
+    
+    // 线圈预设
+    document.getElementById('coil-preset').addEventListener('change', function() {
+        if (this.value) {
+            const [addr, val] = this.value.split('|');
+            document.getElementById('coil-address').value = addr;
+            document.getElementById(val === 'true' ? 'coil-on' : 'coil-off').checked = true;
+        }
+    });
+    
+    // 寄存器写入表单
+    document.getElementById('register-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const deviceId = document.getElementById('device-select').value;
+        const address = document.getElementById('register-address').value;
+        const value = document.getElementById('register-value').value;
+        
+        if (!deviceId) {
+            showAlert('请先选择设备', 'warning');
+            return;
+        }
+        
+        showConfirm(
+            `确定要向设备 <strong>${deviceId}</strong> 的寄存器地址 <strong>${address}</strong> 写入值 <strong>${value}</strong> 吗？`,
+            () => writeRegister(deviceId, address, value)
+        );
+    });
+    
+    // 线圈写入表单
+    document.getElementById('coil-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const deviceId = document.getElementById('device-select').value;
+        const address = document.getElementById('coil-address').value;
+        const value = document.querySelector('input[name="coil-value"]:checked').value === 'true';
+        
+        if (!deviceId) {
+            showAlert('请先选择设备', 'warning');
+            return;
+        }
+        
+        showConfirm(
+            `确定要向设备 <strong>${deviceId}</strong> 的线圈地址 <strong>${address}</strong> 写入 <strong>${value ? 'ON' : 'OFF'}</strong> 吗？`,
+            () => writeCoil(deviceId, address, value)
+        );
+    });
+    
+    // 确认按钮
+    document.getElementById('btn-confirm').addEventListener('click', function() {
+        if (pendingAction) {
+            pendingAction();
+            pendingAction = null;
+        }
+        bootstrap.Modal.getInstance(document.getElementById('confirmModal')).hide();
+    });
+});
+
+// 检查权限
+function checkPermission() {
+    const userStr = localStorage.getItem('scada_user');
+    if (userStr) {
+        try {
+            const user = JSON.parse(userStr);
+            if (!['admin', 'engineer'].includes(user.role)) {
+                document.getElementById('permission-warning').style.display = 'block';
+                document.getElementById('control-panel').style.opacity = '0.5';
+                document.getElementById('control-panel').style.pointerEvents = 'none';
+            }
+        } catch (e) {}
+    }
+}
+
+// 加载设备列表
+async function loadDevices() {
+    try {
+        const response = await fetch('/api/devices', {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+        
+        const select = document.getElementById('device-select');
+        data.devices.forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d.device_id;
+            opt.textContent = `${d.name} (${d.device_id})`;
+            select.appendChild(opt);
+        });
+    } catch (error) {
+        console.error('加载设备列表失败:', error);
+    }
+}
+
+// 加载设备信息
+async function loadDeviceInfo(deviceId) {
+    if (!deviceId) {
+        document.getElementById('device-info').style.display = 'none';
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/devices/${deviceId}`, {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+        
+        document.getElementById('info-device-id').textContent = data.device_id;
+        document.getElementById('info-device-name').textContent = data.name;
+        document.getElementById('info-connection').innerHTML = data.connected ? 
+            '<span class="badge bg-success">已连接</span>' : 
+            '<span class="badge bg-danger">未连接</span>';
+        document.getElementById('info-host').textContent = `${data.host}:${data.port}`;
+        document.getElementById('device-info').style.display = 'block';
+    } catch (error) {
+        console.error('加载设备信息失败:', error);
+    }
+}
+
+// 写入寄存器
+async function writeRegister(deviceId, address, value) {
+    try {
+        const response = await fetch(`/api/devices/${deviceId}/write-register`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...getAuthHeaders()
+            },
+            body: JSON.stringify({
+                address: parseInt(address),
+                value: parseInt(value)
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showAlert(result.message, 'success');
+            loadControlLogs();
+        } else {
+            showAlert(result.message || '写入失败', 'danger');
+        }
+    } catch (error) {
+        showAlert('写入失败: ' + error.message, 'danger');
+    }
+}
+
+// 写入线圈
+async function writeCoil(deviceId, address, value) {
+    try {
+        const response = await fetch(`/api/devices/${deviceId}/write-coil`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...getAuthHeaders()
+            },
+            body: JSON.stringify({
+                address: parseInt(address),
+                value: value
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showAlert(result.message, 'success');
+            loadControlLogs();
+        } else {
+            showAlert(result.message || '写入失败', 'danger');
+        }
+    } catch (error) {
+        showAlert('写入失败: ' + error.message, 'danger');
+    }
+}
+
+// 批量控制
+async function batchControl(action) {
+    const deviceId = document.getElementById('device-select').value;
+    if (!deviceId) {
+        showAlert('请先选择设备', 'warning');
+        return;
+    }
+    
+    let message = '';
+    let callback = null;
+    
+    switch (action) {
+        case 'start':
+            message = `确定要启动设备 <strong>${deviceId}</strong> 吗？`;
+            callback = () => writeCoil(deviceId, 0, true);
+            break;
+        case 'stop':
+            message = `确定要停止设备 <strong>${deviceId}</strong> 吗？`;
+            callback = () => writeCoil(deviceId, 0, false);
+            break;
+        case 'reset':
+            message = `确定要复位设备 <strong>${deviceId}</strong> 吗？`;
+            callback = () => writeRegister(deviceId, 100, 0);
+            break;
+    }
+    
+    showConfirm(message, callback);
+}
+
+// 加载操作日志
+async function loadControlLogs() {
+    try {
+        const response = await fetch('/api/control/logs?limit=20', {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+        
+        const tbody = document.getElementById('control-logs-body');
+        
+        if (!data.logs || data.logs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">暂无操作记录</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = data.logs.map(log => `
+            <tr>
+                <td>${log.timestamp || '-'}</td>
+                <td>${log.username || '-'}</td>
+                <td><span class="badge bg-info">${log.action || '-'}</span></td>
+                <td>${log.details || '-'}</td>
+            </tr>
+        `).join('');
+    } catch (error) {
+        console.error('加载操作日志失败:', error);
+    }
+}
+
+// 显示确认对话框
+function showConfirm(message, callback) {
+    document.getElementById('confirm-message').innerHTML = message;
+    pendingAction = callback;
+    const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
+    modal.show();
+}
+
+// 显示提示信息
+function showAlert(message, type = 'info') {
+    const existingAlert = document.querySelector('.alert-floating');
+    if (existingAlert) existingAlert.remove();
+    
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${type} alert-dismissible fade show alert-floating`;
+    alert.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 9999; min-width: 300px;';
+    alert.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(alert);
+    setTimeout(() => { if (alert.parentNode) alert.remove(); }, 3000);
+}
+</script>
+{% endblock %}

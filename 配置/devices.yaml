@@ -1,0 +1,121 @@
+# 设备配置文件
+# 配置Modbus设备参数
+
+devices:
+  # 设备1: 温度传感器
+  - id: temp_sensor_01
+    name: "温度传感器1号"
+    description: "车间A温度监测点"
+    protocol: modbus_tcp
+    host: "192.168.1.100"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 5  # 秒
+    
+    # 寄存器配置
+    registers:
+      - name: "temperature"
+        description: "温度值"
+        address: 0
+        length: 1
+        data_type: float32
+        scale: 0.1  # 缩放系数
+        offset: 0   # 偏移量
+        unit: "°C"
+        
+      - name: "humidity"
+        description: "湿度值"
+        address: 2
+        length: 1
+        data_type: float32
+        scale: 0.1
+        offset: 0
+        unit: "%RH"
+        
+      - name: "status"
+        description: "设备状态"
+        address: 100
+        length: 1
+        data_type: uint16
+        scale: 1
+        offset: 0
+        unit: ""
+        
+  # 设备2: 压力传感器
+  - id: pressure_sensor_01
+    name: "压力传感器1号"
+    description: "管道压力监测点"
+    protocol: modbus_tcp
+    host: "192.168.1.101"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 5
+    
+    registers:
+      - name: "pressure"
+        description: "压力值"
+        address: 0
+        length: 1
+        data_type: float32
+        scale: 0.01
+        offset: 0
+        unit: "MPa"
+        
+      - name: "temperature"
+        description: "温度值"
+        address: 2
+        length: 1
+        data_type: float32
+        scale: 0.1
+        offset: 0
+        unit: "°C"
+        
+  # 设备3: 电力仪表
+  - id: power_meter_01
+    name: "电力仪表1号"
+    description: "配电室电力监测"
+    protocol: modbus_tcp
+    host: "192.168.1.102"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 10
+    
+    registers:
+      - name: "voltage"
+        description: "电压"
+        address: 0
+        length: 1
+        data_type: float32
+        scale: 0.1
+        offset: 0
+        unit: "V"
+        
+      - name: "current"
+        description: "电流"
+        address: 2
+        length: 1
+        data_type: float32
+        scale: 0.01
+        offset: 0
+        unit: "A"
+        
+      - name: "power"
+        description: "有功功率"
+        address: 4
+        length: 1
+        data_type: float32
+        scale: 0.001
+        offset: 0
+        unit: "kW"
+        
+      - name: "energy"
+        description: "累计电量"
+        address: 6
+        length: 2
+        data_type: float64
+        scale: 0.01
+        offset: 0
+        unit: "kWh"

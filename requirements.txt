@@ -1,0 +1,43 @@
+# 工业数据采集与监控系统依赖包
+
+# Web框架
+flask>=3.0.0
+flask-socketio>=5.3.0
+
+# Modbus通信
+pymodbus>=3.6.0
+
+# MQTT通信
+paho-mqtt>=1.6.0
+
+# 用户认证
+PyJWT>=2.8.0
+bcrypt>=4.1.0
+
+# 数据库
+# SQLite是Python内置的，无需安装
+
+# 数据处理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# 图表生成
+# ECharts通过CDN引入，无需安装
+
+# 配置文件处理
+pyyaml>=6.0
+
+# 日志
+loguru>=0.7.0
+
+# 定时任务
+apscheduler>=3.10.0
+
+# 数据导出
+openpyxl>=3.1.0
+
+# 网络请求
+requests>=2.31.0
+
+# 开发工具
+python-dotenv>=1.0.0

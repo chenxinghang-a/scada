@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+
+{% block title %}历史数据 - 工业SCADA系统{% endblock %}
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-graph-up"></i> 历史数据查询</h5>
+            </div>
+            <div class="card-body">
+                <form id="history-query-form" class="row g-3">
+                    <div class="col-md-3">
+                        <label for="device-select" class="form-label">设备</label>
+                        <select id="device-select" class="form-select">
+                            <option value="">全部设备</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="register-select" class="form-label">参数</label>
+                        <select id="register-select" class="form-select">
+                            <option value="">全部参数</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="start-time" class="form-label">开始时间</label>
+                        <input type="datetime-local" id="start-time" class="form-control">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="end-time" class="form-label">结束时间</label>
+                        <input type="datetime-local" id="end-time" class="form-control">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="interval" class="form-label">时间间隔</label>
+                        <select id="interval" class="form-select">
+                            <option value="1min">1分钟</option>
+                            <option value="5min">5分钟</option>
+                            <option value="1hour">1小时</option>
+                            <option value="1day">1天</option>
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-primary">查询</button>
+                        <button type="button" id="export-btn" class="btn btn-secondary">导出数据</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-bar-chart"></i> 数据图表</h5>
+            </div>
+            <div class="card-body">
+                <div id="history-chart" style="height: 400px;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-table"></i> 数据列表</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover" id="history-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>设备</th>
+                                <th>参数</th>
+                                <th>平均值</th>
+                                <th>最小值</th>
+                                <th>最大值</th>
+                                <th>采样数</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let historyChart = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    // 初始化图表
+    historyChart = echarts.init(document.getElementById('history-chart'));
+    historyChart.setOption({
+        title: { text: '历史数据趋势', left: 'center' },
+        tooltip: { trigger: 'axis' },
+        legend: { bottom: 0 },
+        xAxis: { type: 'category', data: [] },
+        yAxis: { type: 'value' },
+        series: []
+    });
+    
+    // 加载设备列表
+    fetch('/api/devices')
+        .then(r => r.json())
+        .then(data => {
+            const select = document.getElementById('device-select');
+            data.devices.forEach(d => {
+                const opt = document.createElement('option');
+                opt.value = d.device_id;
+                opt.textContent = d.name || d.device_id;
+                select.appendChild(opt);
+            });
+        });
+    
+    // 设备选择变化时更新参数列表
+    document.getElementById('device-select').addEventListener('change', function() {
+        const deviceId = this.value;
+        const registerSelect = document.getElementById('register-select');
+        registerSelect.innerHTML = '<option value="">全部参数</option>';
+        
+        if (deviceId) {
+            fetch(`/api/devices/${deviceId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.registers) {
+                        data.registers.forEach(r => {
+                            const opt = document.createElement('option');
+                            opt.value = r.name;
+                            opt.textContent = r.description || r.name;
+                            registerSelect.appendChild(opt);
+                        });
+                    }
+                });
+        }
+    });
+    
+    // 查询表单提交
+    document.getElementById('history-query-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        queryHistoryData();
+    });
+    
+    // 导出按钮
+    document.getElementById('export-btn').addEventListener('click', function() {
+        exportData();
+    });
+});
+
+// 查询历史数据
+async function queryHistoryData() {
+    const deviceId = document.getElementById('device-select').value;
+    const register = document.getElementById('register-select').value;
+    const startTime = document.getElementById('start-time').value;
+    const endTime = document.getElementById('end-time').value;
+    const interval = document.getElementById('interval').value;
+    
+    if (!deviceId) {
+        alert('请选择设备');
+        return;
+    }
+    
+    // 构建查询参数
+    let url = `/api/data/history/${deviceId}/${register || '*'}`;
+    const params = new URLSearchParams();
+    if (startTime) params.append('start_time', startTime);
+    if (endTime) params.append('end_time', endTime);
+    params.append('interval', interval);
+    
+    try {
+        const response = await fetch(`${url}?${params}`);
+        const data = await response.json();
+        
+        if (data.data) {
+            updateHistoryTable(data.data);
+            updateHistoryChart(data.data, register);
+        } else {
+            alert('没有查询到数据');
+        }
+    } catch (error) {
+        console.error('查询失败:', error);
+        alert('查询失败: ' + error.message);
+    }
+}
+
+// 更新历史数据表格
+function updateHistoryTable(data) {
+    const tbody = document.getElementById('history-tbody');
+    
+    if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">暂无数据</td></tr>';
+        return;
+    }
+    
+    // 获取当前选择的设备和参数
+    const deviceId = document.getElementById('device-select').value;
+    const registerName = document.getElementById('register-select').value;
+    
+    tbody.innerHTML = data.map(item => `
+        <tr>
+            <td>${item.time_bucket || item.timestamp || '-'}</td>
+            <td>${getDeviceName(deviceId)}</td>
+            <td>${getRegisterName(registerName)}</td>
+            <td>${formatNumber(item.avg_value)}</td>
+            <td>${formatNumber(item.min_value)}</td>
+            <td>${formatNumber(item.max_value)}</td>
+            <td>${item.sample_count || 1}</td>
+        </tr>
+    `).join('');
+}
+
+// 更新历史数据图表
+function updateHistoryChart(data, registerName) {
+    if (!data || data.length === 0) return;
+    
+    const timestamps = data.map(d => {
+        const time = d.time_bucket || d.timestamp;
+        // 只显示时分秒
+        if (time && time.includes(' ')) {
+            return time.split(' ')[1];
+        }
+        return time || '-';
+    });
+    const values = data.map(d => d.avg_value || d.value);
+    
+    historyChart.setOption({
+        xAxis: { data: timestamps },
+        series: [{
+            name: getRegisterName(registerName) || '数据',
+            type: 'line',
+            data: values,
+            smooth: true,
+            areaStyle: { opacity: 0.3 }
+        }]
+    });
+}
+
+// 导出数据
+async function exportData() {
+    const deviceId = document.getElementById('device-select').value;
+    const startTime = document.getElementById('start-time').value;
+    const endTime = document.getElementById('end-time').value;
+    
+    if (!deviceId) {
+        alert('请先选择设备');
+        return;
+    }
+    
+    const format = prompt('请选择导出格式 (csv/json):', 'csv');
+    if (!format) return;
+    
+    try {
+        const response = await fetch(`/api/export/device/${deviceId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                start_time: startTime || new Date(Date.now() - 3600000).toISOString(),
+                end_time: endTime || new Date().toISOString(),
+                format: format
+            })
+        });
+        
+        const result = await response.json();
+        if (result.success) {
+            alert('导出成功: ' + result.filepath);
+        } else {
+            alert('导出失败: ' + (result.message || '未知错误'));
+        }
+    } catch (error) {
+        alert('导出失败: ' + error.message);
+    }
+}
+
+// 辅助函数
+function getDeviceName(deviceId) {
+    const names = {
+        'temp_sensor_01': '温度传感器1号',
+        'pressure_sensor_01': '压力传感器1号',
+        'power_meter_01': '电力仪表1号'
+    };
+    return names[deviceId] || deviceId;
+}
+
+function getRegisterName(name) {
+    const names = {
+        'temperature': '温度',
+        'humidity': '湿度',
+        'pressure': '压力',
+        'voltage': '电压',
+        'current': '电流',
+        'power': '功率',
+        'energy': '电量',
+        'status': '状态'
+    };
+    return names[name] || name;
+}
+
+function formatNumber(value, decimals = 2) {
+    if (value === null || value === undefined) return '-';
+    return Number(value).toFixed(decimals);
+}
+</script>
+{% endblock %}

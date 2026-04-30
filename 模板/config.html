@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block title %}系统配置 - 工业SCADA系统{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-sliders"></i> 系统配置</h5>
+            </div>
+            <div class="card-body">
+                <ul class="nav nav-tabs" id="configTabs" role="tablist">
+                    <li class="nav-item">
+                        <a class="nav-link active" id="system-tab" data-bs-toggle="tab" href="#system" role="tab">系统设置</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" id="database-tab" data-bs-toggle="tab" href="#database" role="tab">数据库设置</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" id="collection-tab" data-bs-toggle="tab" href="#collection" role="tab">采集设置</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" id="alarm-tab" data-bs-toggle="tab" href="#alarm" role="tab">报警设置</a>
+                    </li>
+                </ul>
+                
+                <div class="tab-content mt-3" id="configTabContent">
+                    <!-- 系统设置 -->
+                    <div class="tab-pane fade show active" id="system" role="tabpanel">
+                        <form>
+                            <div class="mb-3">
+                                <label for="system-name" class="form-label">系统名称</label>
+                                <input type="text" class="form-control" id="system-name" value="工业数据采集与监控系统">
+                            </div>
+                            <div class="mb-3">
+                                <label for="web-port" class="form-label">Web端口</label>
+                                <input type="number" class="form-control" id="web-port" value="5000">
+                            </div>
+                            <div class="mb-3">
+                                <label for="log-level" class="form-label">日志级别</label>
+                                <select class="form-select" id="log-level">
+                                    <option value="DEBUG">DEBUG</option>
+                                    <option value="INFO" selected>INFO</option>
+                                    <option value="WARNING">WARNING</option>
+                                    <option value="ERROR">ERROR</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary">保存设置</button>
+                        </form>
+                    </div>
+                    
+                    <!-- 数据库设置 -->
+                    <div class="tab-pane fade" id="database" role="tabpanel">
+                        <form>
+                            <div class="mb-3">
+                                <label for="retention-days" class="form-label">数据保留天数</label>
+                                <input type="number" class="form-control" id="retention-days" value="30">
+                            </div>
+                            <div class="mb-3">
+                                <label for="backup-interval" class="form-label">备份间隔（小时）</label>
+                                <input type="number" class="form-control" id="backup-interval" value="24">
+                            </div>
+                            <button type="submit" class="btn btn-primary">保存设置</button>
+                        </form>
+                    </div>
+                    
+                    <!-- 采集设置 -->
+                    <div class="tab-pane fade" id="collection" role="tabpanel">
+                        <form>
+                            <div class="mb-3">
+                                <label for="default-interval" class="form-label">默认采集间隔（秒）</label>
+                                <input type="number" class="form-control" id="default-interval" value="5">
+                            </div>
+                            <div class="mb-3">
+                                <label for="timeout" class="form-label">通信超时（秒）</label>
+                                <input type="number" class="form-control" id="timeout" value="3">
+                            </div>
+                            <div class="mb-3">
+                                <label for="retry-count" class="form-label">重试次数</label>
+                                <input type="number" class="form-control" id="retry-count" value="3">
+                            </div>
+                            <button type="submit" class="btn btn-primary">保存设置</button>
+                        </form>
+                    </div>
+                    
+                    <!-- 报警设置 -->
+                    <div class="tab-pane fade" id="alarm" role="tabpanel">
+                        <form>
+                            <div class="mb-3">
+                                <label for="alarm-check-interval" class="form-label">报警检查间隔（秒）</label>
+                                <input type="number" class="form-control" id="alarm-check-interval" value="1">
+                            </div>
+                            <div class="mb-3">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="email-enabled">
+                                    <label class="form-check-label" for="email-enabled">启用邮件通知</label>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">保存设置</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-info-circle"></i> 系统信息</h5>
+            </div>
+            <div class="card-body">
+                <div class="row" id="system-info">
+                    <div class="col-md-3">
+                        <strong>数据库大小:</strong>
+                        <span id="db-size">-</span>
+                    </div>
+                    <div class="col-md-3">
+                        <strong>数据记录数:</strong>
+                        <span id="data-count">-</span>
+                    </div>
+                    <div class="col-md-3">
+                        <strong>报警记录数:</strong>
+                        <span id="alarm-count">-</span>
+                    </div>
+                    <div class="col-md-3">
+                        <strong>采集成功率:</strong>
+                        <span id="success-rate">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 加载系统信息
+    fetch('/api/system/status')
+        .then(r => r.json())
+        .then(data => {
+            if (data.database) {
+                document.getElementById('db-size').textContent = data.database.database_size_mb + ' MB';
+                document.getElementById('data-count').textContent = data.database.realtime_records;
+                document.getElementById('alarm-count').textContent = data.database.alarm_records;
+            }
+            if (data.collector) {
+                const total = data.collector.total_collections || 0;
+                const success = data.collector.successful_collections || 0;
+                const rate = total > 0 ? ((success / total) * 100).toFixed(1) + '%' : '-';
+                document.getElementById('success-rate').textContent = rate;
+            }
+        });
+});
+</script>
+{% endblock %}
