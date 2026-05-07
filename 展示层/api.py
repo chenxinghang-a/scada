@@ -1034,3 +1034,202 @@ def _update_protocol_fields(protocol: str, device_config: dict, data: dict):
         for key in ('base_url', 'poll_interval', 'auth_type', 'auth_token', 'auth_username', 'auth_password', 'endpoints'):
             if key in data:
                 device_config[key] = int(data[key]) if key == 'poll_interval' else data[key]
+
+
+# ==================== 工业4.0智能层API ====================
+
+@api_bp.route('/industry40/health', methods=['GET'])
+@_require_auth
+def get_health_scores():
+    """获取所有设备健康评分"""
+    pm = current_app.predictive_maintenance
+    if not pm:
+        return jsonify({'error': '预测性维护模块未启用'}), 503
+    return jsonify(pm.get_health_scores())
+
+
+@api_bp.route('/industry40/health/<device_id>', methods=['GET'])
+@_require_auth
+def get_device_health(device_id):
+    """获取指定设备健康评分"""
+    pm = current_app.predictive_maintenance
+    if not pm:
+        return jsonify({'error': '预测性维护模块未启用'}), 503
+    return jsonify(pm.get_device_health(device_id))
+
+
+@api_bp.route('/industry40/maintenance-alerts', methods=['GET'])
+@_require_auth
+def get_maintenance_alerts():
+    """获取维护建议列表"""
+    pm = current_app.predictive_maintenance
+    if not pm:
+        return jsonify({'error': '预测性维护模块未启用'}), 503
+    limit = request.args.get('limit', 50, type=int)
+    return jsonify(pm.get_maintenance_alerts(limit))
+
+
+@api_bp.route('/industry40/trend/<device_id>/<register_name>', methods=['GET'])
+@_require_auth
+def get_trend_data(device_id, register_name):
+    """获取趋势分析数据"""
+    pm = current_app.predictive_maintenance
+    if not pm:
+        return jsonify({'error': '预测性维护模块未启用'}), 503
+    return jsonify(pm.get_trend_data(device_id, register_name))
+
+
+@api_bp.route('/industry40/oee', methods=['GET'])
+@_require_auth
+def get_all_oee():
+    """获取所有设备OEE"""
+    oee = current_app.oee_calculator
+    if not oee:
+        return jsonify({'error': 'OEE模块未启用'}), 503
+    return jsonify(oee.get_all_oee())
+
+
+@api_bp.route('/industry40/oee/<device_id>', methods=['GET'])
+@_require_auth
+def get_device_oee(device_id):
+    """获取指定设备OEE"""
+    oee = current_app.oee_calculator
+    if not oee:
+        return jsonify({'error': 'OEE模块未启用'}), 503
+    result = oee.get_device_oee(device_id)
+    return jsonify(result if result else {'error': '无数据'})
+
+
+@api_bp.route('/industry40/spc/<device_id>/<register_name>', methods=['GET'])
+@_require_auth
+def get_spc_chart(device_id, register_name):
+    """获取SPC控制图数据"""
+    spc = current_app.spc_analyzer
+    if not spc:
+        return jsonify({'error': 'SPC模块未启用'}), 503
+    chart = spc.get_control_chart(device_id, register_name)
+    capability = spc.get_capability(device_id, register_name)
+    return jsonify({
+        'control_chart': chart,
+        'capability': capability,
+    })
+
+
+@api_bp.route('/industry40/energy', methods=['GET'])
+@_require_auth
+def get_energy_summary():
+    """获取能耗汇总"""
+    em = current_app.energy_manager
+    if not em:
+        return jsonify({'error': '能源管理模块未启用'}), 503
+    return jsonify(em.get_energy_summary())
+
+
+@api_bp.route('/industry40/energy/cost', methods=['GET'])
+@_require_auth
+def get_energy_cost():
+    """获取电费分时明细"""
+    em = current_app.energy_manager
+    if not em:
+        return jsonify({'error': '能源管理模块未启用'}), 503
+    return jsonify(em.get_energy_cost_breakdown())
+
+
+@api_bp.route('/industry40/energy/carbon', methods=['GET'])
+@_require_auth
+def get_carbon_emission():
+    """获取碳排放数据"""
+    em = current_app.energy_manager
+    if not em:
+        return jsonify({'error': '能源管理模块未启用'}), 503
+    return jsonify(em.get_carbon_emission())
+
+
+@api_bp.route('/industry40/energy/power', methods=['GET'])
+@_require_auth
+def get_realtime_power():
+    """获取实时功率"""
+    em = current_app.energy_manager
+    if not em:
+        return jsonify({'error': '能源管理模块未启用'}), 503
+    return jsonify({
+        'total_power_kw': em.get_total_power(),
+        'devices': em.get_realtime_power(),
+    })
+
+
+@api_bp.route('/industry40/edge/status', methods=['GET'])
+@_require_auth
+def get_edge_status():
+    """获取边缘决策引擎状态"""
+    edge = current_app.edge_decision
+    if not edge:
+        return jsonify({'error': '边缘决策引擎未启用'}), 503
+    return jsonify(edge.get_status())
+
+
+@api_bp.route('/industry40/edge/rules', methods=['GET'])
+@_require_auth
+def get_edge_rules():
+    """获取边缘决策规则"""
+    edge = current_app.edge_decision
+    if not edge:
+        return jsonify({'error': '边缘决策引擎未启用'}), 503
+    return jsonify(edge.get_rules())
+
+
+@api_bp.route('/industry40/edge/log', methods=['GET'])
+@_require_auth
+def get_edge_log():
+    """获取决策日志"""
+    edge = current_app.edge_decision
+    if not edge:
+        return jsonify({'error': '边缘决策引擎未启用'}), 503
+    limit = request.args.get('limit', 50, type=int)
+    return jsonify(edge.get_decision_log(limit))
+
+
+@api_bp.route('/industry40/overview', methods=['GET'])
+@_require_auth
+def get_industry40_overview():
+    """工业4.0总览数据"""
+    result = {
+        'predictive_maintenance': None,
+        'oee': None,
+        'energy': None,
+        'edge_decision': None,
+    }
+    
+    pm = current_app.predictive_maintenance
+    if pm:
+        scores = pm.get_health_scores()
+        if scores:
+            avg_health = sum(s.get('health_score', 0) for s in scores.values()) / len(scores)
+            alerts = pm.get_maintenance_alerts(5)
+            result['predictive_maintenance'] = {
+                'device_count': len(scores),
+                'avg_health_score': round(avg_health, 1),
+                'recent_alerts': alerts,
+            }
+    
+    oee_calc = current_app.oee_calculator
+    if oee_calc:
+        all_oee = oee_calc.get_all_oee()
+        if all_oee:
+            avg_oee = sum(o.get('oee_percent', 0) for o in all_oee.values()) / len(all_oee)
+            result['oee'] = {
+                'device_count': len(all_oee),
+                'avg_oee_percent': round(avg_oee, 1),
+                'devices': all_oee,
+            }
+    
+    em = current_app.energy_manager
+    if em:
+        result['energy'] = em.get_energy_summary()
+        result['energy']['total_power_kw'] = em.get_total_power()
+    
+    edge = current_app.edge_decision
+    if edge:
+        result['edge_decision'] = edge.get_status()
+    
+    return jsonify(result)

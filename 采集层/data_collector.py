@@ -22,10 +22,19 @@ class DataCollector:
     OPC UA和MQTT有自带的推送机制，仅对Modbus/REST做轮询
     """
     
-    def __init__(self, device_manager, database, alarm_manager=None):
+    def __init__(self, device_manager, database, alarm_manager=None,
+                 predictive_maintenance=None, oee_calculator=None,
+                 spc_analyzer=None, energy_manager=None, edge_decision=None):
         self.device_manager = device_manager
         self.database = database
         self.alarm_manager = alarm_manager
+        
+        # 工业4.0智能层模块（可选注入）
+        self.predictive_maintenance = predictive_maintenance
+        self.oee_calculator = oee_calculator
+        self.spc_analyzer = spc_analyzer
+        self.energy_manager = energy_manager
+        self.edge_decision = edge_decision
         
         # 采集任务
         self.tasks = {}  # device_id -> threading.Timer
@@ -311,6 +320,37 @@ class DataCollector:
                         value=data['value'],
                         timestamp=data['timestamp']
                     )
+                
+                # ===== 工业4.0智能层数据分发 =====
+                device_id = data['device_id']
+                register_name = data['register_name']
+                value = data['value']
+                timestamp = data['timestamp']
+                
+                # 预测性维护 — 喂入所有数值数据
+                if self.predictive_maintenance:
+                    self.predictive_maintenance.feed_data(
+                        device_id, register_name, value, timestamp)
+                
+                # 边缘决策引擎 — 更新数据快照
+                if self.edge_decision:
+                    self.edge_decision.update_data(
+                        f"{device_id}:{register_name}", value)
+                
+                # 能源管理 — 电力数据喂入
+                if self.energy_manager:
+                    if 'power' in register_name.lower() or 'watt' in register_name.lower():
+                        self.energy_manager.feed_power_data(
+                            device_id, value, timestamp=timestamp)
+                    elif 'energy' in register_name.lower() or 'kwh' in register_name.lower():
+                        self.energy_manager.feed_power_data(
+                            device_id, 0, energy_kwh=value, timestamp=timestamp)
+                
+                # SPC — 质量相关数据喂入
+                if self.spc_analyzer:
+                    if any(kw in register_name.lower() for kw in
+                           ['temperature', 'pressure', 'ph', 'quality', 'dimension']):
+                        self.spc_analyzer.feed_data(device_id, register_name, value)
                 
                 with self._stats_lock:
                     self.stats['queue_size'] = self.data_queue.qsize()

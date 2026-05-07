@@ -95,13 +95,40 @@ def main():
                                      alarm_output=alarm_output,
                                      broadcast_system=broadcast_system)
         
-        # 初始化数据采集器
+        # 初始化数据采集器（注入智能层模块）
         logger.info("初始化数据采集器...")
-        data_collector = DataCollector(device_manager, database, alarm_manager)
+        
+        # 初始化工业4.0智能层
+        logger.info("初始化智能层模块...")
+        from 智能层.predictive_maintenance import PredictiveMaintenance
+        from 智能层.oee_calculator import OEECalculator
+        from 智能层.spc_analyzer import SPCAnalyzer
+        from 智能层.energy_manager import EnergyManager
+        from 智能层.edge_decision import EdgeDecisionEngine
+        
+        predictive_maintenance = PredictiveMaintenance(database)
+        oee_calculator = OEECalculator(database)
+        spc_analyzer = SPCAnalyzer(database)
+        energy_manager = EnergyManager(database)
+        edge_decision = EdgeDecisionEngine(database)
+        
+        data_collector = DataCollector(
+            device_manager, database, alarm_manager,
+            predictive_maintenance=predictive_maintenance,
+            oee_calculator=oee_calculator,
+            spc_analyzer=spc_analyzer,
+            energy_manager=energy_manager,
+            edge_decision=edge_decision,
+        )
         
         # 创建Flask应用
         logger.info("创建Web应用...")
-        app = create_app(database, device_manager, alarm_manager, data_collector)
+        app = create_app(database, device_manager, alarm_manager, data_collector,
+                         predictive_maintenance=predictive_maintenance,
+                         oee_calculator=oee_calculator,
+                         spc_analyzer=spc_analyzer,
+                         energy_manager=energy_manager,
+                         edge_decision=edge_decision)
         
         # 将启动时间传递给app
         app.system_start_time = SYSTEM_START_TIME
@@ -116,6 +143,14 @@ def main():
         # 启动数据采集
         logger.info("启动数据采集...")
         data_collector.start()
+        
+        # 启动智能层模块
+        logger.info("启动智能层模块...")
+        predictive_maintenance.start()
+        oee_calculator.start()
+        energy_manager.start()
+        edge_decision.start()
+        logger.info("智能层已启动: 预测性维护 | OEE | SPC | 能源管理 | 边缘决策")
         
         # 启动Web服务
         mode_str = "真实设备模式" if not simulation_mode else "模拟模式：使用仿真数据"

@@ -1,0 +1,940 @@
+{% extends "base.html" %}
+
+{% block title %}工业4.0智能仪表盘{% endblock %}
+
+{% block extra_css %}
+<style>
+    .i4-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border: 1px solid #0f3460;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+        color: #e0e0e0;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    }
+    .i4-card-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #0f3460;
+    }
+    .i4-card-header i {
+        font-size: 1.5rem;
+        margin-right: 10px;
+        color: #00d4ff;
+    }
+    .i4-card-header h5 {
+        margin: 0;
+        font-weight: 600;
+        color: #ffffff;
+    }
+    .health-score {
+        font-size: 3rem;
+        font-weight: 700;
+        text-align: center;
+        padding: 20px 0;
+    }
+    .health-excellent { color: #00ff88; }
+    .health-good { color: #88ff00; }
+    .health-warning { color: #ffaa00; }
+    .health-critical { color: #ff4444; }
+    .oee-gauge {
+        height: 200px;
+    }
+    .metric-box {
+        text-align: center;
+        padding: 15px;
+        background: rgba(0,212,255,0.05);
+        border-radius: 8px;
+        border: 1px solid rgba(0,212,255,0.2);
+    }
+    .metric-value {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #00d4ff;
+    }
+    .metric-label {
+        font-size: 0.85rem;
+        color: #8899aa;
+        margin-top: 5px;
+    }
+    .alert-item {
+        padding: 10px 15px;
+        margin-bottom: 8px;
+        border-radius: 8px;
+        border-left: 4px solid;
+    }
+    .alert-critical { border-color: #ff4444; background: rgba(255,68,68,0.1); }
+    .alert-warning { border-color: #ffaa00; background: rgba(255,170,0,0.1); }
+    .alert-info { border-color: #00d4ff; background: rgba(0,212,255,0.1); }
+    .process-flow {
+        position: relative;
+        height: 300px;
+        background: rgba(0,0,0,0.3);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+    .flow-node {
+        position: absolute;
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75rem;
+        font-weight: 600;
+        border: 2px solid;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    .flow-node:hover {
+        transform: scale(1.1);
+        box-shadow: 0 0 20px rgba(0,212,255,0.5);
+    }
+    .flow-node.running { border-color: #00ff88; background: rgba(0,255,136,0.15); color: #00ff88; }
+    .flow-node.stopped { border-color: #ff4444; background: rgba(255,68,68,0.15); color: #ff4444; }
+    .flow-node.idle { border-color: #ffaa00; background: rgba(255,170,0,0.15); color: #ffaa00; }
+    .flow-pipe {
+        position: absolute;
+        background: linear-gradient(90deg, #0f3460, #00d4ff, #0f3460);
+        height: 3px;
+    }
+    .flow-pipe-v {
+        width: 3px;
+        background: linear-gradient(180deg, #0f3460, #00d4ff, #0f3460);
+    }
+    .spc-chart { height: 250px; }
+    .energy-chart { height: 250px; }
+    .status-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+    .badge-active { background: rgba(0,255,136,0.2); color: #00ff88; border: 1px solid #00ff88; }
+    .badge-inactive { background: rgba(255,68,68,0.2); color: #ff4444; border: 1px solid #ff4444; }
+    .tab-custom .nav-link {
+        color: #8899aa;
+        border: none;
+        padding: 10px 20px;
+    }
+    .tab-custom .nav-link.active {
+        color: #00d4ff;
+        border-bottom: 2px solid #00d4ff;
+        background: transparent;
+    }
+    .data-table {
+        color: #e0e0e0;
+    }
+    .data-table th {
+        background: rgba(0,212,255,0.1);
+        border-color: #0f3460;
+        color: #00d4ff;
+        font-weight: 600;
+    }
+    .data-table td {
+        border-color: #0f3460;
+    }
+    .data-table tr:hover {
+        background: rgba(0,212,255,0.05);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-3">
+    <!-- 顶部状态栏 -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <h4 class="text-white mb-0">
+                    <i class="bi bi-cpu"></i> 工业4.0智能仪表盘
+                    <span class="status-badge badge-active ms-2" id="system-badge">系统运行中</span>
+                </h4>
+                <div class="text-muted">
+                    <span id="last-update">最后更新: --</span>
+                    <button class="btn btn-sm btn-outline-info ms-3" onclick="refreshAll()">
+                        <i class="bi bi-arrow-clockwise"></i> 刷新
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab导航 -->
+    <ul class="nav tab-custom mb-3" id="i4Tabs">
+        <li class="nav-item">
+            <a class="nav-link active" data-bs-toggle="tab" href="#tab-overview">
+                <i class="bi bi-grid-3x3-gap"></i> 总览
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" data-bs-toggle="tab" href="#tab-predictive">
+                <i class="bi bi-heart-pulse"></i> 预测性维护
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" data-bs-toggle="tab" href="#tab-oee">
+                <i class="bi bi-speedometer2"></i> OEE效率
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" data-bs-toggle="tab" href="#tab-spc">
+                <i class="bi bi-bar-chart-line"></i> SPC过程控制
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" data-bs-toggle="tab" href="#tab-energy">
+                <i class="bi bi-lightning"></i> 能源管理
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" data-bs-toggle="tab" href="#tab-edge">
+                <i class="bi bi-diagram-3"></i> 边缘决策
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" data-bs-toggle="tab" href="#tab-twin">
+                <i class="bi bi-box"></i> 数字孪生
+            </a>
+        </li>
+    </ul>
+
+    <div class="tab-content">
+        <!-- ==================== 总览Tab ==================== -->
+        <div class="tab-pane fade show active" id="tab-overview">
+            <!-- 顶部指标卡片 -->
+            <div class="row mb-3">
+                <div class="col-md-3">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="ov-health">--</div>
+                            <div class="metric-label">平均健康评分</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="ov-oee">--%</div>
+                            <div class="metric-label">平均OEE</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="ov-power">--</div>
+                            <div class="metric-label">总功率 (kW)</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="ov-carbon">--</div>
+                            <div class="metric-label">碳排放 (kgCO₂)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 设备健康概览 + 工艺流程 -->
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-diagram-3"></i>
+                            <h5>工艺流程数字孪生</h5>
+                        </div>
+                        <div class="process-flow" id="process-flow">
+                            <!-- 动态生成 -->
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <h5>最新维护建议</h5>
+                        </div>
+                        <div id="ov-alerts" style="max-height: 280px; overflow-y: auto;">
+                            <p class="text-muted">加载中...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== 预测性维护Tab ==================== -->
+        <div class="tab-pane fade" id="tab-predictive">
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-heart-pulse"></i>
+                            <h5>设备健康评分</h5>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table data-table table-sm" id="health-table">
+                                <thead>
+                                    <tr>
+                                        <th>设备</th>
+                                        <th>寄存器</th>
+                                        <th>健康评分</th>
+                                        <th>趋势</th>
+                                        <th>异常数</th>
+                                        <th>故障预测</th>
+                                        <th>更新时间</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-tools"></i>
+                            <h5>维护建议</h5>
+                        </div>
+                        <div id="maintenance-alerts" style="max-height: 500px; overflow-y: auto;">
+                            <p class="text-muted">加载中...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== OEE Tab ==================== -->
+        <div class="tab-pane fade" id="tab-oee">
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-speedometer2"></i>
+                            <h5>全厂OEE</h5>
+                        </div>
+                        <div class="oee-gauge" id="oee-gauge-total"></div>
+                    </div>
+                </div>
+                <div class="col-md-8">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-bar-chart"></i>
+                            <h5>各设备OEE对比</h5>
+                        </div>
+                        <div id="oee-compare-chart" style="height: 250px;"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-12">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-table"></i>
+                            <h5>OEE明细</h5>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table data-table table-sm" id="oee-table">
+                                <thead>
+                                    <tr>
+                                        <th>设备</th>
+                                        <th>可用率(A)</th>
+                                        <th>性能率(P)</th>
+                                        <th>质量率(Q)</th>
+                                        <th>OEE</th>
+                                        <th>等级</th>
+                                        <th>总产量</th>
+                                        <th>合格品</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SPC Tab ==================== -->
+        <div class="tab-pane fade" id="tab-spc">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-graph-up"></i>
+                            <h5>X̄控制图</h5>
+                        </div>
+                        <div class="spc-chart" id="spc-xbar-chart"></div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-bar-chart-line"></i>
+                            <h5>R控制图</h5>
+                        </div>
+                        <div class="spc-chart" id="spc-r-chart"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-clipboard-data"></i>
+                            <h5>过程能力指数</h5>
+                        </div>
+                        <div id="spc-capability">
+                            <p class="text-muted">选择设备和寄存器查看SPC分析</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-exclamation-diamond"></i>
+                            <h5>判异规则检测</h5>
+                        </div>
+                        <div id="spc-violations" style="max-height: 300px; overflow-y: auto;">
+                            <p class="text-muted">暂无判异</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== 能源管理Tab ==================== -->
+        <div class="tab-pane fade" id="tab-energy">
+            <div class="row mb-3">
+                <div class="col-md-3">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="en-total">--</div>
+                            <div class="metric-label">总用电 (kWh)</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="en-cost">--</div>
+                            <div class="metric-label">电费 (元)</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="en-carbon">--</div>
+                            <div class="metric-label">碳排放 (kg)</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="en-trees">--</div>
+                            <div class="metric-label">等效树木 (棵)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-pie-chart"></i>
+                            <h5>分时电价构成</h5>
+                        </div>
+                        <div class="energy-chart" id="energy-pie-chart"></div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-lightning-charge"></i>
+                            <h5>实时功率分布</h5>
+                        </div>
+                        <div class="energy-chart" id="power-bar-chart"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== 边缘决策Tab ==================== -->
+        <div class="tab-pane fade" id="tab-edge">
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="edge-rules">--</div>
+                            <div class="metric-label">决策规则数</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="edge-interlocks">--</div>
+                            <div class="metric-label">安全联锁数</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="i4-card">
+                        <div class="metric-box">
+                            <div class="metric-value" id="edge-pid">--</div>
+                            <div class="metric-label">PID控制器数</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-list-check"></i>
+                            <h5>规则列表</h5>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table data-table table-sm" id="edge-rules-table">
+                                <thead>
+                                    <tr>
+                                        <th>规则ID</th>
+                                        <th>名称</th>
+                                        <th>类型</th>
+                                        <th>触发次数</th>
+                                        <th>状态</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-journal-text"></i>
+                            <h5>决策日志</h5>
+                        </div>
+                        <div id="edge-log" style="max-height: 400px; overflow-y: auto;">
+                            <p class="text-muted">加载中...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== 数字孪生Tab ==================== -->
+        <div class="tab-pane fade" id="tab-twin">
+            <div class="row">
+                <div class="col-12">
+                    <div class="i4-card">
+                        <div class="i4-card-header">
+                            <i class="bi bi-box"></i>
+                            <h5>车间数字孪生 — 实时工艺流程</h5>
+                        </div>
+                        <div class="process-flow" id="digital-twin-flow" style="height: 500px;">
+                            <!-- 大型工艺流程图 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const API_BASE = '/api/industry40';
+let token = localStorage.getItem('token');
+
+// 获取请求头
+function getHeaders() {
+    return {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+    };
+}
+
+// API请求封装
+async function apiGet(path) {
+    try {
+        const resp = await fetch(`${API_BASE}${path}`, { headers: getHeaders() });
+        if (resp.status === 401) {
+            window.location.href = '/login';
+            return null;
+        }
+        return await resp.json();
+    } catch (e) {
+        console.error(`API请求失败: ${path}`, e);
+        return null;
+    }
+}
+
+// ==================== 总览 ====================
+async function loadOverview() {
+    const data = await apiGet('/overview');
+    if (!data) return;
+
+    // 健康评分
+    if (data.predictive_maintenance) {
+        document.getElementById('ov-health').textContent = data.predictive_maintenance.avg_health_score;
+    }
+
+    // OEE
+    if (data.oee) {
+        document.getElementById('ov-oee').textContent = data.oee.avg_oee_percent + '%';
+    }
+
+    // 能源
+    if (data.energy) {
+        document.getElementById('ov-power').textContent = data.energy.total_power_kw;
+        document.getElementById('ov-carbon').textContent = data.energy.carbon_emission_kg;
+    }
+
+    // 维护建议
+    if (data.predictive_maintenance && data.predictive_maintenance.recent_alerts) {
+        const alertsHtml = data.predictive_maintenance.recent_alerts.map(a => `
+            <div class="alert-item alert-${a.severity}">
+                <strong>${a.device_id}</strong>: ${a.message}
+            </div>
+        `).join('');
+        document.getElementById('ov-alerts').innerHTML = alertsHtml || '<p class="text-muted">暂无维护建议</p>';
+    }
+
+    // 工艺流程
+    renderProcessFlow('process-flow');
+
+    document.getElementById('last-update').textContent = `最后更新: ${new Date().toLocaleTimeString()}`;
+}
+
+// ==================== 预测性维护 ====================
+async function loadPredictive() {
+    const scores = await apiGet('/health');
+    if (!scores) return;
+
+    const tbody = document.querySelector('#health-table tbody');
+    tbody.innerHTML = '';
+
+    for (const [key, data] of Object.entries(scores)) {
+        const score = data.health_score;
+        const cls = score >= 80 ? 'health-excellent' : score >= 60 ? 'health-good' : score >= 40 ? 'health-warning' : 'health-critical';
+        const trend = data.trend ? data.trend.direction : '-';
+        const trendIcon = trend === 'rising' ? '↑' : trend === 'falling' ? '↓' : '→';
+        const failure = data.failure_prediction ? `${data.failure_prediction.days_to_limit}天` : '-';
+
+        tbody.innerHTML += `
+            <tr>
+                <td>${data.device_id}</td>
+                <td>${data.register_name}</td>
+                <td class="${cls}"><strong>${score}</strong></td>
+                <td>${trendIcon} ${trend}</td>
+                <td>${data.anomaly_count}</td>
+                <td>${failure}</td>
+                <td>${new Date(data.updated_at).toLocaleTimeString()}</td>
+            </tr>
+        `;
+    }
+
+    // 维护建议
+    const alerts = await apiGet('/maintenance-alerts');
+    if (alerts) {
+        const div = document.getElementById('maintenance-alerts');
+        div.innerHTML = alerts.map(a => `
+            <div class="alert-item alert-${a.severity}">
+                <div><strong>${a.device_id}</strong> — ${a.register_name}</div>
+                <div style="font-size:0.85rem; margin-top:4px;">${a.message}</div>
+            </div>
+        `).join('') || '<p class="text-muted">暂无维护建议</p>';
+    }
+}
+
+// ==================== OEE ====================
+async function loadOEE() {
+    const data = await apiGet('/oee');
+    if (!data) return;
+
+    const devices = Object.entries(data);
+    if (devices.length === 0) return;
+
+    // 全厂OEE仪表盘
+    const avgOEE = devices.reduce((sum, [, d]) => sum + (d.oee_percent || 0), 0) / devices.length;
+    renderOEEGauge('oee-gauge-total', avgOEE);
+
+    // 对比图
+    renderOEECompare('oee-compare-chart', devices);
+
+    // 明细表
+    const tbody = document.querySelector('#oee-table tbody');
+    tbody.innerHTML = '';
+    for (const [id, d] of devices) {
+        tbody.innerHTML += `
+            <tr>
+                <td>${id}</td>
+                <td>${(d.availability * 100).toFixed(1)}%</td>
+                <td>${(d.performance * 100).toFixed(1)}%</td>
+                <td>${(d.quality * 100).toFixed(1)}%</td>
+                <td><strong>${d.oee_percent}%</strong></td>
+                <td>${d.grade || '-'}</td>
+                <td>${d.total_count || 0}</td>
+                <td>${d.good_count || 0}</td>
+            </tr>
+        `;
+    }
+}
+
+function renderOEEGauge(domId, value) {
+    const chart = echarts.init(document.getElementById(domId));
+    chart.setOption({
+        series: [{
+            type: 'gauge',
+            startAngle: 200,
+            endAngle: -20,
+            min: 0,
+            max: 100,
+            axisLine: {
+                lineStyle: {
+                    width: 20,
+                    color: [[0.5, '#ff4444'], [0.65, '#ffaa00'], [0.85, '#88ff00'], [1, '#00ff88']]
+                }
+            },
+            pointer: { itemStyle: { color: '#00d4ff' } },
+            axisTick: { show: false },
+            splitLine: { show: false },
+            axisLabel: { color: '#8899aa', fontSize: 10 },
+            detail: {
+                valueAnimation: true,
+                formatter: '{value}%',
+                color: '#00d4ff',
+                fontSize: 28,
+                offsetCenter: [0, '60%']
+            },
+            title: { show: false },
+            data: [{ value: value.toFixed(1) }]
+        }]
+    });
+}
+
+function renderOEECompare(domId, devices) {
+    const chart = echarts.init(document.getElementById(domId));
+    const names = devices.map(([id]) => id.replace('_', '\n'));
+    const values = devices.map(([, d]) => d.oee_percent || 0);
+
+    chart.setOption({
+        tooltip: { trigger: 'axis' },
+        xAxis: { type: 'category', data: names, axisLabel: { color: '#8899aa', fontSize: 10 } },
+        yAxis: { type: 'value', max: 100, axisLabel: { color: '#8899aa' }, splitLine: { lineStyle: { color: '#0f3460' } } },
+        series: [{
+            type: 'bar',
+            data: values.map(v => ({
+                value: v,
+                itemStyle: { color: v >= 85 ? '#00ff88' : v >= 65 ? '#ffaa00' : '#ff4444' }
+            })),
+            barWidth: '40%',
+            label: { show: true, position: 'top', color: '#e0e0e0', formatter: '{c}%' }
+        }],
+        grid: { left: 50, right: 20, bottom: 40, top: 20 }
+    });
+}
+
+// ==================== 能源 ====================
+async function loadEnergy() {
+    const summary = await apiGet('/energy');
+    if (!summary) return;
+
+    document.getElementById('en-total').textContent = summary.total_energy_kwh;
+    document.getElementById('en-cost').textContent = summary.electricity_cost;
+    document.getElementById('en-carbon').textContent = summary.carbon_emission_kg;
+
+    const carbon = await apiGet('/energy/carbon');
+    if (carbon) {
+        document.getElementById('en-trees').textContent = carbon.equivalent_trees;
+    }
+
+    // 分时电价饼图
+    const cost = await apiGet('/energy/cost');
+    if (cost) {
+        renderEnergyPie('energy-pie-chart', cost);
+    }
+
+    // 实时功率
+    const power = await apiGet('/energy/power');
+    if (power && power.devices) {
+        renderPowerBar('power-bar-chart', power.devices);
+    }
+}
+
+function renderEnergyPie(domId, cost) {
+    const chart = echarts.init(document.getElementById(domId));
+    chart.setOption({
+        tooltip: { trigger: 'item', formatter: '{b}: {c}元 ({d}%)' },
+        legend: { bottom: 0, textStyle: { color: '#8899aa' } },
+        series: [{
+            type: 'pie',
+            radius: ['40%', '70%'],
+            label: { color: '#e0e0e0' },
+            data: [
+                { value: cost.peak.cost, name: '峰时', itemStyle: { color: '#ff4444' } },
+                { value: cost.flat.cost, name: '平时', itemStyle: { color: '#ffaa00' } },
+                { value: cost.valley.cost, name: '谷时', itemStyle: { color: '#00ff88' } },
+            ]
+        }]
+    });
+}
+
+function renderPowerBar(domId, devices) {
+    const chart = echarts.init(document.getElementById(domId));
+    const entries = Object.entries(devices).filter(([, v]) => v.power_kw !== undefined);
+    const names = entries.map(([k]) => k);
+    const values = entries.map(([, v]) => v.power_kw);
+
+    chart.setOption({
+        tooltip: { trigger: 'axis' },
+        xAxis: { type: 'category', data: names, axisLabel: { color: '#8899aa', rotate: 30, fontSize: 10 } },
+        yAxis: { type: 'value', axisLabel: { color: '#8899aa' }, splitLine: { lineStyle: { color: '#0f3460' } } },
+        series: [{
+            type: 'bar',
+            data: values,
+            itemStyle: { color: '#00d4ff' },
+            barWidth: '50%'
+        }],
+        grid: { left: 50, right: 20, bottom: 60, top: 20 }
+    });
+}
+
+// ==================== 边缘决策 ====================
+async function loadEdge() {
+    const status = await apiGet('/edge/status');
+    if (status) {
+        document.getElementById('edge-rules').textContent = status.rules_count;
+        document.getElementById('edge-interlocks').textContent = status.interlocks_count;
+        document.getElementById('edge-pid').textContent = status.pid_controllers_count;
+    }
+
+    const rules = await apiGet('/edge/rules');
+    if (rules) {
+        const tbody = document.querySelector('#edge-rules-table tbody');
+        tbody.innerHTML = '';
+
+        for (const [id, r] of Object.entries(rules.rules || {})) {
+            tbody.innerHTML += `
+                <tr>
+                    <td>${id}</td>
+                    <td>${r.name}</td>
+                    <td>规则</td>
+                    <td>${r.trigger_count}</td>
+                    <td>${r.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>'}</td>
+                </tr>
+            `;
+        }
+        for (const [id, r] of Object.entries(rules.interlocks || {})) {
+            tbody.innerHTML += `
+                <tr>
+                    <td>${id}</td>
+                    <td>${r.name}</td>
+                    <td><span style="color:#ff4444">联锁</span></td>
+                    <td>${r.trigger_count}</td>
+                    <td>${r.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>'}</td>
+                </tr>
+            `;
+        }
+    }
+
+    const log = await apiGet('/edge/log');
+    if (log) {
+        const div = document.getElementById('edge-log');
+        div.innerHTML = log.map(l => `
+            <div style="padding:5px 10px; border-bottom:1px solid #0f3460; font-size:0.85rem;">
+                <span style="color:#00d4ff">[${l.rule_type}]</span>
+                <strong>${l.rule_id}</strong>: ${l.result || ''}
+                <span style="color:#666; float:right">${new Date(l.timestamp).toLocaleTimeString()}</span>
+            </div>
+        `).join('') || '<p class="text-muted">暂无决策日志</p>';
+    }
+}
+
+// ==================== 工艺流程数字孪生 ====================
+function renderProcessFlow(domId) {
+    const container = document.getElementById(domId);
+    if (!container) return;
+
+    // 工艺节点定义
+    const nodes = [
+        { id: 'raw', x: 30, y: 120, label: '原料仓', icon: '📦', status: 'running' },
+        { id: 'reactor', x: 160, y: 80, label: '反应釜A', icon: '⚗️', status: 'running' },
+        { id: 'reactor2', x: 160, y: 180, label: '反应釜B', icon: '⚗️', status: 'idle' },
+        { id: 'mixer', x: 300, y: 120, label: '混合机', icon: '🔄', status: 'running' },
+        { id: 'conveyor', x: 440, y: 120, label: '传送带', icon: '➡️', status: 'running' },
+        { id: 'packer', x: 570, y: 120, label: '包装机', icon: '📦', status: 'running' },
+        { id: 'warehouse', x: 700, y: 120, label: '成品仓', icon: '🏭', status: 'running' },
+    ];
+
+    // 管道连接
+    const pipes = [
+        { x: 110, y: 155, w: 50, h: 3 },
+        { x: 240, y: 115, w: 60, h: 3 },
+        { x: 240, y: 195, w: 60, h: 3, vertical: false },
+        { x: 380, y: 155, w: 60, h: 3 },
+        { x: 520, y: 155, w: 50, h: 3 },
+        { x: 650, y: 155, w: 50, h: 3 },
+    ];
+
+    let html = '';
+
+    // 绘制管道
+    pipes.forEach(p => {
+        html += `<div class="flow-pipe" style="left:${p.x}px; top:${p.y}px; width:${p.w}px; height:${p.h}px;"></div>`;
+    });
+
+    // 绘制节点
+    nodes.forEach(n => {
+        html += `
+            <div class="flow-node ${n.status}" style="left:${n.x}px; top:${n.y}px;" title="${n.label}">
+                <span style="font-size:1.5rem;">${n.icon}</span>
+                <span>${n.label}</span>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
+
+// ==================== 刷新 ====================
+function refreshAll() {
+    loadOverview();
+    loadPredictive();
+    loadOEE();
+    loadEnergy();
+    loadEdge();
+}
+
+// 初始化
+document.addEventListener('DOMContentLoaded', () => {
+    refreshAll();
+    // 每30秒自动刷新
+    setInterval(refreshAll, 30000);
+});
+
+// Tab切换时加载对应数据
+document.querySelectorAll('#i4Tabs .nav-link').forEach(tab => {
+    tab.addEventListener('shown.bs.tab', (e) => {
+        const target = e.target.getAttribute('href');
+        if (target === '#tab-predictive') loadPredictive();
+        if (target === '#tab-oee') loadOEE();
+        if (target === '#tab-energy') loadEnergy();
+        if (target === '#tab-edge') loadEdge();
+    });
+});
+</script>
+{% endblock %}

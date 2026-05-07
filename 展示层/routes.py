@@ -11,7 +11,9 @@ from .websocket import init_socketio
 from 用户层.auth import AuthManager
 
 
-def create_app(database, device_manager, alarm_manager, data_collector):
+def create_app(database, device_manager, alarm_manager, data_collector,
+               predictive_maintenance=None, oee_calculator=None,
+               spc_analyzer=None, energy_manager=None, edge_decision=None):
     """
     创建Flask应用
     
@@ -20,6 +22,11 @@ def create_app(database, device_manager, alarm_manager, data_collector):
         device_manager: 设备管理器实例
         alarm_manager: 报警管理器实例
         data_collector: 数据采集器实例
+        predictive_maintenance: 预测性维护实例（可选）
+        oee_calculator: OEE计算器实例（可选）
+        spc_analyzer: SPC分析器实例（可选）
+        energy_manager: 能源管理实例（可选）
+        edge_decision: 边缘决策引擎实例（可选）
         
     Returns:
         Flask: Flask应用实例
@@ -45,6 +52,13 @@ def create_app(database, device_manager, alarm_manager, data_collector):
     app.alarm_manager = alarm_manager
     app.data_collector = data_collector
     app.auth_manager = auth_manager
+    
+    # 工业4.0智能层实例
+    app.predictive_maintenance = predictive_maintenance
+    app.oee_calculator = oee_calculator
+    app.spc_analyzer = spc_analyzer
+    app.energy_manager = energy_manager
+    app.edge_decision = edge_decision
     
     # 页面路由
     @app.route('/')
@@ -96,6 +110,11 @@ def create_app(database, device_manager, alarm_manager, data_collector):
     def alarm_output_page():
         """报警输出与广播控制页面"""
         return render_template('alarm_output.html')
+    
+    @app.route('/industry40')
+    def industry40_page():
+        """工业4.0智能仪表盘"""
+        return render_template('industry40.html')
     
     # 错误处理
     @app.errorhandler(404)
