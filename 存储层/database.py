@@ -539,7 +539,8 @@ class Database:
             try:
                 cursor.execute('SELECT COUNT(*) FROM history_archive')
                 archive_count = cursor.fetchone()[0]
-            except:
+            except Exception as e:
+                logger.debug(f"查询归档数据统计失败（可能表不存在）: {e}")
                 archive_count = 0
             
             # 数据库文件大小

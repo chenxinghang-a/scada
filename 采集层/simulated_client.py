@@ -16,6 +16,8 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Any, Callable, Optional
 
+from .base_client import ModbusClientInterface, PushClientInterface
+
 logger = logging.getLogger(__name__)
 
 
@@ -308,7 +310,7 @@ def _generate_value(rule: dict, t: float, phase_offset: float = 0.0) -> float:
 
 # ==================== 模拟Modbus客户端 ====================
 
-class SimulatedModbusClient:
+class SimulatedModbusClient(ModbusClientInterface):
     """
     模拟Modbus客户端（配置驱动版）
     从寄存器配置的 name/unit/data_type 自动推断模拟数据范围
@@ -316,9 +318,7 @@ class SimulatedModbusClient:
     """
 
     def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.device_id = config.get('id')
-        self.device_name = config.get('name')
+        super().__init__(config)
         self.connected = False
         self.start_time = time.time()
 
@@ -445,16 +445,14 @@ class SimulatedModbusClient:
 
 # ==================== 模拟OPC UA客户端 ====================
 
-class SimulatedOPCUAClient:
+class SimulatedOPCUAClient(PushClientInterface):
     """
     模拟OPC UA客户端（配置驱动版）
     从节点配置的 name/unit 自动推断模拟数据
     """
 
     def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.device_id = config.get('id', 'opcua_sim')
-        self.device_name = config.get('name', 'OPC UA模拟设备')
+        super().__init__(config)
         self.connected = False
         self.start_time = time.time()
 
@@ -550,18 +548,17 @@ class SimulatedOPCUAClient:
 
 # ==================== 模拟MQTT客户端 ====================
 
-class SimulatedMQTTClient:
+class SimulatedMQTTClient(PushClientInterface):
     """
     模拟MQTT客户端（配置驱动版）
     从topics配置的 name/unit 自动推断模拟数据
     """
 
     def __init__(self, config: Dict[str, Any] = None, **kwargs):
-        self.config = config or kwargs
-        self.device_id = self.config.get('id', 'mqtt_sim')
-        self.device_name = self.config.get('name', 'MQTT模拟设备')
-        self.broker_host = self.config.get('host', 'localhost')
-        self.broker_port = self.config.get('port', 1883)
+        config = config or kwargs
+        super().__init__(config)
+        self.broker_host = config.get('host', 'localhost')
+        self.broker_port = config.get('port', 1883)
         self.connected = False
         self.start_time = time.time()
 
@@ -669,16 +666,14 @@ class SimulatedMQTTClient:
 
 # ==================== 模拟REST客户端 ====================
 
-class SimulatedRESTClient:
+class SimulatedRESTClient(PushClientInterface):
     """
     模拟REST HTTP客户端（配置驱动版）
     从endpoints配置的 name/unit 自动推断模拟数据
     """
 
     def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.device_id = config.get('id', 'rest_sim')
-        self.device_name = config.get('name', 'REST模拟设备')
+        super().__init__(config)
         self.base_url = config.get('base_url', 'http://localhost')
         self.connected = False
         self.start_time = time.time()

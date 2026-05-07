@@ -96,6 +96,9 @@ class MQTTClient:
         # 订阅主题列表: {topic: qos}
         self._subscriptions: Dict[str, int] = {}
         
+        # 最新数据缓存（与模拟客户端行为一致）
+        self.latest_data: Dict[str, Dict] = {}
+        
         # 连接状态
         self.connected = False
         self._lock = threading.Lock()
@@ -185,8 +188,8 @@ class MQTTClient:
             return False
     
     def get_latest_data(self) -> Dict[str, Dict]:
-        """获取最新数据（与其他协议客户端接口统一，MQTT无缓存返回空）"""
-        return {}
+        """获取最新数据缓存"""
+        return dict(self.latest_data)
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息（与其他协议客户端接口统一）"""
@@ -313,6 +316,13 @@ class MQTTClient:
         签名统一: callback(device_id, register_name, value, unit)
         与OPCUA/REST客户端的DataCollector.on_data回调签名一致
         """
+        # 更新数据缓存
+        self.latest_data[register_name] = {
+            'value': value,
+            'unit': unit,
+            'timestamp': datetime.now().isoformat()
+        }
+        
         for callback in self._data_callbacks:
             try:
                 callback(device_id, register_name, value, unit)
