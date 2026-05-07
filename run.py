@@ -105,12 +105,14 @@ def main():
         from 智能层.spc_analyzer import SPCAnalyzer
         from 智能层.energy_manager import EnergyManager
         from 智能层.edge_decision import EdgeDecisionEngine
+        from 智能层.device_control import DeviceControlSafety
         
         predictive_maintenance = PredictiveMaintenance(database)
         oee_calculator = OEECalculator(database)
         spc_analyzer = SPCAnalyzer(database)
         energy_manager = EnergyManager(database)
         edge_decision = EdgeDecisionEngine(database)
+        device_control = DeviceControlSafety(database, device_manager, alarm_manager)
         
         data_collector = DataCollector(
             device_manager, database, alarm_manager,
@@ -119,6 +121,7 @@ def main():
             spc_analyzer=spc_analyzer,
             energy_manager=energy_manager,
             edge_decision=edge_decision,
+            device_control=device_control,
         )
         
         # 创建Flask应用
@@ -128,7 +131,8 @@ def main():
                          oee_calculator=oee_calculator,
                          spc_analyzer=spc_analyzer,
                          energy_manager=energy_manager,
-                         edge_decision=edge_decision)
+                         edge_decision=edge_decision,
+                         device_control=device_control)
         
         # 将启动时间传递给app
         app.system_start_time = SYSTEM_START_TIME

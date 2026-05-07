@@ -2,11 +2,75 @@
 
 {% block title %}设备控制 - 工业数据采集与监控系统{% endblock %}
 
+{% block extra_css %}
+<style>
+/* 紧急停机按钮 */
+.estop-btn {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    font-size: 16px;
+    font-weight: bold;
+    border: 6px solid #8b0000;
+    box-shadow: 0 4px 15px rgba(220,53,69,0.4);
+    transition: all 0.2s;
+}
+.estop-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 6px 20px rgba(220,53,69,0.6);
+}
+.estop-btn.active {
+    background: #ff0000 !important;
+    color: #fff !important;
+    animation: estop-pulse 1s ease-in-out infinite;
+}
+@keyframes estop-pulse {
+    0%, 100% { box-shadow: 0 0 20px rgba(255,0,0,0.5); }
+    50% { box-shadow: 0 0 40px rgba(255,0,0,0.8), 0 0 60px rgba(255,0,0,0.3); }
+}
+/* 联锁状态 */
+.interlock-item {
+    padding: 6px 10px;
+    border-left: 3px solid #6c757d;
+    margin-bottom: 4px;
+    background: #f8f9fa;
+    border-radius: 0 4px 4px 0;
+    font-size: 13px;
+}
+.interlock-item.triggered { border-left-color: #dc3545; background: #fff5f5; }
+.interlock-item.bypassed { border-left-color: #ffc107; background: #fffdf0; opacity: 0.7; }
+.interlock-item.normal { border-left-color: #28a745; }
+/* 设备健康 */
+.health-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+.health-dot.connected { background: #28a745; }
+.health-dot.disconnected { background: #dc3545; }
+.health-dot.unknown { background: #6c757d; }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="row mb-4">
+<!-- 紧急停机状态横幅 -->
+<div class="alert alert-danger d-none align-items-center mb-3" id="estop-banner" role="alert" style="font-size:18px;">
+    <i class="bi bi-exclamation-octagon-fill me-3" style="font-size:28px;"></i>
+    <div class="flex-grow-1">
+        <strong>紧急停机已激活</strong> — <span id="estop-reason">-</span>
+        <br><small>时间: <span id="estop-time">-</span></small>
+    </div>
+    <button class="btn btn-light btn-lg" id="btn-estop-reset" onclick="resetEStop()">
+        <i class="bi bi-arrow-counterclockwise"></i> 解除停机
+    </button>
+</div>
+
+<div class="row mb-3">
     <div class="col">
         <h2><i class="bi bi-joystick me-2"></i>设备控制</h2>
-        <p class="text-muted">远程控制工业设备，写入寄存器和线圈</p>
+        <p class="text-muted">远程控制工业设备，写入寄存器和线圈 | 工厂级安全控制</p>
     </div>
 </div>
 
@@ -14,6 +78,52 @@
 <div class="alert alert-warning" id="permission-warning" style="display: none;">
     <i class="bi bi-exclamation-triangle me-2"></i>
     <strong>权限不足：</strong>设备控制功能仅限管理员和工程师使用。
+</div>
+
+<!-- 紧急停机 + 联锁状态 + 设备健康 -->
+<div class="row mb-4">
+    <!-- 紧急停机 -->
+    <div class="col-md-3 text-center">
+        <div class="card border-danger">
+            <div class="card-body py-4">
+                <h6 class="text-danger mb-3"><i class="bi bi-shield-exclamation"></i> 紧急停机</h6>
+                <button class="btn btn-danger estop-btn" id="btn-estop" onclick="triggerEStop()">
+                    E-STOP
+                </button>
+                <div class="mt-2">
+                    <small class="text-muted" id="estop-status-text">系统正常</small>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- 安全联锁 -->
+    <div class="col-md-5">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center py-2">
+                <h6 class="mb-0"><i class="bi bi-shield-check"></i> 安全联锁</h6>
+                <span class="badge bg-secondary" id="interlock-count">-</span>
+            </div>
+            <div class="card-body p-2" style="max-height:200px;overflow-y:auto;">
+                <div id="interlock-list">
+                    <div class="text-muted text-center py-2">加载中...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- 设备健康 -->
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center py-2">
+                <h6 class="mb-0"><i class="bi bi-heart-pulse"></i> 设备健康</h6>
+                <span class="badge bg-secondary" id="health-count">-</span>
+            </div>
+            <div class="card-body p-2" style="max-height:200px;overflow-y:auto;">
+                <div id="health-list">
+                    <div class="text-muted text-center py-2">加载中...</div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- 控制面板 -->
@@ -499,5 +609,182 @@ function showAlert(message, type = 'info') {
     document.body.appendChild(alert);
     setTimeout(() => { if (alert.parentNode) alert.remove(); }, 3000);
 }
+
+// ==================== 紧急停机 ====================
+async function triggerEStop() {
+    if (!confirm('确认触发紧急停机？\n\n这将停止所有可控设备！')) return;
+    const reason = prompt('请输入停机原因（可选）:', '操作员手动触发') || '操作员手动触发';
+    try {
+        const r = await fetch('/api/control/estop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({ reason })
+        });
+        const data = await r.json();
+        showAlert(data.message || '紧急停机已触发', 'danger');
+        loadControlSafetyStatus();
+    } catch(e) { showAlert('紧急停机触发失败', 'danger'); }
+}
+
+async function resetEStop() {
+    if (!confirm('确认解除紧急停机？\n\n请确认所有安全条件已满足！')) return;
+    try {
+        const r = await fetch('/api/control/estop/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+        });
+        const data = await r.json();
+        if (data.success) {
+            showAlert('紧急停机已解除', 'success');
+        } else {
+            showAlert(data.message || '解除失败', 'warning');
+        }
+        loadControlSafetyStatus();
+    } catch(e) { showAlert('解除紧急停机失败', 'danger'); }
+}
+
+// ==================== 安全联锁 ====================
+async function loadInterlocks() {
+    try {
+        const r = await fetch('/api/control/interlocks', { headers: getAuthHeaders() });
+        const data = await r.json();
+        renderInterlocks(data);
+    } catch(e) {}
+}
+
+function renderInterlocks(rules) {
+    const container = document.getElementById('interlock-list');
+    const entries = Object.entries(rules);
+    if (entries.length === 0) {
+        container.innerHTML = '<div class="text-muted text-center py-2">无联锁规则</div>';
+        return;
+    }
+    let triggered = 0, bypassed = 0;
+    container.innerHTML = entries.map(([id, r]) => {
+        if (r.triggered) triggered++;
+        if (r.bypassed) bypassed++;
+        const status = r.bypassed ? 'bypassed' : r.triggered ? 'triggered' : 'normal';
+        const icon = r.bypassed ? 'bi-pause-circle' : r.triggered ? 'bi-exclamation-triangle' : 'bi-check-circle';
+        const color = r.bypassed ? 'warning' : r.triggered ? 'danger' : 'success';
+        return `
+            <div class="interlock-item ${status}">
+                <div class="d-flex justify-content-between align-items-center">
+                    <span>
+                        <i class="bi ${icon} text-${color} me-1"></i>
+                        <strong>${r.name || id}</strong>
+                    </span>
+                    <span>
+                        ${r.bypassed
+                            ? `<button class="btn btn-sm btn-outline-success py-0" onclick="restoreInterlock('${id}')">恢复</button>`
+                            : `<button class="btn btn-sm btn-outline-warning py-0" onclick="bypassInterlock('${id}')">旁路</button>`
+                        }
+                    </span>
+                </div>
+                <small class="text-muted">${r.description || ''}</small>
+            </div>
+        `;
+    }).join('');
+    document.getElementById('interlock-count').textContent = `${triggered}触发 / ${bypassed}旁路 / ${entries.length}总数`;
+}
+
+async function bypassInterlock(ruleId) {
+    const reason = prompt('请输入旁路原因（维护等）:');
+    if (!reason) return;
+    try {
+        await fetch(`/api/control/interlocks/${ruleId}/bypass`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({ reason })
+        });
+        loadInterlocks();
+    } catch(e) { showAlert('旁路失败', 'danger'); }
+}
+
+async function restoreInterlock(ruleId) {
+    if (!confirm('确认恢复联锁？')) return;
+    try {
+        await fetch(`/api/control/interlocks/${ruleId}/restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+        });
+        loadInterlocks();
+    } catch(e) { showAlert('恢复失败', 'danger'); }
+}
+
+// ==================== 设备健康 ====================
+async function loadDeviceHealth() {
+    try {
+        const r = await fetch('/api/control/health', { headers: getAuthHeaders() });
+        const data = await r.json();
+        renderDeviceHealth(data);
+    } catch(e) {}
+}
+
+function renderDeviceHealth(data) {
+    const container = document.getElementById('health-list');
+    const devices = data.devices || {};
+    const entries = Object.entries(devices);
+    if (entries.length === 0) {
+        container.innerHTML = '<div class="text-muted text-center py-2">暂无设备健康数据</div>';
+        return;
+    }
+    let connected = 0, disconnected = 0;
+    container.innerHTML = entries.map(([id, h]) => {
+        const status = h.status || 'unknown';
+        if (status === 'connected') connected++;
+        if (status === 'disconnected') disconnected++;
+        return `
+            <div class="d-flex justify-content-between align-items-center py-1 border-bottom">
+                <span>
+                    <span class="health-dot ${status}"></span>
+                    ${id}
+                </span>
+                <small class="text-muted">${status === 'connected' ? `${Math.round(h.avg_response_ms || 0)}ms` : status}</small>
+            </div>
+        `;
+    }).join('');
+    document.getElementById('health-count').textContent = `${connected}在线 / ${disconnected}离线 / ${entries.length}总数`;
+}
+
+// ==================== 综合状态加载 ====================
+async function loadControlSafetyStatus() {
+    try {
+        const r = await fetch('/api/control/status', { headers: getAuthHeaders() });
+        const data = await r.json();
+        if (!data.enabled) return;
+
+        // E-Stop状态
+        const estop = data.estop || {};
+        const banner = document.getElementById('estop-banner');
+        const btn = document.getElementById('btn-estop');
+        const statusText = document.getElementById('estop-status-text');
+        if (estop.active) {
+            banner.classList.remove('d-none');
+            banner.classList.add('d-flex');
+            document.getElementById('estop-reason').textContent = estop.reason || '-';
+            document.getElementById('estop-time').textContent = estop.time ? new Date(estop.time).toLocaleString() : '-';
+            btn.classList.add('active');
+            statusText.textContent = '停机中';
+            statusText.className = 'text-danger fw-bold';
+        } else {
+            banner.classList.add('d-none');
+            banner.classList.remove('d-flex');
+            btn.classList.remove('active');
+            statusText.textContent = '系统正常';
+            statusText.className = 'text-success';
+        }
+
+        // 联锁和健康
+        if (data.interlocks) renderInterlocks(data.interlocks.rules || {});
+        if (data.device_health) renderDeviceHealth(data.device_health);
+    } catch(e) {}
+}
+
+// 页面加载时初始化安全状态
+document.addEventListener('DOMContentLoaded', function() {
+    loadControlSafetyStatus();
+    // 每10秒刷新安全状态
+    setInterval(loadControlSafetyStatus, 10000);
+});
 </script>
 {% endblock %}

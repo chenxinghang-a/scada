@@ -24,7 +24,8 @@ class DataCollector:
     
     def __init__(self, device_manager, database, alarm_manager=None,
                  predictive_maintenance=None, oee_calculator=None,
-                 spc_analyzer=None, energy_manager=None, edge_decision=None):
+                 spc_analyzer=None, energy_manager=None, edge_decision=None,
+                 device_control=None):
         self.device_manager = device_manager
         self.database = database
         self.alarm_manager = alarm_manager
@@ -35,6 +36,7 @@ class DataCollector:
         self.spc_analyzer = spc_analyzer
         self.energy_manager = energy_manager
         self.edge_decision = edge_decision
+        self.device_control = device_control
         
         # 采集任务
         self.tasks = {}  # device_id -> threading.Timer
@@ -351,6 +353,11 @@ class DataCollector:
                     if any(kw in register_name.lower() for kw in
                            ['temperature', 'pressure', 'ph', 'quality', 'dimension']):
                         self.spc_analyzer.feed_data(device_id, register_name, value)
+                
+                # 安全联锁检查（每次数据采集时触发）
+                if self.device_control:
+                    self.device_control.check_interlocks(
+                        device_id, register_name, value)
                 
                 with self._stats_lock:
                     self.stats['queue_size'] = self.data_queue.qsize()

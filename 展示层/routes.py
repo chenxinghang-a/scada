@@ -13,7 +13,8 @@ from 用户层.auth import AuthManager
 
 def create_app(database, device_manager, alarm_manager, data_collector,
                predictive_maintenance=None, oee_calculator=None,
-               spc_analyzer=None, energy_manager=None, edge_decision=None):
+               spc_analyzer=None, energy_manager=None, edge_decision=None,
+               device_control=None):
     """
     创建Flask应用
     
@@ -27,6 +28,7 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         spc_analyzer: SPC分析器实例（可选）
         energy_manager: 能源管理实例（可选）
         edge_decision: 边缘决策引擎实例（可选）
+        device_control: 设备控制安全管理实例（可选）
         
     Returns:
         Flask: Flask应用实例
@@ -59,6 +61,7 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     app.spc_analyzer = spc_analyzer
     app.energy_manager = energy_manager
     app.edge_decision = edge_decision
+    app.device_control = device_control
     
     # 页面路由
     @app.route('/')
