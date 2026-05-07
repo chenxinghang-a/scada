@@ -120,6 +120,12 @@ def emit_alarm(alarm_data):
         socketio.emit('alarm', alarm_data, broadcast=True)
 
 
+def emit_broadcast(broadcast_data):
+    """发送广播事件通知"""
+    if socketio:
+        socketio.emit('broadcast', broadcast_data, broadcast=True)
+
+
 def emit_device_status(device_id, status):
     """发送设备状态更新"""
     if socketio:

@@ -162,8 +162,11 @@ def main():
         logger.info("=" * 50)
         
         # 注入WebSocket推送函数到报警管理器
-        from 展示层.websocket import socketio as ws_socketio, emit_alarm
+        from 展示层.websocket import socketio as ws_socketio, emit_alarm, emit_broadcast
         alarm_manager.set_websocket_emit(emit_alarm)
+        
+        # 注入广播WebSocket推送（广播发生时实时通知前端）
+        broadcast_system.add_callback(lambda msg: emit_broadcast(msg))
         
         # 使用routes.py中已创建的SocketIO实例（init_socketio在create_app中已调用）
         from 展示层.websocket import socketio

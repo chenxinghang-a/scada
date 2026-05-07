@@ -81,6 +81,24 @@
     50% { transform: rotate(5deg); }
     100% { transform: rotate(-5deg); }
 }
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+/* Toast容器 */
+#toast-container {
+    position: fixed;
+    top: 70px;
+    right: 20px;
+    z-index: 9999;
+    width: 350px;
+    max-height: 60vh;
+    overflow-y: auto;
+    pointer-events: none;
+}
+#toast-container .toast {
+    pointer-events: auto;
+}
 
 /* 广播历史 */
 .broadcast-item {
@@ -109,6 +127,9 @@
 {% endblock %}
 
 {% block content %}
+<!-- 报警弹窗容器 -->
+<div id="toast-container"></div>
+
 <!-- 顶部状态栏 -->
 <div class="row mb-3">
     <div class="col-12">
@@ -123,8 +144,11 @@
                     <strong>广播系统：</strong>
                     <span id="broadcast-status-text" class="badge bg-secondary">加载中...</span>
                 </div>
-                <div>
-                    <button class="btn btn-sm btn-outline-light me-1" onclick="loadAll()">
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-light" id="btn-sound-toggle" onclick="toggleSound()" title="浏览器报警音">
+                        <i class="bi bi-volume-up-fill"></i> 报警音开
+                    </button>
+                    <button class="btn btn-sm btn-outline-light" onclick="loadAll()">
                         <i class="bi bi-arrow-clockwise"></i> 刷新
                     </button>
                 </div>
@@ -392,9 +416,145 @@
 
 {% block extra_js %}
 <script>
+// ==================== 浏览器音频报警 ====================
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+let soundEnabled = true;
+
+function ensureAudioCtx() {
+    if (!audioCtx) audioCtx = new AudioCtx();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+}
+
+function playAlarmSound(level) {
+    if (!soundEnabled) return;
+    try {
+        const ctx = ensureAudioCtx();
+        if (level === 'critical') {
+            // 严重报警：急促双音（3次）
+            for (let i = 0; i < 3; i++) {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(880, ctx.currentTime + i * 0.3);
+                osc.frequency.setValueAtTime(660, ctx.currentTime + i * 0.3 + 0.1);
+                gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.3);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.3 + 0.25);
+                osc.start(ctx.currentTime + i * 0.3);
+                osc.stop(ctx.currentTime + i * 0.3 + 0.25);
+            }
+        } else if (level === 'warning') {
+            // 警告：单音两声
+            for (let i = 0; i < 2; i++) {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = 'sine';
+                osc.frequency.value = 520;
+                gain.gain.setValueAtTime(0.25, ctx.currentTime + i * 0.4);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.4 + 0.3);
+                osc.start(ctx.currentTime + i * 0.4);
+                osc.stop(ctx.currentTime + i * 0.4 + 0.3);
+            }
+        }
+    } catch(e) { console.warn('音频播放失败:', e); }
+}
+
+function toggleSound() {
+    soundEnabled = !soundEnabled;
+    const btn = document.getElementById('btn-sound-toggle');
+    if (soundEnabled) {
+        btn.innerHTML = '<i class="bi bi-volume-up-fill"></i> 报警音开';
+        btn.className = 'btn btn-sm btn-outline-light';
+    } else {
+        btn.innerHTML = '<i class="bi bi-volume-mute"></i> 报警音关';
+        btn.className = 'btn btn-sm btn-outline-secondary';
+    }
+}
+
+// ==================== WebSocket 实时监听 ====================
+let wsSocket = null;
+
+function initAlarmWebSocket() {
+    if (typeof io === 'undefined') return;
+    wsSocket = io();
+
+    wsSocket.on('connect', () => console.log('[报警输出] WebSocket已连接'));
+
+    // 实时报警事件 → 立即更新灯塔 + 播放声音
+    wsSocket.on('alarm', (data) => {
+        console.log('[报警输出] 收到报警:', data);
+        playAlarmSound(data.alarm_level);
+        loadAlarmOutputStatus();  // 立即刷新灯塔状态
+        showToast(data);          // 页面内弹窗
+    });
+
+    // 实时广播事件 → 立即更新广播历史
+    wsSocket.on('broadcast', (data) => {
+        console.log('[报警输出] 收到广播:', data);
+        prependBroadcastHistory(data);
+    });
+}
+
+// 页面内报警弹窗（不阻塞操作）
+function showToast(alarm) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const level = alarm.alarm_level || 'warning';
+    const color = level === 'critical' ? 'danger' : level === 'warning' ? 'warning' : 'info';
+    const icon = level === 'critical' ? 'exclamation-triangle' : 'bell';
+    const toast = document.createElement('div');
+    toast.className = `toast show border-${color} mb-2`;
+    toast.style.borderLeftWidth = '4px';
+    toast.innerHTML = `
+        <div class="toast-header bg-${color} text-white">
+            <i class="bi bi-${icon} me-2"></i>
+            <strong class="me-auto">${level === 'critical' ? '严重报警' : level === 'warning' ? '警告' : '信息'}</strong>
+            <small>${new Date().toLocaleTimeString()}</small>
+            <button type="button" class="btn-close btn-close-white ms-2" onclick="this.closest('.toast').remove()"></button>
+        </div>
+        <div class="toast-body">
+            <strong>${alarm.alarm_message || ''}</strong><br>
+            <small>${alarm.device_id || ''} / ${alarm.register_name || ''} = ${alarm.actual_value ?? '-'}</small>
+        </div>
+    `;
+    container.appendChild(toast);
+    // 8秒后自动移除
+    setTimeout(() => toast.remove(), 8000);
+}
+
+// 实时插入广播历史（最新在前）
+function prependBroadcastHistory(broadcast) {
+    const container = document.getElementById('broadcast-history');
+    if (!container) return;
+    // 移除"暂无"提示
+    const empty = container.querySelector('.text-muted.text-center');
+    if (empty) empty.remove();
+    const level = broadcast.level || 'info';
+    const html = `
+        <div class="broadcast-item ${level}" style="animation: fadeIn 0.3s">
+            <div class="d-flex justify-content-between">
+                <span><strong>${broadcast.area || 'all'}</strong> | ${broadcast.source || 'system'}</span>
+                <small class="text-muted">${new Date(broadcast.timestamp).toLocaleTimeString()}</small>
+            </div>
+            <div>${broadcast.text || ''}</div>
+        </div>
+    `;
+    container.insertAdjacentHTML('afterbegin', html);
+    // 限制最多30条
+    while (container.children.length > 30) container.lastChild.remove();
+}
+
 // ==================== 页面初始化 ====================
 document.addEventListener('DOMContentLoaded', function() {
+    initAlarmWebSocket();
     loadAll();
+    // 首次点击页面时解锁音频上下文（浏览器策略要求用户交互后才能播放音频）
+    document.addEventListener('click', () => ensureAudioCtx(), { once: true });
 });
 
 async function loadAll() {
