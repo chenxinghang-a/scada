@@ -19,9 +19,11 @@ devices:
 
   # ==================== 设备1: 正泰DTSU666三相四线电能表 ====================
   # 手册来源: 正泰DTSU666.014使用说明书, Modbus RTU通讯协议
-  # 寄存器格式: 保持寄存器(功能码03H), 整型+缩放因子
+  # 寄存器格式: 保持寄存器(功能码03H), IEEE754 float32
   # 物理接口: RS-485 (9600bps, 8N2), 通过串口转TCP网关暴露为Modbus TCP
   # 从机地址: 1, 波特率: 9600bps
+  # 官方手册: https://www.modbus.cn/10181.html
+  # 注意: 三相表每相电压/电流各占2个寄存器(float32), 地址间隔2
   - id: power_meter_01
     name: "正泰DTSU666三相电能表"
     description: "配电室三相四线多功能电表"
@@ -35,129 +37,129 @@ devices:
     vendor: "正泰电器"
 
     registers:
-      # --- 电压 (uint16, 实际值 = 读数 ÷ 10, 单位V) ---
+      # --- 电压 (float32, 单位V, 地址2000H起) ---
+      # 官方手册: 2000H=A相, 三相表扩展地址间隔2
       - name: "voltage_a"
         description: "A相电压"
-        address: 0           # 40001 (Modbus 0-indexed)
-        length: 1
-        data_type: uint16
-        scale: 0.1           # ÷10
+        address: 8192         # 2000H = 8192
+        length: 2
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "V"
 
       - name: "voltage_b"
         description: "B相电压"
-        address: 1           # 40002
-        length: 1
-        data_type: uint16
-        scale: 0.1
+        address: 8194         # 2002H
+        length: 2
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "V"
 
       - name: "voltage_c"
         description: "C相电压"
-        address: 2           # 40003
-        length: 1
-        data_type: uint16
-        scale: 0.1
+        address: 8196         # 2004H
+        length: 2
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "V"
 
-      # --- 电流 (uint16, 实际值 = 读数 ÷ 100, 单位A) ---
+      # --- 电流 (float32, 单位A) ---
       - name: "current_a"
         description: "A相电流"
-        address: 3           # 40004
-        length: 1
-        data_type: uint16
-        scale: 0.01          # ÷100
+        address: 8198         # 2006H
+        length: 2
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "A"
 
       - name: "current_b"
         description: "B相电流"
-        address: 4           # 40005
-        length: 1
-        data_type: uint16
-        scale: 0.01
+        address: 8200         # 2008H
+        length: 2
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "A"
 
       - name: "current_c"
         description: "C相电流"
-        address: 5           # 40006
-        length: 1
-        data_type: uint16
-        scale: 0.01
+        address: 8202         # 200AH
+        length: 2
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "A"
 
-      # --- 功率 (int32, 实际值 = 读数 ÷ 1000, 单位kW) ---
-      # int32占2个寄存器, 高位在前(Big-Endian)
+      # --- 功率 (float32, 单位kW/kvar/kVA) ---
       - name: "active_power"
         description: "总有功功率"
-        address: 6           # 40007-40008
+        address: 8204         # 200CH
         length: 2
-        data_type: int32
-        scale: 0.001         # ÷1000
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "kW"
 
       - name: "reactive_power"
         description: "总无功功率"
-        address: 8           # 40009-40010
+        address: 8206         # 200EH
         length: 2
-        data_type: int32
-        scale: 0.001
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "kvar"
 
       - name: "apparent_power"
         description: "总视在功率"
-        address: 10          # 40011-40012
+        address: 8208         # 2010H
         length: 2
-        data_type: int32
-        scale: 0.001
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "kVA"
 
-      # --- 电能 (uint32, 实际值 = 读数 ÷ 100, 单位kWh) ---
+      # --- 功率因数 (float32) ---
+      - name: "power_factor"
+        description: "总功率因数"
+        address: 8210         # 2012H
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      # --- 频率 (float32, 单位Hz) ---
+      - name: "frequency"
+        description: "电网频率"
+        address: 8212         # 2014H
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "Hz"
+
+      # --- 电能 (float32, 单位kWh, 地址4000H起) ---
       - name: "total_energy"
         description: "正向有功总电能"
-        address: 12          # 40013-40014
+        address: 16384        # 4000H = 16384
         length: 2
-        data_type: uint32
-        scale: 0.01          # ÷100
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "kWh"
 
       - name: "reverse_energy"
         description: "反向有功总电能"
-        address: 14          # 40015-40016
+        address: 16386        # 4002H
         length: 2
-        data_type: uint32
-        scale: 0.01
+        data_type: float32
+        scale: 1.0
         offset: 0
         unit: "kWh"
-
-      # --- 频率 (uint16, 实际值 = 读数 ÷ 10, 单位Hz) ---
-      - name: "frequency"
-        description: "电网频率"
-        address: 20          # 40021
-        length: 1
-        data_type: uint16
-        scale: 0.1           # ÷10
-        offset: 0
-        unit: "Hz"
-
-      # --- 功率因数 (int16, 实际值 = 读数 ÷ 1000) ---
-      - name: "power_factor"
-        description: "总功率因数"
-        address: 21          # 40022
-        length: 1
-        data_type: int16
-        scale: 0.001         # ÷1000
-        offset: 0
-        unit: ""
 
 
   # ==================== 设备2: 西门子S7-1200 PLC (Modbus TCP) ====================
@@ -1356,3 +1358,436 @@ devices:
         scale: 1.0
         offset: 0
         unit: "Pa"
+
+
+  # ==================== 设备19: Patlite LR7信号灯塔 (Modbus TCP) ====================
+  # 手册来源: Patlite LR7系列信号灯 Modbus TCP通讯手册
+  # LR7是工业级多层信号灯塔, 广泛用于设备状态指示
+  # 支持5色灯(红/黄/绿/蓝/白) + 蜂鸣器, 每层可独立控制亮/闪/灭
+  # 安装在各产线设备顶部, 用于运行状态/报警/待机指示
+  # Modbus TCP端口502, 保持寄存器控制各灯层和蜂鸣器
+  - id: signal_tower_01
+    name: "Patlite LR7信号灯塔 — 1号线"
+    description: "产线1号设备状态指示灯塔 — 红黄绿蓝白+蜂鸣器"
+    protocol: modbus_tcp
+    host: "192.168.1.70"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 1
+    device_model: "LR7-302NWFB"
+    vendor: "Patlite (日本帕特莱)"
+
+    registers:
+      # --- 红色灯控制 (uint16: 0=灭, 1=亮, 2=闪) ---
+      - name: "red_light"
+        description: "红色灯 — 故障/紧急停止"
+        address: 0
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      # --- 黄色灯控制 (uint16: 0=灭, 1=亮, 2=闪) ---
+      - name: "yellow_light"
+        description: "黄色灯 — 警告/待料"
+        address: 1
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      # --- 绿色灯控制 (uint16: 0=灭, 1=亮, 2=闪) ---
+      - name: "green_light"
+        description: "绿色灯 — 正常运行"
+        address: 2
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      # --- 蓝色灯控制 (uint16: 0=灭, 1=亮, 2=闪) ---
+      - name: "blue_light"
+        description: "蓝色灯 — 待机/呼叫"
+        address: 3
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      # --- 白色灯控制 (uint16: 0=灭, 1=亮, 2=闪) ---
+      - name: "white_light"
+        description: "白色灯 — 维护模式"
+        address: 4
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      # --- 蜂鸣器控制 (uint16: 0=关, 1=连续, 2=间歇, 3=断续) ---
+      - name: "buzzer"
+        description: "内置蜂鸣器 — 报警/呼叫"
+        address: 5
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      # --- 闪烁频率控制 (uint16, 单位ms, 范围100-5000) ---
+      - name: "flash_interval"
+        description: "闪烁周期"
+        address: 6
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "ms"
+
+      # --- 蜂鸣器音量 (uint16, 0-100%) ---
+      - name: "buzzer_volume"
+        description: "蜂鸣器音量"
+        address: 7
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "%"
+
+
+  # ==================== 设备20: Patlite LR7信号灯塔 — 2号线 ====================
+  # 同型号第二台, 安装在产线2号设备
+  - id: signal_tower_02
+    name: "Patlite LR7信号灯塔 — 2号线"
+    description: "产线2号设备状态指示灯塔 — 红黄绿蓝白+蜂鸣器"
+    protocol: modbus_tcp
+    host: "192.168.1.71"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 1
+    device_model: "LR7-302NWFB"
+    vendor: "Patlite (日本帕特莱)"
+
+    registers:
+      - name: "red_light"
+        description: "红色灯 — 故障/紧急停止"
+        address: 0
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      - name: "yellow_light"
+        description: "黄色灯 — 警告/待料"
+        address: 1
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      - name: "green_light"
+        description: "绿色灯 — 正常运行"
+        address: 2
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      - name: "blue_light"
+        description: "蓝色灯 — 待机/呼叫"
+        address: 3
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      - name: "white_light"
+        description: "白色灯 — 维护模式"
+        address: 4
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      - name: "buzzer"
+        description: "内置蜂鸣器 — 报警/呼叫"
+        address: 5
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      - name: "flash_interval"
+        description: "闪烁周期"
+        address: 6
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "ms"
+
+      - name: "buzzer_volume"
+        description: "蜂鸣器音量"
+        address: 7
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "%"
+
+
+  # ==================== 设备21: 研华ADAM-6060继电器输出模块 (Modbus TCP) ====================
+  # 手册来源: 研华ADAM-6000系列用户手册
+  # ADAM-6060: 6路继电器输出 + 6路数字量输入
+  # 用于控制外部报警灯、蜂鸣器、电磁阀等执行器
+  # 安装在车间配电柜内, 通过Modbus TCP控制
+  # 继电器输出: Form A (常开), 触点容量250VAC/30VDC 3A
+  - id: relay_output_01
+    name: "研华ADAM-6060继电器模块"
+    description: "报警输出控制 — 外部警灯/蜂鸣器/电磁阀"
+    protocol: modbus_tcp
+    host: "192.168.1.72"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 1
+    device_model: "ADAM-6060-AE"
+    vendor: "研华科技 (Advantech)"
+
+    registers:
+      # --- 继电器输出 (线圈, 功能码05H/0FH) ---
+      # 读取用功能码01H, 写入用05H(单个)或0FH(多个)
+      # 值: 0=断开, 1=闭合
+      - name: "relay_1"
+        description: "继电器1 — 主报警红灯"
+        address: 0
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_2"
+        description: "继电器2 — 主报警蜂鸣器"
+        address: 1
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_3"
+        description: "继电器3 — 备用报警黄灯"
+        address: 2
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_4"
+        description: "继电器4 — 备用蜂鸣器"
+        address: 3
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_5"
+        description: "继电器5 — 电磁阀控制"
+        address: 4
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_6"
+        description: "继电器6 — 备用输出"
+        address: 5
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      # --- 数字量输入 (离散输入, 功能码02H) ---
+      - name: "di_1"
+        description: "数字输入1 — 急停按钮反馈"
+        address: 0
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "r"
+
+      - name: "di_2"
+        description: "数字输入2 — 门禁开关"
+        address: 1
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "r"
+
+      - name: "di_3"
+        description: "数字输入3 — 烟感报警"
+        address: 2
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "r"
+
+      - name: "di_4"
+        description: "数字输入4 — 水浸报警"
+        address: 3
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "r"
+
+      - name: "di_5"
+        description: "数字输入5 — 手动/自动切换"
+        address: 4
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "r"
+
+      - name: "di_6"
+        description: "数字输入6 — 备用"
+        address: 5
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "r"
+
+
+  # ==================== 设备22: 微雪Modbus RTU 8路继电器模块 ====================
+  # 手册来源: 微雪(waveshare) Modbus RTU继电器模块用户手册
+  # 8路继电器输出, RS-485接口, 通过串口转TCP网关暴露
+  # 用于分散式报警输出: 各工位独立蜂鸣器和指示灯
+  # 支持Modbus RTU功能码01H(读线圈)/05H(写单个)/0FH(写多个)
+  # 从机地址可拨码设置, 波特率9600
+  - id: relay_output_02
+    name: "微雪8路继电器模块 — 工位报警"
+    description: "工位级报警输出 — 各工位独立蜂鸣器和指示灯"
+    protocol: modbus_tcp
+    host: "192.168.1.73"
+    port: 502
+    slave_id: 2
+    enabled: true
+    collection_interval: 1
+    device_model: "Modbus RTU Relay 8CH"
+    vendor: "微雪电子 (Waveshare)"
+
+    registers:
+      # 8路继电器, 线圈地址0-7
+      - name: "relay_1"
+        description: "继电器1 — 工位A蜂鸣器"
+        address: 0
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_2"
+        description: "继电器2 — 工位A红灯"
+        address: 1
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_3"
+        description: "继电器3 — 工位A绿灯"
+        address: 2
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_4"
+        description: "继电器4 — 工位B蜂鸣器"
+        address: 3
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_5"
+        description: "继电器5 — 工位B红灯"
+        address: 4
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_6"
+        description: "继电器6 — 工位B绿灯"
+        address: 5
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_7"
+        description: "继电器7 — 走廊警灯"
+        address: 6
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"
+
+      - name: "relay_8"
+        description: "继电器8 — 总蜂鸣器"
+        address: 7
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+        access: "rw"

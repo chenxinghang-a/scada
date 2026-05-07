@@ -54,7 +54,31 @@ def main():
         logger.info("加载报警配置...")
         from 报警层.alarm_output import AlarmOutput
         from 报警层.broadcast_system import BroadcastSystem
-        alarm_output = AlarmOutput({'enabled': True, 'simulation': simulation_mode})
+
+        # 从alarms.yaml读取灯控设备配置
+        import yaml
+        alarms_config_path = Path('配置/alarms.yaml')
+        alarm_output_cfg = {'enabled': True, 'simulation': simulation_mode}
+        if alarms_config_path.exists():
+            with open(alarms_config_path, 'r', encoding='utf-8') as f:
+                alarms_yaml = yaml.safe_load(f) or {}
+            ao_cfg = alarms_yaml.get('alarm_output', {})
+            if ao_cfg:
+                # 使用Patlite信号灯塔作为主输出
+                tower = ao_cfg.get('signal_tower', {})
+                alarm_output_cfg.update({
+                    'modbus': {
+                        'host': tower.get('host', '192.168.1.70'),
+                        'port': tower.get('port', 502),
+                        'slave_id': tower.get('slave_id', 1),
+                    },
+                    'do_mapping': tower.get('do_mapping', {
+                        'red_light': 0, 'yellow_light': 1,
+                        'green_light': 2, 'buzzer': 5
+                    }),
+                })
+                logger.info(f"灯控设备: {tower.get('device_id')} @ {tower.get('host')}")
+        alarm_output = AlarmOutput(alarm_output_cfg)
         broadcast_system = BroadcastSystem({
             'enabled': True,
             'simulation': simulation_mode,

@@ -116,3 +116,59 @@ notification:
     enabled: true
     critical_sound: "alarm_critical.mp3"
     warning_sound: "alarm_warning.mp3"
+
+# ==================== 声光报警输出设备配置 ====================
+# 关联devices.yaml中的灯控和蜂鸣器设备
+alarm_output:
+  enabled: true
+
+  # 主报警灯塔 — Patlite LR7信号灯塔 (1号线)
+  signal_tower:
+    device_id: "signal_tower_01"
+    protocol: modbus_tcp
+    host: "192.168.1.70"
+    port: 502
+    slave_id: 1
+    # 寄存器地址映射（对应devices.yaml中的定义）
+    do_mapping:
+      red_light: 0       # 红色灯 — 故障/紧急停止
+      yellow_light: 1    # 黄色灯 — 警告/待料
+      green_light: 2     # 绿色灯 — 正常运行
+      blue_light: 3      # 蓝色灯 — 待机/呼叫
+      white_light: 4     # 白色灯 — 维护模式
+      buzzer: 5          # 蜂鸣器 — 报警/呼叫
+      flash_interval: 6  # 闪烁周期 (ms)
+      buzzer_volume: 7   # 蜂鸣器音量 (%)
+
+  # 备用报警输出 — 研华ADAM-6060继电器模块
+  relay_output:
+    device_id: "relay_output_01"
+    protocol: modbus_tcp
+    host: "192.168.1.72"
+    port: 502
+    slave_id: 1
+    # 继电器映射
+    do_mapping:
+      red_light: 0       # 继电器1 — 主报警红灯
+      buzzer: 1          # 继电器2 — 主报警蜂鸣器
+      yellow_light: 2    # 继电器3 — 备用报警黄灯
+      spare_buzzer: 3    # 继电器4 — 备用蜂鸣器
+      solenoid_valve: 4  # 继电器5 — 电磁阀控制
+      spare: 5           # 继电器6 — 备用输出
+
+  # 工位级报警 — 微雪8路继电器模块
+  station_output:
+    device_id: "relay_output_02"
+    protocol: modbus_tcp
+    host: "192.168.1.73"
+    port: 502
+    slave_id: 2
+    do_mapping:
+      station_a_buzzer: 0   # 工位A蜂鸣器
+      station_a_red: 1      # 工位A红灯
+      station_a_green: 2    # 工位A绿灯
+      station_b_buzzer: 3   # 工位B蜂鸣器
+      station_b_red: 4      # 工位B红灯
+      station_b_green: 5    # 工位B绿灯
+      corridor_light: 6     # 走廊警灯
+      master_buzzer: 7      # 总蜂鸣器
