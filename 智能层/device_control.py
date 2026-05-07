@@ -331,8 +331,17 @@ class DeviceControlSafety:
                             triggered = True
 
                 elif cond.get('type') == 'coil':
+                    # coil条件：address是整数地址，register_name可能是名称或地址
+                    cond_address = cond.get('address')
+                    # 将register_name转为整数地址进行比较
+                    try:
+                        reg_addr = int(register_name)
+                    except (ValueError, TypeError):
+                        reg_addr = self._resolve_register_address(device_id, register_name)
+                    
                     if (cond.get('device_id') == device_id and
-                            cond.get('address') == register_name):
+                            cond_address is not None and reg_addr is not None and
+                            int(cond_address) == int(reg_addr)):
                         if value == (1 if cond.get('value') else 0):
                             triggered = True
 
@@ -371,10 +380,19 @@ class DeviceControlSafety:
             value = action.get('value')
             if self.device_manager:
                 try:
-                    self.device_manager.write_register(device_id, register, value)
-                    logger.info(f"联锁动作执行: 写入 {device_id}/{register} = {value}")
+                    client = self.device_manager.get_client(device_id)
+                    if client and hasattr(client, 'write_single_register'):
+                        # register可能是寄存器名称，需要查找对应地址
+                        address = self._resolve_register_address(device_id, register)
+                        if address is not None:
+                            client.write_single_register(address, int(value))
+                            logger.info(f"联锁动作执行: 写入 {device_id}/addr={address} = {value}")
+                        else:
+                            logger.error(f"联锁动作: 无法解析寄存器 {register} 的地址")
+                    else:
+                        logger.error(f"联锁动作: 设备 {device_id} 不支持写操作")
                 except Exception as e:
-                    logger.error(f"联锁动作执行失败: {e}")
+                    logger.error(f"联锁动作执行失败: {e}", exc_info=True)
 
         elif action_type == 'emergency_stop':
             self.trigger_emergency_stop(f'联锁 {rule_id} 触发紧急停机')
@@ -518,10 +536,16 @@ class DeviceControlSafety:
         if self.device_manager:
             for device_id in self._get_controllable_devices():
                 try:
-                    self.device_manager.write_register(device_id, 'emergency_stop', 1)
-                    stopped_devices.append(device_id)
+                    client = self.device_manager.get_client(device_id)
+                    if client and hasattr(client, 'write_single_register'):
+                        # 尝试写入地址100=1作为紧急停机命令（通用约定）
+                        client.write_single_register(100, 1)
+                        stopped_devices.append(device_id)
+                    elif client and hasattr(client, 'write_single_coil'):
+                        client.write_single_coil(0, False)
+                        stopped_devices.append(device_id)
                 except Exception as e:
-                    logger.error(f"紧急停机命令发送失败 {device_id}: {e}")
+                    logger.error(f"紧急停机命令发送失败 {device_id}: {e}", exc_info=True)
 
         self._estop_devices = stopped_devices
 
@@ -602,6 +626,37 @@ class DeviceControlSafety:
                 if config.get('access') == 'rw' or config.get('protocol') in ('modbus_tcp', 'modbus_rtu'):
                     devices.append(device_id)
         return devices
+
+    def _resolve_register_address(self, device_id: str, register_name) -> Optional[int]:
+        """
+        将寄存器名称解析为地址
+        
+        Args:
+            device_id: 设备ID
+            register_name: 寄存器名称或地址（可能是字符串名称或整数地址）
+            
+        Returns:
+            寄存器地址，找不到返回None
+        """
+        # 如果已经是整数，直接返回
+        if isinstance(register_name, int):
+            return register_name
+        
+        # 尝试转换为整数
+        try:
+            return int(register_name)
+        except (ValueError, TypeError):
+            pass
+        
+        # 从设备配置中查找寄存器名称对应的地址
+        if self.device_manager:
+            device_config = self.device_manager.devices.get(device_id, {})
+            registers = device_config.get('registers', [])
+            for reg in registers:
+                if reg.get('name') == register_name:
+                    return reg.get('address')
+        
+        return None
 
     # ==================== 故障降级 ====================
 
@@ -717,10 +772,18 @@ class DeviceControlSafety:
         try:
             # 写入
             success = False
+            client = self.device_manager.get_client(device_id) if self.device_manager else None
+            if not client:
+                self._audit('write_failed', operator,
+                            f'写入失败: 设备 {device_id} 客户端不存在')
+                return {'success': False, 'message': f'设备 {device_id} 不存在或未连接'}
+
             for attempt in range(max_retries + 1):
                 try:
-                    if self.device_manager:
-                        success = self.device_manager.write_register(device_id, address, value)
+                    if hasattr(client, 'write_single_register'):
+                        success = client.write_single_register(int(address), int(value))
+                    elif hasattr(client, 'write_single_coil'):
+                        success = client.write_single_coil(int(address), bool(value))
                     break
                 except Exception as e:
                     if attempt < max_retries:
@@ -741,11 +804,13 @@ class DeviceControlSafety:
             readback_ok = True
             readback_value = None
             try:
-                if self.device_manager:
-                    readback_value = self.device_manager.read_register(device_id, address)
-                    if readback_value is not None and abs(readback_value - value) > 1:
-                        readback_ok = False
-                        logger.warning(f"回读验证失败: 期望 {value}, 实际 {readback_value}")
+                if hasattr(client, 'read_holding_registers'):
+                    raw = client.read_holding_registers(int(address), 1)
+                    if raw and len(raw) > 0:
+                        readback_value = raw[0]
+                        if abs(readback_value - value) > 1:
+                            readback_ok = False
+                            logger.warning(f"回读验证失败: 期望 {value}, 实际 {readback_value}")
             except Exception as e:
                 logger.warning(f"回读验证异常: {e}")
 

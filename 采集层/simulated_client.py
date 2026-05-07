@@ -364,7 +364,12 @@ class SimulatedModbusClient:
         rule = self._rules_cache.get(address)
         if rule is None:
             # 没有匹配规则，按寄存器读取数量猜测类型
-            if count >= 2:
+            if count >= 4:
+                # float64: 返回4个寄存器
+                raw = struct.pack('>d', float(random.uniform(0, 100)))
+                return [struct.unpack('>H', raw[i*2:(i+1)*2])[0] for i in range(4)]
+            elif count >= 2:
+                # float32/int32/uint32: 返回2个寄存器
                 raw = struct.pack('>f', float(random.uniform(0, 100)))
                 return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
             return [random.randint(0, 1000)]

@@ -298,7 +298,7 @@ class DataCollector:
             return round(value, 4)
             
         except Exception as e:
-            logger.error(f"读取寄存器异常: {e}")
+            logger.error(f"读取寄存器异常 ({register.get('name', '?')}): {e}", exc_info=True)
             return None
     
     def _process_data(self):
@@ -366,7 +366,7 @@ class DataCollector:
                 continue
             except Exception as e:
                 if self.running:
-                    logger.error(f"数据处理异常: {e}")
+                    logger.error(f"数据处理异常: {e}", exc_info=True)
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""

@@ -563,7 +563,6 @@ def trigger_estop():
 
 
 @api_bp.route('/control/estop/reset', methods=['POST'])
-@_require_auth
 @_require_engineer
 def reset_estop():
     """解除紧急停机（需工程师权限）"""
