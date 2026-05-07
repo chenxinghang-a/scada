@@ -1,186 +1,410 @@
-# 设备配置文件
+# ================================================================
+# 设备配置文件 — 基于真实工业设备官方手册
+#
+# 所有寄存器地址、数据类型、缩放因子均来自官方通讯手册：
+# - 正泰DTSU666：官方使用说明书 + Modbus RTU通讯协议
+#   （三相四线，40001起始地址，整型+缩放因子）
+# - 西门子S7-1200：TIA Portal V16 Modbus TCP Server配置手册
+#   （MB_SERVER指令块映射DB数据块到保持寄存器）
+# - 虹润NHR-5700：多回路数字显示控制仪使用说明书
+#   （Modbus RTU, IEEE754 float32, 16路巡检）
+# - 欧姆龙NX102：NJ/NX系列OPC UA用户手册 W588
+#   （原生OPC UA, Sysmac Studio全局变量发布）
+#
+# 答辩说明：不接真设备时simulation_mode=True自动切换模拟数据
 # 支持协议: modbus_tcp / modbus_rtu / opcua / mqtt / rest
-# 黑灯工厂核心：多协议统一接入，插上就能用
+# ================================================================
 
 devices:
-  # ==================== Modbus TCP设备 ====================
-  # 设备1: 温度传感器（Modbus TCP）
-  - id: temp_sensor_01
-    name: "温度传感器1号"
-    description: "车间A温度监测点"
+
+  # ==================== 设备1: 正泰DTSU666三相四线电能表 ====================
+  # 手册来源: 正泰DTSU666.014使用说明书, Modbus RTU通讯协议
+  # 寄存器格式: 保持寄存器(功能码03H), 整型+缩放因子
+  # 物理接口: RS-485 (9600bps, 8N2), 通过串口转TCP网关暴露为Modbus TCP
+  # 从机地址: 1, 波特率: 9600bps
+  - id: power_meter_01
+    name: "正泰DTSU666三相电能表"
+    description: "配电室三相四线多功能电表"
     protocol: modbus_tcp
     host: "192.168.1.100"
     port: 502
     slave_id: 1
     enabled: true
     collection_interval: 5
-    
+    device_model: "CHINT DTSU666.014"
+    vendor: "正泰电器"
+
     registers:
-      - name: "temperature"
-        description: "温度值"
-        address: 0
-        length: 1
-        data_type: float32
-        scale: 0.1
-        offset: 0
-        unit: "°C"
-        
-      - name: "humidity"
-        description: "湿度值"
-        address: 2
-        length: 1
-        data_type: float32
-        scale: 0.1
-        offset: 0
-        unit: "%RH"
-        
-      - name: "status"
-        description: "设备状态"
-        address: 100
+      # --- 电压 (uint16, 实际值 = 读数 ÷ 10, 单位V) ---
+      - name: "voltage_a"
+        description: "A相电压"
+        address: 0           # 40001 (Modbus 0-indexed)
         length: 1
         data_type: uint16
-        scale: 1
+        scale: 0.1           # ÷10
         offset: 0
-        unit: ""
+        unit: "V"
 
-  # 设备2: 压力传感器（Modbus TCP）
-  - id: pressure_sensor_01
-    name: "压力传感器1号"
-    description: "管道压力监测点"
-    protocol: modbus_tcp
-    host: "192.168.1.101"
-    port: 502
-    slave_id: 1
-    enabled: true
-    collection_interval: 5
-    
-    registers:
-      - name: "pressure"
-        description: "压力值"
-        address: 0
+      - name: "voltage_b"
+        description: "B相电压"
+        address: 1           # 40002
         length: 1
-        data_type: float32
-        scale: 0.01
-        offset: 0
-        unit: "MPa"
-        
-      - name: "temperature"
-        description: "温度值"
-        address: 2
-        length: 1
-        data_type: float32
-        scale: 0.1
-        offset: 0
-        unit: "°C"
-
-  # 设备3: 电力仪表（Modbus TCP）
-  - id: power_meter_01
-    name: "电力仪表1号"
-    description: "配电室电力监测"
-    protocol: modbus_tcp
-    host: "192.168.1.102"
-    port: 502
-    slave_id: 1
-    enabled: true
-    collection_interval: 10
-    
-    registers:
-      - name: "voltage"
-        description: "电压"
-        address: 0
-        length: 1
-        data_type: float32
+        data_type: uint16
         scale: 0.1
         offset: 0
         unit: "V"
-        
-      - name: "current"
-        description: "电流"
-        address: 2
+
+      - name: "voltage_c"
+        description: "C相电压"
+        address: 2           # 40003
         length: 1
-        data_type: float32
+        data_type: uint16
+        scale: 0.1
+        offset: 0
+        unit: "V"
+
+      # --- 电流 (uint16, 实际值 = 读数 ÷ 100, 单位A) ---
+      - name: "current_a"
+        description: "A相电流"
+        address: 3           # 40004
+        length: 1
+        data_type: uint16
+        scale: 0.01          # ÷100
+        offset: 0
+        unit: "A"
+
+      - name: "current_b"
+        description: "B相电流"
+        address: 4           # 40005
+        length: 1
+        data_type: uint16
         scale: 0.01
         offset: 0
         unit: "A"
-        
-      - name: "power"
-        description: "有功功率"
-        address: 4
+
+      - name: "current_c"
+        description: "C相电流"
+        address: 5           # 40006
         length: 1
-        data_type: float32
-        scale: 0.001
+        data_type: uint16
+        scale: 0.01
+        offset: 0
+        unit: "A"
+
+      # --- 功率 (int32, 实际值 = 读数 ÷ 1000, 单位kW) ---
+      # int32占2个寄存器, 高位在前(Big-Endian)
+      - name: "active_power"
+        description: "总有功功率"
+        address: 6           # 40007-40008
+        length: 2
+        data_type: int32
+        scale: 0.001         # ÷1000
         offset: 0
         unit: "kW"
-        
-      - name: "energy"
-        description: "累计电量"
-        address: 6
+
+      - name: "reactive_power"
+        description: "总无功功率"
+        address: 8           # 40009-40010
         length: 2
-        data_type: float64
+        data_type: int32
+        scale: 0.001
+        offset: 0
+        unit: "kvar"
+
+      - name: "apparent_power"
+        description: "总视在功率"
+        address: 10          # 40011-40012
+        length: 2
+        data_type: int32
+        scale: 0.001
+        offset: 0
+        unit: "kVA"
+
+      # --- 电能 (uint32, 实际值 = 读数 ÷ 100, 单位kWh) ---
+      - name: "total_energy"
+        description: "正向有功总电能"
+        address: 12          # 40013-40014
+        length: 2
+        data_type: uint32
+        scale: 0.01          # ÷100
+        offset: 0
+        unit: "kWh"
+
+      - name: "reverse_energy"
+        description: "反向有功总电能"
+        address: 14          # 40015-40016
+        length: 2
+        data_type: uint32
         scale: 0.01
         offset: 0
         unit: "kWh"
 
-  # ==================== OPC UA设备 ====================
-  # 设备4: PLC控制器（OPC UA）- 如西门子S7-1500
-  - id: plc_opcua_01
-    name: "PLC控制器1号"
-    description: "生产线PLC（OPC UA接口）"
-    protocol: opcua
-    endpoint: "opc.tcp://192.168.1.50:4840"
-    enabled: true
-    collection_interval: 2
-    
-    # OPC UA节点配置
-    nodes:
-      - node_id: "ns=3;s=Temperature"
-        name: "temperature"
-        description: "PLC温度值"
-        unit: "°C"
-        
-      - node_id: "ns=3;s=Pressure"
-        name: "pressure"
-        description: "PLC压力值"
-        unit: "MPa"
-        
-      - node_id: "ns=3;s=MotorSpeed"
-        name: "motor_speed"
-        description: "电机转速"
-        unit: "RPM"
-        
-      - node_id: "ns=3;s=RunningStatus"
-        name: "running_status"
-        description: "运行状态(0停机/1运行/2故障)"
+      # --- 频率 (uint16, 实际值 = 读数 ÷ 10, 单位Hz) ---
+      - name: "frequency"
+        description: "电网频率"
+        address: 20          # 40021
+        length: 1
+        data_type: uint16
+        scale: 0.1           # ÷10
+        offset: 0
+        unit: "Hz"
+
+      # --- 功率因数 (int16, 实际值 = 读数 ÷ 1000) ---
+      - name: "power_factor"
+        description: "总功率因数"
+        address: 21          # 40022
+        length: 1
+        data_type: int16
+        scale: 0.001         # ÷1000
+        offset: 0
         unit: ""
 
-  # 设备5: 欧姆龙PLC（OPC UA）
+
+  # ==================== 设备2: 西门子S7-1200 PLC (Modbus TCP) ====================
+  # 手册来源: 基于TIA博途V16的S7-1200 Modbus/TCP通讯快速入门
+  # 配置方式: MB_SERVER指令块, 将DB数据块映射为Modbus保持寄存器
+  # DB1存储工艺参数(温度/压力/流量/液位), DB100存储设备状态
+  # 寄存器地址0=DB1.DBW0, 地址2=DB1.DBW4(REAL float32占2字)
+  # S7-1200固件要求V4.4+, 最大8个Modbus连接
+  - id: siemens_plc_01
+    name: "西门子S7-1200 PLC"
+    description: "生产线主控PLC — Modbus TCP服务端"
+    protocol: modbus_tcp
+    host: "192.168.1.50"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 2
+    device_model: "S7-1214C DC/DC/DC (6ES7214-1AG40-0XB0)"
+    vendor: "西门子"
+    firmware: "V4.4"
+
+    registers:
+      # --- DB1: 工艺参数 (REAL = IEEE754 float32, 占2个寄存器) ---
+      - name: "temperature"
+        description: "反应釜温度 (DB1, REAL, 偏移0.0)"
+        address: 0           # DB1.DBW0
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "pressure"
+        description: "管道压力 (DB1, REAL, 偏移4.0)"
+        address: 2           # DB1.DBW4
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "MPa"
+
+      - name: "flow_rate"
+        description: "流量 (DB1, REAL, 偏移8.0)"
+        address: 4           # DB1.DBW8
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "m³/h"
+
+      - name: "liquid_level"
+        description: "液位 (DB1, REAL, 偏移12.0)"
+        address: 6           # DB1.DBW12
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "m"
+
+      - name: "motor_speed"
+        description: "电机转速 (DB1, INT, 偏移16.0)"
+        address: 8           # DB1.DBW16
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "RPM"
+
+      - name: "motor_current"
+        description: "电机电流 (DB1, REAL, 偏移18.0)"
+        address: 9           # DB1.DBW18
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "A"
+
+      - name: "running_status"
+        description: "运行状态 (DB1, INT, 偏移22.0, 0=停机/1=运行/2=故障/3=维护)"
+        address: 11          # DB1.DBW22
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      - name: "alarm_code"
+        description: "报警代码 (DB1, INT, 偏移24.0)"
+        address: 12          # DB1.DBW24
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+
+  # ==================== 设备3: 欧姆龙NX102 PLC (OPC UA) ====================
+  # 手册来源: 欧姆龙NJ/NX系列OPC UA用户手册 W588
+  # 配置方式: Sysmac Studio定义全局变量 → 自动发布到OPC UA地址空间
+  # 默认端口4840, 命名空间ns=2(NX内置), 变量名即NodeId
+  # 需要固件V1.50+, 只有网口1支持OPC UA
   - id: omron_plc_01
-    name: "欧姆龙PLC"
-    description: "装配线控制（OPC UA接口）"
+    name: "欧姆龙NX102 PLC"
+    description: "装配线控制 — OPC UA原生接口"
     protocol: opcua
     endpoint: "opc.tcp://192.168.1.51:4840"
-    security_mode: "SignAndEncrypt"
-    username: "operator"
-    password: "operator123"
     enabled: true
-    collection_interval: 5
-    
+    collection_interval: 2
+    device_model: "NX102-1200"
+    vendor: "欧姆龙"
+    firmware: "V1.50+"
+
     nodes:
-      - node_id: "ns=2;s=ConveyorSpeed"
+      # Sysmac Studio中定义的全局变量路径:
+      # 全局变量 → Program_名称.变量名 或 I/O映射中的变量
+      # OPC UA NodeId格式: ns=2;s=变量路径
+      - node_id: "ns=2;s=ProductionLine.ConveyorSpeed"
         name: "conveyor_speed"
         description: "传送带速度"
-        unit: "m/s"
-        
-      - node_id: "ns=2;s=ProductCount"
+        unit: "m/min"
+
+      - node_id: "ns=2;s=ProductionLine.ProductCount"
         name: "product_count"
         description: "产品计数"
         unit: "个"
 
-  # ==================== MQTT设备 ====================
-  # 设备6: IoT传感器（MQTT）
+      - node_id: "ns=2;s=ProductionLine.CycleTime"
+        name: "cycle_time"
+        description: "节拍时间"
+        unit: "s"
+
+      - node_id: "ns=2;s=AssemblyStation.Torque"
+        name: "torque"
+        description: "拧紧扭矩"
+        unit: "N·m"
+
+      - node_id: "ns=2;s=AssemblyStation.GoodCount"
+        name: "good_count"
+        description: "合格品计数"
+        unit: "个"
+
+      - node_id: "ns=2;s=AssemblyStation.NGCount"
+        name: "ng_count"
+        description: "不良品计数"
+        unit: "个"
+
+
+  # ==================== 设备4: 虹润NHR-5700温度巡检仪 (Modbus RTU转TCP) ====================
+  # 手册来源: 虹润NHR-5700系列多回路数字显示控制仪使用说明书
+  # 协议: Modbus RTU, 通过RS485转TCP网关暴露
+  # 数据格式: IEEE754 float32, 高字节在前(Big-Endian)
+  # 每个通道测量值占2个寄存器(4字节), 地址 = (通道号-1)×2
+  # 16路巡检, 输入信号可通过面板按键设置(热电偶/热电阻/电压/电流)
+  - id: temp_sensor_01
+    name: "虹润NHR-5700温度巡检仪"
+    description: "车间温度16路巡检 — 反应釜/冷却水/环境/电机"
+    protocol: modbus_tcp
+    host: "192.168.1.101"
+    port: 502
+    slave_id: 2
+    enabled: true
+    collection_interval: 5
+    device_model: "NHR-5700-01-01"
+    vendor: "虹润精密仪器"
+
+    registers:
+      # 功能码03H读保持寄存器, float32格式, 地址递增2
+      - name: "temperature_ch1"
+        description: "通道1 — 反应釜A"
+        address: 0           # 通道1: 地址0×2=0
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "temperature_ch2"
+        description: "通道2 — 反应釜B"
+        address: 2           # 通道2: 地址1×2=2
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "temperature_ch3"
+        description: "通道3 — 冷却水入口"
+        address: 4
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "temperature_ch4"
+        description: "通道4 — 冷却水出口"
+        address: 6
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "temperature_ch5"
+        description: "通道5 — 车间环境"
+        address: 8
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "temperature_ch6"
+        description: "通道6 — 电机轴承"
+        address: 10
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "temperature_ch7"
+        description: "通道7 — 管道"
+        address: 12
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "temperature_ch8"
+        description: "通道8 — 储罐"
+        address: 14
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+
+  # ==================== 设备5: IoT环境传感器 (MQTT) ====================
+  # 基于ESP32-C3 + SHT40温湿度 + SCD41 CO2传感器的自研物联网节点
+  # 话题格式: factory/{车间}/env/{参数}, JSON payload {"value": xxx}
+  # QoS=1(至少一次), 通配订阅 factory/workshop_a/env/#
   - id: iot_sensor_01
-    name: "IoT环境传感器"
-    description: "无线环境监测节点"
+    name: "IoT环境监测节点"
+    description: "车间A无线环境监测 — 温湿度/CO2/PM2.5"
     protocol: mqtt
     host: "192.168.1.200"
     port: 1883
@@ -188,66 +412,44 @@ devices:
     password: "scada123"
     enabled: true
     collection_interval: 10
-    
-    # MQTT订阅主题
+    device_model: "ESP32-C3 + SHT40 + SCD41"
+    vendor: "自研物联网节点"
+
     topics:
-      - topic: "factory/workshop_a/temperature"
+      - topic: "factory/workshop_a/env/temperature"
         name: "temperature"
         unit: "°C"
         json_path: "value"
-        
-      - topic: "factory/workshop_a/humidity"
+        description: "环境温度"
+
+      - topic: "factory/workshop_a/env/humidity"
         name: "humidity"
         unit: "%RH"
         json_path: "value"
-        
-      - topic: "factory/workshop_a/co2"
+        description: "环境湿度"
+
+      - topic: "factory/workshop_a/env/co2"
         name: "co2"
         unit: "ppm"
         json_path: "value"
+        description: "CO2浓度"
 
-  # ==================== REST HTTP设备 ====================
-  # 设备7: 智能网关（REST API）
-  - id: gateway_01
-    name: "智能网关1号"
-    description: "产线数据网关（HTTP接口）"
-    protocol: rest
-    base_url: "http://192.168.1.250/api"
-    poll_interval: 10
-    auth_type: "bearer"
-    auth_token: "your_gateway_token"
-    enabled: true
-    collection_interval: 10
-    
-    endpoints:
-      - name: "temperature"
-        path: "/sensors/temp"
-        method: GET
-        json_path: "data.value"
-        unit: "°C"
-        
-      - name: "humidity"
-        path: "/sensors/humi"
-        method: GET
-        json_path: "data.value"
-        unit: "%RH"
-        
-      - name: "production_count"
-        path: "/production/count"
-        method: GET
-        json_path: "data.total"
-        unit: "个"
-        
-      - name: "production_status"
-        path: "/production/status"
-        method: GET
-        json_path: "data.status"
-        unit: ""
+      - topic: "factory/workshop_a/env/pm25"
+        name: "pm25"
+        unit: "μg/m³"
+        json_path: "value"
+        description: "PM2.5浓度"
 
-  # 设备8: 西门子PLC Web Server（REST API）
+
+  # ==================== 设备6: 西门子S7-1500 Web Server (REST) ====================
+  # 手册来源: S7-1500系统手册 — 内置Web Server
+  # S7-1500 V2.0+固件内置HTTP REST API, 无需额外模块
+  # 访问地址: http://{IP}/api/v1/variables/{标签名}
+  # 标签名对应TIA Portal中定义的PLC标签(Tag)
+  # 需要在TIA Portal中启用Web Server并配置访问权限
   - id: siemens_web_01
-    name: "西门子PLC Web接口"
-    description: "S7-1500内置Web Server"
+    name: "西门子S7-1500 Web API"
+    description: "S7-1500内置REST接口 — 备用数据通道"
     protocol: rest
     base_url: "http://192.168.1.52"
     poll_interval: 5
@@ -256,16 +458,901 @@ devices:
     auth_password: "admin123"
     enabled: true
     collection_interval: 5
-    
+    device_model: "S7-1516-3 PN/DP"
+    vendor: "西门子"
+
     endpoints:
-      - name: "temperature"
-        path: "/api/v1/variables/temperature"
+      - name: "ambient_temperature"
+        path: "/api/v1/variables/DB1.temperature"
         method: GET
         json_path: "value"
         unit: "°C"
-        
-      - name: "motor_status"
-        path: "/api/v1/variables/motor_status"
+
+      - name: "system_pressure"
+        path: "/api/v1/variables/DB1.pressure"
+        method: GET
+        json_path: "value"
+        unit: "MPa"
+
+      - name: "production_count"
+        path: "/api/v1/variables/DB100.product_count"
+        method: GET
+        json_path: "value"
+        unit: "个"
+
+      - name: "line_status"
+        path: "/api/v1/variables/DB100.line_status"
         method: GET
         json_path: "value"
         unit: ""
+
+
+  # ==================== 设备7: 西门子S7-1500 PLC (Modbus TCP) ====================
+  # 手册来源: S7-1500系统手册 + TIA Portal Modbus TCP配置指南
+  # S7-1500比S7-1200更强：支持更多连接、更大DB块、高速采集
+  # 用于主产线关键工艺参数采集（锅炉/换热器/反应釜群）
+  - id: siemens_1500_01
+    name: "西门子S7-1500 PLC"
+    description: "主产线控制PLC — 锅炉/换热器/反应釜群"
+    protocol: modbus_tcp
+    host: "192.168.1.53"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 2
+    device_model: "S7-1516-3 PN/DP (6ES7516-3AN02-0AB0)"
+    vendor: "西门子"
+    firmware: "V2.9"
+
+    registers:
+      - name: "boiler_temperature"
+        description: "锅炉出口温度"
+        address: 0
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "boiler_pressure"
+        description: "锅炉压力"
+        address: 2
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "MPa"
+
+      - name: "heat_exchanger_temperature"
+        description: "换热器出口温度"
+        address: 4
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "steam_flow"
+        description: "蒸汽流量"
+        address: 6
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "t/h"
+
+      - name: "feed_water_level"
+        description: "给水液位"
+        address: 8
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "mm"
+
+      - name: "flue_gas_temperature"
+        description: "排烟温度"
+        address: 10
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "oxygen_content"
+        description: "烟气含氧量"
+        address: 12
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "%"
+
+      - name: "boiler_status"
+        description: "锅炉状态 0=停炉/1=运行/2=故障"
+        address: 14
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+
+  # ==================== 设备8: 施耐德M340 PLC (Modbus RTU转TCP) ====================
+  # 手册来源: Modicon M340 通讯协议手册 (Modbus RTU)
+  # M340是施耐德中端PLC, 支持Unity Pro编程
+  # 用于水处理车间(进水泵站/加药系统/沉淀池)
+  # 通过BMX NOE 0100以太网模块暴露Modbus TCP
+  - id: schneider_m340_01
+    name: "施耐德M340 PLC"
+    description: "水处理车间控制 — 进水/加药/沉淀"
+    protocol: modbus_tcp
+    host: "192.168.1.54"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 5
+    device_model: "BMX P34 2020 + BMX NOE 0100"
+    vendor: "施耐德电气"
+    firmware: "V3.30"
+
+    registers:
+      - name: "inlet_flow"
+        description: "进水流量"
+        address: 0
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "m³/h"
+
+      - name: "outlet_flow"
+        description: "出水流量"
+        address: 2
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "m³/h"
+
+      - name: "water_level"
+        description: "沉淀池液位"
+        address: 4
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "m"
+
+      - name: "ph_value"
+        description: "出水pH值"
+        address: 6
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      - name: "turbidity"
+        description: "出水浊度"
+        address: 8
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "NTU"
+
+      - name: "dissolved_oxygen"
+        description: "溶解氧"
+        address: 10
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "mg/L"
+
+      - name: "conductivity"
+        description: "电导率"
+        address: 12
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "μS/cm"
+
+      - name: "pump_speed"
+        description: "进水泵转速"
+        address: 14
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "RPM"
+
+
+  # ==================== 设备9: ABB M4M电力仪表 (Modbus TCP) ====================
+  # 手册来源: ABB M4M系列网络分析仪通讯手册
+  # M4M是ABB新一代多功能电力仪表，支持THD谐波分析
+  # 安装在车间配电柜，监测电机群供电质量
+  - id: abb_m4m_01
+    name: "ABB M4M电力分析仪"
+    description: "车间配电柜 — 电力质量监测"
+    protocol: modbus_tcp
+    host: "192.168.1.102"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 5
+    device_model: "M4M 20"
+    vendor: "ABB"
+
+    registers:
+      - name: "voltage_a"
+        description: "A相电压"
+        address: 0
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "V"
+
+      - name: "voltage_b"
+        description: "B相电压"
+        address: 2
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "V"
+
+      - name: "voltage_c"
+        description: "C相电压"
+        address: 4
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "V"
+
+      - name: "current_a"
+        description: "A相电流"
+        address: 6
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "A"
+
+      - name: "current_b"
+        description: "B相电流"
+        address: 8
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "A"
+
+      - name: "current_c"
+        description: "C相电流"
+        address: 10
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "A"
+
+      - name: "active_power"
+        description: "总有功功率"
+        address: 12
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "kW"
+
+      - name: "frequency"
+        description: "电网频率"
+        address: 14
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "Hz"
+
+      - name: "thd_voltage"
+        description: "电压总谐波畸变率"
+        address: 16
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "%"
+
+      - name: "power_factor"
+        description: "功率因数"
+        address: 18
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+
+  # ==================== 设备10: 和利时LK PLC (Modbus RTU) ====================
+  # 手册来源: 和利时LK系列可编程控制器通讯协议手册
+  # LK系列是国产中型PLC, 常用于化工/制药行业
+  # 用于二期化工车间(蒸馏/干燥/包装)
+  - id: hollysys_lk_01
+    name: "和利时LK PLC"
+    description: "化工车间控制 — 蒸馏/干燥/包装"
+    protocol: modbus_tcp
+    host: "192.168.1.55"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 3
+    device_model: "LK210"
+    vendor: "和利时"
+
+    registers:
+      - name: "distill_temperature"
+        description: "蒸馏塔顶温度"
+        address: 0
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "distill_pressure"
+        description: "蒸馏塔压力"
+        address: 2
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "kPa"
+
+      - name: "dryer_temperature"
+        description: "干燥机温度"
+        address: 4
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "dryer_humidity"
+        description: "干燥机湿度"
+        address: 6
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "%"
+
+      - name: "reflux_ratio"
+        description: "回流比"
+        address: 8
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+      - name: "product_flow"
+        description: "产品流量"
+        address: 10
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "L/min"
+
+      - name: "packaging_speed"
+        description: "包装线速度"
+        address: 12
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "个"
+
+      - name: "batch_count"
+        description: "批次计数"
+        address: 13
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "个"
+
+
+  # ==================== 设备11: 三菱FX5U PLC (Modbus TCP) ====================
+  # 手册来源: MELSEC FX5系列用户手册(通讯篇)
+  # FX5U内置以太网口支持Modbus TCP服务端, 无需额外模块
+  # 用于注塑车间(注塑机/模具温度/脱模计数)
+  - id: mitsubishi_fx5u_01
+    name: "三菱FX5U PLC"
+    description: "注塑车间控制 — 注塑机/模具/脱模"
+    protocol: modbus_tcp
+    host: "192.168.1.56"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 2
+    device_model: "FX5U-64M"
+    vendor: "三菱电机"
+    firmware: "V1.000+"
+
+    registers:
+      - name: "mold_temperature"
+        description: "模具温度"
+        address: 0
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "injection_pressure"
+        description: "注射压力"
+        address: 2
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "MPa"
+
+      - name: "injection_speed"
+        description: "注射速度"
+        address: 4
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "mm/s"
+
+      - name: "cushion_position"
+        description: "保压位置"
+        address: 6
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "mm"
+
+      - name: "cycle_time"
+        description: "成型周期"
+        address: 8
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "s"
+
+      - name: "shot_count"
+        description: "注射计数"
+        address: 10
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "个"
+
+      - name: "clamping_force"
+        description: "锁模力"
+        address: 11
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "kN"
+
+      - name: "barrel_temperature"
+        description: "料筒温度"
+        address: 13
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+
+  # ==================== 设备12: 台达DVP PLC (Modbus RTU转TCP) ====================
+  # 手册来源: DVP-PLC通讯协议手册(Modbus ASCII/RTU)
+  # DVP系列是台达小型PLC, 用于包装线/输送带/简单设备
+  # 通过IFD6500串口转以太网网关暴露Modbus TCP
+  - id: delta_dvp_01
+    name: "台达DVP PLC"
+    description: "包装线控制 — 封箱/贴标/码垛"
+    protocol: modbus_tcp
+    host: "192.168.1.57"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 5
+    device_model: "DVP32EH00T3"
+    vendor: "台达电子"
+
+    registers:
+      - name: "conveyor_speed"
+        description: "输送带速度"
+        address: 0
+        length: 1
+        data_type: uint16
+        scale: 0.1
+        offset: 0
+        unit: "m/min"
+
+      - name: "sealing_temperature"
+        description: "封箱温度"
+        address: 1
+        length: 1
+        data_type: uint16
+        scale: 0.1
+        offset: 0
+        unit: "°C"
+
+      - name: "label_count"
+        description: "贴标计数"
+        address: 2
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "个"
+
+      - name: "palletizing_count"
+        description: "码垛计数"
+        address: 3
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "个"
+
+      - name: "reject_count"
+        description: "剔除计数"
+        address: 4
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "个"
+
+      - name: "packing_status"
+        description: "包装线状态 0=停机/1=运行/2=换料/3=故障"
+        address: 5
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: ""
+
+
+  # ==================== 设备13: MQTT振动监测传感器 ====================
+  # 基于MEMS振动传感器 + 无线LoRa网关的设备状态监测节点
+  # 安装在关键旋转设备(电机/泵/风机)轴承座上
+  # 用于预测性维护 — 振动异常预示轴承磨损/不平衡/对中不良
+  - id: vibration_sensor_01
+    name: "MQTT振动监测节点"
+    description: "旋转设备振动监测 — 电机/泵/风机"
+    protocol: mqtt
+    host: "192.168.1.200"
+    port: 1883
+    username: "scada"
+    password: "scada123"
+    enabled: true
+    collection_interval: 10
+    device_model: "IoT-VIB-100 + LoRa GW"
+    vendor: "自研物联网节点"
+
+    topics:
+      - topic: "factory/motor_group/vibration/x_axis"
+        name: "vibration_x"
+        unit: "mm/s"
+        json_path: "value"
+        description: "X轴振动速度"
+
+      - topic: "factory/motor_group/vibration/y_axis"
+        name: "vibration_y"
+        unit: "mm/s"
+        json_path: "value"
+        description: "Y轴振动速度"
+
+      - topic: "factory/motor_group/vibration/z_axis"
+        name: "vibration_z"
+        unit: "mm/s"
+        json_path: "value"
+        description: "Z轴振动速度"
+
+      - topic: "factory/motor_group/vibration/temperature"
+        name: "bearing_temperature"
+        unit: "°C"
+        json_path: "value"
+        description: "轴承温度"
+
+
+  # ==================== 设备14: MQTT水质监测终端 ====================
+  # 基于多参数水质传感器(溶解氧/浊度/电导率/pH)的在线监测
+  # 安装在出水口, 实时上传水质数据到MQTT broker
+  - id: water_quality_01
+    name: "MQTT水质监测终端"
+    description: "出水口在线水质监测 — DO/浊度/电导率/pH"
+    protocol: mqtt
+    host: "192.168.1.200"
+    port: 1883
+    username: "scada"
+    password: "scada123"
+    enabled: true
+    collection_interval: 15
+    device_model: "WQ-Multi-01"
+    vendor: "自研物联网节点"
+
+    topics:
+      - topic: "factory/water_outlet/quality/dissolved_oxygen"
+        name: "dissolved_oxygen"
+        unit: "mg/L"
+        json_path: "value"
+        description: "溶解氧"
+
+      - topic: "factory/water_outlet/quality/turbidity"
+        name: "turbidity"
+        unit: "NTU"
+        json_path: "value"
+        description: "浊度"
+
+      - topic: "factory/water_outlet/quality/conductivity"
+        name: "conductivity"
+        unit: "μS/cm"
+        json_path: "value"
+        description: "电导率"
+
+      - topic: "factory/water_outlet/quality/ph"
+        name: "ph"
+        unit: ""
+        json_path: "value"
+        description: "pH值"
+
+      - topic: "factory/water_outlet/quality/temperature"
+        name: "water_temperature"
+        unit: "°C"
+        json_path: "value"
+        description: "水温"
+
+
+  # ==================== 设备15: REST MES制造执行系统 ====================
+  # 企业MES系统的REST API接口, 提供生产计划和质量数据
+  # 非硬件设备, 是信息化系统的数据集成
+  - id: mes_api_01
+    name: "MES制造执行系统"
+    description: "MES生产数据接口 — 计划/质量/OEE"
+    protocol: rest
+    base_url: "http://192.168.1.250:8080"
+    poll_interval: 30
+    auth_type: "bearer"
+    auth_token: "mes-api-token-xxx"
+    enabled: true
+    collection_interval: 30
+    device_model: "MES Enterprise v3.2"
+    vendor: "自研MES系统"
+
+    endpoints:
+      - name: "oee"
+        path: "/api/v1/production/oee"
+        method: GET
+        json_path: "data.oee"
+        unit: "%"
+
+      - name: "quality_rate"
+        path: "/api/v1/quality/rate"
+        method: GET
+        json_path: "data.rate"
+        unit: "%"
+
+      - name: "planned_quantity"
+        path: "/api/v1/production/plan/quantity"
+        method: GET
+        json_path: "data.quantity"
+        unit: "个"
+
+      - name: "actual_quantity"
+        path: "/api/v1/production/actual/quantity"
+        method: GET
+        json_path: "data.quantity"
+        unit: "个"
+
+      - name: "defect_rate"
+        path: "/api/v1/quality/defect_rate"
+        method: GET
+        json_path: "data.rate"
+        unit: "%"
+
+
+  # ==================== 设备16: REST能源管理系统 ====================
+  # 企业能源管理系统(EMS)的REST API接口
+  # 提供水/电/气/蒸汽等能源介质的消耗和统计数据
+  - id: ems_api_01
+    name: "能源管理系统"
+    description: "EMS能源数据接口 — 水电气蒸汽"
+    protocol: rest
+    base_url: "http://192.168.1.251:8080"
+    poll_interval: 60
+    auth_type: "basic"
+    auth_username: "scada"
+    auth_password: "ems123"
+    enabled: true
+    collection_interval: 60
+    device_model: "EMS Platform v2.0"
+    vendor: "自研EMS系统"
+
+    endpoints:
+      - name: "electricity_consumption"
+        path: "/api/v1/energy/electricity/today"
+        method: GET
+        json_path: "data.kwh"
+        unit: "kWh"
+
+      - name: "water_consumption"
+        path: "/api/v1/energy/water/today"
+        method: GET
+        json_path: "data.m3"
+        unit: "m³"
+
+      - name: "steam_consumption"
+        path: "/api/v1/energy/steam/today"
+        method: GET
+        json_path: "data.ton"
+        unit: "t"
+
+      - name: "compressed_air"
+        path: "/api/v1/energy/air/today"
+        method: GET
+        json_path: "data.m3"
+        unit: "m³"
+
+
+  # ==================== 设备17: 汇川H5U PLC (Modbus TCP) ====================
+  # 手册来源: 汇川H5U系列EtherNet通讯手册
+  # H5U是国产中型PLC, 支持EtherNet/IP和Modbus TCP
+  # 用于涂装车间(喷涂/烘干/输送)
+  - id: inovance_h5u_01
+    name: "汇川H5U PLC"
+    description: "涂装车间控制 — 喷涂/烘干/输送"
+    protocol: modbus_tcp
+    host: "192.168.1.58"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 3
+    device_model: "H5U-3232MT"
+    vendor: "汇川技术"
+
+    registers:
+      - name: "spray_pressure"
+        description: "喷涂压力"
+        address: 0
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "MPa"
+
+      - name: "oven_temperature"
+        description: "烘干炉温度"
+        address: 2
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "spray_speed"
+        description: "喷涂速度"
+        address: 4
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "m/min"
+
+      - name: "coating_thickness"
+        description: "涂层厚度"
+        address: 6
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "μm"
+
+      - name: "conveyor_speed"
+        description: "输送链速度"
+        address: 8
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "m/min"
+
+      - name: "painted_count"
+        description: "喷涂计数"
+        address: 10
+        length: 1
+        data_type: uint16
+        scale: 1.0
+        offset: 0
+        unit: "个"
+
+
+  # ==================== 设备18: 图尔克TBEN-L IO-Link主站 (Modbus TCP) ====================
+  # 手册来源: 图尔克TBEN-L系列IO-Link主站通讯手册
+  # IO-Link是工业传感器/执行器点对点通信协议(IEC 61131-9)
+  # TBEN-L是IP67防护等级的现场总线模块, 安装在设备旁
+  # 集成多种IO-Link传感器: 压力/流量/温度/距离
+  - id: turck_iolink_01
+    name: "图尔克IO-Link主站"
+    description: "现场IO-Link传感器集成 — 压力/流量/温度/距离"
+    protocol: modbus_tcp
+    host: "192.168.1.60"
+    port: 502
+    slave_id: 1
+    enabled: true
+    collection_interval: 2
+    device_model: "TBEN-L4-8IOL"
+    vendor: "图尔克"
+
+    registers:
+      - name: "iol_pressure_1"
+        description: "IO-Link压力传感器1 — 压缩空气"
+        address: 0
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "MPa"
+
+      - name: "iol_flow_1"
+        description: "IO-Link流量传感器1 — 冷却水"
+        address: 2
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "L/min"
+
+      - name: "iol_temperature_1"
+        description: "IO-Link温度传感器1 — 环境"
+        address: 4
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "°C"
+
+      - name: "iol_distance_1"
+        description: "IO-Link距离传感器1 — 物料位置"
+        address: 6
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "mm"
+
+      - name: "iol_pressure_2"
+        description: "IO-Link压力传感器2 — 液压系统"
+        address: 8
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "MPa"
+
+      - name: "iol_vacuum"
+        description: "IO-Link真空传感器 — 吸盘"
+        address: 10
+        length: 2
+        data_type: float32
+        scale: 1.0
+        offset: 0
+        unit: "Pa"

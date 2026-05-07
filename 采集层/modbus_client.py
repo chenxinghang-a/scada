@@ -379,6 +379,33 @@ class ModbusClient:
             return register - 0x10000
         return register
     
+    def decode_int32(self, registers: List[int]) -> int:
+        """
+        解码32位有符号整数（两个寄存器，Big-Endian）
+        
+        Args:
+            registers: 寄存器值列表（2个）
+            
+        Returns:
+            int: 解码后的整数
+        """
+        raw = (registers[0] << 16) | registers[1]
+        if raw & 0x80000000:
+            raw -= 0x100000000
+        return raw
+    
+    def decode_uint32(self, registers: List[int]) -> int:
+        """
+        解码32位无符号整数（两个寄存器，Big-Endian）
+        
+        Args:
+            registers: 寄存器值列表（2个）
+            
+        Returns:
+            int: 解码后的整数
+        """
+        return (registers[0] << 16) | registers[1]
+    
     def get_stats(self) -> Dict[str, Any]:
         """
         获取统计信息

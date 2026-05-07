@@ -205,7 +205,7 @@ class DataCollector:
                     self.data_queue.put({
                         'device_id': device_id,
                         'register_name': name,
-                        'value': float(value) if value else 0,
+                        'value': float(value) if value is not None else 0,
                         'timestamp': timestamp,
                         'unit': data.get('unit', '')
                     })
@@ -222,7 +222,7 @@ class DataCollector:
                     self.data_queue.put({
                         'device_id': device_id,
                         'register_name': name,
-                        'value': float(value) if value else 0,
+                        'value': float(value) if value is not None else 0,
                         'timestamp': timestamp,
                         'unit': data.get('unit', '')
                     })
@@ -239,7 +239,7 @@ class DataCollector:
                     self.data_queue.put({
                         'device_id': device_id,
                         'register_name': name,
-                        'value': float(value) if value else 0,
+                        'value': float(value) if value is not None else 0,
                         'timestamp': timestamp,
                         'unit': data.get('unit', '')
                     })
@@ -264,6 +264,14 @@ class DataCollector:
                 if raw_values is None or len(raw_values) < 4:
                     return None
                 value = client.decode_float64(raw_values)
+            elif data_type in ('int32', 'uint32'):
+                raw_values = client.read_holding_registers(address, 2)
+                if raw_values is None or len(raw_values) < 2:
+                    return None
+                if data_type == 'int32':
+                    value = client.decode_int32(raw_values)
+                else:
+                    value = client.decode_uint32(raw_values)
             else:
                 raw_values = client.read_holding_registers(address, 1)
                 if raw_values is None:
