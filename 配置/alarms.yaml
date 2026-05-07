@@ -7,83 +7,145 @@
 # - info: 信息提示，仅记录
 
 alarm_rules:
-  # 温度报警规则（模拟数据范围20-35°C）
+  # 温度报警规则 — 虹润NHR-5700通道1（反应釜A）
+  # devices.yaml: temp_sensor_01 -> temperature_ch1 (float32, °C)
   - id: temp_high
-    name: "温度过高"
-    description: "温度超过上限"
+    name: "反应釜A温度过高"
+    description: "反应釜A温度超过上限"
     device_id: temp_sensor_01
-    register_name: "temperature"
+    register_name: "temperature_ch1"
     condition: "greater_than"
-    threshold: 32.0  # 调整到32度，模拟数据会触发
+    threshold: 85.0
     level: "critical"
     enabled: true
-    delay: 0  # 立即确认
+    delay: 0
     
   - id: temp_low
-    name: "温度过低"
-    description: "温度低于下限"
+    name: "反应釜A温度过低"
+    description: "反应釜A温度低于下限"
     device_id: temp_sensor_01
-    register_name: "temperature"
+    register_name: "temperature_ch1"
     condition: "less_than"
-    threshold: 22.0  # 调整到22度，模拟数据会触发
+    threshold: 15.0
+    level: "warning"
+    enabled: true
+    delay: 0
+
+  # 温度报警 — 虹润通道5（车间环境）
+  - id: env_temp_high
+    name: "车间环境温度过高"
+    description: "车间环境温度超过上限"
+    device_id: temp_sensor_01
+    register_name: "temperature_ch5"
+    condition: "greater_than"
+    threshold: 38.0
     level: "warning"
     enabled: true
     delay: 0
     
-  # 压力报警规则（模拟数据范围0.3-0.7 MPa）
+  # 压力报警规则 — 西门子S7-1200管道压力
+  # devices.yaml: siemens_plc_01 -> pressure (float32, MPa)
   - id: pressure_high
-    name: "压力过高"
-    description: "压力超过上限"
-    device_id: pressure_sensor_01
+    name: "管道压力过高"
+    description: "管道压力超过上限"
+    device_id: siemens_plc_01
     register_name: "pressure"
     condition: "greater_than"
-    threshold: 0.65  # 调整到0.65，模拟数据会触发
+    threshold: 0.8
     level: "critical"
     enabled: true
     delay: 0
     
   - id: pressure_low
-    name: "压力过低"
-    description: "压力低于下限"
-    device_id: pressure_sensor_01
+    name: "管道压力过低"
+    description: "管道压力低于下限"
+    device_id: siemens_plc_01
     register_name: "pressure"
     condition: "less_than"
-    threshold: 0.35  # 调整到0.35，模拟数据会触发
+    threshold: 0.2
     level: "warning"
     enabled: true
     delay: 0
     
-  # 电力报警规则（电压220±10，电流50-70）
+  # 电力报警规则 — 正泰DTSU666 A相电压/电流
+  # devices.yaml: power_meter_01 -> voltage_a (float32, V), current_a (float32, A)
   - id: voltage_high
-    name: "电压过高"
-    description: "电压超过上限"
+    name: "A相电压过高"
+    description: "A相电压超过上限"
     device_id: power_meter_01
-    register_name: "voltage"
+    register_name: "voltage_a"
     condition: "greater_than"
-    threshold: 225.0  # 调整到225，模拟数据偶尔触发
+    threshold: 242.0
     level: "critical"
     enabled: true
     delay: 0
     
   - id: voltage_low
-    name: "电压过低"
-    description: "电压低于下限"
+    name: "A相电压过低"
+    description: "A相电压低于下限"
     device_id: power_meter_01
-    register_name: "voltage"
+    register_name: "voltage_a"
     condition: "less_than"
-    threshold: 215.0  # 调整到215，模拟数据偶尔触发
+    threshold: 198.0
     level: "warning"
     enabled: true
     delay: 0
     
   - id: current_high
-    name: "电流过高"
-    description: "电流超过上限"
+    name: "A相电流过高"
+    description: "A相电流超过上限"
     device_id: power_meter_01
-    register_name: "current"
+    register_name: "current_a"
     condition: "greater_than"
-    threshold: 65.0  # 调整到65，模拟数据会触发
+    threshold: 100.0
     level: "critical"
+    enabled: true
+    delay: 0
+
+  # 锅炉报警 — 西门子S7-1500
+  # devices.yaml: siemens_1500_01 -> boiler_temperature, boiler_pressure
+  - id: boiler_temp_high
+    name: "锅炉温度过高"
+    description: "锅炉出口温度超过上限"
+    device_id: siemens_1500_01
+    register_name: "boiler_temperature"
+    condition: "greater_than"
+    threshold: 180.0
+    level: "critical"
+    enabled: true
+    delay: 0
+
+  - id: boiler_pressure_high
+    name: "锅炉压力过高"
+    description: "锅炉压力超过上限"
+    device_id: siemens_1500_01
+    register_name: "boiler_pressure"
+    condition: "greater_than"
+    threshold: 1.2
+    level: "critical"
+    enabled: true
+    delay: 0
+
+  # 水质报警 — 施耐德M340 pH值
+  - id: ph_low
+    name: "出水pH过低"
+    description: "出水pH值低于下限"
+    device_id: schneider_m340_01
+    register_name: "ph_value"
+    condition: "less_than"
+    threshold: 6.5
+    level: "warning"
+    enabled: true
+    delay: 0
+
+  - id: ph_high
+    name: "出水pH过高"
+    description: "出水pH值超过上限"
+    device_id: schneider_m340_01
+    register_name: "ph_value"
+    condition: "greater_than"
+    threshold: 8.5
+    level: "warning"
     enabled: true
     delay: 0
 

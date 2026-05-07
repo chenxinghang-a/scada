@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Optional, Dict, List
+from pathlib import Path
 from flask import request, jsonify, current_app
 
 logger = logging.getLogger(__name__)
@@ -33,11 +34,15 @@ ROLES = {
     }
 }
 
-# JWT配置
-JWT_SECRET = 'industrial-scada-jwt-secret-2026'
-JWT_ALGORITHM = 'HS256'
-JWT_EXPIRATION_HOURS = 24
-JWT_REFRESH_DAYS = 7
+# JWT配置（从config.py统一读取）
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import AuthConfig
+
+JWT_SECRET = AuthConfig.JWT_SECRET
+JWT_ALGORITHM = AuthConfig.JWT_ALGORITHM
+JWT_EXPIRATION_HOURS = AuthConfig.JWT_EXPIRATION_HOURS
+JWT_REFRESH_DAYS = AuthConfig.JWT_REFRESH_DAYS
 
 
 class AuthManager:

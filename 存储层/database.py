@@ -38,12 +38,17 @@ class Database:
     def get_connection(self):
         """
         获取数据库连接（上下文管理器）
+        使用WAL模式提升并发性能，设置超时避免死锁
         
         Yields:
             sqlite3.Connection: 数据库连接
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
+        # WAL模式：允许多个读连接和一个写连接并发
+        conn.execute('PRAGMA journal_mode=WAL')
+        # 忙等待超时30秒
+        conn.execute('PRAGMA busy_timeout=30000')
         try:
             yield conn
             conn.commit()
@@ -58,7 +63,7 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # 创建实时数据表
+            # 创建实时数据表（每个设备+寄存器只保留最新一条）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS realtime_data (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +72,8 @@ class Database:
                     value REAL,
                     unit TEXT,
                     timestamp DATETIME NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(device_id, register_name)
                 )
             ''')
             
@@ -177,7 +183,9 @@ class Database:
     def insert_data(self, device_id: str, register_name: str, 
                     value: float, timestamp: datetime, unit: str = ''):
         """
-        插入实时数据
+        插入数据
+        - realtime_data: UPSERT，每个设备+寄存器只保留最新一条
+        - history_data: INSERT，保留全量历史记录
         
         Args:
             device_id: 设备ID
@@ -188,12 +196,19 @@ class Database:
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
+            
+            # realtime_data: UPSERT — 每个(device_id, register_name)只保留最新值
             cursor.execute('''
                 INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(device_id, register_name) DO UPDATE SET
+                    value = excluded.value,
+                    unit = excluded.unit,
+                    timestamp = excluded.timestamp,
+                    created_at = CURRENT_TIMESTAMP
             ''', (device_id, register_name, value, unit, timestamp))
             
-            # 同时插入历史数据表
+            # history_data: INSERT — 保留全量历史
             cursor.execute('''
                 INSERT INTO history_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
