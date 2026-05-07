@@ -9,10 +9,16 @@ REST API模块
 """
 
 import yaml
+import logging
 from pathlib import Path
 from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 from datetime import datetime, timedelta
+
+# 导入统一的认证装饰器
+from 用户层.auth import jwt_required, role_required, permission_required
+
+logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__)
 
@@ -24,60 +30,34 @@ def _get_auth_manager():
     return current_app.auth_manager
 
 
-def _get_current_user():
-    """从请求中提取当前用户信息，返回 (user_dict, error_response)"""
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return None, (jsonify({'error': '未认证'}), 401)
-    
-    token = auth_header[7:]
-    auth_manager = _get_auth_manager()
-    user = auth_manager.verify_token(token)
-    
-    if not user:
-        return None, (jsonify({'error': '令牌无效或已过期'}), 401)
-    
-    return user, None
+# 统一使用auth.py中的装饰器，保持向后兼容
+_require_auth = jwt_required
+_require_admin = role_required('admin')
+_require_engineer = role_required('admin', 'engineer')
 
 
-def _require_auth(f):
-    """认证装饰器：要求有效JWT令牌"""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        user, error = _get_current_user()
-        if error:
-            return error
-        request.current_user = user
-        return f(*args, **kwargs)
-    return decorated
+# ==================== 配置工具函数 ====================
+
+def _load_yaml_config(config_path: str) -> dict:
+    """加载YAML配置文件"""
+    path = Path(config_path)
+    if not path.exists():
+        return {}
+    with open(path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f) or {}
 
 
-def _require_admin(f):
-    """管理员权限装饰器"""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        user, error = _get_current_user()
-        if error:
-            return error
-        if user['role'] != 'admin':
-            return jsonify({'error': '需要管理员权限'}), 403
-        request.current_user = user
-        return f(*args, **kwargs)
-    return decorated
-
-
-def _require_engineer(f):
-    """工程师权限装饰器（admin或engineer）"""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        user, error = _get_current_user()
-        if error:
-            return error
-        if user['role'] not in ('admin', 'engineer'):
-            return jsonify({'error': '需要管理员或工程师权限'}), 403
-        request.current_user = user
-        return f(*args, **kwargs)
-    return decorated
+def _save_yaml_config(config_path: str, config: dict) -> bool:
+    """保存YAML配置文件"""
+    try:
+        path = Path(config_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+        return True
+    except Exception as e:
+        logger.error(f"保存配置文件失败: {e}")
+        return False
 
 
 # ==================== 认证相关API ====================
@@ -596,7 +576,6 @@ def get_interlocks():
 
 
 @api_bp.route('/control/interlocks/<rule_id>/bypass', methods=['POST'])
-@_require_auth
 @_require_engineer
 def bypass_interlock(rule_id):
     """旁路联锁（维护用，需工程师权限+原因）"""
@@ -611,7 +590,6 @@ def bypass_interlock(rule_id):
 
 
 @api_bp.route('/control/interlocks/<rule_id>/restore', methods=['POST'])
-@_require_auth
 @_require_engineer
 def restore_interlock(rule_id):
     """恢复联锁"""
@@ -969,12 +947,9 @@ def export_alarms():
 @api_bp.route('/config', methods=['GET'])
 def get_config():
     """获取系统配置"""
-    config_path = Path('配置/system.yaml')
-    if not config_path.exists():
+    config = _load_yaml_config('配置/system.yaml')
+    if not config:
         return jsonify({'error': '配置文件不存在'}), 404
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
     return jsonify({'config': config})
 
 
@@ -986,9 +961,7 @@ def update_config():
     if not data:
         return jsonify({'error': '请提供配置数据'}), 400
     
-    config_path = Path('配置/system.yaml')
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    config = _load_yaml_config('配置/system.yaml')
     
     section = data.get('section')
     if section and section in config:
@@ -996,8 +969,7 @@ def update_config():
     else:
         config.update(data)
     
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    _save_yaml_config('配置/system.yaml', config)
     
     _get_auth_manager().log_operation(
         request.current_user['username'], 'update_config', f"更新系统配置: {section or 'global'}")
@@ -1009,13 +981,7 @@ def update_config():
 @api_bp.route('/alarm-rules', methods=['GET'])
 def get_alarm_rules():
     """获取所有报警规则"""
-    config_path = Path('配置/alarms.yaml')
-    if not config_path.exists():
-        return jsonify({'rules': []})
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-    
+    config = _load_yaml_config('配置/alarms.yaml')
     return jsonify({'rules': config.get('alarm_rules', []), 'notification': config.get('notification', {})})
 
 
@@ -1027,9 +993,7 @@ def add_alarm_rule():
     if not data or 'id' not in data:
         return jsonify({'error': '请提供规则ID'}), 400
     
-    config_path = Path('配置/alarms.yaml')
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    config = _load_yaml_config('配置/alarms.yaml')
     
     rules = config.get('alarm_rules', [])
     if any(r.get('id') == data['id'] for r in rules):
@@ -1038,8 +1002,7 @@ def add_alarm_rule():
     rules.append(data)
     config['alarm_rules'] = rules
     
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    _save_yaml_config('配置/alarms.yaml', config)
     
     current_app.alarm_manager.rules[data['id']] = data
     _get_auth_manager().log_operation(
@@ -1055,9 +1018,7 @@ def update_alarm_rule(rule_id):
     if not data:
         return jsonify({'error': '请提供更新数据'}), 400
     
-    config_path = Path('配置/alarms.yaml')
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    config = _load_yaml_config('配置/alarms.yaml')
     
     rules = config.get('alarm_rules', [])
     found = False
@@ -1071,8 +1032,7 @@ def update_alarm_rule(rule_id):
         return jsonify({'error': f'规则 {rule_id} 不存在'}), 404
     
     config['alarm_rules'] = rules
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    _save_yaml_config('配置/alarms.yaml', config)
     
     current_app.alarm_manager.rules[rule_id] = rules[[r['id'] for r in rules].index(rule_id)]
     _get_auth_manager().log_operation(
@@ -1084,9 +1044,7 @@ def update_alarm_rule(rule_id):
 @_require_engineer
 def delete_alarm_rule(rule_id):
     """删除报警规则"""
-    config_path = Path('配置/alarms.yaml')
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    config = _load_yaml_config('配置/alarms.yaml')
     
     rules = config.get('alarm_rules', [])
     new_rules = [r for r in rules if r.get('id') != rule_id]
@@ -1095,8 +1053,7 @@ def delete_alarm_rule(rule_id):
         return jsonify({'error': f'规则 {rule_id} 不存在'}), 404
     
     config['alarm_rules'] = new_rules
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    _save_yaml_config('配置/alarms.yaml', config)
     
     if rule_id in current_app.alarm_manager.rules:
         del current_app.alarm_manager.rules[rule_id]
@@ -1114,17 +1071,14 @@ def update_notification():
     if not data:
         return jsonify({'error': '请提供通知配置'}), 400
     
-    config_path = Path('配置/alarms.yaml')
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    config = _load_yaml_config('配置/alarms.yaml')
     
     if 'email' in data:
         config.setdefault('notification', {})['email'] = data['email']
     if 'sound' in data:
         config.setdefault('notification', {})['sound'] = data['sound']
     
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    _save_yaml_config('配置/alarms.yaml', config)
     
     _get_auth_manager().log_operation(
         request.current_user['username'], 'update_notification', '更新通知设置')
@@ -1239,7 +1193,7 @@ def get_health_scores():
 
 @api_bp.route('/industry40/health/<device_id>', methods=['GET'])
 @_require_auth
-def get_device_health(device_id):
+def get_device_health_by_id(device_id):
     """获取指定设备健康评分"""
     pm = current_app.predictive_maintenance
     if not pm:

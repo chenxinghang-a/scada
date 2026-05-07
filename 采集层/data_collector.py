@@ -206,8 +206,8 @@ class DataCollector:
                     'unit': register.get('unit', '')
                 })
     
-    def _collect_rest(self, client, device_id: str, device_config: Dict, timestamp):
-        """采集REST设备的缓存数据（客户端自带轮询）"""
+    def _collect_from_cache(self, client, device_id: str, timestamp):
+        """通用方法：从客户端缓存采集数据（适用于REST/OPC UA/MQTT）"""
         latest = client.get_latest_data()
         for name, data in latest.items():
             value = data.get('value')
@@ -222,40 +222,18 @@ class DataCollector:
                     })
                 except (ValueError, TypeError):
                     pass
+
+    def _collect_rest(self, client, device_id: str, device_config: Dict, timestamp):
+        """采集REST设备的缓存数据（客户端自带轮询）"""
+        self._collect_from_cache(client, device_id, timestamp)
 
     def _collect_opcua(self, client, device_id: str, device_config: Dict, timestamp):
         """采集OPC UA设备的缓存数据（客户端通过订阅自动更新缓存）"""
-        latest = client.get_latest_data()
-        for name, data in latest.items():
-            value = data.get('value')
-            if value is not None:
-                try:
-                    self.data_queue.put({
-                        'device_id': device_id,
-                        'register_name': name,
-                        'value': float(value) if value is not None else 0,
-                        'timestamp': timestamp,
-                        'unit': data.get('unit', '')
-                    })
-                except (ValueError, TypeError):
-                    pass
+        self._collect_from_cache(client, device_id, timestamp)
 
     def _collect_mqtt(self, client, device_id: str, device_config: Dict, timestamp):
         """采集MQTT设备的缓存数据（客户端通过订阅自动更新缓存）"""
-        latest = client.get_latest_data()
-        for name, data in latest.items():
-            value = data.get('value')
-            if value is not None:
-                try:
-                    self.data_queue.put({
-                        'device_id': device_id,
-                        'register_name': name,
-                        'value': float(value) if value is not None else 0,
-                        'timestamp': timestamp,
-                        'unit': data.get('unit', '')
-                    })
-                except (ValueError, TypeError):
-                    pass
+        self._collect_from_cache(client, device_id, timestamp)
     
     def _read_register(self, client, register: Dict) -> Optional[float]:
         """读取单个Modbus寄存器数据"""
