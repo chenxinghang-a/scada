@@ -539,11 +539,15 @@ class Database:
             try:
                 cursor.execute('SELECT COUNT(*) FROM history_archive')
                 archive_count = cursor.fetchone()[0]
-            except:
+            except Exception as e:
+                logger.debug(f"查询归档数据统计失败（可能表不存在）: {e}")
                 archive_count = 0
             
             # 数据库文件大小
             db_size = Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0
+            
+            # 总记录数（所有表合计）
+            total_records = realtime_count + history_count + alarm_count + archive_count
             
             return {
                 'realtime_records': realtime_count,
@@ -551,6 +555,7 @@ class Database:
                 'alarm_records': alarm_count,
                 'unacknowledged_alarms': unacknowledged_count,
                 'archive_records': archive_count,
+                'total_records': total_records,
                 'database_size_mb': round(db_size / (1024 * 1024), 2)
             }
     

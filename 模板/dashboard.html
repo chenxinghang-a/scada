@@ -492,7 +492,7 @@
             document.getElementById('db-bar').style.width = dbPercent + '%';
             
             document.getElementById('total-records').textContent = 
-                (stats.database.realtime_records + stats.database.history_records).toLocaleString();
+                (stats.database.total_records || (stats.database.realtime_records + stats.database.history_records)).toLocaleString();
         }
         
         if (stats.collector) {

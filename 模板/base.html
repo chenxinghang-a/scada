@@ -81,6 +81,11 @@
                 <!-- 系统状态指示器 -->
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
+                        <span class="nav-link" id="sim-mode-indicator" title="点击切换模式" style="cursor:pointer;" onclick="toggleSimMode()">
+                            <i class="bi bi-cpu"></i> <span id="sim-mode-text">-</span>
+                        </span>
+                    </li>
+                    <li class="nav-item">
                         <span class="nav-link" id="system-status">
                             <i class="bi bi-circle-fill text-success"></i> 系统正常
                         </span>
@@ -207,10 +212,60 @@
             });
         }
         
+        // 更新模拟模式指示器
+        function updateSimModeIndicator() {
+            fetch('/api/system/simulation-mode', { headers: getAuthHeaders() })
+                .then(r => r.json())
+                .then(data => {
+                    const indicator = document.getElementById('sim-mode-indicator');
+                    const text = document.getElementById('sim-mode-text');
+                    if (indicator && text) {
+                        if (data.simulation_mode) {
+                            text.textContent = '模拟模式';
+                            indicator.className = 'nav-link text-info';
+                            indicator.title = '当前为模拟模式，点击切换到真实模式';
+                        } else {
+                            text.textContent = '真实设备';
+                            indicator.className = 'nav-link text-success';
+                            indicator.title = '当前为真实设备模式，点击切换到模拟模式';
+                        }
+                    }
+                })
+                .catch(() => {});
+        }
+        
+        // 切换模拟模式
+        function toggleSimMode() {
+            const text = document.getElementById('sim-mode-text');
+            const currentMode = text?.textContent === '模拟模式';
+            const newMode = !currentMode;
+            
+            if (!confirm(`确定要切换到${newMode ? '模拟' : '真实'}模式吗？\n注意：切换后需要重启服务才能生效。`)) {
+                return;
+            }
+            
+            fetch('/api/system/simulation-mode', {
+                method: 'POST',
+                headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ simulation_mode: newMode })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    updateSimModeIndicator();
+                } else {
+                    alert('切换失败: ' + (data.message || '未知错误'));
+                }
+            })
+            .catch(e => alert('切换失败: ' + e.message));
+        }
+        
         // 页面加载时检查认证
         document.addEventListener('DOMContentLoaded', function() {
             checkAuth();
             updateNavUserInfo();
+            updateSimModeIndicator();
         });
     </script>
     

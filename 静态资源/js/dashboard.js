@@ -224,7 +224,7 @@ function updateDashboardStats(stats) {
     
     // 数据库统计
     if (stats.database) {
-        document.getElementById('data-today').textContent = stats.database.realtime_records || 0;
+        document.getElementById('data-today').textContent = (stats.database.total_records || stats.database.realtime_records || 0).toLocaleString();
     }
     
     // 报警统计

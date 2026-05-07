@@ -871,6 +871,52 @@ def get_database_stats():
     return jsonify(current_app.database.get_database_stats())
 
 
+@api_bp.route('/system/simulation-mode', methods=['GET'])
+def get_simulation_mode():
+    """获取当前模拟/真实模式状态"""
+    return jsonify({
+        'simulation_mode': current_app.device_manager.simulation_mode
+    })
+
+
+@api_bp.route('/system/simulation-mode', methods=['POST'])
+@role_required('admin', 'engineer')
+def toggle_simulation_mode():
+    """切换模拟/真实模式（需要重启服务生效）"""
+    data = request.get_json() or {}
+    new_mode = data.get('simulation_mode')
+    
+    if new_mode is None:
+        return jsonify({'success': False, 'message': '缺少simulation_mode参数'}), 400
+    
+    # 注意：运行时切换模式需要重启所有客户端连接
+    # 这里只更新配置文件，提示用户重启
+    from pathlib import Path
+    import yaml
+    
+    config_path = Path('配置/system.yaml')
+    if config_path.exists():
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+    else:
+        config = {}
+    
+    if 'system' not in config:
+        config['system'] = {}
+    config['system']['simulation_mode'] = bool(new_mode)
+    
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    
+    return jsonify({
+        'success': True,
+        'message': f'模式已切换为{"模拟" if new_mode else "真实"}模式，重启服务后生效',
+        'simulation_mode': bool(new_mode),
+        'restart_required': True
+    })
+
+
 # ==================== 数据导出API ====================
 
 @api_bp.route('/export/device/<device_id>', methods=['POST'])
