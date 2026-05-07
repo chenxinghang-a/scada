@@ -1,9 +1,11 @@
 """
 数据采集器模块
 实现定时数据采集和数据处理
+支持协议: Modbus TCP/RTU, OPC UA, MQTT, REST HTTP
 """
 
 import time
+import queue
 import logging
 import threading
 from typing import Dict, List, Any, Optional
@@ -16,18 +18,11 @@ logger = logging.getLogger(__name__)
 class DataCollector:
     """
     数据采集器
-    负责定时从Modbus设备采集数据
+    统一定时从多协议设备采集数据（Modbus/OPC UA/MQTT/REST）
+    OPC UA和MQTT有自带的推送机制，仅对Modbus/REST做轮询
     """
     
     def __init__(self, device_manager, database, alarm_manager=None):
-        """
-        初始化数据采集器
-        
-        Args:
-            device_manager: 设备管理器实例
-            database: 数据库实例
-            alarm_manager: 报警管理器实例（可选）
-        """
         self.device_manager = device_manager
         self.database = database
         self.alarm_manager = alarm_manager
@@ -39,17 +34,24 @@ class DataCollector:
         # 数据队列
         self.data_queue = Queue(maxsize=10000)
         
-        # 统计信息
+        # 统计信息（用锁保护，多线程安全）
+        self._stats_lock = threading.Lock()
         self.stats = {
             'total_collections': 0,
             'successful_collections': 0,
             'failed_collections': 0,
             'last_collection_time': None,
-            'queue_size': 0
+            'queue_size': 0,
+            'protocols_active': {}
         }
         
         # 数据处理线程
         self.process_thread = None
+    
+    def _inc_stat(self, key: str, amount: int = 1):
+        """线程安全地增加统计计数"""
+        with self._stats_lock:
+            self.stats[key] = self.stats.get(key, 0) + amount
     
     def start(self):
         """启动数据采集"""
@@ -65,134 +67,207 @@ class DataCollector:
         
         # 为每个设备启动采集任务
         devices = self.device_manager.get_all_devices()
+        proto_count = {}
         for device_id, device_config in devices.items():
             if device_config.get('enabled', True):
-                self._start_device_collection(device_id, device_config)
+                protocol = device_config.get('protocol', 'modbus_tcp')
+                proto_count[protocol] = proto_count.get(protocol, 0) + 1
+                
+                if protocol in ('opcua', 'mqtt'):
+                    self._setup_push_device(device_id, device_config)
+                else:
+                    self._start_device_collection(device_id, device_config)
         
-        logger.info(f"数据采集器已启动，共 {len(devices)} 个设备")
+        with self._stats_lock:
+            self.stats['protocols_active'] = proto_count
+        
+        summary = ', '.join(f"{k}:{v}" for k, v in proto_count.items())
+        logger.info(f"数据采集器已启动，共 {len(devices)} 个设备 ({summary})")
     
     def stop(self):
         """停止数据采集"""
         self.running = False
         
-        # 取消所有采集任务
         for device_id, timer in self.tasks.items():
             timer.cancel()
         self.tasks.clear()
         
+        self.device_manager.disconnect_all()
         logger.info("数据采集器已停止")
     
-    def _start_device_collection(self, device_id: str, device_config: Dict):
-        """
-        启动单个设备的采集任务
+    def _setup_push_device(self, device_id: str, device_config: Dict):
+        """设置推送型设备（OPC UA / MQTT）"""
+        protocol = device_config.get('protocol', 'modbus_tcp')
+        client = self.device_manager.get_client(device_id)
+        if not client:
+            logger.error(f"设备 {device_id} 客户端创建失败")
+            return
         
-        Args:
-            device_id: 设备ID
-            device_config: 设备配置
-        """
+        def on_data(device_id, name, value, unit):
+            # 队列满时丢弃最旧数据，避免阻塞
+            if self.data_queue.full():
+                try:
+                    self.data_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            self.data_queue.put({
+                'device_id': device_id,
+                'register_name': name,
+                'value': value,
+                'timestamp': datetime.now(),
+                'unit': unit
+            })
+        
+        if hasattr(client, 'add_data_callback'):
+            client.add_data_callback(on_data)
+        
+        if client.connect():
+            logger.info(f"[{protocol.upper()}] 设备 {device_id} 已连接（推送模式）")
+        else:
+            logger.error(f"[{protocol.upper()}] 设备 {device_id} 连接失败")
+    
+    def _start_device_collection(self, device_id: str, device_config: Dict):
+        """启动单个设备的轮询采集任务（Modbus / REST）"""
         interval = device_config.get('collection_interval', 5)
+        protocol = device_config.get('protocol', 'modbus_tcp')
         
         def collect_task():
             if not self.running:
                 return
             
-            # 执行采集
-            self._collect_device_data(device_id, device_config)
+            self._collect_device_data(device_id, device_config, protocol)
             
-            # 安排下次采集
             if self.running:
                 timer = threading.Timer(interval, collect_task)
                 timer.daemon = True
                 timer.start()
                 self.tasks[device_id] = timer
         
-        # 立即开始第一次采集
         collect_task()
     
-    def _collect_device_data(self, device_id: str, device_config: Dict):
-        """
-        采集单个设备的数据
-        
-        Args:
-            device_id: 设备ID
-            device_config: 设备配置
-        """
-        self.stats['total_collections'] += 1
+    def _collect_device_data(self, device_id: str, device_config: Dict, protocol: str):
+        """采集单个轮询型设备的数据"""
+        self._inc_stat('total_collections')
         
         try:
-            # 获取设备客户端
             client = self.device_manager.get_client(device_id)
             if not client:
                 logger.error(f"设备 {device_id} 客户端不存在")
-                self.stats['failed_collections'] += 1
+                self._inc_stat('failed_collections')
                 return
             
-            # 确保连接
-            if not client.connected:
+            if not getattr(client, 'connected', False):
                 if not client.connect():
                     logger.error(f"设备 {device_id} 连接失败")
-                    self.stats['failed_collections'] += 1
+                    self._inc_stat('failed_collections')
                     return
             
-            # 采集所有寄存器数据
-            registers = device_config.get('registers', [])
             timestamp = datetime.now()
             
-            for register in registers:
-                data = self._read_register(client, register)
-                if data is not None:
-                    # 放入数据队列
-                    self.data_queue.put({
-                        'device_id': device_id,
-                        'register_name': register['name'],
-                        'value': data,
-                        'timestamp': timestamp,
-                        'unit': register.get('unit', '')
-                    })
+            if protocol in ('modbus_tcp', 'modbus_rtu'):
+                self._collect_modbus(client, device_id, device_config, timestamp)
+            elif protocol == 'rest':
+                self._collect_rest(client, device_id, device_config, timestamp)
+            elif protocol == 'opcua':
+                self._collect_opcua(client, device_id, device_config, timestamp)
+            elif protocol == 'mqtt':
+                self._collect_mqtt(client, device_id, device_config, timestamp)
             
-            self.stats['successful_collections'] += 1
-            self.stats['last_collection_time'] = timestamp
+            self._inc_stat('successful_collections')
+            with self._stats_lock:
+                self.stats['last_collection_time'] = timestamp
             
         except Exception as e:
             logger.error(f"采集设备 {device_id} 数据异常: {e}")
-            self.stats['failed_collections'] += 1
+            self._inc_stat('failed_collections')
+    
+    def _collect_modbus(self, client, device_id: str, device_config: Dict, timestamp):
+        """采集Modbus设备的寄存器数据"""
+        registers = device_config.get('registers', [])
+        for register in registers:
+            data = self._read_register(client, register)
+            if data is not None:
+                self.data_queue.put({
+                    'device_id': device_id,
+                    'register_name': register['name'],
+                    'value': data,
+                    'timestamp': timestamp,
+                    'unit': register.get('unit', '')
+                })
+    
+    def _collect_rest(self, client, device_id: str, device_config: Dict, timestamp):
+        """采集REST设备的缓存数据（客户端自带轮询）"""
+        latest = client.get_latest_data()
+        for name, data in latest.items():
+            value = data.get('value')
+            if value is not None:
+                try:
+                    self.data_queue.put({
+                        'device_id': device_id,
+                        'register_name': name,
+                        'value': float(value) if value else 0,
+                        'timestamp': timestamp,
+                        'unit': data.get('unit', '')
+                    })
+                except (ValueError, TypeError):
+                    pass
+
+    def _collect_opcua(self, client, device_id: str, device_config: Dict, timestamp):
+        """采集OPC UA设备的缓存数据（客户端通过订阅自动更新缓存）"""
+        latest = client.get_latest_data()
+        for name, data in latest.items():
+            value = data.get('value')
+            if value is not None:
+                try:
+                    self.data_queue.put({
+                        'device_id': device_id,
+                        'register_name': name,
+                        'value': float(value) if value else 0,
+                        'timestamp': timestamp,
+                        'unit': data.get('unit', '')
+                    })
+                except (ValueError, TypeError):
+                    pass
+
+    def _collect_mqtt(self, client, device_id: str, device_config: Dict, timestamp):
+        """采集MQTT设备的缓存数据（客户端通过订阅自动更新缓存）"""
+        latest = client.get_latest_data()
+        for name, data in latest.items():
+            value = data.get('value')
+            if value is not None:
+                try:
+                    self.data_queue.put({
+                        'device_id': device_id,
+                        'register_name': name,
+                        'value': float(value) if value else 0,
+                        'timestamp': timestamp,
+                        'unit': data.get('unit', '')
+                    })
+                except (ValueError, TypeError):
+                    pass
     
     def _read_register(self, client, register: Dict) -> Optional[float]:
-        """
-        读取单个寄存器数据
-        
-        Args:
-            client: Modbus客户端
-            register: 寄存器配置
-            
-        Returns:
-            float: 读取的值，失败返回None
-        """
+        """读取单个Modbus寄存器数据"""
         try:
             address = register['address']
             data_type = register.get('data_type', 'uint16')
             scale = register.get('scale', 1)
             offset = register.get('offset', 0)
             
-            # 根据数据类型读取
             if data_type == 'float32':
-                # 浮点数需要读取2个寄存器
                 raw_values = client.read_holding_registers(address, 2)
                 if raw_values is None or len(raw_values) < 2:
                     return None
                 value = client.decode_float32(raw_values)
             elif data_type == 'float64':
-                # 双精度浮点需要读取4个寄存器
                 raw_values = client.read_holding_registers(address, 4)
                 if raw_values is None or len(raw_values) < 4:
                     return None
-                value = client.decode_float32(raw_values[:2])  # 简化处理
+                value = client.decode_float64(raw_values)
             else:
-                # 整数读取1个寄存器
                 raw_values = client.read_holding_registers(address, 1)
                 if raw_values is None:
                     return None
-                
                 if data_type == 'uint16':
                     value = client.decode_uint16(raw_values[0])
                 elif data_type == 'int16':
@@ -200,9 +275,7 @@ class DataCollector:
                 else:
                     value = raw_values[0]
             
-            # 应用缩放和偏移
             value = value * scale + offset
-            
             return round(value, 4)
             
         except Exception as e:
@@ -211,13 +284,10 @@ class DataCollector:
     
     def _process_data(self):
         """数据处理线程"""
-        import queue
         while self.running:
             try:
-                # 从队列获取数据
                 data = self.data_queue.get(timeout=1)
                 
-                # 存储到数据库
                 self.database.insert_data(
                     device_id=data['device_id'],
                     register_name=data['register_name'],
@@ -226,7 +296,6 @@ class DataCollector:
                     unit=data['unit']
                 )
                 
-                # 检查报警
                 if self.alarm_manager:
                     self.alarm_manager.check_alarm(
                         device_id=data['device_id'],
@@ -235,24 +304,20 @@ class DataCollector:
                         timestamp=data['timestamp']
                     )
                 
-                self.stats['queue_size'] = self.data_queue.qsize()
+                with self._stats_lock:
+                    self.stats['queue_size'] = self.data_queue.qsize()
                 
             except queue.Empty:
-                # 队列超时，继续循环
                 continue
             except Exception as e:
                 if self.running:
                     logger.error(f"数据处理异常: {e}")
     
     def get_stats(self) -> Dict[str, Any]:
-        """
-        获取统计信息
-        
-        Returns:
-            Dict: 统计信息字典
-        """
-        return {
-            'running': self.running,
-            'queue_size': self.data_queue.qsize(),
-            **self.stats
-        }
+        """获取统计信息"""
+        with self._stats_lock:
+            return {
+                'running': self.running,
+                'queue_size': self.data_queue.qsize(),
+                **self.stats
+            }

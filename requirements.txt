@@ -7,6 +7,9 @@ flask-socketio>=5.3.0
 # Modbus通信
 pymodbus>=3.6.0
 
+# OPC UA通信（工业4.0标准）
+opcua-asyncio>=1.0.0
+
 # MQTT通信
 paho-mqtt>=1.6.0
 

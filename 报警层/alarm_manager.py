@@ -1,11 +1,12 @@
 """
 报警管理器模块
 实现报警检测、记录和通知
+集成工业声光报警器、语音广播、前端推送
 """
 
 import logging
 import yaml
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -15,16 +16,24 @@ logger = logging.getLogger(__name__)
 class AlarmManager:
     """
     报警管理器
-    负责报警检测、记录和通知
+    负责报警检测、记录、声光输出、语音广播、前端推送
+    
+    报警输出总线（三级联动）：
+    1. 声光报警器（Modbus DO -> 报警灯塔 + 蜂鸣器）
+    2. 语音广播系统（MQTT -> IP网络广播/现场音柱）
+    3. 前端WebSocket推送（页面弹窗/音效/语音合成）
     """
     
-    def __init__(self, database, config_path: str = '配置/alarms.yaml'):
+    def __init__(self, database, config_path: str = '配置/alarms.yaml',
+                 alarm_output=None, broadcast_system=None):
         """
         初始化报警管理器
         
         Args:
             database: 数据库实例
             config_path: 报警配置文件路径
+            alarm_output: 声光报警输出实例（AlarmOutput，可选）
+            broadcast_system: 广播系统实例（BroadcastSystem，可选）
         """
         self.database = database
         self.config_path = config_path
@@ -35,8 +44,19 @@ class AlarmManager:
         # 报警状态
         self.alarm_states = {}  # (device_id, register_name) -> alarm_state
         
+        # 输出总线（延迟注入，启动后绑定）
+        self.alarm_output = alarm_output
+        self.broadcast_system = broadcast_system
+        
+        # WebSocket回调（由外部注入，用于前端推送）
+        self._websocket_emit: Optional[Callable] = None
+        
         # 加载报警配置
         self.load_config()
+    
+    def set_websocket_emit(self, emit_func: Callable):
+        """注入WebSocket emit函数（由run.py启动时调用）"""
+        self._websocket_emit = emit_func
     
     def load_config(self):
         """加载报警配置文件"""
@@ -188,7 +208,12 @@ class AlarmManager:
     def _trigger_alarm(self, rule_config: Dict, device_id: str,
                        register_name: str, value: float, timestamp: datetime):
         """
-        触发报警
+        触发报警 → 三级联动输出
+        
+        1. 记录数据库
+        2. 声光报警器（Modbus DO控制灯塔+蜂鸣器）
+        3. 语音广播（MQTT发布到现场音柱）
+        4. 前端WebSocket推送（页面弹窗+音效+语音合成）
         
         Args:
             rule_config: 规则配置
@@ -201,8 +226,9 @@ class AlarmManager:
         alarm_level = rule_config.get('level', 'warning')
         alarm_message = rule_config.get('name', '未知报警')
         threshold = rule_config.get('threshold', 0)
+        alarm_area = rule_config.get('area', 'all')
         
-        # 记录报警
+        # 1. 记录数据库
         self.database.insert_alarm(
             alarm_id=rule_id,
             device_id=device_id,
@@ -216,26 +242,57 @@ class AlarmManager:
         
         logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")
         
-        # 发送通知（如果配置了）
-        self._send_notification(rule_config, device_id, register_name, value, timestamp)
+        # 2. 声光报警器输出（Modbus DO -> 灯塔+蜂鸣器）
+        if self.alarm_output and self.alarm_output.enabled:
+            try:
+                self.alarm_output.trigger_alarm(
+                    level=alarm_level,
+                    message=alarm_message,
+                    device_id=device_id
+                )
+            except Exception as e:
+                logger.error(f"声光报警输出异常: {e}")
+        
+        # 3. 语音广播系统（MQTT -> IP网络广播/现场音柱）
+        if self.broadcast_system and self.broadcast_system.enabled:
+            try:
+                self.broadcast_system.speak_alarm(
+                    level=alarm_level,
+                    message=f"{alarm_message}，当前值{value}，阈值{threshold}",
+                    device_id=device_id,
+                    area=alarm_area
+                )
+            except Exception as e:
+                logger.error(f"语音广播异常: {e}")
+        
+        # 4. 前端WebSocket推送
+        self._emit_websocket_alarm({
+            'alarm_id': rule_id,
+            'device_id': device_id,
+            'register_name': register_name,
+            'alarm_level': alarm_level,
+            'alarm_message': alarm_message,
+            'threshold': threshold,
+            'actual_value': value,
+            'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
+            'area': alarm_area
+        })
+    
+    def _emit_websocket_alarm(self, alarm_data: Dict):
+        """通过WebSocket向前端推送报警"""
+        try:
+            if self._websocket_emit:
+                self._websocket_emit(alarm_data)
+        except Exception as e:
+            logger.error(f"WebSocket报警推送异常: {e}")
     
     def _send_notification(self, rule_config: Dict, device_id: str,
                            register_name: str, value: float, timestamp: datetime):
         """
-        发送报警通知
-        
-        Args:
-            rule_config: 规则配置
-            device_id: 设备ID
-            register_name: 寄存器名称
-            value: 数据值
-            timestamp: 时间戳
+        发送报警通知（保留兼容，具体实现在 _trigger_alarm 中）
         """
-        # 这里可以实现邮件、短信等通知
-        # 暂时只记录日志
         alarm_level = rule_config.get('level', 'warning')
         alarm_message = rule_config.get('name', '未知报警')
-        
         logger.info(f"报警通知: [{alarm_level}] {alarm_message} - {device_id}/{register_name}")
     
     def get_active_alarms(self) -> List[Dict]:
@@ -269,7 +326,9 @@ class AlarmManager:
     def acknowledge_alarm(self, alarm_id: str, device_id: str,
                           register_name: str, acknowledged_by: str) -> bool:
         """
-        确认报警
+        确认报警（含声光消音）
+        
+        操作员到场后确认报警，自动关闭蜂鸣器（灯保持闪烁）
         
         Args:
             alarm_id: 报警ID
@@ -288,16 +347,46 @@ class AlarmManager:
             state['acknowledged_by'] = acknowledged_by
             state['acknowledged_at'] = datetime.now()
         
-        # 更新数据库（无论内存状态是否存在都尝试更新）
+        # 更新数据库
         success = self.database.acknowledge_alarm(alarm_id, acknowledged_by)
         
         if success:
             logger.info(f"报警已确认: {alarm_id} by {acknowledged_by}")
+            # 声光消音（关蜂鸣器，灯保持）
+            if self.alarm_output and self.alarm_output.enabled:
+                try:
+                    self.alarm_output.acknowledge()
+                except Exception as e:
+                    logger.error(f"声光消音失败: {e}")
         return success
+    
+    def reset_alarm(self, device_id: str = None) -> bool:
+        """
+        复位报警（清除所有/指定设备的报警状态，恢复绿灯）
+        
+        Args:
+            device_id: 设备ID（None=全部复位）
+        """
+        if device_id:
+            keys_to_remove = [k for k in self.alarm_states if k[0] == device_id]
+            for key in keys_to_remove:
+                del self.alarm_states[key]
+        else:
+            self.alarm_states.clear()
+        
+        # 声光复位（全部清零，绿灯恢复）
+        if self.alarm_output and self.alarm_output.enabled:
+            try:
+                self.alarm_output.reset()
+            except Exception as e:
+                logger.error(f"声光复位失败: {e}")
+        
+        logger.info(f"报警已复位: {'全部' if not device_id else device_id}")
+        return True
     
     def get_alarm_statistics(self) -> Dict[str, Any]:
         """
-        获取报警统计信息
+        获取报警统计信息（含输出总线状态）
         
         Returns:
             Dict: 统计信息
@@ -317,13 +406,21 @@ class AlarmManager:
             device_id = alarm.get('device_id')
             device_stats[device_id] = device_stats.get(device_id, 0) + 1
         
-        return {
+        stats = {
             'total_active_alarms': len(active_alarms),
             'by_level': level_stats,
             'by_device': device_stats,
             'total_rules': len(self.rules),
             'enabled_rules': sum(1 for r in self.rules.values() if r.get('enabled', True))
         }
+        
+        # 输出总线状态
+        stats['output'] = {
+            'alarm_output': self.alarm_output.get_status() if self.alarm_output else None,
+            'broadcast': self.broadcast_system.get_status() if self.broadcast_system else None
+        }
+        
+        return stats
     
     def add_rule(self, rule_config: Dict) -> bool:
         """

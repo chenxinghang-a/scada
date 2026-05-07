@@ -1,8 +1,10 @@
 # 设备配置文件
-# 配置Modbus设备参数
+# 支持协议: modbus_tcp / modbus_rtu / opcua / mqtt / rest
+# 黑灯工厂核心：多协议统一接入，插上就能用
 
 devices:
-  # 设备1: 温度传感器
+  # ==================== Modbus TCP设备 ====================
+  # 设备1: 温度传感器（Modbus TCP）
   - id: temp_sensor_01
     name: "温度传感器1号"
     description: "车间A温度监测点"
@@ -11,17 +13,16 @@ devices:
     port: 502
     slave_id: 1
     enabled: true
-    collection_interval: 5  # 秒
+    collection_interval: 5
     
-    # 寄存器配置
     registers:
       - name: "temperature"
         description: "温度值"
         address: 0
         length: 1
         data_type: float32
-        scale: 0.1  # 缩放系数
-        offset: 0   # 偏移量
+        scale: 0.1
+        offset: 0
         unit: "°C"
         
       - name: "humidity"
@@ -41,8 +42,8 @@ devices:
         scale: 1
         offset: 0
         unit: ""
-        
-  # 设备2: 压力传感器
+
+  # 设备2: 压力传感器（Modbus TCP）
   - id: pressure_sensor_01
     name: "压力传感器1号"
     description: "管道压力监测点"
@@ -71,8 +72,8 @@ devices:
         scale: 0.1
         offset: 0
         unit: "°C"
-        
-  # 设备3: 电力仪表
+
+  # 设备3: 电力仪表（Modbus TCP）
   - id: power_meter_01
     name: "电力仪表1号"
     description: "配电室电力监测"
@@ -119,3 +120,152 @@ devices:
         scale: 0.01
         offset: 0
         unit: "kWh"
+
+  # ==================== OPC UA设备 ====================
+  # 设备4: PLC控制器（OPC UA）- 如西门子S7-1500
+  - id: plc_opcua_01
+    name: "PLC控制器1号"
+    description: "生产线PLC（OPC UA接口）"
+    protocol: opcua
+    endpoint: "opc.tcp://192.168.1.50:4840"
+    enabled: true
+    collection_interval: 2
+    
+    # OPC UA节点配置
+    nodes:
+      - node_id: "ns=3;s=Temperature"
+        name: "temperature"
+        description: "PLC温度值"
+        unit: "°C"
+        
+      - node_id: "ns=3;s=Pressure"
+        name: "pressure"
+        description: "PLC压力值"
+        unit: "MPa"
+        
+      - node_id: "ns=3;s=MotorSpeed"
+        name: "motor_speed"
+        description: "电机转速"
+        unit: "RPM"
+        
+      - node_id: "ns=3;s=RunningStatus"
+        name: "running_status"
+        description: "运行状态(0停机/1运行/2故障)"
+        unit: ""
+
+  # 设备5: 欧姆龙PLC（OPC UA）
+  - id: omron_plc_01
+    name: "欧姆龙PLC"
+    description: "装配线控制（OPC UA接口）"
+    protocol: opcua
+    endpoint: "opc.tcp://192.168.1.51:4840"
+    security_mode: "SignAndEncrypt"
+    username: "operator"
+    password: "operator123"
+    enabled: true
+    collection_interval: 5
+    
+    nodes:
+      - node_id: "ns=2;s=ConveyorSpeed"
+        name: "conveyor_speed"
+        description: "传送带速度"
+        unit: "m/s"
+        
+      - node_id: "ns=2;s=ProductCount"
+        name: "product_count"
+        description: "产品计数"
+        unit: "个"
+
+  # ==================== MQTT设备 ====================
+  # 设备6: IoT传感器（MQTT）
+  - id: iot_sensor_01
+    name: "IoT环境传感器"
+    description: "无线环境监测节点"
+    protocol: mqtt
+    host: "192.168.1.200"
+    port: 1883
+    username: "scada"
+    password: "scada123"
+    enabled: true
+    collection_interval: 10
+    
+    # MQTT订阅主题
+    topics:
+      - topic: "factory/workshop_a/temperature"
+        name: "temperature"
+        unit: "°C"
+        json_path: "value"
+        
+      - topic: "factory/workshop_a/humidity"
+        name: "humidity"
+        unit: "%RH"
+        json_path: "value"
+        
+      - topic: "factory/workshop_a/co2"
+        name: "co2"
+        unit: "ppm"
+        json_path: "value"
+
+  # ==================== REST HTTP设备 ====================
+  # 设备7: 智能网关（REST API）
+  - id: gateway_01
+    name: "智能网关1号"
+    description: "产线数据网关（HTTP接口）"
+    protocol: rest
+    base_url: "http://192.168.1.250/api"
+    poll_interval: 10
+    auth_type: "bearer"
+    auth_token: "your_gateway_token"
+    enabled: true
+    collection_interval: 10
+    
+    endpoints:
+      - name: "temperature"
+        path: "/sensors/temp"
+        method: GET
+        json_path: "data.value"
+        unit: "°C"
+        
+      - name: "humidity"
+        path: "/sensors/humi"
+        method: GET
+        json_path: "data.value"
+        unit: "%RH"
+        
+      - name: "production_count"
+        path: "/production/count"
+        method: GET
+        json_path: "data.total"
+        unit: "个"
+        
+      - name: "production_status"
+        path: "/production/status"
+        method: GET
+        json_path: "data.status"
+        unit: ""
+
+  # 设备8: 西门子PLC Web Server（REST API）
+  - id: siemens_web_01
+    name: "西门子PLC Web接口"
+    description: "S7-1500内置Web Server"
+    protocol: rest
+    base_url: "http://192.168.1.52"
+    poll_interval: 5
+    auth_type: "basic"
+    auth_username: "admin"
+    auth_password: "admin123"
+    enabled: true
+    collection_interval: 5
+    
+    endpoints:
+      - name: "temperature"
+        path: "/api/v1/variables/temperature"
+        method: GET
+        json_path: "value"
+        unit: "°C"
+        
+      - name: "motor_status"
+        path: "/api/v1/variables/motor_status"
+        method: GET
+        json_path: "value"
+        unit: ""

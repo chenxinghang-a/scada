@@ -1,12 +1,83 @@
 """
 REST API模块
 提供数据查询和设备控制接口
+
+优化点:
+- 使用装饰器替代重复认证代码（_require_auth / _require_admin / _require_engineer）
+- 统一错误响应格式
+- 消除重复的 import yaml / Path
 """
 
+import yaml
+from pathlib import Path
+from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 from datetime import datetime, timedelta
 
 api_bp = Blueprint('api', __name__)
+
+
+# ==================== 认证辅助函数 ====================
+
+def _get_auth_manager():
+    """获取认证管理器"""
+    return current_app.auth_manager
+
+
+def _get_current_user():
+    """从请求中提取当前用户信息，返回 (user_dict, error_response)"""
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return None, (jsonify({'error': '未认证'}), 401)
+    
+    token = auth_header[7:]
+    auth_manager = _get_auth_manager()
+    user = auth_manager.verify_token(token)
+    
+    if not user:
+        return None, (jsonify({'error': '令牌无效或已过期'}), 401)
+    
+    return user, None
+
+
+def _require_auth(f):
+    """认证装饰器：要求有效JWT令牌"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        user, error = _get_current_user()
+        if error:
+            return error
+        request.current_user = user
+        return f(*args, **kwargs)
+    return decorated
+
+
+def _require_admin(f):
+    """管理员权限装饰器"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        user, error = _get_current_user()
+        if error:
+            return error
+        if user['role'] != 'admin':
+            return jsonify({'error': '需要管理员权限'}), 403
+        request.current_user = user
+        return f(*args, **kwargs)
+    return decorated
+
+
+def _require_engineer(f):
+    """工程师权限装饰器（admin或engineer）"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        user, error = _get_current_user()
+        if error:
+            return error
+        if user['role'] not in ('admin', 'engineer'):
+            return jsonify({'error': '需要管理员或工程师权限'}), 403
+        request.current_user = user
+        return f(*args, **kwargs)
+    return decorated
 
 
 # ==================== 认证相关API ====================
@@ -24,31 +95,24 @@ def login():
     if not username or not password:
         return jsonify({'success': False, 'message': '用户名和密码不能为空'}), 400
     
-    auth_manager = current_app.auth_manager
+    auth_manager = _get_auth_manager()
     ip_address = request.remote_addr
-    
     result = auth_manager.login(username, password, ip_address)
     
-    if result['success']:
-        return jsonify(result)
-    else:
-        return jsonify(result), 401
+    return jsonify(result), (200 if result['success'] else 401)
 
 
 @api_bp.route('/auth/register', methods=['POST'])
 def register():
-    """用户注册（仅管理员可操作）"""
-    from 用户层.auth import jwt_required, role_required
-    
-    # 检查是否有管理员token
+    """用户注册（仅管理员，或首个用户直接注册admin）"""
     token = None
     auth_header = request.headers.get('Authorization', '')
     if auth_header.startswith('Bearer '):
         token = auth_header[7:]
     
-    auth_manager = current_app.auth_manager
+    auth_manager = _get_auth_manager()
     
-    # 如果没有token，检查是否是第一个用户（允许直接注册admin）
+    # 无token时：检查是否是第一个用户（允许直接注册admin）
     if not token:
         users = auth_manager.get_users()
         if len(users) > 0:
@@ -71,40 +135,27 @@ def register():
         phone=data.get('phone')
     )
     
-    if result['success']:
-        return jsonify(result), 201
-    else:
-        return jsonify(result), 400
+    return jsonify(result), (201 if result['success'] else 400)
 
 
 @api_bp.route('/auth/verify', methods=['GET'])
+@_require_auth
 def verify_token():
     """验证令牌有效性"""
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'valid': False}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if user:
-        return jsonify({'valid': True, 'user': user})
-    else:
-        return jsonify({'valid': False}), 401
+    return jsonify({'valid': True, 'user': request.current_user})
 
 
 @api_bp.route('/auth/refresh', methods=['POST'])
 def refresh_token():
     """刷新令牌"""
     data = request.get_json()
-    refresh_token = data.get('refresh_token')
+    rtoken = data.get('refresh_token')
     
-    if not refresh_token:
+    if not rtoken:
         return jsonify({'success': False, 'message': '请提供刷新令牌'}), 400
     
-    auth_manager = current_app.auth_manager
-    result = auth_manager.refresh_token(refresh_token)
+    auth_manager = _get_auth_manager()
+    result = auth_manager.refresh_token(rtoken)
     
     if result:
         return jsonify(result)
@@ -113,107 +164,52 @@ def refresh_token():
 
 
 @api_bp.route('/auth/change-password', methods=['POST'])
+@_require_auth
 def change_password():
     """修改密码"""
-    from 用户层.auth import jwt_required
-    
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'success': False, 'message': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user:
-        return jsonify({'success': False, 'message': '令牌无效'}), 401
-    
     data = request.get_json()
+    auth_manager = _get_auth_manager()
     result = auth_manager.change_password(
-        username=user['username'],
+        username=request.current_user['username'],
         old_password=data.get('old_password', ''),
         new_password=data.get('new_password', '')
     )
-    
     return jsonify(result)
 
 
 @api_bp.route('/auth/users', methods=['GET'])
+@_require_admin
 def get_users():
     """获取用户列表（仅管理员）"""
-    from 用户层.auth import jwt_required, role_required
-    
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user or user['role'] != 'admin':
-        return jsonify({'error': '需要管理员权限'}), 403
-    
-    users = auth_manager.get_users()
-    return jsonify({'users': users})
+    auth_manager = _get_auth_manager()
+    return jsonify({'users': auth_manager.get_users()})
 
 
 @api_bp.route('/auth/users/<username>', methods=['PUT'])
+@_require_admin
 def update_user(username):
     """更新用户信息（仅管理员）"""
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user or user['role'] != 'admin':
-        return jsonify({'error': '需要管理员权限'}), 403
-    
     data = request.get_json()
-    result = auth_manager.update_user(username, **data)
-    return jsonify(result)
+    auth_manager = _get_auth_manager()
+    return jsonify(auth_manager.update_user(username, **data))
 
 
 @api_bp.route('/auth/users/<username>', methods=['DELETE'])
+@_require_admin
 def delete_user(username):
     """删除用户（仅管理员）"""
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user or user['role'] != 'admin':
-        return jsonify({'error': '需要管理员权限'}), 403
-    
-    result = auth_manager.delete_user(username)
-    return jsonify(result)
+    auth_manager = _get_auth_manager()
+    return jsonify(auth_manager.delete_user(username))
 
 
 @api_bp.route('/auth/logs', methods=['GET'])
+@_require_admin
 def get_operation_logs():
     """获取操作日志（仅管理员）"""
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user or user['role'] != 'admin':
-        return jsonify({'error': '需要管理员权限'}), 403
-    
+    auth_manager = _get_auth_manager()
     username = request.args.get('username')
     limit = request.args.get('limit', 100, type=int)
-    
-    logs = auth_manager.get_operation_logs(username=username, limit=limit)
-    return jsonify({'logs': logs})
+    return jsonify({'logs': auth_manager.get_operation_logs(username=username, limit=limit)})
 
 
 # ==================== 设备管理API ====================
@@ -221,419 +217,298 @@ def get_operation_logs():
 @api_bp.route('/devices', methods=['GET'])
 def get_devices():
     """获取所有设备列表"""
-    device_manager = current_app.device_manager
-    devices = device_manager.get_all_status()
+    devices = current_app.device_manager.get_all_status()
     return jsonify({'devices': devices})
 
 
 @api_bp.route('/devices/<device_id>', methods=['GET'])
 def get_device(device_id):
     """获取单个设备详情"""
-    device_manager = current_app.device_manager
-    status = device_manager.get_device_status(device_id)
-    
+    status = current_app.device_manager.get_device_status(device_id)
     if 'error' in status:
         return jsonify(status), 404
-    
     return jsonify(status)
 
 
 @api_bp.route('/devices', methods=['POST'])
+@_require_engineer
 def add_device():
-    """添加新设备"""
-    from 用户层.auth import jwt_required, role_required
-    
-    # 权限检查
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user or user['role'] not in ['admin', 'engineer']:
-        return jsonify({'error': '需要管理员或工程师权限'}), 403
-    
+    """添加新设备（支持所有协议）"""
     data = request.get_json()
     if not data:
         return jsonify({'error': '请提供设备配置'}), 400
     
-    # 验证必填字段
-    required_fields = ['id', 'name', 'host', 'port']
-    for field in required_fields:
+    # 基础必填字段
+    for field in ('id', 'name'):
         if field not in data:
             return jsonify({'error': f'缺少必填字段: {field}'}), 400
     
-    # 设置默认值
-    device_config = {
-        'id': data['id'],
-        'name': data['name'],
-        'description': data.get('description', ''),
-        'protocol': data.get('protocol', 'modbus_tcp'),
-        'host': data['host'],
-        'port': int(data['port']),
-        'slave_id': int(data.get('slave_id', 1)),
-        'enabled': data.get('enabled', True),
-        'collection_interval': int(data.get('collection_interval', 5)),
-        'registers': data.get('registers', [])
-    }
+    protocol = data.get('protocol', 'modbus_tcp')
     
-    device_manager = current_app.device_manager
-    success = device_manager.add_device(device_config)
+    # 协议级必填字段验证
+    try:
+        _validate_protocol_fields(protocol, data)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     
+    # 构建设备配置
+    device_config = _build_device_config(protocol, data)
+    
+    success = current_app.device_manager.add_device(device_config)
     if success:
-        # 记录操作日志
-        auth_manager.log_operation(user['username'], 'add_device', f"添加设备: {data['id']}")
+        _get_auth_manager().log_operation(
+            request.current_user['username'], 'add_device', f"添加设备: {data['id']}")
         return jsonify({'success': True, 'message': f"设备 {data['id']} 添加成功"})
     else:
         return jsonify({'success': False, 'message': '添加失败'}), 400
 
 
 @api_bp.route('/devices/<device_id>', methods=['PUT'])
+@_require_engineer
 def update_device(device_id):
-    """更新设备配置"""
-    # 权限检查
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user or user['role'] not in ['admin', 'engineer']:
-        return jsonify({'error': '需要管理员或工程师权限'}), 403
-    
+    """更新设备配置（支持所有协议）"""
     data = request.get_json()
     if not data:
         return jsonify({'error': '请提供设备配置'}), 400
     
     device_manager = current_app.device_manager
-    
-    # 检查设备是否存在
     if device_id not in device_manager.devices:
         return jsonify({'error': f'设备 {device_id} 不存在'}), 404
     
-    # 更新配置
     device_config = device_manager.devices[device_id]
-    for key in ['name', 'description', 'host', 'port', 'slave_id', 'enabled', 'collection_interval', 'registers']:
+    protocol = data.get('protocol', device_config.get('protocol', 'modbus_tcp'))
+    
+    # 通用字段
+    for key in ('name', 'description', 'enabled', 'collection_interval', 'protocol'):
         if key in data:
-            if key in ['port', 'slave_id', 'collection_interval']:
-                device_config[key] = int(data[key])
-            else:
-                device_config[key] = data[key]
+            device_config[key] = int(data[key]) if key == 'collection_interval' else data[key]
     
-    # 保存配置
+    # 协议专属字段
+    _update_protocol_fields(protocol, device_config, data)
+    
     device_manager._save_config()
-    
-    # 记录操作日志
-    auth_manager.log_operation(user['username'], 'update_device', f"更新设备: {device_id}")
-    
+    _get_auth_manager().log_operation(
+        request.current_user['username'], 'update_device', f"更新设备: {device_id}")
     return jsonify({'success': True, 'message': f'设备 {device_id} 更新成功'})
 
 
 @api_bp.route('/devices/<device_id>', methods=['DELETE'])
+@_require_engineer
 def delete_device(device_id):
     """删除设备"""
-    # 权限检查
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user or user['role'] not in ['admin', 'engineer']:
-        return jsonify({'error': '需要管理员或工程师权限'}), 403
-    
-    device_manager = current_app.device_manager
-    success = device_manager.remove_device(device_id)
-    
+    success = current_app.device_manager.remove_device(device_id)
     if success:
-        # 记录操作日志
-        auth_manager.log_operation(user['username'], 'delete_device', f"删除设备: {device_id}")
+        _get_auth_manager().log_operation(
+            request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
         return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
-    else:
-        return jsonify({'success': False, 'message': '删除失败'}), 400
+    return jsonify({'success': False, 'message': '删除失败'}), 400
 
 
 @api_bp.route('/devices/<device_id>/test', methods=['POST'])
 def test_device_connection(device_id):
-    """测试设备连接"""
+    """测试设备连接（支持所有协议）"""
     device_manager = current_app.device_manager
     device_config = device_manager.devices.get(device_id)
     
     if not device_config:
         return jsonify({'success': False, 'message': f'设备 {device_id} 不存在'}), 404
     
-    # 尝试连接
+    protocol = device_config.get('protocol', 'modbus_tcp')
+    
     try:
-        from 采集层.modbus_client import ModbusClient
+        from 采集层.device_manager import _create_client
         
-        # 创建临时客户端进行测试
-        test_client = ModbusClient(device_config)
+        test_client = _create_client(device_config, device_manager.simulation_mode)
+        if test_client is None:
+            return jsonify({'success': False, 'message': f'不支持的协议: {protocol}'}), 400
+        
         connected = test_client.connect()
+        if not connected:
+            return jsonify({
+                'success': False,
+                'message': f'连接失败（协议: {protocol}）',
+                'protocol': protocol,
+                'endpoint': device_config.get('host', device_config.get('endpoint', ''))
+            })
         
-        if connected:
-            # 尝试读取一个寄存器
+        # 读取示例数据
+        sample = {}
+        if protocol in ('modbus_tcp', 'modbus_rtu'):
             registers = device_config.get('registers', [])
             if registers:
                 reg = registers[0]
-                result = test_client.read_register(
-                    reg['address'],
-                    reg.get('length', 1)
-                )
-                test_client.disconnect()
-                
+                result = test_client.read_holding_registers(reg['address'], reg.get('length', 1))
                 if result is not None:
-                    return jsonify({
-                        'success': True,
-                        'message': '连接成功，数据读取正常',
-                        'sample_data': {
-                            'register': reg['name'],
-                            'value': result
-                        }
-                    })
-                else:
-                    return jsonify({
-                        'success': True,
-                        'message': '连接成功，但读取数据失败',
-                        'warning': '请检查寄存器地址是否正确'
-                    })
-            else:
-                test_client.disconnect()
-                return jsonify({
-                    'success': True,
-                    'message': '连接成功（未配置寄存器）'
-                })
-        else:
-            return jsonify({
-                'success': False,
-                'message': '连接失败，请检查IP地址和端口'
-            })
-            
-    except Exception as e:
+                    sample = {'register': reg['name'], 'value': result, 'unit': reg.get('unit', '')}
+            test_client.disconnect()
+        elif protocol == 'opcua':
+            latest = test_client.get_latest_data()
+            if latest:
+                name, ldata = list(latest.items())[0]
+                sample = {'node': name, 'value': ldata.get('value'), 'unit': ldata.get('unit', '')}
+            test_client.disconnect()
+        elif protocol == 'rest':
+            for ep in device_config.get('endpoints', []):
+                value = test_client.read_endpoint(ep)
+                if value is not None:
+                    sample = {'endpoint': ep.get('name'), 'value': value, 'unit': ep.get('unit', '')}
+                    break
+            test_client.disconnect()
+        elif protocol == 'mqtt':
+            test_client.disconnect()
+        
         return jsonify({
-            'success': False,
-            'message': f'连接测试失败: {str(e)}'
+            'success': True, 'message': f'连接成功（协议: {protocol}）',
+            'protocol': protocol, 'sample_data': sample
         })
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'连接测试失败: {str(e)}', 'protocol': protocol})
+
+
+@api_bp.route('/devices/protocols', methods=['GET'])
+def get_supported_protocols():
+    """获取系统支持的协议列表"""
+    protocols = [
+        {'id': 'modbus_tcp', 'name': 'Modbus TCP', 'description': '工业以太网标准协议，适用于PLC/仪表/传感器', 'default_port': 502, 'requires': ['host', 'port', 'slave_id', 'registers']},
+        {'id': 'modbus_rtu', 'name': 'Modbus RTU', 'description': '串口通信协议，适用于传统工业设备', 'default_port': None, 'requires': ['serial_port', 'baudrate', 'slave_id', 'registers']},
+        {'id': 'opcua', 'name': 'OPC UA', 'description': '工业4.0标准协议，面向对象，内置安全认证', 'default_port': 4840, 'requires': ['endpoint', 'nodes']},
+        {'id': 'mqtt', 'name': 'MQTT', 'description': '物联网消息协议，适合无线传感器和IoT设备', 'default_port': 1883, 'requires': ['host', 'port', 'topics']},
+        {'id': 'rest', 'name': 'REST HTTP', 'description': 'HTTP接口，适合智能网关和云平台对接', 'default_port': 80, 'requires': ['base_url', 'endpoints']},
+    ]
+    return jsonify({'protocols': protocols, 'summary': current_app.device_manager.get_protocol_summary()})
 
 
 @api_bp.route('/devices/templates', methods=['GET'])
 def get_device_templates():
     """获取设备模板列表"""
     templates = [
-        {
-            'id': 'temperature_sensor',
-            'name': '温度传感器',
-            'description': '常见温度传感器模板',
-            'protocol': 'modbus_tcp',
-            'port': 502,
-            'registers': [
-                {'name': 'temperature', 'description': '温度值', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': '°C'},
-                {'name': 'humidity', 'description': '湿度值', 'address': 2, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': '%RH'}
-            ]
-        },
-        {
-            'id': 'pressure_sensor',
-            'name': '压力传感器',
-            'description': '管道压力监测传感器',
-            'protocol': 'modbus_tcp',
-            'port': 502,
-            'registers': [
-                {'name': 'pressure', 'description': '压力值', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'MPa'},
-                {'name': 'temperature', 'description': '介质温度', 'address': 2, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': '°C'}
-            ]
-        },
-        {
-            'id': 'power_meter',
-            'name': '电力仪表',
-            'description': '多功能电力监测仪表',
-            'protocol': 'modbus_tcp',
-            'port': 502,
-            'registers': [
-                {'name': 'voltage', 'description': '电压', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': 'V'},
-                {'name': 'current', 'description': '电流', 'address': 2, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'A'},
-                {'name': 'power', 'description': '有功功率', 'address': 4, 'length': 1, 'data_type': 'float32', 'scale': 0.001, 'unit': 'kW'},
-                {'name': 'energy', 'description': '累计电量', 'address': 6, 'length': 2, 'data_type': 'float64', 'scale': 0.01, 'unit': 'kWh'}
-            ]
-        },
-        {
-            'id': 'flow_meter',
-            'name': '流量计',
-            'description': '管道流量监测仪表',
-            'protocol': 'modbus_tcp',
-            'port': 502,
-            'registers': [
-                {'name': 'flow_rate', 'description': '瞬时流量', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'm³/h'},
-                {'name': 'total_flow', 'description': '累计流量', 'address': 2, 'length': 2, 'data_type': 'float64', 'scale': 0.01, 'unit': 'm³'},
-                {'name': 'temperature', 'description': '介质温度', 'address': 4, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': '°C'}
-            ]
-        },
-        {
-            'id': 'inverter',
-            'name': '变频器',
-            'description': 'ABB/西门子等变频器',
-            'protocol': 'modbus_tcp',
-            'port': 502,
-            'registers': [
-                {'name': 'frequency', 'description': '输出频率', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'Hz'},
-                {'name': 'current', 'description': '输出电流', 'address': 2, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'A'},
-                {'name': 'voltage', 'description': '输出电压', 'address': 4, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': 'V'},
-                {'name': 'status', 'description': '运行状态', 'address': 100, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''}
-            ]
-        },
-        {
-            'id': 'plc',
-            'name': 'PLC控制器',
-            'description': '西门子/三菱等PLC',
-            'protocol': 'modbus_tcp',
-            'port': 502,
-            'registers': [
-                {'name': 'input_1', 'description': '输入点1', 'address': 0, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
-                {'name': 'input_2', 'description': '输入点2', 'address': 1, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
-                {'name': 'output_1', 'description': '输出点1', 'address': 100, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
-                {'name': 'output_2', 'description': '输出点2', 'address': 101, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''}
-            ]
-        }
+        {'id': 'temperature_sensor', 'name': '温度传感器', 'description': '常见温度传感器模板', 'protocol': 'modbus_tcp', 'port': 502,
+         'registers': [
+             {'name': 'temperature', 'description': '温度值', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': '°C'},
+             {'name': 'humidity', 'description': '湿度值', 'address': 2, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': '%RH'}
+         ]},
+        {'id': 'pressure_sensor', 'name': '压力传感器', 'description': '管道压力监测传感器', 'protocol': 'modbus_tcp', 'port': 502,
+         'registers': [
+             {'name': 'pressure', 'description': '压力值', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'MPa'},
+             {'name': 'temperature', 'description': '介质温度', 'address': 2, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': '°C'}
+         ]},
+        {'id': 'power_meter', 'name': '电力仪表', 'description': '多功能电力监测仪表', 'protocol': 'modbus_tcp', 'port': 502,
+         'registers': [
+             {'name': 'voltage', 'description': '电压', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': 'V'},
+             {'name': 'current', 'description': '电流', 'address': 2, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'A'},
+             {'name': 'power', 'description': '有功功率', 'address': 4, 'length': 1, 'data_type': 'float32', 'scale': 0.001, 'unit': 'kW'},
+             {'name': 'energy', 'description': '累计电量', 'address': 6, 'length': 2, 'data_type': 'float64', 'scale': 0.01, 'unit': 'kWh'}
+         ]},
+        {'id': 'flow_meter', 'name': '流量计', 'description': '管道流量监测仪表', 'protocol': 'modbus_tcp', 'port': 502,
+         'registers': [
+             {'name': 'flow_rate', 'description': '瞬时流量', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'm³/h'},
+             {'name': 'total_flow', 'description': '累计流量', 'address': 2, 'length': 2, 'data_type': 'float64', 'scale': 0.01, 'unit': 'm³'},
+             {'name': 'temperature', 'description': '介质温度', 'address': 4, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': '°C'}
+         ]},
+        {'id': 'inverter', 'name': '变频器', 'description': 'ABB/西门子等变频器', 'protocol': 'modbus_tcp', 'port': 502,
+         'registers': [
+             {'name': 'frequency', 'description': '输出频率', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'Hz'},
+             {'name': 'current', 'description': '输出电流', 'address': 2, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'A'},
+             {'name': 'voltage', 'description': '输出电压', 'address': 4, 'length': 1, 'data_type': 'float32', 'scale': 0.1, 'unit': 'V'},
+             {'name': 'status', 'description': '运行状态', 'address': 100, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''}
+         ]},
+        {'id': 'plc', 'name': 'PLC控制器', 'description': '西门子/三菱等PLC', 'protocol': 'modbus_tcp', 'port': 502,
+         'registers': [
+             {'name': 'input_1', 'description': '输入点1', 'address': 0, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'input_2', 'description': '输入点2', 'address': 1, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'output_1', 'description': '输出点1', 'address': 100, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'output_2', 'description': '输出点2', 'address': 101, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''}
+         ]},
+        {'id': 'opcua_plc', 'name': 'OPC UA PLC控制器', 'description': '支持OPC UA的PLC（如西门子S7-1500）', 'protocol': 'opcua',
+         'endpoint': 'opc.tcp://192.168.1.50:4840',
+         'nodes': [
+             {'node_id': 'ns=3;s=Temperature', 'name': 'temperature', 'description': '温度值', 'unit': '°C'},
+             {'node_id': 'ns=3;s=Pressure', 'name': 'pressure', 'description': '压力值', 'unit': 'MPa'},
+             {'node_id': 'ns=3;s=MotorSpeed', 'name': 'motor_speed', 'description': '电机转速', 'unit': 'RPM'},
+             {'node_id': 'ns=3;s=RunningStatus', 'name': 'running_status', 'description': '运行状态', 'unit': ''}
+         ]},
+        {'id': 'mqtt_iot_sensor', 'name': 'MQTT IoT传感器', 'description': '无线环境监测节点（MQTT协议）', 'protocol': 'mqtt', 'port': 1883,
+         'topics': [
+             {'topic': 'factory/workshop_a/temperature', 'name': 'temperature', 'unit': '°C', 'json_path': 'value'},
+             {'topic': 'factory/workshop_a/humidity', 'name': 'humidity', 'unit': '%RH', 'json_path': 'value'},
+             {'topic': 'factory/workshop_a/co2', 'name': 'co2', 'unit': 'ppm', 'json_path': 'value'}
+         ]},
+        {'id': 'rest_gateway', 'name': 'REST智能网关', 'description': '产线数据网关（HTTP接口）', 'protocol': 'rest',
+         'base_url': 'http://192.168.1.250/api',
+         'endpoints': [
+             {'name': 'temperature', 'path': '/sensors/temp', 'method': 'GET', 'json_path': 'data.value', 'unit': '°C'},
+             {'name': 'humidity', 'path': '/sensors/humi', 'method': 'GET', 'json_path': 'data.value', 'unit': '%RH'},
+             {'name': 'production_count', 'path': '/production/count', 'method': 'GET', 'json_path': 'data.total', 'unit': '个'}
+         ]},
     ]
-    
     return jsonify({'templates': templates})
 
 
 # ==================== 设备控制API ====================
 
 @api_bp.route('/devices/<device_id>/write-register', methods=['POST'])
+@_require_engineer
 def write_register(device_id):
     """写入寄存器"""
-    # 权限检查：仅管理员和工程师可操作
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user or user['role'] not in ['admin', 'engineer']:
-        return jsonify({'error': '需要管理员或工程师权限'}), 403
-    
     data = request.get_json()
     if not data:
         return jsonify({'error': '请提供写入参数'}), 400
     
     address = data.get('address')
     value = data.get('value')
-    
     if address is None or value is None:
         return jsonify({'error': '缺少address或value参数'}), 400
     
-    device_manager = current_app.device_manager
-    client = device_manager.get_client(device_id)
-    
+    client = current_app.device_manager.get_client(device_id)
     if not client:
         return jsonify({'error': f'设备 {device_id} 不存在'}), 404
-    
     if not client.connected:
         return jsonify({'error': f'设备 {device_id} 未连接'}), 400
     
-    # 写入寄存器
     success = client.write_single_register(int(address), int(value))
-    
     if success:
-        # 记录操作日志
-        auth_manager._log_operation(
-            user['username'], 'write_register',
-            f'设备 {device_id} 写入寄存器 address={address} value={value}'
-        )
-        return jsonify({
-            'success': True,
-            'message': f'写入成功: 地址={address}, 值={value}'
-        })
-    else:
-        return jsonify({
-            'success': False,
-            'message': '写入失败，请检查设备连接和寄存器地址'
-        }), 400
+        _get_auth_manager().log_operation(
+            request.current_user['username'], 'write_register',
+            f'设备 {device_id} 写入寄存器 address={address} value={value}')
+        return jsonify({'success': True, 'message': f'写入成功: 地址={address}, 值={value}'})
+    return jsonify({'success': False, 'message': '写入失败，请检查设备连接和寄存器地址'}), 400
 
 
 @api_bp.route('/devices/<device_id>/write-coil', methods=['POST'])
+@_require_engineer
 def write_coil(device_id):
     """写入线圈（开关控制）"""
-    # 权限检查
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user or user['role'] not in ['admin', 'engineer']:
-        return jsonify({'error': '需要管理员或工程师权限'}), 403
-    
     data = request.get_json()
     if not data:
         return jsonify({'error': '请提供写入参数'}), 400
     
     address = data.get('address')
     value = data.get('value')
-    
     if address is None or value is None:
         return jsonify({'error': '缺少address或value参数'}), 400
     
-    device_manager = current_app.device_manager
-    client = device_manager.get_client(device_id)
-    
+    client = current_app.device_manager.get_client(device_id)
     if not client:
         return jsonify({'error': f'设备 {device_id} 不存在'}), 404
-    
     if not client.connected:
         return jsonify({'error': f'设备 {device_id} 未连接'}), 400
     
-    # 写入线圈
     success = client.write_single_coil(int(address), bool(value))
-    
     if success:
-        # 记录操作日志
-        auth_manager._log_operation(
-            user['username'], 'write_coil',
-            f'设备 {device_id} 写入线圈 address={address} value={value}'
-        )
-        return jsonify({
-            'success': True,
-            'message': f'写入成功: 地址={address}, 值={value}'
-        })
-    else:
-        return jsonify({
-            'success': False,
-            'message': '写入失败，请检查设备连接和线圈地址'
-        }), 400
+        _get_auth_manager().log_operation(
+            request.current_user['username'], 'write_coil',
+            f'设备 {device_id} 写入线圈 address={address} value={value}')
+        return jsonify({'success': True, 'message': f'写入成功: 地址={address}, 值={value}'})
+    return jsonify({'success': False, 'message': '写入失败，请检查设备连接和线圈地址'}), 400
 
 
 @api_bp.route('/control/logs', methods=['GET'])
+@_require_auth
 def get_control_logs():
     """获取控制操作日志"""
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未认证'}), 401
-    
-    token = auth_header[7:]
-    auth_manager = current_app.auth_manager
-    user = auth_manager.verify_token(token)
-    
-    if not user:
-        return jsonify({'error': '令牌无效'}), 401
-    
-    # 获取控制操作日志
     limit = request.args.get('limit', 50, type=int)
-    logs = auth_manager.get_operation_logs(limit=limit)
-    
-    # 只返回控制相关的日志
-    control_logs = [log for log in logs if log.get('action') in ['write_register', 'write_coil']]
-    
+    logs = _get_auth_manager().get_operation_logs(limit=limit)
+    control_logs = [log for log in logs if log.get('action') in ('write_register', 'write_coil')]
     return jsonify({'logs': control_logs})
 
 
@@ -642,57 +517,34 @@ def get_control_logs():
 @api_bp.route('/data/realtime', methods=['GET'])
 def get_realtime_data():
     """获取实时数据"""
-    database = current_app.database
     device_id = request.args.get('device_id')
     limit = request.args.get('limit', 100, type=int)
-    
-    data = database.get_realtime_data(device_id=device_id, limit=limit)
-    
-    return jsonify({'data': data})
+    return jsonify({'data': current_app.database.get_realtime_data(device_id=device_id, limit=limit)})
 
 
 @api_bp.route('/data/latest/<device_id>', methods=['GET'])
 def get_latest_data(device_id):
     """获取设备最新数据"""
-    database = current_app.database
     register_name = request.args.get('register_name')
-    
-    data = database.get_latest_data(device_id=device_id, register_name=register_name)
-    
+    data = current_app.database.get_latest_data(device_id=device_id, register_name=register_name)
     if data:
         return jsonify(data)
-    else:
-        return jsonify({'error': '没有数据'}), 404
+    return jsonify({'error': '没有数据'}), 404
 
 
 @api_bp.route('/data/history/<device_id>/<register_name>', methods=['GET'])
 def get_history_data(device_id, register_name):
     """获取历史数据"""
-    database = current_app.database
-    
-    # 解析时间参数
     start_time = request.args.get('start_time')
     end_time = request.args.get('end_time')
     interval = request.args.get('interval', '1min')
     
-    if start_time:
-        start_time = datetime.fromisoformat(start_time)
-    else:
-        start_time = datetime.now() - timedelta(hours=1)
+    start_time = datetime.fromisoformat(start_time) if start_time else datetime.now() - timedelta(hours=1)
+    end_time = datetime.fromisoformat(end_time) if end_time else datetime.now()
     
-    if end_time:
-        end_time = datetime.fromisoformat(end_time)
-    else:
-        end_time = datetime.now()
-    
-    data = database.get_history_data(
-        device_id=device_id,
-        register_name=register_name,
-        start_time=start_time,
-        end_time=end_time,
-        interval=interval
-    )
-    
+    data = current_app.database.get_history_data(
+        device_id=device_id, register_name=register_name,
+        start_time=start_time, end_time=end_time, interval=interval)
     return jsonify({'data': data})
 
 
@@ -701,8 +553,6 @@ def get_history_data(device_id, register_name):
 @api_bp.route('/alarms', methods=['GET'])
 def get_alarms():
     """获取报警记录"""
-    database = current_app.database
-    
     device_id = request.args.get('device_id')
     alarm_level = request.args.get('alarm_level')
     acknowledged = request.args.get('acknowledged')
@@ -711,55 +561,146 @@ def get_alarms():
     if acknowledged is not None:
         acknowledged = acknowledged.lower() == 'true'
     
-    data = database.get_alarm_records(
-        device_id=device_id,
-        alarm_level=alarm_level,
-        acknowledged=acknowledged,
-        limit=limit
-    )
-    
+    data = current_app.database.get_alarm_records(
+        device_id=device_id, alarm_level=alarm_level,
+        acknowledged=acknowledged, limit=limit)
     return jsonify({'alarms': data})
 
 
 @api_bp.route('/alarms/active', methods=['GET'])
 def get_active_alarms():
     """获取活动报警"""
-    alarm_manager = current_app.alarm_manager
-    alarms = alarm_manager.get_active_alarms()
-    
-    return jsonify({'alarms': alarms})
+    return jsonify({'alarms': current_app.alarm_manager.get_active_alarms()})
 
 
 @api_bp.route('/alarms/<alarm_id>/acknowledge', methods=['POST'])
 def acknowledge_alarm(alarm_id):
     """确认报警"""
-    alarm_manager = current_app.alarm_manager
-    
     data = request.get_json()
-    device_id = data.get('device_id')
-    register_name = data.get('register_name')
-    acknowledged_by = data.get('acknowledged_by', 'operator')
-    
-    success = alarm_manager.acknowledge_alarm(
+    success = current_app.alarm_manager.acknowledge_alarm(
         alarm_id=alarm_id,
-        device_id=device_id,
-        register_name=register_name,
-        acknowledged_by=acknowledged_by
+        device_id=data.get('device_id'),
+        register_name=data.get('register_name'),
+        acknowledged_by=data.get('acknowledged_by', 'operator')
     )
-    
-    return jsonify({
-        'success': success,
-        'message': '报警已确认' if success else '确认失败'
-    })
+    return jsonify({'success': success, 'message': '报警已确认' if success else '确认失败'})
 
 
 @api_bp.route('/alarms/statistics', methods=['GET'])
 def get_alarm_statistics():
-    """获取报警统计"""
+    """获取报警统计（含声光输出+广播系统状态）"""
+    return jsonify(current_app.alarm_manager.get_alarm_statistics())
+
+
+# ==================== 报警输出控制API ====================
+
+@api_bp.route('/alarm-output/status', methods=['GET'])
+@_require_auth
+def get_alarm_output_status():
+    """获取声光报警器和广播系统状态"""
+    result = {}
     alarm_manager = current_app.alarm_manager
-    stats = alarm_manager.get_alarm_statistics()
+    if alarm_manager.alarm_output:
+        result['alarm_output'] = alarm_manager.alarm_output.get_status()
+    if alarm_manager.broadcast_system:
+        result['broadcast'] = alarm_manager.broadcast_system.get_status()
+    return jsonify(result)
+
+
+@api_bp.route('/alarm-output/acknowledge', methods=['POST'])
+@_require_auth
+def alarm_output_acknowledge():
+    """消音 — 关闭蜂鸣器，报警灯保持闪烁"""
+    alarm_manager = current_app.alarm_manager
+    if alarm_manager.alarm_output:
+        alarm_manager.alarm_output.acknowledge()
+        _get_auth_manager().log_operation(
+            request.current_user['username'], 'alarm_acknowledge', '声光报警消音')
+        return jsonify({'success': True, 'message': '已消音，指示灯保持'})
+    return jsonify({'success': False, 'message': '声光报警输出未启用'})
+
+
+@api_bp.route('/alarm-output/reset', methods=['POST'])
+@_require_auth
+def alarm_output_reset():
+    """复位 — 全部清零，恢复绿灯正常状态"""
+    alarm_manager = current_app.alarm_manager
+    alarm_manager.reset_alarm()
+    _get_auth_manager().log_operation(
+        request.current_user['username'], 'alarm_reset', '报警输出复位')
+    return jsonify({'success': True, 'message': '报警输出已复位（绿灯正常）'})
+
+
+@api_bp.route('/alarm-output/manual', methods=['POST'])
+@_require_auth
+@_require_engineer
+def alarm_output_manual():
+    """手动控制报警灯和蜂鸣器（调试/巡检用）"""
+    data = request.get_json() or {}
+    alarm_manager = current_app.alarm_manager
+    if not alarm_manager.alarm_output:
+        return jsonify({'success': False, 'message': '声光报警输出未启用'}), 400
     
-    return jsonify(stats)
+    result = alarm_manager.alarm_output.manual_control(
+        red=data.get('red'),
+        yellow=data.get('yellow'),
+        green=data.get('green'),
+        buzzer=data.get('buzzer'),
+        duration=data.get('duration', 0)
+    )
+    _get_auth_manager().log_operation(
+        request.current_user['username'], 'alarm_manual',
+        f'手动控制报警灯: {data}')
+    return jsonify({
+        'success': result.get('success', True),
+        'state': result.get('state', {}),
+        'message': '手动控制指令已发送'
+    })
+
+
+@api_bp.route('/broadcast/speak', methods=['POST'])
+@_require_auth
+def broadcast_speak():
+    """手动广播喊话"""
+    data = request.get_json()
+    if not data or not data.get('text'):
+        return jsonify({'success': False, 'message': '请提供广播内容(text)'}), 400
+    
+    alarm_manager = current_app.alarm_manager
+    if not alarm_manager.broadcast_system:
+        return jsonify({'success': False, 'message': '广播系统未启用'}), 400
+    
+    result = alarm_manager.broadcast_system.speak(
+        text=data['text'],
+        level=data.get('level', 'info'),
+        area=data.get('area'),
+        source='manual'
+    )
+    _get_auth_manager().log_operation(
+        request.current_user['username'], 'broadcast_speak',
+        f'广播喊话: {data["text"][:50]}')
+    return jsonify(result)
+
+
+@api_bp.route('/broadcast/areas', methods=['GET'])
+@_require_auth
+def get_broadcast_areas():
+    """获取广播区域列表"""
+    alarm_manager = current_app.alarm_manager
+    if not alarm_manager.broadcast_system:
+        return jsonify({'areas': []})
+    return jsonify({'areas': alarm_manager.broadcast_system.get_areas()})
+
+
+@api_bp.route('/broadcast/history', methods=['GET'])
+@_require_auth
+def get_broadcast_history():
+    """获取广播历史"""
+    limit = request.args.get('limit', 50, type=int)
+    alarm_manager = current_app.alarm_manager
+    if not alarm_manager.broadcast_system:
+        return jsonify({'history': []})
+    return jsonify({'history': alarm_manager.broadcast_system.get_history(limit=limit)})
 
 
 # ==================== 系统信息API ====================
@@ -767,35 +708,24 @@ def get_alarm_statistics():
 @api_bp.route('/system/status', methods=['GET'])
 def get_system_status():
     """获取系统状态"""
-    database = current_app.database
-    device_manager = current_app.device_manager
-    data_collector = current_app.data_collector
-    alarm_manager = current_app.alarm_manager
-    
-    # 计算运行时间
     start_time = getattr(current_app, 'system_start_time', None)
-    uptime_seconds = 0
-    if start_time:
-        uptime_seconds = (datetime.now() - start_time).total_seconds()
+    uptime_seconds = (datetime.now() - start_time).total_seconds() if start_time else 0
     
     return jsonify({
-        'database': database.get_database_stats(),
-        'devices': device_manager.get_all_status(),
-        'collector': data_collector.get_stats(),
-        'alarms': alarm_manager.get_alarm_statistics(),
+        'database': current_app.database.get_database_stats(),
+        'devices': current_app.device_manager.get_all_status(),
+        'collector': current_app.data_collector.get_stats(),
+        'alarms': current_app.alarm_manager.get_alarm_statistics(),
         'uptime_seconds': uptime_seconds,
         'start_time': start_time.isoformat() if start_time else None,
-        'simulation_mode': device_manager.simulation_mode
+        'simulation_mode': current_app.device_manager.simulation_mode
     })
 
 
 @api_bp.route('/system/database', methods=['GET'])
 def get_database_stats():
     """获取数据库统计"""
-    database = current_app.database
-    stats = database.get_database_stats()
-    
-    return jsonify(stats)
+    return jsonify(current_app.database.get_database_stats())
 
 
 # ==================== 数据导出API ====================
@@ -805,26 +735,25 @@ def export_device_data(device_id):
     """导出设备数据"""
     from 存储层.data_export import DataExport
     
-    database = current_app.database
-    data = request.get_json()
+    data = request.get_json() or {}
+    start_time_str = data.get('start_time')
+    end_time_str = data.get('end_time')
     
-    start_time = datetime.fromisoformat(data.get('start_time'))
-    end_time = datetime.fromisoformat(data.get('end_time'))
-    format = data.get('format', 'csv')
+    if not start_time_str or not end_time_str:
+        return jsonify({'success': False, 'message': '缺少start_time或end_time参数'}), 400
     
     exporter = DataExport()
     filepath = exporter.export_device_data(
-        database=database,
+        database=current_app.database,
         device_id=device_id,
-        start_time=start_time,
-        end_time=end_time,
-        format=format
+        start_time=datetime.fromisoformat(start_time_str),
+        end_time=datetime.fromisoformat(end_time_str),
+        format=data.get('format', 'csv')
     )
     
     if filepath:
         return jsonify({'success': True, 'filepath': filepath})
-    else:
-        return jsonify({'success': False, 'message': '导出失败'}), 500
+    return jsonify({'success': False, 'message': '导出失败'}), 500
 
 
 @api_bp.route('/export/alarms', methods=['POST'])
@@ -832,22 +761,276 @@ def export_alarms():
     """导出报警记录"""
     from 存储层.data_export import DataExport
     
-    database = current_app.database
     data = request.get_json() or {}
-    
-    start_time = datetime.fromisoformat(data.get('start_time')) if data.get('start_time') else None
-    end_time = datetime.fromisoformat(data.get('end_time')) if data.get('end_time') else None
-    format = data.get('format', 'csv')
-    
     exporter = DataExport()
     filepath = exporter.export_alarm_records(
-        database=database,
-        start_time=start_time,
-        end_time=end_time,
-        format=format
+        database=current_app.database,
+        start_time=datetime.fromisoformat(data['start_time']) if data.get('start_time') else None,
+        end_time=datetime.fromisoformat(data['end_time']) if data.get('end_time') else None,
+        format=data.get('format', 'csv')
     )
     
     if filepath:
         return jsonify({'success': True, 'filepath': filepath})
+    return jsonify({'success': False, 'message': '没有报警记录可导出'})
+
+
+# ==================== 系统配置API ====================
+
+@api_bp.route('/config', methods=['GET'])
+def get_config():
+    """获取系统配置"""
+    config_path = Path('配置/system.yaml')
+    if not config_path.exists():
+        return jsonify({'error': '配置文件不存在'}), 404
+    
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    return jsonify({'config': config})
+
+
+@api_bp.route('/config', methods=['PUT'])
+@_require_engineer
+def update_config():
+    """更新系统配置"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': '请提供配置数据'}), 400
+    
+    config_path = Path('配置/system.yaml')
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    section = data.get('section')
+    if section and section in config:
+        config[section].update(data.get('data', {}))
     else:
-        return jsonify({'success': False, 'message': '没有报警记录可导出'})
+        config.update(data)
+    
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    
+    _get_auth_manager().log_operation(
+        request.current_user['username'], 'update_config', f"更新系统配置: {section or 'global'}")
+    return jsonify({'success': True, 'message': '配置已保存'})
+
+
+# ==================== 报警规则API ====================
+
+@api_bp.route('/alarm-rules', methods=['GET'])
+def get_alarm_rules():
+    """获取所有报警规则"""
+    config_path = Path('配置/alarms.yaml')
+    if not config_path.exists():
+        return jsonify({'rules': []})
+    
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    return jsonify({'rules': config.get('alarm_rules', []), 'notification': config.get('notification', {})})
+
+
+@api_bp.route('/alarm-rules', methods=['POST'])
+@_require_engineer
+def add_alarm_rule():
+    """添加报警规则"""
+    data = request.get_json()
+    if not data or 'id' not in data:
+        return jsonify({'error': '请提供规则ID'}), 400
+    
+    config_path = Path('配置/alarms.yaml')
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    rules = config.get('alarm_rules', [])
+    if any(r.get('id') == data['id'] for r in rules):
+        return jsonify({'error': f'规则 {data["id"]} 已存在'}), 400
+    
+    rules.append(data)
+    config['alarm_rules'] = rules
+    
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    
+    current_app.alarm_manager.rules[data['id']] = data
+    _get_auth_manager().log_operation(
+        request.current_user['username'], 'add_alarm_rule', f"添加报警规则: {data['id']}")
+    return jsonify({'success': True, 'message': f"规则 {data['id']} 已添加"})
+
+
+@api_bp.route('/alarm-rules/<rule_id>', methods=['PUT'])
+@_require_engineer
+def update_alarm_rule(rule_id):
+    """更新报警规则"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': '请提供更新数据'}), 400
+    
+    config_path = Path('配置/alarms.yaml')
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    rules = config.get('alarm_rules', [])
+    found = False
+    for i, r in enumerate(rules):
+        if r.get('id') == rule_id:
+            rules[i].update(data)
+            found = True
+            break
+    
+    if not found:
+        return jsonify({'error': f'规则 {rule_id} 不存在'}), 404
+    
+    config['alarm_rules'] = rules
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    
+    current_app.alarm_manager.rules[rule_id] = rules[[r['id'] for r in rules].index(rule_id)]
+    _get_auth_manager().log_operation(
+        request.current_user['username'], 'update_alarm_rule', f"更新报警规则: {rule_id}")
+    return jsonify({'success': True, 'message': f'规则 {rule_id} 已更新'})
+
+
+@api_bp.route('/alarm-rules/<rule_id>', methods=['DELETE'])
+@_require_engineer
+def delete_alarm_rule(rule_id):
+    """删除报警规则"""
+    config_path = Path('配置/alarms.yaml')
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    rules = config.get('alarm_rules', [])
+    new_rules = [r for r in rules if r.get('id') != rule_id]
+    
+    if len(new_rules) == len(rules):
+        return jsonify({'error': f'规则 {rule_id} 不存在'}), 404
+    
+    config['alarm_rules'] = new_rules
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    
+    if rule_id in current_app.alarm_manager.rules:
+        del current_app.alarm_manager.rules[rule_id]
+    
+    _get_auth_manager().log_operation(
+        request.current_user['username'], 'delete_alarm_rule', f"删除报警规则: {rule_id}")
+    return jsonify({'success': True, 'message': f'规则 {rule_id} 已删除'})
+
+
+@api_bp.route('/alarm-rules/notification', methods=['PUT'])
+@_require_engineer
+def update_notification():
+    """更新通知设置"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': '请提供通知配置'}), 400
+    
+    config_path = Path('配置/alarms.yaml')
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    if 'email' in data:
+        config.setdefault('notification', {})['email'] = data['email']
+    if 'sound' in data:
+        config.setdefault('notification', {})['sound'] = data['sound']
+    
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    
+    _get_auth_manager().log_operation(
+        request.current_user['username'], 'update_notification', '更新通知设置')
+    return jsonify({'success': True, 'message': '通知设置已保存'})
+
+
+# ==================== 内部辅助函数 ====================
+
+def _validate_protocol_fields(protocol: str, data: dict):
+    """验证协议必填字段，失败抛异常"""
+    if protocol in ('modbus_tcp', 'modbus_rtu'):
+        for field in ('host', 'port'):
+            if field not in data:
+                raise ValueError(f'Modbus设备缺少必填字段: {field}')
+    elif protocol == 'opcua':
+        if 'endpoint' not in data:
+            raise ValueError('OPC UA设备缺少必填字段: endpoint')
+        if not data.get('nodes'):
+            raise ValueError('OPC UA设备缺少节点配置')
+    elif protocol == 'mqtt':
+        for field in ('host', 'port'):
+            if field not in data:
+                raise ValueError(f'MQTT设备缺少必填字段: {field}')
+        if not data.get('topics'):
+            raise ValueError('MQTT设备缺少主题配置')
+    elif protocol == 'rest':
+        if 'base_url' not in data:
+            raise ValueError('REST设备缺少必填字段: base_url')
+        if not data.get('endpoints'):
+            raise ValueError('REST设备缺少端点配置')
+
+
+def _build_device_config(protocol: str, data: dict) -> dict:
+    """根据协议类型构建设备配置字典"""
+    config = {
+        'id': data['id'],
+        'name': data['name'],
+        'description': data.get('description', ''),
+        'protocol': protocol,
+        'enabled': data.get('enabled', True),
+        'collection_interval': int(data.get('collection_interval', 5))
+    }
+    
+    if protocol in ('modbus_tcp', 'modbus_rtu'):
+        config['host'] = data['host']
+        config['port'] = int(data['port'])
+        config['slave_id'] = int(data.get('slave_id', 1))
+        config['registers'] = data.get('registers', [])
+        if protocol == 'modbus_rtu':
+            config['baudrate'] = int(data.get('baudrate', 115200))
+    elif protocol == 'opcua':
+        config['endpoint'] = data['endpoint']
+        config['security_mode'] = data.get('security_mode', 'None')
+        if data.get('username'):
+            config['username'] = data['username']
+            config['password'] = data.get('password', '')
+        config['nodes'] = data['nodes']
+    elif protocol == 'mqtt':
+        config['host'] = data['host']
+        config['port'] = int(data['port'])
+        if data.get('username'):
+            config['username'] = data['username']
+            config['password'] = data.get('password', '')
+        config['topics'] = data['topics']
+    elif protocol == 'rest':
+        config['base_url'] = data['base_url']
+        config['poll_interval'] = int(data.get('poll_interval', 10))
+        auth_type = data.get('auth_type', 'none')
+        if auth_type != 'none':
+            config['auth_type'] = auth_type
+            if auth_type in ('bearer', 'api_key'):
+                config['auth_token'] = data.get('auth_token', '')
+            elif auth_type == 'basic':
+                config['auth_username'] = data.get('auth_username', '')
+                config['auth_password'] = data.get('auth_password', '')
+        config['endpoints'] = data['endpoints']
+    
+    return config
+
+
+def _update_protocol_fields(protocol: str, device_config: dict, data: dict):
+    """更新协议专属字段"""
+    if protocol in ('modbus_tcp', 'modbus_rtu'):
+        for key in ('host', 'port', 'slave_id', 'registers', 'baudrate'):
+            if key in data:
+                device_config[key] = int(data[key]) if key in ('port', 'slave_id') else data[key]
+    elif protocol == 'opcua':
+        for key in ('endpoint', 'security_mode', 'username', 'password', 'nodes'):
+            if key in data:
+                device_config[key] = data[key]
+    elif protocol == 'mqtt':
+        for key in ('host', 'port', 'username', 'password', 'topics'):
+            if key in data:
+                device_config[key] = int(data[key]) if key == 'port' else data[key]
+    elif protocol == 'rest':
+        for key in ('base_url', 'poll_interval', 'auth_type', 'auth_token', 'auth_username', 'auth_password', 'endpoints'):
+            if key in data:
+                device_config[key] = int(data[key]) if key == 'poll_interval' else data[key]

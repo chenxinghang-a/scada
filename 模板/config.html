@@ -1,136 +1,366 @@
 {% extends "base.html" %}
 
-{% block title %}系统配置 - 工业SCADA系统{% endblock %}
+{% block title %}系统配置 - 工业数据采集与监控系统{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-sliders"></i> 系统配置</h5>
-            </div>
+<div class="row mb-4">
+    <div class="col">
+        <h2><i class="bi bi-sliders me-2"></i>系统配置</h2>
+        <p class="text-muted">管理系统参数、报警规则、采集设置</p>
+    </div>
+</div>
+
+<!-- Tab导航 -->
+<ul class="nav nav-tabs mb-3" id="configTabs">
+    <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-system">系统设置</button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-collection">采集设置</button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-database">数据库设置</button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-alarms">
+            报警规则 <span class="badge bg-danger" id="alarm-count-badge">0</span>
+        </button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logging">日志设置</button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <!-- ==================== 系统设置 ==================== -->
+    <div class="tab-pane fade show active" id="tab-system">
+        <div class="card">
             <div class="card-body">
-                <ul class="nav nav-tabs" id="configTabs" role="tablist">
-                    <li class="nav-item">
-                        <a class="nav-link active" id="system-tab" data-bs-toggle="tab" href="#system" role="tab">系统设置</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" id="database-tab" data-bs-toggle="tab" href="#database" role="tab">数据库设置</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" id="collection-tab" data-bs-toggle="tab" href="#collection" role="tab">采集设置</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" id="alarm-tab" data-bs-toggle="tab" href="#alarm" role="tab">报警设置</a>
-                    </li>
-                </ul>
-                
-                <div class="tab-content mt-3" id="configTabContent">
-                    <!-- 系统设置 -->
-                    <div class="tab-pane fade show active" id="system" role="tabpanel">
-                        <form>
-                            <div class="mb-3">
-                                <label for="system-name" class="form-label">系统名称</label>
-                                <input type="text" class="form-control" id="system-name" value="工业数据采集与监控系统">
-                            </div>
-                            <div class="mb-3">
-                                <label for="web-port" class="form-label">Web端口</label>
-                                <input type="number" class="form-control" id="web-port" value="5000">
-                            </div>
-                            <div class="mb-3">
-                                <label for="log-level" class="form-label">日志级别</label>
-                                <select class="form-select" id="log-level">
-                                    <option value="DEBUG">DEBUG</option>
-                                    <option value="INFO" selected>INFO</option>
-                                    <option value="WARNING">WARNING</option>
-                                    <option value="ERROR">ERROR</option>
-                                </select>
-                            </div>
-                            <button type="submit" class="btn btn-primary">保存设置</button>
-                        </form>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">系统名称</label>
+                        <input type="text" class="form-control" id="cfg-system-name">
                     </div>
-                    
-                    <!-- 数据库设置 -->
-                    <div class="tab-pane fade" id="database" role="tabpanel">
-                        <form>
-                            <div class="mb-3">
-                                <label for="retention-days" class="form-label">数据保留天数</label>
-                                <input type="number" class="form-control" id="retention-days" value="30">
-                            </div>
-                            <div class="mb-3">
-                                <label for="backup-interval" class="form-label">备份间隔（小时）</label>
-                                <input type="number" class="form-control" id="backup-interval" value="24">
-                            </div>
-                            <button type="submit" class="btn btn-primary">保存设置</button>
-                        </form>
+                    <div class="col-md-3">
+                        <label class="form-label">版本</label>
+                        <input type="text" class="form-control" id="cfg-system-version" readonly>
                     </div>
-                    
-                    <!-- 采集设置 -->
-                    <div class="tab-pane fade" id="collection" role="tabpanel">
-                        <form>
-                            <div class="mb-3">
-                                <label for="default-interval" class="form-label">默认采集间隔（秒）</label>
-                                <input type="number" class="form-control" id="default-interval" value="5">
-                            </div>
-                            <div class="mb-3">
-                                <label for="timeout" class="form-label">通信超时（秒）</label>
-                                <input type="number" class="form-control" id="timeout" value="3">
-                            </div>
-                            <div class="mb-3">
-                                <label for="retry-count" class="form-label">重试次数</label>
-                                <input type="number" class="form-control" id="retry-count" value="3">
-                            </div>
-                            <button type="submit" class="btn btn-primary">保存设置</button>
-                        </form>
-                    </div>
-                    
-                    <!-- 报警设置 -->
-                    <div class="tab-pane fade" id="alarm" role="tabpanel">
-                        <form>
-                            <div class="mb-3">
-                                <label for="alarm-check-interval" class="form-label">报警检查间隔（秒）</label>
-                                <input type="number" class="form-control" id="alarm-check-interval" value="1">
-                            </div>
-                            <div class="mb-3">
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" id="email-enabled">
-                                    <label class="form-check-label" for="email-enabled">启用邮件通知</label>
-                                </div>
-                            </div>
-                            <button type="submit" class="btn btn-primary">保存设置</button>
-                        </form>
+                    <div class="col-md-3">
+                        <label class="form-label">作者</label>
+                        <input type="text" class="form-control" id="cfg-system-author" readonly>
                     </div>
                 </div>
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <label class="form-label">Web端口</label>
+                        <input type="number" class="form-control" id="cfg-web-port" min="1" max="65535">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Web主机</label>
+                        <input type="text" class="form-control" id="cfg-web-host">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">调试模式</label>
+                        <select class="form-select" id="cfg-web-debug">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">CORS</label>
+                        <select class="form-select" id="cfg-cors-enabled">
+                            <option value="true">允许跨域</option>
+                            <option value="false">禁止</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="saveSection('system')">
+                    <i class="bi bi-check-lg me-1"></i>保存系统设置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 采集设置 ==================== -->
+    <div class="tab-pane fade" id="tab-collection">
+        <div class="card">
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <label class="form-label">默认采集间隔(秒)</label>
+                        <input type="number" class="form-control" id="cfg-col-interval" min="1">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">最大并发数</label>
+                        <input type="number" class="form-control" id="cfg-col-concurrent" min="1">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">通信超时(秒)</label>
+                        <input type="number" class="form-control" id="cfg-col-timeout" min="1">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">重试次数</label>
+                        <input type="number" class="form-control" id="cfg-col-retry" min="0">
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <label class="form-label">重试间隔(秒)</label>
+                        <input type="number" class="form-control" id="cfg-col-retry-interval" min="1">
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="saveSection('collection')">
+                    <i class="bi bi-check-lg me-1"></i>保存采集设置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 数据库设置 ==================== -->
+    <div class="tab-pane fade" id="tab-database">
+        <div class="card">
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">原始数据保留天数</label>
+                        <input type="number" class="form-control" id="cfg-db-raw-days" min="1">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">压缩数据保留天数</label>
+                        <input type="number" class="form-control" id="cfg-db-compressed-days" min="1">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">报警记录保留天数</label>
+                        <input type="number" class="form-control" id="cfg-db-alarm-days" min="1">
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">数据压缩</label>
+                        <select class="form-select" id="cfg-db-compress-enabled">
+                            <option value="true">启用</option>
+                            <option value="false">禁用</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">压缩间隔(小时)</label>
+                        <input type="number" class="form-control" id="cfg-db-compress-interval" min="1">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">压缩方法</label>
+                        <select class="form-select" id="cfg-db-compress-method">
+                            <option value="average">平均值</option>
+                            <option value="min_max">最大最小值</option>
+                            <option value="first_last">首尾值</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="saveSection('database')">
+                    <i class="bi bi-check-lg me-1"></i>保存数据库设置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 报警规则 ==================== -->
+    <div class="tab-pane fade" id="tab-alarms">
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0">报警规则</h6>
+                <button class="btn btn-sm btn-primary" onclick="showAddRuleModal()">
+                    <i class="bi bi-plus-circle me-1"></i>添加规则
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>规则ID</th>
+                                <th>名称</th>
+                                <th>设备</th>
+                                <th>变量</th>
+                                <th>条件</th>
+                                <th>阈值</th>
+                                <th>等级</th>
+                                <th>启用</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="alarm-rules-body">
+                            <tr><td colspan="9" class="text-center text-muted">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 通知设置 -->
+        <div class="card">
+            <div class="card-header"><h6 class="mb-0">通知设置</h6></div>
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="cfg-notify-email">
+                            <label class="form-check-label" for="cfg-notify-email">邮件通知</label>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="cfg-notify-sound" checked>
+                            <label class="form-check-label" for="cfg-notify-sound">声音报警</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mb-3" id="email-config-row">
+                    <div class="col-md-3">
+                        <label class="form-label">SMTP服务器</label>
+                        <input type="text" class="form-control" id="cfg-smtp-server" placeholder="smtp.example.com">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">端口</label>
+                        <input type="number" class="form-control" id="cfg-smtp-port" value="587">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">用户名</label>
+                        <input type="text" class="form-control" id="cfg-smtp-username">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">收件人(逗号分隔)</label>
+                        <input type="text" class="form-control" id="cfg-smtp-recipients" placeholder="admin@example.com">
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="saveNotification()">
+                    <i class="bi bi-check-lg me-1"></i>保存通知设置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 日志设置 ==================== -->
+    <div class="tab-pane fade" id="tab-logging">
+        <div class="card">
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">日志级别</label>
+                        <select class="form-select" id="cfg-log-level">
+                            <option value="DEBUG">DEBUG</option>
+                            <option value="INFO">INFO</option>
+                            <option value="WARNING">WARNING</option>
+                            <option value="ERROR">ERROR</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">日志文件最大(MB)</label>
+                        <input type="number" class="form-control" id="cfg-log-max-size" min="1">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">日志备份数</label>
+                        <input type="number" class="form-control" id="cfg-log-backup-count" min="0">
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="saveSection('logging')">
+                    <i class="bi bi-check-lg me-1"></i>保存日志设置
+                </button>
             </div>
         </div>
     </div>
 </div>
 
-<div class="row">
-    <div class="col-12">
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-info-circle"></i> 系统信息</h5>
+<!-- 系统信息卡片 -->
+<div class="card mt-4">
+    <div class="card-header"><h6 class="mb-0"><i class="bi bi-info-circle me-2"></i>系统运行状态</h6></div>
+    <div class="card-body">
+        <div class="row" id="system-info">
+            <div class="col-md-2"><strong>数据库:</strong> <span id="info-db-size">-</span></div>
+            <div class="col-md-2"><strong>数据记录:</strong> <span id="info-data-count">-</span></div>
+            <div class="col-md-2"><strong>报警记录:</strong> <span id="info-alarm-count">-</span></div>
+            <div class="col-md-2"><strong>采集成功率:</strong> <span id="info-success-rate">-</span></div>
+            <div class="col-md-2"><strong>模拟模式:</strong> <span id="info-sim-mode">-</span></div>
+            <div class="col-md-2"><strong>运行时间:</strong> <span id="info-uptime">-</span></div>
+        </div>
+    </div>
+</div>
+
+<!-- 添加/编辑报警规则模态框 -->
+<div class="modal fade" id="ruleModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="ruleModalTitle">添加报警规则</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="card-body">
-                <div class="row" id="system-info">
-                    <div class="col-md-3">
-                        <strong>数据库大小:</strong>
-                        <span id="db-size">-</span>
+            <div class="modal-body">
+                <form id="ruleForm">
+                    <input type="hidden" id="rule-id-old" value="">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">规则ID <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="rule-id" required placeholder="如: temp_high" pattern="[a-zA-Z0-9_]+">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">规则名称 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="rule-name" required placeholder="如: 温度过高">
+                        </div>
                     </div>
-                    <div class="col-md-3">
-                        <strong>数据记录数:</strong>
-                        <span id="data-count">-</span>
+                    <div class="mb-3">
+                        <label class="form-label">描述</label>
+                        <input type="text" class="form-control" id="rule-description" placeholder="温度超过上限">
                     </div>
-                    <div class="col-md-3">
-                        <strong>报警记录数:</strong>
-                        <span id="alarm-count">-</span>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">设备ID <span class="text-danger">*</span></label>
+                            <select class="form-select" id="rule-device-id"></select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">变量名 <span class="text-danger">*</span></label>
+                            <select class="form-select" id="rule-register-name"></select>
+                        </div>
                     </div>
-                    <div class="col-md-3">
-                        <strong>采集成功率:</strong>
-                        <span id="success-rate">-</span>
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">条件</label>
+                            <select class="form-select" id="rule-condition">
+                                <option value="greater_than">大于</option>
+                                <option value="less_than">小于</option>
+                                <option value="equal">等于</option>
+                                <option value="greater_equal">大于等于</option>
+                                <option value="less_equal">小于等于</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">阈值 <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" id="rule-threshold" step="0.01" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">等级</label>
+                            <select class="form-select" id="rule-level">
+                                <option value="warning">警告</option>
+                                <option value="danger">危险</option>
+                                <option value="critical">严重</option>
+                            </select>
+                        </div>
                     </div>
-                </div>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">延迟(秒)</label>
+                            <input type="number" class="form-control" id="rule-delay" value="0" min="0">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">启用</label>
+                            <select class="form-select" id="rule-enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveRule()">保存</button>
             </div>
         </div>
     </div>
@@ -139,23 +369,421 @@
 
 {% block extra_js %}
 <script>
+// ==================== 页面加载 ====================
+
 document.addEventListener('DOMContentLoaded', function() {
-    // 加载系统信息
-    fetch('/api/system/status')
-        .then(r => r.json())
-        .then(data => {
-            if (data.database) {
-                document.getElementById('db-size').textContent = data.database.database_size_mb + ' MB';
-                document.getElementById('data-count').textContent = data.database.realtime_records;
-                document.getElementById('alarm-count').textContent = data.database.alarm_records;
-            }
-            if (data.collector) {
-                const total = data.collector.total_collections || 0;
-                const success = data.collector.successful_collections || 0;
-                const rate = total > 0 ? ((success / total) * 100).toFixed(1) + '%' : '-';
-                document.getElementById('success-rate').textContent = rate;
-            }
-        });
+    loadConfig();
+    loadAlarmRules();
+    loadSystemStatus();
 });
+
+// ==================== 系统配置加载 & 保存 ====================
+
+async function loadConfig() {
+    try {
+        const response = await fetch('/api/config', { headers: getAuthHeaders() });
+        const data = await response.json();
+        if (!data.config) return;
+        
+        const c = data.config;
+        
+        // 系统设置
+        setVal('cfg-system-name', c.system?.name);
+        setVal('cfg-system-version', c.system?.version);
+        setVal('cfg-system-author', c.system?.author);
+        setVal('cfg-web-port', c.web?.port);
+        setVal('cfg-web-host', c.web?.host);
+        setVal('cfg-web-debug', c.web?.debug === true ? 'true' : 'false');
+        setVal('cfg-cors-enabled', c.web?.cors?.enabled === true ? 'true' : 'false');
+        
+        // 采集设置
+        setVal('cfg-col-interval', c.collection?.default_interval);
+        setVal('cfg-col-concurrent', c.collection?.max_concurrent);
+        setVal('cfg-col-timeout', c.collection?.timeout);
+        setVal('cfg-col-retry', c.collection?.retry?.max_attempts);
+        setVal('cfg-col-retry-interval', c.collection?.retry?.interval_seconds);
+        
+        // 数据库设置
+        setVal('cfg-db-raw-days', c.database?.retention?.raw_data_days);
+        setVal('cfg-db-compressed-days', c.database?.retention?.compressed_data_days);
+        setVal('cfg-db-alarm-days', c.database?.retention?.alarm_days);
+        setVal('cfg-db-compress-enabled', c.database?.compression?.enabled === true ? 'true' : 'false');
+        setVal('cfg-db-compress-interval', c.database?.compression?.interval_hours);
+        setVal('cfg-db-compress-method', c.database?.compression?.method);
+        
+        // 日志设置
+        setVal('cfg-log-level', c.logging?.level);
+        setVal('cfg-log-max-size', c.logging?.file?.max_size_mb);
+        setVal('cfg-log-backup-count', c.logging?.file?.backup_count);
+        
+    } catch (error) {
+        console.error('加载配置失败:', error);
+    }
+}
+
+function setVal(id, value) {
+    const el = document.getElementById(id);
+    if (el && value !== undefined && value !== null) {
+        el.value = value;
+    }
+}
+
+async function saveSection(section) {
+    let data = {};
+    
+    if (section === 'system') {
+        data = {
+            section: 'system',
+            data: {
+                name: document.getElementById('cfg-system-name').value
+            }
+        };
+        // 也更新web配置
+        const webData = {
+            section: 'web',
+            data: {
+                port: parseInt(document.getElementById('cfg-web-port').value) || 5000,
+                host: document.getElementById('cfg-web-host').value,
+                debug: document.getElementById('cfg-web-debug').value === 'true',
+                cors: {
+                    enabled: document.getElementById('cfg-cors-enabled').value === 'true',
+                    origins: ['*']
+                }
+            }
+        };
+        await fetch('/api/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(webData)
+        });
+    } else if (section === 'collection') {
+        data = {
+            section: 'collection',
+            data: {
+                default_interval: parseInt(document.getElementById('cfg-col-interval').value) || 5,
+                max_concurrent: parseInt(document.getElementById('cfg-col-concurrent').value) || 10,
+                timeout: parseInt(document.getElementById('cfg-col-timeout').value) || 10,
+                retry: {
+                    max_attempts: parseInt(document.getElementById('cfg-col-retry').value) || 3,
+                    interval_seconds: parseInt(document.getElementById('cfg-col-retry-interval').value) || 5
+                }
+            }
+        };
+    } else if (section === 'database') {
+        data = {
+            section: 'database',
+            data: {
+                retention: {
+                    raw_data_days: parseInt(document.getElementById('cfg-db-raw-days').value) || 30,
+                    compressed_data_days: parseInt(document.getElementById('cfg-db-compressed-days').value) || 365,
+                    alarm_days: parseInt(document.getElementById('cfg-db-alarm-days').value) || 90
+                },
+                compression: {
+                    enabled: document.getElementById('cfg-db-compress-enabled').value === 'true',
+                    interval_hours: parseInt(document.getElementById('cfg-db-compress-interval').value) || 24,
+                    method: document.getElementById('cfg-db-compress-method').value
+                }
+            }
+        };
+    } else if (section === 'logging') {
+        data = {
+            section: 'logging',
+            data: {
+                level: document.getElementById('cfg-log-level').value,
+                file: {
+                    enabled: true,
+                    path: 'logs/scada.log',
+                    max_size_mb: parseInt(document.getElementById('cfg-log-max-size').value) || 10,
+                    backup_count: parseInt(document.getElementById('cfg-log-backup-count').value) || 5
+                }
+            }
+        };
+    }
+    
+    try {
+        const response = await fetch('/api/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(data)
+        });
+        const result = await response.json();
+        if (result.success) {
+            showAlert(result.message, 'success');
+        } else {
+            showAlert(result.message || '保存失败', 'danger');
+        }
+    } catch (error) {
+        showAlert('保存失败: ' + error.message, 'danger');
+    }
+}
+
+// ==================== 报警规则 ====================
+
+let alarmRulesList = [];
+let devicesCache = [];
+
+async function loadAlarmRules() {
+    try {
+        const response = await fetch('/api/alarm-rules', { headers: getAuthHeaders() });
+        const data = await response.json();
+        
+        alarmRulesList = data.rules || [];
+        document.getElementById('alarm-count-badge').textContent = alarmRulesList.length;
+        
+        // 同时加载设备列表用于填充下拉框
+        const devResp = await fetch('/api/devices', { headers: getAuthHeaders() });
+        const devData = await devResp.json();
+        devicesCache = devData.devices || [];
+        
+        renderAlarmRules(alarmRulesList);
+        
+        // 填充通知设置
+        if (data.notification) {
+            document.getElementById('cfg-notify-email').checked = data.notification.email?.enabled || false;
+            document.getElementById('cfg-notify-sound').checked = data.notification.sound?.enabled !== false;
+            document.getElementById('cfg-smtp-server').value = data.notification.email?.smtp_server || '';
+            document.getElementById('cfg-smtp-port').value = data.notification.email?.smtp_port || 587;
+            document.getElementById('cfg-smtp-username').value = data.notification.email?.username || '';
+            document.getElementById('cfg-smtp-recipients').value = (data.notification.email?.recipients || []).join(',');
+        }
+        
+    } catch (error) {
+        console.error('加载报警规则失败:', error);
+    }
+}
+
+function renderAlarmRules(rules) {
+    const tbody = document.getElementById('alarm-rules-body');
+    
+    if (!rules || rules.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-3">暂无报警规则</td></tr>';
+        return;
+    }
+    
+    const condMap = {
+        'greater_than': '> 大于',
+        'less_than': '< 小于',
+        'equal': '= 等于',
+        'greater_equal': '>= 大于等于',
+        'less_equal': '<= 小于等于'
+    };
+    const levelMap = {
+        'warning': '<span class="badge bg-warning">警告</span>',
+        'danger': '<span class="badge bg-orange">危险</span>',
+        'critical': '<span class="badge bg-danger">严重</span>'
+    };
+    
+    tbody.innerHTML = rules.map(r => `
+        <tr>
+            <td><code>${r.id}</code></td>
+            <td>${r.name || '-'}</td>
+            <td>${r.device_id || '-'}</td>
+            <td>${r.register_name || '-'}</td>
+            <td>${condMap[r.condition] || r.condition}</td>
+            <td>${r.threshold}</td>
+            <td>${levelMap[r.level] || r.level}</td>
+            <td>${r.enabled !== false ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-muted"></i>'}</td>
+            <td>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-secondary" onclick="editRule('${r.id}')" title="编辑"><i class="bi bi-pencil"></i></button>
+                    <button class="btn btn-outline-danger" onclick="deleteRule('${r.id}')" title="删除"><i class="bi bi-trash"></i></button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function populateDeviceSelect() {
+    const select = document.getElementById('rule-device-id');
+    select.innerHTML = '<option value="">选择设备</option>' + 
+        devicesCache.map(d => `<option value="${d.device_id}">${d.name} (${d.device_id})</option>`).join('');
+    select.onchange = function() {
+        const device = devicesCache.find(d => d.device_id === this.value);
+        const regSelect = document.getElementById('rule-register-name');
+        let vars = [];
+        if (device) {
+            if (device.registers) vars = device.registers.map(r => r.name);
+            else if (device.nodes) vars = device.nodes.map(n => n.name);
+            else if (device.topics) vars = device.topics.map(t => t.name);
+            else if (device.endpoints) vars = device.endpoints.map(e => e.name);
+        }
+        regSelect.innerHTML = '<option value="">选择变量</option>' + 
+            vars.map(v => `<option value="${v}">${v}</option>`).join('');
+    };
+}
+
+function showAddRuleModal() {
+    document.getElementById('ruleModalTitle').textContent = '添加报警规则';
+    document.getElementById('rule-id-old').value = '';
+    document.getElementById('ruleForm').reset();
+    document.getElementById('rule-id').disabled = false;
+    document.getElementById('rule-delay').value = '0';
+    populateDeviceSelect();
+    
+    const modal = new bootstrap.Modal(document.getElementById('ruleModal'));
+    modal.show();
+}
+
+function editRule(ruleId) {
+    const rule = alarmRulesList.find(r => r.id === ruleId);
+    if (!rule) return;
+    
+    document.getElementById('ruleModalTitle').textContent = '编辑报警规则';
+    document.getElementById('rule-id-old').value = ruleId;
+    document.getElementById('rule-id').value = ruleId;
+    document.getElementById('rule-id').disabled = true;
+    document.getElementById('rule-name').value = rule.name || '';
+    document.getElementById('rule-description').value = rule.description || '';
+    document.getElementById('rule-condition').value = rule.condition || 'greater_than';
+    document.getElementById('rule-threshold').value = rule.threshold ?? 0;
+    document.getElementById('rule-level').value = rule.level || 'warning';
+    document.getElementById('rule-delay').value = rule.delay ?? 0;
+    document.getElementById('rule-enabled').value = rule.enabled !== false ? 'true' : 'false';
+    
+    populateDeviceSelect();
+    document.getElementById('rule-device-id').value = rule.device_id || '';
+    document.getElementById('rule-device-id').onchange(); // 触发加载变量
+    setTimeout(() => {
+        document.getElementById('rule-register-name').value = rule.register_name || '';
+    }, 100);
+    
+    const modal = new bootstrap.Modal(document.getElementById('ruleModal'));
+    modal.show();
+}
+
+async function saveRule() {
+    const ruleId = document.getElementById('rule-id').value.trim();
+    const oldId = document.getElementById('rule-id-old').value;
+    const isEdit = !!oldId;
+    
+    if (!ruleId) { showAlert('请输入规则ID', 'warning'); return; }
+    if (!document.getElementById('rule-name').value.trim()) { showAlert('请输入规则名称', 'warning'); return; }
+    if (!document.getElementById('rule-threshold').value) { showAlert('请输入阈值', 'warning'); return; }
+    
+    const ruleData = {
+        id: ruleId,
+        name: document.getElementById('rule-name').value.trim(),
+        description: document.getElementById('rule-description').value.trim(),
+        device_id: document.getElementById('rule-device-id').value,
+        register_name: document.getElementById('rule-register-name').value,
+        condition: document.getElementById('rule-condition').value,
+        threshold: parseFloat(document.getElementById('rule-threshold').value),
+        level: document.getElementById('rule-level').value,
+        delay: parseInt(document.getElementById('rule-delay').value) || 0,
+        enabled: document.getElementById('rule-enabled').value === 'true'
+    };
+    
+    try {
+        const url = isEdit ? `/api/alarm-rules/${oldId}` : '/api/alarm-rules';
+        const method = isEdit ? 'PUT' : 'POST';
+        
+        const response = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(ruleData)
+        });
+        
+        const result = await response.json();
+        if (result.success) {
+            showAlert(result.message, 'success');
+            bootstrap.Modal.getInstance(document.getElementById('ruleModal')).hide();
+            loadAlarmRules();
+        } else {
+            showAlert(result.message || '保存失败', 'danger');
+        }
+    } catch (error) {
+        showAlert('保存失败: ' + error.message, 'danger');
+    }
+}
+
+async function deleteRule(ruleId) {
+    if (!confirm(`确定要删除规则 "${ruleId}" 吗？`)) return;
+    
+    try {
+        const response = await fetch(`/api/alarm-rules/${ruleId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+        });
+        const result = await response.json();
+        if (result.success) {
+            showAlert(result.message, 'success');
+            loadAlarmRules();
+        } else {
+            showAlert(result.message || '删除失败', 'danger');
+        }
+    } catch (error) {
+        showAlert('删除失败: ' + error.message, 'danger');
+    }
+}
+
+async function saveNotification() {
+    const notification = {
+        email: {
+            enabled: document.getElementById('cfg-notify-email').checked,
+            smtp_server: document.getElementById('cfg-smtp-server').value,
+            smtp_port: parseInt(document.getElementById('cfg-smtp-port').value) || 587,
+            username: document.getElementById('cfg-smtp-username').value,
+            recipients: document.getElementById('cfg-smtp-recipients').value.split(',').map(s => s.trim()).filter(Boolean)
+        },
+        sound: {
+            enabled: document.getElementById('cfg-notify-sound').checked
+        }
+    };
+    
+    try {
+        const response = await fetch('/api/alarm-rules/notification', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(notification)
+        });
+        const result = await response.json();
+        showAlert(result.success ? '通知设置已保存' : '保存失败', result.success ? 'success' : 'danger');
+    } catch (error) {
+        showAlert('保存失败', 'danger');
+    }
+}
+
+// ==================== 系统状态 ====================
+
+async function loadSystemStatus() {
+    try {
+        const response = await fetch('/api/system/status', { headers: getAuthHeaders() });
+        const data = await response.json();
+        
+        if (data.database) {
+            document.getElementById('info-db-size').textContent = data.database.database_size_mb + ' MB';
+            document.getElementById('info-data-count').textContent = data.database.realtime_records;
+            document.getElementById('info-alarm-count').textContent = data.database.alarm_records;
+        }
+        if (data.collector) {
+            const total = data.collector.total_collections || 0;
+            const success = data.collector.successful_collections || 0;
+            document.getElementById('info-success-rate').textContent = total > 0 ? ((success / total) * 100).toFixed(1) + '%' : '-';
+        }
+        document.getElementById('info-sim-mode').textContent = data.simulation_mode ? '开启' : '关闭';
+        
+        if (data.uptime_seconds) {
+            const h = Math.floor(data.uptime_seconds / 3600);
+            const m = Math.floor((data.uptime_seconds % 3600) / 60);
+            document.getElementById('info-uptime').textContent = `${h}小时${m}分`;
+        }
+    } catch (error) {
+        console.error('加载系统状态失败:', error);
+    }
+}
+
+// ==================== 工具函数 ====================
+
+function showAlert(message, type = 'info') {
+    const existing = document.querySelector('.alert-floating');
+    if (existing) existing.remove();
+    
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${type} alert-dismissible fade show alert-floating`;
+    alert.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 9999; min-width: 300px;';
+    alert.innerHTML = `${message}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>`;
+    document.body.appendChild(alert);
+    setTimeout(() => { if (alert.parentNode) alert.remove(); }, 3000);
+}
 </script>
 {% endblock %}

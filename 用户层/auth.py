@@ -468,9 +468,14 @@ class AuthManager:
         }
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     
+    def log_operation(self, username: str, action: str, target: str = None,
+                      detail: str = None, ip_address: str = None):
+        """记录操作日志（公共接口）"""
+        self._log_operation(username, action, target, detail, ip_address)
+
     def _log_operation(self, username: str, action: str, target: str = None,
                        detail: str = None, ip_address: str = None):
-        """记录操作日志"""
+        """记录操作日志（内部实现）"""
         try:
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()

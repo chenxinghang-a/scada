@@ -1,6 +1,10 @@
 """
 报警规则模块
 定义报警规则和条件
+
+注意: 此模块中的类（AlarmLevel/AlarmCondition/AlarmRule/AlarmRules）
+是面向对象的规则定义框架，供论文展示设计理念。
+实际运行时，AlarmManager直接使用dict管理规则（更简洁）。
 """
 
 import logging

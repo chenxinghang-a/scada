@@ -55,6 +55,38 @@ class AlarmConfig:
     SMTP_USERNAME = ''
     SMTP_PASSWORD = ''
 
+
+# 报警输出配置（声光报警器 + 广播系统）
+class AlarmOutputConfig:
+    # 声光报警器（Modbus DO控制灯塔+蜂鸣器）
+    ENABLED = True
+    SIMULATION = True  # True=模拟模式(日志输出), False=硬件模式(Modbus DO)
+    DO_MAPPING = {
+        'red_light': 0,    # DO0 = 红灯
+        'yellow_light': 1, # DO1 = 黄灯
+        'green_light': 2,  # DO2 = 绿灯
+        'buzzer': 3,       # DO3 = 蜂鸣器
+    }
+    MODBUS_HOST = '192.168.1.100'
+    MODBUS_PORT = 502
+    MODBUS_SLAVE_ID = 1
+
+
+# 工业广播系统配置
+class BroadcastConfig:
+    ENABLED = True
+    SIMULATION = True
+    MQTT_BROKER = os.environ.get('PA_BROKER', 'localhost')
+    MQTT_PORT = int(os.environ.get('PA_MQTT_PORT', 1883))
+    TOPIC_PREFIX = 'pa/'  # 广播MQTT主题前缀
+    AREAS = ['车间A', '车间B', '仓库', '办公楼']
+    PRESET_TEMPLATES = {
+        'alarm_critical': '注意！{area}发生严重报警：{message}，请立即处置！',
+        'alarm_warning': '提醒：{area}出现告警：{message}，请关注。',
+        'evacuation': '请注意，{area}发生紧急状况，请沿疏散通道撤离！',
+        'all_clear': '广播通知，{area}警报解除，恢复正常。',
+    }
+
 # 日志配置
 class LogConfig:
     # 日志级别

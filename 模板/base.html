@@ -62,6 +62,11 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/alarm-output' %}active{% endif %}" href="/alarm-output">
+                            <i class="bi bi-lightning-charge"></i> 报警输出
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if request.path == '/config' %}active{% endif %}" href="/config">
                             <i class="bi bi-sliders"></i> 系统配置
                         </a>

@@ -50,9 +50,26 @@ def main():
         logger.info("加载设备配置...")
         device_manager = DeviceManager('配置/devices.yaml', simulation_mode=simulation_mode)
         
-        # 初始化报警管理器
+        # 初始化报警管理器（含声光报警器+广播系统）
         logger.info("加载报警配置...")
-        alarm_manager = AlarmManager(database, '配置/alarms.yaml')
+        from 报警层.alarm_output import AlarmOutput
+        from 报警层.broadcast_system import BroadcastSystem
+        alarm_output = AlarmOutput({'enabled': True, 'simulation': simulation_mode})
+        broadcast_system = BroadcastSystem({
+            'enabled': True,
+            'simulation': simulation_mode,
+            'areas': ['车间A', '车间B', '仓库', '办公楼'],
+            'default_area': 'all',
+            'preset_templates': {
+                'alarm_critical': '注意！{area}发生严重报警：{message}，请立即处置！',
+                'alarm_warning': '提醒：{area}出现告警：{message}，请关注。',
+                'evacuation': '请注意，{area}发生紧急状况，请沿疏散通道撤离！',
+                'all_clear': '广播通知，{area}警报解除，恢复正常。',
+            }
+        })
+        alarm_manager = AlarmManager(database, '配置/alarms.yaml',
+                                     alarm_output=alarm_output,
+                                     broadcast_system=broadcast_system)
         
         # 初始化数据采集器
         logger.info("初始化数据采集器...")
@@ -85,14 +102,26 @@ def main():
         logger.info(f"（{mode_str}）")
         logger.info("=" * 50)
         
-        from flask_socketio import SocketIO
-        socketio = SocketIO(app, cors_allowed_origins="*")
-        socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
+        # 注入WebSocket推送函数到报警管理器
+        from 展示层.websocket import socketio as ws_socketio, emit_alarm
+        alarm_manager.set_websocket_emit(emit_alarm)
+        
+        # 使用routes.py中已创建的SocketIO实例（init_socketio在create_app中已调用）
+        from 展示层.websocket import socketio
+        if socketio is None:
+            logger.warning("SocketIO未初始化，使用普通Flask服务器")
+            app.run(host='0.0.0.0', port=5000, debug=False)
+        else:
+            socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
         
     except KeyboardInterrupt:
         logger.info("系统正在关闭...")
         if 'data_collector' in locals():
             data_collector.stop()
+        if 'alarm_output' in locals():
+            alarm_output.disconnect()
+        if 'broadcast_system' in locals():
+            broadcast_system.disconnect()
         if 'device_manager' in locals():
             device_manager.disconnect_all()
         logger.info("系统已关闭")

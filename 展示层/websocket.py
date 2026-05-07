@@ -3,7 +3,9 @@ WebSocket模块
 实现实时数据推送
 """
 
+import time
 import logging
+import threading
 from flask import request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime
@@ -75,12 +77,9 @@ def start_data_push_thread(database, data_collector):
     """
     启动数据推送线程
     
-    Args:
-        database: 数据库实例
-        data_collector: 数据采集器实例
+    注意: async_mode='threading'时用time.sleep()而非socketio.sleep()
+    socketio.sleep()在gevent/eventlet模式下才正确工作
     """
-    import threading
-    
     def push_data():
         """推送数据到客户端"""
         while True:
@@ -93,7 +92,6 @@ def start_data_push_thread(database, data_collector):
                     latest_data = database.get_latest_data(device_id)
                     
                     if latest_data:
-                        # 推送到订阅的客户端
                         socketio.emit('data_update', latest_data, room=f'device_{device_id}')
                 
                 # 推送系统状态
@@ -104,38 +102,26 @@ def start_data_push_thread(database, data_collector):
                 }
                 socketio.emit('system_status', system_status)
                 
-                # 等待1秒
-                socketio.sleep(1)
+                # threading模式用time.sleep
+                time.sleep(2)
                 
             except Exception as e:
                 logger.error(f"数据推送异常: {e}")
-                socketio.sleep(5)
+                time.sleep(5)
     
-    # 启动推送线程
     thread = threading.Thread(target=push_data, daemon=True)
     thread.start()
     logger.info("数据推送线程已启动")
 
 
 def emit_alarm(alarm_data):
-    """
-    发送报警通知
-    
-    Args:
-        alarm_data: 报警数据
-    """
+    """发送报警通知"""
     if socketio:
         socketio.emit('alarm', alarm_data, broadcast=True)
 
 
 def emit_device_status(device_id, status):
-    """
-    发送设备状态更新
-    
-    Args:
-        device_id: 设备ID
-        status: 设备状态
-    """
+    """发送设备状态更新"""
     if socketio:
         socketio.emit('device_status', {
             'device_id': device_id,

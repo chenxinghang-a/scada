@@ -92,6 +92,11 @@ def create_app(database, device_manager, alarm_manager, data_collector):
         """设备控制页面"""
         return render_template('control.html')
     
+    @app.route('/alarm-output')
+    def alarm_output_page():
+        """报警输出与广播控制页面"""
+        return render_template('alarm_output.html')
+    
     # 错误处理
     @app.errorhandler(404)
     def not_found(error):

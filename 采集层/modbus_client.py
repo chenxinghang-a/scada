@@ -340,6 +340,19 @@ class ModbusClient:
         # 解码为浮点数（大端序）
         return struct.unpack('>f', struct.pack('>I', raw))[0]
     
+    def decode_float64(self, registers: List[int]) -> float:
+        """
+        解码64位浮点数（四个寄存器）
+        
+        Args:
+            registers: 寄存器值列表（4个）
+            
+        Returns:
+            float: 解码后的浮点数
+        """
+        raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
+        return struct.unpack('>d', raw)[0]
+    
     def decode_uint16(self, register: int) -> int:
         """
         解码16位无符号整数

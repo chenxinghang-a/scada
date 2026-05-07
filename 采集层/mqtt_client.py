@@ -6,7 +6,7 @@ MQTT数据采集模块
 import json
 import logging
 import threading
-from typing import Dict, List, Callable, Optional
+from typing import Dict, List, Callable, Optional, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -23,26 +23,59 @@ class MQTTClient:
     """
     MQTT数据采集客户端
     支持订阅多个主题，解析JSON数据并转发到数据库
+    
+    构造函数统一接受config字典，与其他协议客户端接口一致。
+    config格式:
+        {
+            'id': 'mqtt_device_01',
+            'name': 'MQTT IoT传感器',
+            'protocol': 'mqtt',
+            'host': 'localhost',
+            'port': 1883,
+            'username': None,
+            'password': None,
+            'topics': [
+                {'topic': 'factory/temperature', 'qos': 1, 'name': 'temperature', 'unit': '°C'}
+            ]
+        }
+    
+    数据回调签名: callback(device_id, register_name, value, unit)
+        - 与OPCUA/REST客户端回调签名一致
     """
     
-    def __init__(self, broker_host: str = 'localhost', broker_port: int = 1883,
-                 client_id: str = None, username: str = None, password: str = None):
+    def __init__(self, config: Dict[str, Any] = None, **kwargs):
         """
         初始化MQTT客户端
         
         Args:
-            broker_host: MQTT Broker地址
-            broker_port: MQTT Broker端口
-            client_id: 客户端ID（可选）
-            username: 用户名（可选）
-            password: 密码（可选）
+            config: 设备配置字典（推荐方式，与其他协议一致）
+            **kwargs: 兼容旧的独立参数方式 (broker_host, broker_port, username, password)
         """
         if not MQTT_AVAILABLE:
             raise ImportError("paho-mqtt未安装，请运行: pip install paho-mqtt")
         
-        self.broker_host = broker_host
-        self.broker_port = broker_port
-        self.client_id = client_id or f'scada_{datetime.now().strftime("%H%M%S")}'
+        # 统一从config提取参数
+        if config:
+            self.config = config
+            self.device_id = config.get('id', 'mqtt_device')
+            self.device_name = config.get('name', 'MQTT设备')
+            self.broker_host = config.get('host', 'localhost')
+            self.broker_port = config.get('port', 1883)
+            username = config.get('username')
+            password = config.get('password')
+            self.topics_config = config.get('topics', [])
+        else:
+            # 兼容旧的独立参数方式
+            self.config = kwargs
+            self.device_id = kwargs.get('client_id', 'mqtt_device')
+            self.device_name = kwargs.get('client_id', 'MQTT设备')
+            self.broker_host = kwargs.get('broker_host', 'localhost')
+            self.broker_port = kwargs.get('broker_port', 1883)
+            username = kwargs.get('username')
+            password = kwargs.get('password')
+            self.topics_config = []
+        
+        self.client_id = f'scada_{self.device_id}_{datetime.now().strftime("%H%M%S")}'
         
         # 创建MQTT客户端
         self.client = mqtt.Client(client_id=self.client_id, protocol=mqtt.MQTTv311)
@@ -60,11 +93,11 @@ class MQTTClient:
         # 数据回调函数
         self._data_callbacks: List[Callable] = []
         
-        # 订阅主题列表
-        self._subscriptions: Dict[str, int] = {}  # topic -> qos
+        # 订阅主题列表: {topic: qos}
+        self._subscriptions: Dict[str, int] = {}
         
         # 连接状态
-        self._connected = False
+        self.connected = False
         self._lock = threading.Lock()
         
         # 统计信息
@@ -76,14 +109,21 @@ class MQTTClient:
             'last_message_time': None
         }
         
-        logger.info(f"MQTT客户端初始化: {broker_host}:{broker_port}")
+        logger.info(f"MQTT客户端初始化: {self.broker_host}:{self.broker_port} [{self.device_id}]")
+    
+    def add_data_callback(self, callback: Callable):
+        """添加数据回调函数（签名: callback(device_id, name, value, unit)）"""
+        self._data_callbacks.append(callback)
     
     def connect(self) -> bool:
         """
         连接到MQTT Broker
         
+        注意: paho-mqtt的connect()只发起TCP连接，MQTT握手在loop_start()的后台线程中完成。
+        连接成功后on_connect回调才会设置self.connected=True。
+        
         Returns:
-            bool: 连接是否成功
+            bool: connect()调用是否成功（不代表MQTT握手完成）
         """
         try:
             logger.info(f"正在连接MQTT Broker: {self.broker_host}:{self.broker_port}")
@@ -92,6 +132,7 @@ class MQTTClient:
             return True
         except Exception as e:
             logger.error(f"MQTT连接失败: {e}")
+            self.stats['last_error'] = str(e)
             return False
     
     def disconnect(self):
@@ -99,25 +140,16 @@ class MQTTClient:
         try:
             self.client.loop_stop()
             self.client.disconnect()
-            self._connected = False
+            self.connected = False
             logger.info("MQTT连接已断开")
         except Exception as e:
             logger.error(f"MQTT断开失败: {e}")
     
     def subscribe(self, topic: str, qos: int = 1) -> bool:
-        """
-        订阅主题
-        
-        Args:
-            topic: MQTT主题
-            qos: 服务质量等级 (0, 1, 2)
-            
-        Returns:
-            bool: 订阅是否成功
-        """
+        """订阅主题"""
         self._subscriptions[topic] = qos
         
-        if self._connected:
+        if self.connected:
             result, mid = self.client.subscribe(topic, qos)
             if result == mqtt.MQTT_ERR_SUCCESS:
                 logger.info(f"已订阅主题: {topic} (QoS: {qos})")
@@ -134,32 +166,13 @@ class MQTTClient:
         if topic in self._subscriptions:
             del self._subscriptions[topic]
         
-        if self._connected:
+        if self.connected:
             self.client.unsubscribe(topic)
             logger.info(f"已取消订阅: {topic}")
     
-    def add_data_callback(self, callback: Callable):
-        """
-        添加数据回调函数
-        
-        Args:
-            callback: 回调函数，签名: callback(device_id, register_name, value, timestamp, unit)
-        """
-        self._data_callbacks.append(callback)
-    
     def publish(self, topic: str, payload: dict, qos: int = 1) -> bool:
-        """
-        发布消息
-        
-        Args:
-            topic: 主题
-            payload: 消息内容（字典）
-            qos: 服务质量
-            
-        Returns:
-            bool: 发布是否成功
-        """
-        if not self._connected:
+        """发布消息"""
+        if not self.connected:
             logger.warning("MQTT未连接，无法发布")
             return False
         
@@ -171,20 +184,38 @@ class MQTTClient:
             logger.error(f"MQTT发布失败: {e}")
             return False
     
+    def get_latest_data(self) -> Dict[str, Dict]:
+        """获取最新数据（与其他协议客户端接口统一，MQTT无缓存返回空）"""
+        return {}
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """获取统计信息（与其他协议客户端接口统一）"""
+        return {
+            'device_id': self.device_id,
+            'device_name': self.device_name,
+            'connected': self.connected,
+            'broker': f'{self.broker_host}:{self.broker_port}',
+            'client_id': self.client_id,
+            'subscriptions': list(self._subscriptions.keys()),
+            **self.stats
+        }
+    
     def get_status(self) -> Dict:
         """获取客户端状态"""
         return {
-            'connected': self._connected,
+            'connected': self.connected,
             'broker': f'{self.broker_host}:{self.broker_port}',
             'client_id': self.client_id,
             'subscriptions': list(self._subscriptions.keys()),
             'stats': self.stats.copy()
         }
     
+    # ---- paho-mqtt 回调 ----
+    
     def _on_connect(self, client, userdata, flags, rc):
         """连接成功回调"""
         if rc == 0:
-            self._connected = True
+            self.connected = True
             self.stats['connected_since'] = datetime.now().isoformat()
             logger.info(f"MQTT连接成功: {self.broker_host}:{self.broker_port}")
             
@@ -197,7 +228,7 @@ class MQTTClient:
     
     def _on_disconnect(self, client, userdata, rc):
         """断开连接回调"""
-        self._connected = False
+        self.connected = False
         if rc != 0:
             logger.warning(f"MQTT意外断开，返回码: {rc}")
         else:
@@ -209,17 +240,14 @@ class MQTTClient:
             self.stats['messages_received'] += 1
             self.stats['last_message_time'] = datetime.now().isoformat()
             
-            # 解析消息
             topic = msg.topic
             payload = msg.payload.decode('utf-8')
             
-            # 尝试解析JSON
             try:
                 data = json.loads(payload)
                 self.stats['messages_parsed'] += 1
                 self._process_message(topic, data)
             except json.JSONDecodeError:
-                # 非JSON格式，尝试简单解析
                 self._process_raw_message(topic, payload)
                 
         except Exception as e:
@@ -239,57 +267,55 @@ class MQTTClient:
         2. {"temperature": 25.5, "pressure": 0.101}  (自动从topic提取device_id)
         3. {"device_id": "xxx", "data": {"temperature": 25.5, "pressure": 0.101}}
         """
-        timestamp = datetime.now()
-        
         # 格式1: 完整格式
         if 'device_id' in data and 'register' in data:
             device_id = data['device_id']
             register_name = data['register']
             value = float(data.get('value', 0))
             unit = data.get('unit', '')
-            
-            self._notify_callbacks(device_id, register_name, value, timestamp, unit)
+            self._notify_callbacks(device_id, register_name, value, unit)
         
         # 格式3: 嵌套数据格式
         elif 'device_id' in data and 'data' in data:
             device_id = data['device_id']
             for register_name, value in data['data'].items():
                 if isinstance(value, (int, float)):
-                    self._notify_callbacks(device_id, register_name, float(value), timestamp, '')
+                    self._notify_callbacks(device_id, register_name, float(value), '')
         
         # 格式2: 简单键值对
         else:
-            # 从topic提取device_id
             device_id = topic.split('/')[-1] if '/' in topic else topic
             for register_name, value in data.items():
                 if isinstance(value, (int, float)):
-                    self._notify_callbacks(device_id, register_name, float(value), timestamp, '')
+                    self._notify_callbacks(device_id, register_name, float(value), '')
     
     def _process_raw_message(self, topic: str, payload: str):
         """处理非JSON格式消息"""
         try:
-            # 尝试解析 "key=value" 格式
             if '=' in payload:
                 parts = payload.split('=')
                 if len(parts) == 2:
                     device_id = topic.split('/')[-1] if '/' in topic else topic
                     register_name = parts[0].strip()
                     value = float(parts[1].strip())
-                    self._notify_callbacks(device_id, register_name, value, datetime.now(), '')
+                    self._notify_callbacks(device_id, register_name, value, '')
             else:
-                # 尝试直接解析为数值
                 value = float(payload.strip())
                 device_id = topic.split('/')[-1] if '/' in topic else topic
-                self._notify_callbacks(device_id, 'value', value, datetime.now(), '')
+                self._notify_callbacks(device_id, 'value', value, '')
         except (ValueError, IndexError):
             logger.debug(f"无法解析原始消息: {topic} = {payload}")
     
     def _notify_callbacks(self, device_id: str, register_name: str, 
-                         value: float, timestamp: datetime, unit: str):
-        """通知所有回调函数"""
+                         value: float, unit: str):
+        """
+        通知所有回调函数
+        签名统一: callback(device_id, register_name, value, unit)
+        与OPCUA/REST客户端的DataCollector.on_data回调签名一致
+        """
         for callback in self._data_callbacks:
             try:
-                callback(device_id, register_name, value, timestamp, unit)
+                callback(device_id, register_name, value, unit)
             except Exception as e:
                 logger.error(f"数据回调执行失败: {e}")
 
@@ -301,45 +327,14 @@ class MQTTDeviceManager:
     """
     
     def __init__(self, config: dict):
-        """
-        初始化MQTT设备管理器
-        
-        Args:
-            config: MQTT配置字典
-                {
-                    'broker_host': 'localhost',
-                    'broker_port': 1883,
-                    'username': None,
-                    'password': None,
-                    'topics': [
-                        {'topic': 'scada/temp_sensor/#', 'qos': 1},
-                        {'topic': 'scada/pressure/#', 'qos': 1}
-                    ]
-                }
-        """
         self.config = config
         self.client = None
         self._running = False
     
     def start(self, data_callback: Callable) -> bool:
-        """
-        启动MQTT数据采集
-        
-        Args:
-            data_callback: 数据回调函数
-            
-        Returns:
-            bool: 是否启动成功
-        """
+        """启动MQTT数据采集"""
         try:
-            self.client = MQTTClient(
-                broker_host=self.config.get('broker_host', 'localhost'),
-                broker_port=self.config.get('broker_port', 1883),
-                username=self.config.get('username'),
-                password=self.config.get('password')
-            )
-            
-            # 添加数据回调
+            self.client = MQTTClient(self.config)
             self.client.add_data_callback(data_callback)
             
             # 订阅主题
@@ -350,7 +345,6 @@ class MQTTDeviceManager:
                 if topic:
                     self.client.subscribe(topic, qos)
             
-            # 连接
             if self.client.connect():
                 self._running = True
                 logger.info("MQTT设备管理器启动成功")

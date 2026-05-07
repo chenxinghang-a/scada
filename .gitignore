@@ -12,4 +12,6 @@ venv/
 backup/
 exports/
 data/
+stderr*.txt
+stdout*.txt
 
