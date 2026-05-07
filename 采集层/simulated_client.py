@@ -438,6 +438,24 @@ class SimulatedModbusClient(ModbusClientInterface):
         logger.info(f"[模拟] 设备 {self.device_name} 写入线圈: address={address}, value={value}")
         return True
 
+    def read_coils(self, address: int, count: int, slave_id: int = None) -> Optional[List[bool]]:
+        if not self.connected:
+            return None
+        self.stats['total_reads'] += 1
+        self.stats['successful_reads'] += 1
+        return [random.choice([True, False]) for _ in range(count)]
+
+    def read_discrete_inputs(self, address: int, count: int, slave_id: int = None) -> Optional[List[bool]]:
+        if not self.connected:
+            return None
+        self.stats['total_reads'] += 1
+        self.stats['successful_reads'] += 1
+        return [random.choice([True, False]) for _ in range(count)]
+
+    def read_input_registers(self, address: int, count: int, slave_id: int = None) -> Optional[List[int]]:
+        """读取输入寄存器（与保持寄存器逻辑相同）"""
+        return self.read_holding_registers(address, count, slave_id)
+
     def get_stats(self) -> Dict[str, Any]:
         return {'device_id': self.device_id, 'device_name': self.device_name,
                 'connected': self.connected, **self.stats}

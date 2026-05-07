@@ -1,46 +1,40 @@
-# 工业数据采集与监控系统依赖包
+# Industrial SCADA System Dependencies
 
-# Web框架
+# Web framework
 flask>=3.0.0
 flask-socketio>=5.3.0
 
-# Modbus通信
+# Modbus communication
 pymodbus>=3.6.0
 
-# OPC UA通信（工业4.0标准）
-opcua-asyncio>=1.0.0
+# OPC UA communication
+asyncua>=1.0.0
 
-# MQTT通信
+# MQTT communication
 paho-mqtt>=1.6.0
 
-# 用户认证
+# User authentication
 PyJWT>=2.8.0
 bcrypt>=4.1.0
 
-# 数据库
-# SQLite是Python内置的，无需安装
-
-# 数据处理
+# Data processing
 pandas>=2.0.0
 numpy>=1.24.0
 
-# 图表生成
-# ECharts通过CDN引入，无需安装
-
-# 配置文件处理
+# Configuration
 pyyaml>=6.0
 
-# 日志
+# Logging
 loguru>=0.7.0
 
-# 定时任务
+# Scheduler
 apscheduler>=3.10.0
 
-# 数据导出
+# Data export
 openpyxl>=3.1.0
 
-# 网络请求
+# HTTP requests
 requests>=2.31.0
 
-# 开发工具
+# Development
 python-dotenv>=1.0.0

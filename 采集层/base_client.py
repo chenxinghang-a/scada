@@ -27,12 +27,7 @@ class BaseDeviceClient(ABC):
         self.device_id = config.get('device_id', 'unknown')
         self.device_name = config.get('device_name', self.device_id)
         self.protocol = config.get('protocol', 'unknown')
-    
-    @property
-    @abstractmethod
-    def connected(self) -> bool:
-        """连接状态属性"""
-        pass
+        self.connected = False
     
     @abstractmethod
     def connect(self) -> bool:
