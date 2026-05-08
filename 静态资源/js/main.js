@@ -159,13 +159,26 @@ function updateUptime(startTime) {
  * API请求封装
  */
 async function apiRequest(url, options = {}) {
+    const token = localStorage.getItem('auth_token');
     const defaultOptions = {
         headers: {
             'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
     };
     
     const response = await fetch(`${API_BASE}${url}`, { ...defaultOptions, ...options });
+    
+    // 处理认证失败
+    if (response.status === 401) {
+        // 清除无效token
+        localStorage.removeItem('auth_token');
+        // 如果不是登录页面，跳转到登录页
+        if (!window.location.pathname.includes('/login')) {
+            window.location.href = '/login';
+        }
+    }
+    
     return response.json();
 }
 

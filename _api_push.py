@@ -27,9 +27,16 @@ if not TOKEN:
     if git_cred.exists():
         content = git_cred.read_text()
         for line in content.splitlines():
-            if "github.com" in line and "oauth2" in line:
-                TOKEN = line.split("oauth2:")[1].split("@")[0]
-                break
+            # 使用更安全的URL解析
+            if line.startswith("https://oauth2:") and "github.com" in line:
+                # 提取token：https://oauth2:TOKEN@github.com/...
+                try:
+                    token_part = line.split("https://oauth2:")[1]
+                    if "@" in token_part:
+                        TOKEN = token_part.split("@")[0]
+                        break
+                except (IndexError, ValueError):
+                    continue
 
 if not TOKEN:
     print("ERROR: 没找到GitHub Token，设置环境变量 GITHUB_TOKEN 或配置 gh auth")

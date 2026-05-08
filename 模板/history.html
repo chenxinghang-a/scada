@@ -200,7 +200,15 @@ function updateHistoryTable(data) {
     const tbody = document.getElementById('history-tbody');
     
     if (!data || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">暂无数据</td></tr>';
+        // 安全地创建空数据提示
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 7;
+        cell.className = 'text-center text-muted';
+        cell.textContent = '暂无数据';
+        row.appendChild(cell);
+        tbody.innerHTML = '';
+        tbody.appendChild(row);
         return;
     }
     
@@ -208,17 +216,41 @@ function updateHistoryTable(data) {
     const deviceId = document.getElementById('device-select').value;
     const registerName = document.getElementById('register-select').value;
     
-    tbody.innerHTML = data.map(item => `
-        <tr>
-            <td>${item.time_bucket || item.timestamp || '-'}</td>
-            <td>${getDeviceName(deviceId)}</td>
-            <td>${getRegisterName(registerName)}</td>
-            <td>${formatNumber(item.avg_value)}</td>
-            <td>${formatNumber(item.min_value)}</td>
-            <td>${formatNumber(item.max_value)}</td>
-            <td>${item.sample_count || 1}</td>
-        </tr>
-    `).join('');
+    // 安全地创建表格行
+    tbody.innerHTML = '';
+    data.forEach(item => {
+        const row = document.createElement('tr');
+        
+        const timeCell = document.createElement('td');
+        timeCell.textContent = item.time_bucket || item.timestamp || '-';
+        row.appendChild(timeCell);
+        
+        const deviceCell = document.createElement('td');
+        deviceCell.textContent = getDeviceName(deviceId);
+        row.appendChild(deviceCell);
+        
+        const registerCell = document.createElement('td');
+        registerCell.textContent = getRegisterName(registerName);
+        row.appendChild(registerCell);
+        
+        const avgCell = document.createElement('td');
+        avgCell.textContent = formatNumber(item.avg_value);
+        row.appendChild(avgCell);
+        
+        const minCell = document.createElement('td');
+        minCell.textContent = formatNumber(item.min_value);
+        row.appendChild(minCell);
+        
+        const maxCell = document.createElement('td');
+        maxCell.textContent = formatNumber(item.max_value);
+        row.appendChild(maxCell);
+        
+        const countCell = document.createElement('td');
+        countCell.textContent = item.sample_count || 1;
+        row.appendChild(countCell);
+        
+        tbody.appendChild(row);
+    });
 }
 
 // 更新历史数据图表

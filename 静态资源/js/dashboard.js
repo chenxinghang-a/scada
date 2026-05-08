@@ -94,7 +94,11 @@ async function loadRealtimeData() {
         
         // 更新设备热力图
         if (statusData.devices) {
-            updateDeviceHeatmap(statusData.devices);
+            let deviceList = statusData.devices;
+            if (typeof deviceList === 'object' && !Array.isArray(deviceList)) {
+                deviceList = Object.values(deviceList);
+            }
+            updateDeviceHeatmap(deviceList);
         }
         
         // 更新系统健康度
@@ -110,22 +114,42 @@ async function loadRealtimeData() {
  */
 function updateGaugeValues(data) {
     let temp = null, pressure = null, voltage = null;
+    let tempUnit = '°C', pressureUnit = 'MPa', voltageUnit = 'V';
     
     data.forEach(item => {
-        if (item.register_name === 'temperature' && item.device_id === 'temp_sensor_01') {
-            temp = item.value;
+        // 动态匹配温度相关寄存器
+        if (item.register_name.includes('temperature') || item.register_name.includes('temp')) {
+            if (temp === null) {
+                temp = item.value;
+                tempUnit = item.unit || '°C';
+            }
         }
-        if (item.register_name === 'pressure' && item.device_id === 'pressure_sensor_01') {
-            pressure = item.value;
+        // 动态匹配压力相关寄存器
+        if (item.register_name.includes('pressure')) {
+            if (pressure === null) {
+                pressure = item.value;
+                pressureUnit = item.unit || 'MPa';
+            }
         }
-        if (item.register_name === 'voltage' && item.device_id === 'power_meter_01') {
-            voltage = item.value;
+        // 动态匹配电压相关寄存器
+        if (item.register_name.includes('voltage') || item.register_name.includes('volt')) {
+            if (voltage === null) {
+                voltage = item.value;
+                voltageUnit = item.unit || 'V';
+            }
         }
     });
     
     // 更新仪表盘
     if (typeof updateGauges === 'function') {
-        updateGauges({ temperature: temp, pressure: pressure, voltage: voltage });
+        updateGauges({ 
+            temperature: temp, 
+            pressure: pressure, 
+            voltage: voltage,
+            tempUnit: tempUnit,
+            pressureUnit: pressureUnit,
+            voltageUnit: voltageUnit
+        });
     }
 }
 
@@ -168,14 +192,14 @@ function updateCharts(data) {
     
     // 更新温度数据
     data.forEach(item => {
-        if (item.register_name === 'temperature' && item.device_id === 'temp_sensor_01') {
+        if (item.register_name.includes('temperature') || item.register_name.includes('temp')) {
             temperatureData.push({ time: now, value: item.value });
             if (temperatureData.length > MAX_DATA_POINTS) {
                 temperatureData.shift();
             }
         }
         
-        if (item.register_name === 'pressure' && item.device_id === 'pressure_sensor_01') {
+        if (item.register_name.includes('pressure')) {
             pressureData.push({ time: now, value: item.value });
             if (pressureData.length > MAX_DATA_POINTS) {
                 pressureData.shift();
@@ -206,15 +230,21 @@ function updateCharts(data) {
 function updateDashboardStats(stats) {
     // 设备统计
     if (stats.devices) {
-        const total = stats.devices.length;
-        const online = stats.devices.filter(d => d.connected).length;
+        // 处理设备列表（可能是数组或对象）
+        let deviceList = stats.devices;
+        if (typeof deviceList === 'object' && !Array.isArray(deviceList)) {
+            deviceList = Object.values(deviceList);
+        }
+        
+        const total = deviceList.length;
+        const online = deviceList.filter(d => d.connected).length;
         
         document.getElementById('device-count').textContent = total;
         document.getElementById('device-online').textContent = online;
         document.getElementById('device-offline').textContent = total - online;
         
         // 更新设备状态列表
-        updateDeviceStatusList(stats.devices);
+        updateDeviceStatusList(deviceList);
     }
     
     // 数据采集统计

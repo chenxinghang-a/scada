@@ -165,7 +165,8 @@ class Notification:
         
         # 这里可以实现短信发送逻辑
         # 示例：使用阿里云短信服务
-        logger.info(f"短信发送: {message} -> {phone_numbers}")
+        # 安全地记录日志，不暴露敏感信息
+        logger.info(f"短信发送: 发送{len(phone_numbers)}条短信")
         return True
     
     def test_email(self) -> bool:

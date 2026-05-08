@@ -430,21 +430,24 @@
         if (!data) return;
         
         // 更新温度
-        if (data.temperature !== undefined) {
+        if (data.temperature !== undefined && data.temperature !== null) {
             tempGauge.setOption({ series: [{ data: [{ value: data.temperature }] }] });
-            document.getElementById('temp-value').textContent = data.temperature.toFixed(1) + '°C';
+            const tempUnit = data.tempUnit || '°C';
+            document.getElementById('temp-value').textContent = data.temperature.toFixed(1) + ' ' + tempUnit;
         }
         
         // 更新压力
-        if (data.pressure !== undefined) {
+        if (data.pressure !== undefined && data.pressure !== null) {
             pressureGauge.setOption({ series: [{ data: [{ value: data.pressure }] }] });
-            document.getElementById('pressure-value').textContent = data.pressure.toFixed(3) + ' MPa';
+            const pressureUnit = data.pressureUnit || 'MPa';
+            document.getElementById('pressure-value').textContent = data.pressure.toFixed(3) + ' ' + pressureUnit;
         }
         
         // 更新电压
-        if (data.voltage !== undefined) {
+        if (data.voltage !== undefined && data.voltage !== null) {
             voltageGauge.setOption({ series: [{ data: [{ value: data.voltage }] }] });
-            document.getElementById('voltage-value').textContent = data.voltage.toFixed(1) + ' V';
+            const voltageUnit = data.voltageUnit || 'V';
+            document.getElementById('voltage-value').textContent = data.voltage.toFixed(1) + ' ' + voltageUnit;
         }
     }
     

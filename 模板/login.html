@@ -255,7 +255,7 @@
                 
                 if (data.success) {
                     // 保存token和用户信息
-                    localStorage.setItem('scada_token', data.token);
+                    localStorage.setItem('auth_token', data.token);
                     localStorage.setItem('scada_user', JSON.stringify(data.user));
                     
                     if (rememberMe) {

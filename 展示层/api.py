@@ -229,7 +229,9 @@ def add_device():
     try:
         _validate_protocol_fields(protocol, data)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        # 记录验证错误到日志，返回通用错误信息
+        logger.warning(f"设备配置验证失败: {e}")
+        return jsonify({'error': '设备配置验证失败，请检查必填字段'}), 400
     
     # 构建设备配置
     device_config = _build_device_config(protocol, data)
@@ -342,7 +344,9 @@ def test_device_connection(device_id):
             'protocol': protocol, 'sample_data': sample
         })
     except Exception as e:
-        return jsonify({'success': False, 'message': f'连接测试失败: {str(e)}', 'protocol': protocol})
+        # 记录详细错误信息到日志，但不暴露给用户
+        logger.error(f"连接测试失败: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': '连接测试失败，请检查设备配置', 'protocol': protocol})
 
 
 @api_bp.route('/devices/protocols', methods=['GET'])

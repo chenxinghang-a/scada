@@ -587,7 +587,9 @@ async function loadControlLogs() {
 
 // 显示确认对话框
 function showConfirm(message, callback) {
-    document.getElementById('confirm-message').innerHTML = message;
+    // 安全地设置确认消息
+    const confirmMessageEl = document.getElementById('confirm-message');
+    confirmMessageEl.textContent = message;
     pendingAction = callback;
     const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
     modal.show();
@@ -601,10 +603,17 @@ function showAlert(message, type = 'info') {
     const alert = document.createElement('div');
     alert.className = `alert alert-${type} alert-dismissible fade show alert-floating`;
     alert.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 9999; min-width: 300px;';
-    alert.innerHTML = `
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
+    
+    // 安全地创建alert内容
+    const messageSpan = document.createElement('span');
+    messageSpan.textContent = message;
+    alert.appendChild(messageSpan);
+    
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'btn-close';
+    closeButton.setAttribute('data-bs-dismiss', 'alert');
+    alert.appendChild(closeButton);
     
     document.body.appendChild(alert);
     setTimeout(() => { if (alert.parentNode) alert.remove(); }, 3000);
