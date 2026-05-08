@@ -232,10 +232,12 @@ def main():
         if simulation_mode:
             logger.info("模拟模式：初始化工业4.0模块数据...")
             from core.simulation_initializer import initialize_simulation_data
-            initialize_simulation_data(
+            simulation_initializer = initialize_simulation_data(
                 device_manager, oee_calculator, predictive_maintenance,
                 spc_analyzer, energy_manager
             )
+            # 挂载到app供API使用
+            app.simulation_initializer = simulation_initializer
 
         # 启动TDengine适配器（如果可用）
         if realtime_bridge:

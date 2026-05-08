@@ -1,0 +1,483 @@
+# ============================================================
+# 模拟设备预设配置
+# 用户可通过前端一键添加预设设备，也可自定义添加新设备
+# ============================================================
+
+presets:
+
+  # ==================== PLC控制器类 ====================
+  - id: preset_siemens_1500
+    name: 西门子S7-1500 PLC（锅炉产线）
+    category: plc
+    description: 主产线控制PLC — 锅炉/换热器/反应釜群
+    device_config:
+      id: siemens_1500_01
+      name: 西门子S7-1500 PLC
+      description: 主产线控制PLC — 锅炉/换热器/反应釜群
+      protocol: modbus_tcp
+      host: 192.168.1.53
+      port: 502
+      slave_id: 1
+      collection_interval: 2
+      vendor: 西门子
+      device_model: S7-1516-3 PN/DP
+      enabled: true
+      registers:
+        - {name: boiler_temperature, description: 锅炉出口温度, address: 0, length: 2, data_type: float32, scale: 1.0, unit: "°C"}
+        - {name: boiler_pressure, description: 锅炉压力, address: 2, length: 2, data_type: float32, scale: 1.0, unit: MPa}
+        - {name: heat_exchanger_temperature, description: 换热器出口温度, address: 4, length: 2, data_type: float32, scale: 1.0, unit: "°C"}
+        - {name: steam_flow, description: 蒸汽流量, address: 6, length: 2, data_type: float32, scale: 1.0, unit: t/h}
+        - {name: feed_water_level, description: 给水液位, address: 8, length: 2, data_type: float32, scale: 1.0, unit: mm}
+        - {name: flue_gas_temperature, description: 排烟温度, address: 10, length: 2, data_type: float32, scale: 1.0, unit: "°C"}
+        - {name: oxygen_content, description: 烟气含氧量, address: 12, length: 2, data_type: float32, scale: 1.0, unit: "%"}
+        - {name: boiler_status, description: "锅炉状态 0=停炉/1=运行/2=故障", address: 14, length: 1, data_type: uint16, scale: 1, unit: ""}
+    simulation_params:
+      theoretical_rate: 120
+      energy_baseline: 200
+      base_values: {boiler_temperature: 180, boiler_pressure: 1.2, steam_flow: 5.0, feed_water_level: 500, flue_gas_temperature: 160, oxygen_content: 8}
+      noise_levels: {boiler_temperature: 3, boiler_pressure: 0.05, steam_flow: 0.3, feed_water_level: 10, flue_gas_temperature: 5, oxygen_content: 0.5}
+
+  - id: preset_hollysys_lk
+    name: 和利时LK PLC（化工车间）
+    category: plc
+    description: 化工车间控制 — 蒸馏/干燥/包装
+    device_config:
+      id: hollysys_lk_01
+      name: 和利时LK PLC
+      description: 化工车间控制 — 蒸馏/干燥/包装
+      protocol: modbus_tcp
+      host: 192.168.1.55
+      port: 502
+      slave_id: 1
+      collection_interval: 3
+      vendor: 和利时
+      device_model: LK210
+      enabled: true
+      registers:
+        - {name: distill_temperature, description: 蒸馏塔顶温度, address: 0, length: 2, data_type: float32, scale: 1.0, unit: "°C"}
+        - {name: distill_pressure, description: 蒸馏塔压力, address: 2, length: 2, data_type: float32, scale: 1.0, unit: kPa}
+        - {name: dryer_temperature, description: 干燥机温度, address: 4, length: 2, data_type: float32, scale: 1.0, unit: "°C"}
+        - {name: dryer_humidity, description: 干燥机湿度, address: 6, length: 2, data_type: float32, scale: 1.0, unit: "%"}
+        - {name: reflux_ratio, description: 回流比, address: 8, length: 2, data_type: float32, scale: 1.0, unit: ""}
+        - {name: product_flow, description: 产品流量, address: 10, length: 2, data_type: float32, scale: 1.0, unit: L/min}
+        - {name: packaging_speed, description: 包装线速度, address: 12, length: 1, data_type: uint16, scale: 1, unit: 个}
+        - {name: batch_count, description: 批次计数, address: 13, length: 1, data_type: uint16, scale: 1, unit: 个}
+    simulation_params:
+      theoretical_rate: 80
+      energy_baseline: 150
+      base_values: {distill_temperature: 78, distill_pressure: 101, dryer_temperature: 60, dryer_humidity: 35, reflux_ratio: 2.5, product_flow: 15}
+      noise_levels: {distill_temperature: 2, distill_pressure: 3, dryer_temperature: 3, dryer_humidity: 5, reflux_ratio: 0.2, product_flow: 1}
+
+  - id: preset_mitsubishi_fx5u
+    name: 三菱FX5U PLC（注塑车间）
+    category: plc
+    description: 注塑车间控制 — 注塑机/模具/脱模
+    device_config:
+      id: mitsubishi_fx5u_01
+      name: 三菱FX5U PLC
+      description: 注塑车间控制 — 注塑机/模具/脱模
+      protocol: modbus_tcp
+      host: 192.168.1.56
+      port: 502
+      slave_id: 1
+      collection_interval: 2
+      vendor: 三菱电机
+      device_model: FX5U-64M
+      enabled: true
+      registers:
+        - {name: mold_temperature, description: 模具温度, address: 0, length: 2, data_type: float32, scale: 1.0, unit: "°C"}
+        - {name: injection_pressure, description: 注射压力, address: 2, length: 2, data_type: float32, scale: 1.0, unit: MPa}
+        - {name: injection_speed, description: 注射速度, address: 4, length: 2, data_type: float32, scale: 1.0, unit: mm/s}
+        - {name: cushion_position, description: 保压位置, address: 6, length: 2, data_type: float32, scale: 1.0, unit: mm}
+        - {name: cycle_time, description: 成型周期, address: 8, length: 2, data_type: float32, scale: 1.0, unit: s}
+        - {name: shot_count, description: 注射计数, address: 10, length: 1, data_type: uint16, scale: 1, unit: 个}
+        - {name: clamping_force, description: 锁模力, address: 11, length: 2, data_type: float32, scale: 1.0, unit: kN}
+        - {name: barrel_temperature, description: 料筒温度, address: 13, length: 2, data_type: float32, scale: 1.0, unit: "°C"}
+    simulation_params:
+      theoretical_rate: 200
+      energy_baseline: 100
+      base_values: {mold_temperature: 220, injection_pressure: 80, injection_speed: 120, cycle_time: 35, clamping_force: 1500, barrel_temperature: 230}
+      noise_levels: {mold_temperature: 5, injection_pressure: 3, injection_speed: 8, cycle_time: 2, clamping_force: 50, barrel_temperature: 4}
+
+  - id: preset_delta_dvp
+    name: 台达DVP PLC（包装线）
+    category: plc
+    description: 包装线控制 — 封箱/贴标/码垛
+    device_config:
+      id: delta_dvp_01
+      name: 台达DVP PLC
+      description: 包装线控制 — 封箱/贴标/码垛
+      protocol: modbus_tcp
+      host: 192.168.1.57
+      port: 502
+      slave_id: 1
+      collection_interval: 5
+      vendor: 台达电子
+      device_model: DVP32EH00T3
+      enabled: true
+      registers:
+        - {name: conveyor_speed, description: 输送带速度, address: 0, length: 1, data_type: uint16, scale: 0.1, unit: m/min}
+        - {name: sealing_temperature, description: 封箱温度, address: 1, length: 1, data_type: uint16, scale: 0.1, unit: "°C"}
+        - {name: label_count, description: 贴标计数, address: 2, length: 1, data_type: uint16, scale: 1, unit: 个}
+        - {name: palletizing_count, description: 码垛计数, address: 3, length: 1, data_type: uint16, scale: 1, unit: 个}
+        - {name: reject_count, description: 剔除计数, address: 4, length: 1, data_type: uint16, scale: 1, unit: 个}
+        - {name: packing_status, description: "包装线状态 0=停机/1=运行/2=换料/3=故障", address: 5, length: 1, data_type: uint16, scale: 1, unit: ""}
+    simulation_params:
+      theoretical_rate: 150
+      energy_baseline: 80
+      base_values: {conveyor_speed: 25, sealing_temperature: 180, label_count: 0, palletizing_count: 0, reject_count: 0}
+      noise_levels: {conveyor_speed: 2, sealing_temperature: 5, label_count: 0, palletizing_count: 0, reject_count: 0}
+
+  - id: preset_inovance_h5u
+    name: 汇川H5U PLC（涂装车间）
+    category: plc
+    description: 涂装车间控制 — 喷涂/烘干/输送
+    device_config:
+      id: inovance_h5u_01
+      name: 汇川H5U PLC
+      description: 涂装车间控制 — 喷涂/烘干/输送
+      protocol: modbus_tcp
+      host: 192.168.1.58
+      port: 502
+      slave_id: 1
+      collection_interval: 3
+      vendor: 汇川技术
+      device_model: H5U-3232MT
+      enabled: true
+      registers:
+        - {name: spray_pressure, description: 喷涂压力, address: 0, length: 2, data_type: float32, scale: 1.0, unit: MPa}
+        - {name: oven_temperature, description: 烘干炉温度, address: 2, length: 2, data_type: float32, scale: 1.0, unit: "°C"}
+        - {name: spray_speed, description: 喷涂速度, address: 4, length: 2, data_type: float32, scale: 1.0, unit: m/min}
+        - {name: coating_thickness, description: 涂层厚度, address: 6, length: 2, data_type: float32, scale: 1.0, unit: μm}
+        - {name: conveyor_speed, description: 输送链速度, address: 8, length: 2, data_type: float32, scale: 1.0, unit: m/min}
+        - {name: painted_count, description: 喷涂计数, address: 10, length: 1, data_type: uint16, scale: 1, unit: 个}
+    simulation_params:
+      theoretical_rate: 100
+      energy_baseline: 120
+      base_values: {spray_pressure: 0.4, oven_temperature: 160, spray_speed: 8, coating_thickness: 60, conveyor_speed: 5}
+      noise_levels: {spray_pressure: 0.03, oven_temperature: 4, spray_speed: 0.5, coating_thickness: 3, conveyor_speed: 0.3}
+
+  - id: preset_schneider_m340
+    name: 施耐德M340 PLC（水处理）
+    category: plc
+    description: 水处理车间控制 — 进水/加药/沉淀
+    device_config:
+      id: schneider_m340_01
+      name: 施耐德M340 PLC
+      description: 水处理车间控制 — 进水/加药/沉淀
+      protocol: modbus_tcp
+      host: 192.168.1.54
+      port: 502
+      slave_id: 1
+      collection_interval: 5
+      vendor: 施耐德电气
+      device_model: BMX P34 2020
+      enabled: true
+      registers:
+        - {name: inlet_flow, description: 进水流量, address: 0, length: 2, data_type: float32, scale: 1.0, unit: "m³/h"}
+        - {name: outlet_flow, description: 出水流量, address: 2, length: 2, data_type: float32, scale: 1.0, unit: "m³/h"}
+        - {name: water_level, description: 沉淀池液位, address: 4, length: 2, data_type: float32, scale: 1.0, unit: m}
+        - {name: ph_value, description: 出水pH值, address: 6, length: 2, data_type: float32, scale: 1.0, unit: ""}
+        - {name: turbidity, description: 出水浊度, address: 8, length: 2, data_type: float32, scale: 1.0, unit: NTU}
+        - {name: dissolved_oxygen, description: 溶解氧, address: 10, length: 2, data_type: float32, scale: 1.0, unit: mg/L}
+        - {name: conductivity, description: 电导率, address: 12, length: 2, data_type: float32, scale: 1.0, unit: μS/cm}
+        - {name: pump_speed, description: 进水泵转速, address: 14, length: 1, data_type: uint16, scale: 1, unit: RPM}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 60
+      base_values: {inlet_flow: 50, outlet_flow: 48, water_level: 3.5, ph_value: 7.2, turbidity: 5, dissolved_oxygen: 8, conductivity: 450, pump_speed: 1450}
+      noise_levels: {inlet_flow: 3, outlet_flow: 3, water_level: 0.2, ph_value: 0.3, turbidity: 1.5, dissolved_oxygen: 0.5, conductivity: 20, pump_speed: 30}
+
+  # ==================== 传感器类 ====================
+  - id: preset_abb_m4m
+    name: ABB M4M电力分析仪
+    category: sensor
+    description: 车间配电柜 — 电力质量监测
+    device_config:
+      id: abb_m4m_01
+      name: ABB M4M电力分析仪
+      description: 车间配电柜 — 电力质量监测
+      protocol: modbus_tcp
+      host: 192.168.1.102
+      port: 502
+      slave_id: 1
+      collection_interval: 5
+      vendor: ABB
+      device_model: M4M 20
+      enabled: true
+      registers:
+        - {name: voltage_a, description: A相电压, address: 0, length: 2, data_type: float32, scale: 1.0, unit: V}
+        - {name: voltage_b, description: B相电压, address: 2, length: 2, data_type: float32, scale: 1.0, unit: V}
+        - {name: voltage_c, description: C相电压, address: 4, length: 2, data_type: float32, scale: 1.0, unit: V}
+        - {name: current_a, description: A相电流, address: 6, length: 2, data_type: float32, scale: 1.0, unit: A}
+        - {name: current_b, description: B相电流, address: 8, length: 2, data_type: float32, scale: 1.0, unit: A}
+        - {name: current_c, description: C相电流, address: 10, length: 2, data_type: float32, scale: 1.0, unit: A}
+        - {name: active_power, description: 总有功功率, address: 12, length: 2, data_type: float32, scale: 1.0, unit: kW}
+        - {name: frequency, description: 电网频率, address: 14, length: 2, data_type: float32, scale: 1.0, unit: Hz}
+        - {name: thd_voltage, description: 电压总谐波畸变率, address: 16, length: 2, data_type: float32, scale: 1.0, unit: "%"}
+        - {name: power_factor, description: 功率因数, address: 18, length: 2, data_type: float32, scale: 1.0, unit: ""}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 500
+      base_values: {voltage_a: 220, voltage_b: 220, voltage_c: 220, current_a: 100, current_b: 95, current_c: 98, active_power: 65, frequency: 50, thd_voltage: 3.2, power_factor: 0.92}
+      noise_levels: {voltage_a: 3, voltage_b: 3, voltage_c: 3, current_a: 5, current_b: 5, current_c: 5, active_power: 3, frequency: 0.1, thd_voltage: 0.5, power_factor: 0.02}
+
+  - id: preset_turck_iolink
+    name: 图尔克IO-Link主站
+    category: sensor
+    description: 现场IO-Link传感器集成 — 压力/流量/温度/距离
+    device_config:
+      id: turck_iolink_01
+      name: 图尔克IO-Link主站
+      description: 现场IO-Link传感器集成 — 压力/流量/温度/距离
+      protocol: modbus_tcp
+      host: 192.168.1.60
+      port: 502
+      slave_id: 1
+      collection_interval: 2
+      vendor: 图尔克
+      device_model: TBEN-L4-8IOL
+      enabled: true
+      registers:
+        - {name: iol_pressure_1, description: IO-Link压力传感器1, address: 0, length: 2, data_type: float32, scale: 1.0, unit: MPa}
+        - {name: iol_flow_1, description: IO-Link流量传感器1, address: 2, length: 2, data_type: float32, scale: 1.0, unit: L/min}
+        - {name: iol_temperature_1, description: IO-Link温度传感器1, address: 4, length: 2, data_type: float32, scale: 1.0, unit: "°C"}
+        - {name: iol_distance_1, description: IO-Link距离传感器1, address: 6, length: 2, data_type: float32, scale: 1.0, unit: mm}
+        - {name: iol_pressure_2, description: IO-Link压力传感器2, address: 8, length: 2, data_type: float32, scale: 1.0, unit: MPa}
+        - {name: iol_vacuum, description: IO-Link真空传感器, address: 10, length: 2, data_type: float32, scale: 1.0, unit: Pa}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 10
+      base_values: {iol_pressure_1: 0.6, iol_flow_1: 12, iol_temperature_1: 25, iol_distance_1: 150, iol_pressure_2: 8.5, iol_vacuum: -80000}
+      noise_levels: {iol_pressure_1: 0.02, iol_flow_1: 0.8, iol_temperature_1: 1.5, iol_distance_1: 2, iol_pressure_2: 0.3, iol_vacuum: 2000}
+
+  # ==================== MQTT设备 ====================
+  - id: preset_vibration_sensor
+    name: MQTT振动监测节点
+    category: mqtt
+    description: 旋转设备振动监测 — 电机/泵/风机
+    device_config:
+      id: vibration_sensor_01
+      name: MQTT振动监测节点
+      description: 旋转设备振动监测 — 电机/泵/风机
+      protocol: mqtt
+      host: 192.168.1.200
+      port: 1883
+      username: scada
+      password: scada123
+      collection_interval: 10
+      vendor: 自研物联网节点
+      device_model: IoT-VIB-100 + LoRa GW
+      enabled: true
+      topics:
+        - {topic: factory/motor_group/vibration/x_axis, name: vibration_x, description: X轴振动速度, unit: mm/s, json_path: value}
+        - {topic: factory/motor_group/vibration/y_axis, name: vibration_y, description: Y轴振动速度, unit: mm/s, json_path: value}
+        - {topic: factory/motor_group/vibration/z_axis, name: vibration_z, description: Z轴振动速度, unit: mm/s, json_path: value}
+        - {topic: factory/motor_group/vibration/temperature, name: bearing_temperature, description: 轴承温度, unit: "°C", json_path: value}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 5
+      base_values: {vibration_x: 2.5, vibration_y: 2.3, vibration_z: 1.8, bearing_temperature: 45}
+      noise_levels: {vibration_x: 0.5, vibration_y: 0.4, vibration_z: 0.3, bearing_temperature: 2}
+
+  - id: preset_water_quality
+    name: MQTT水质监测终端
+    category: mqtt
+    description: 出水口在线水质监测 — DO/浊度/电导率/pH
+    device_config:
+      id: water_quality_01
+      name: MQTT水质监测终端
+      description: 出水口在线水质监测 — DO/浊度/电导率/pH
+      protocol: mqtt
+      host: 192.168.1.200
+      port: 1883
+      username: scada
+      password: scada123
+      collection_interval: 15
+      vendor: 自研物联网节点
+      device_model: WQ-Multi-01
+      enabled: true
+      topics:
+        - {topic: factory/water_outlet/quality/dissolved_oxygen, name: dissolved_oxygen, description: 溶解氧, unit: mg/L, json_path: value}
+        - {topic: factory/water_outlet/quality/turbidity, name: turbidity, description: 浊度, unit: NTU, json_path: value}
+        - {topic: factory/water_outlet/quality/conductivity, name: conductivity, description: 电导率, unit: μS/cm, json_path: value}
+        - {topic: factory/water_outlet/quality/ph, name: ph, description: pH值, unit: "", json_path: value}
+        - {topic: factory/water_outlet/quality/temperature, name: water_temperature, description: 水温, unit: "°C", json_path: value}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 3
+      base_values: {dissolved_oxygen: 7.5, turbidity: 3, conductivity: 420, ph: 7.1, water_temperature: 22}
+      noise_levels: {dissolved_oxygen: 0.5, turbidity: 1, conductivity: 15, ph: 0.2, water_temperature: 1}
+
+  # ==================== REST设备 ====================
+  - id: preset_siemens_web
+    name: 西门子S7-1500 Web API
+    category: rest
+    description: S7-1500内置REST接口 — 备用数据通道
+    device_config:
+      id: siemens_web_01
+      name: 西门子S7-1500 Web API
+      description: S7-1500内置REST接口 — 备用数据通道
+      protocol: rest
+      base_url: http://192.168.1.52
+      auth_type: basic
+      auth_username: admin
+      auth_password: admin123
+      poll_interval: 5
+      collection_interval: 5
+      vendor: 西门子
+      device_model: S7-1516-3 PN/DP
+      enabled: true
+      endpoints:
+        - {name: ambient_temperature, path: /api/v1/variables/DB1.temperature, method: GET, json_path: value, unit: "°C"}
+        - {name: system_pressure, path: /api/v1/variables/DB1.pressure, method: GET, json_path: value, unit: MPa}
+        - {name: production_count, path: /api/v1/variables/DB100.product_count, method: GET, json_path: value, unit: 个}
+        - {name: line_status, path: /api/v1/variables/DB100.line_status, method: GET, json_path: value, unit: ""}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 0
+      base_values: {ambient_temperature: 25, system_pressure: 0.5, production_count: 0, line_status: 1}
+      noise_levels: {ambient_temperature: 1, system_pressure: 0.02, production_count: 0, line_status: 0}
+
+  - id: preset_mes_api
+    name: MES制造执行系统
+    category: rest
+    description: MES生产数据接口 — 计划/质量/OEE
+    device_config:
+      id: mes_api_01
+      name: MES制造执行系统
+      description: MES生产数据接口 — 计划/质量/OEE
+      protocol: rest
+      base_url: http://192.168.1.250:8080
+      auth_type: bearer
+      auth_token: mes-api-token-xxx
+      poll_interval: 30
+      collection_interval: 30
+      vendor: 自研MES系统
+      device_model: MES Enterprise v3.2
+      enabled: true
+      endpoints:
+        - {name: oee, path: /api/v1/production/oee, method: GET, json_path: data.oee, unit: "%"}
+        - {name: quality_rate, path: /api/v1/quality/rate, method: GET, json_path: data.rate, unit: "%"}
+        - {name: planned_quantity, path: /api/v1/production/plan/quantity, method: GET, json_path: data.quantity, unit: 个}
+        - {name: actual_quantity, path: /api/v1/production/actual/quantity, method: GET, json_path: data.quantity, unit: 个}
+        - {name: defect_rate, path: /api/v1/quality/defect_rate, method: GET, json_path: data.rate, unit: "%"}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 0
+      base_values: {oee: 85, quality_rate: 98, planned_quantity: 1000, actual_quantity: 950, defect_rate: 1.5}
+      noise_levels: {oee: 3, quality_rate: 1, planned_quantity: 0, actual_quantity: 0, defect_rate: 0.3}
+
+  # ==================== 执行器/继电器 ====================
+  - id: preset_signal_tower_1
+    name: Patlite信号灯塔 — 1号线
+    category: actuator
+    description: 产线1号设备状态指示灯塔
+    device_config:
+      id: signal_tower_01
+      name: Patlite LR7信号灯塔 — 1号线
+      description: 产线1号设备状态指示灯塔 — 红黄绿蓝白+蜂鸣器
+      protocol: modbus_tcp
+      host: 192.168.1.70
+      port: 502
+      slave_id: 1
+      collection_interval: 1
+      vendor: "Patlite (日本帕特莱)"
+      device_model: LR7-302NWFB
+      enabled: true
+      registers:
+        - {name: red_light, description: 红色灯, address: 0, length: 1, data_type: uint16, scale: 1, unit: ""}
+        - {name: yellow_light, description: 黄色灯, address: 1, length: 1, data_type: uint16, scale: 1, unit: ""}
+        - {name: green_light, description: 绿色灯, address: 2, length: 1, data_type: uint16, scale: 1, unit: ""}
+        - {name: blue_light, description: 蓝色灯, address: 3, length: 1, data_type: uint16, scale: 1, unit: ""}
+        - {name: white_light, description: 白色灯, address: 4, length: 1, data_type: uint16, scale: 1, unit: ""}
+        - {name: buzzer, description: 蜂鸣器, address: 5, length: 1, data_type: uint16, scale: 1, unit: ""}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 5
+      base_values: {red_light: 0, yellow_light: 0, green_light: 1, blue_light: 0, white_light: 0, buzzer: 0}
+      noise_levels: {red_light: 0, yellow_light: 0, green_light: 0, blue_light: 0, white_light: 0, buzzer: 0}
+
+  - id: preset_relay_output
+    name: 研华ADAM-6060继电器模块
+    category: actuator
+    description: 报警输出控制 — 外部警灯/蜂鸣器/电磁阀
+    device_config:
+      id: relay_output_01
+      name: 研华ADAM-6060继电器模块
+      description: 报警输出控制 — 外部警灯/蜂鸣器/电磁阀
+      protocol: modbus_tcp
+      host: 192.168.1.72
+      port: 502
+      slave_id: 1
+      collection_interval: 1
+      vendor: "研华科技 (Advantech)"
+      device_model: ADAM-6060-AE
+      enabled: true
+      registers:
+        - {name: relay_1, description: 继电器1, address: 0, length: 1, data_type: uint16, scale: 1, unit: "", access: rw}
+        - {name: relay_2, description: 继电器2, address: 1, length: 1, data_type: uint16, scale: 1, unit: "", access: rw}
+        - {name: relay_3, description: 继电器3, address: 2, length: 1, data_type: uint16, scale: 1, unit: "", access: rw}
+        - {name: relay_4, description: 继电器4, address: 3, length: 1, data_type: uint16, scale: 1, unit: "", access: rw}
+        - {name: relay_5, description: 继电器5, address: 4, length: 1, data_type: uint16, scale: 1, unit: "", access: rw}
+        - {name: relay_6, description: 继电器6, address: 5, length: 1, data_type: uint16, scale: 1, unit: "", access: rw}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 10
+      base_values: {relay_1: 0, relay_2: 0, relay_3: 0, relay_4: 0, relay_5: 0, relay_6: 0}
+      noise_levels: {relay_1: 0, relay_2: 0, relay_3: 0, relay_4: 0, relay_5: 0, relay_6: 0}
+
+  # ==================== OPC UA设备 ====================
+  - id: preset_opcua_plc
+    name: OPC UA PLC控制器
+    category: opcua
+    description: 支持OPC UA的PLC（如西门子S7-1500）
+    device_config:
+      id: opcua_plc_01
+      name: OPC UA PLC控制器
+      description: 支持OPC UA的PLC控制器
+      protocol: opcua
+      endpoint: opc.tcp://192.168.1.50:4840
+      security_mode: None
+      collection_interval: 3
+      enabled: true
+      nodes:
+        - {node_id: "ns=3;s=Temperature", name: temperature, description: 温度值, unit: "°C"}
+        - {node_id: "ns=3;s=Pressure", name: pressure, description: 压力值, unit: MPa}
+        - {node_id: "ns=3;s=MotorSpeed", name: motor_speed, description: 电机转速, unit: RPM}
+        - {node_id: "ns=3;s=RunningStatus", name: running_status, description: 运行状态, unit: ""}
+    simulation_params:
+      theoretical_rate: 0
+      energy_baseline: 50
+      base_values: {temperature: 65, pressure: 0.8, motor_speed: 1500, running_status: 1}
+      noise_levels: {temperature: 3, pressure: 0.05, motor_speed: 50, running_status: 0}
+
+
+# ============================================================
+# 预设分类（用于前端展示）
+# ============================================================
+categories:
+  - id: plc
+    name: PLC控制器
+    icon: bi-cpu
+    description: 工业可编程逻辑控制器
+  - id: sensor
+    name: 传感器/仪表
+    icon: bi-thermometer-half
+    description: 温度/压力/电力等传感器
+  - id: mqtt
+    name: MQTT设备
+    icon: bi-broadcast
+    description: 物联网无线传感器节点
+  - id: rest
+    name: REST接口
+    icon: bi-cloud
+    description: HTTP API设备/系统对接
+  - id: actuator
+    name: 执行器/继电器
+    icon: bi-toggles
+    description: 信号灯塔/继电器/电磁阀
+  - id: opcua
+    name: OPC UA设备
+    icon: bi-diagram-3
+    description: 工业4.0标准协议设备

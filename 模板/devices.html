@@ -13,12 +13,42 @@
         <p class="text-muted">添加、编辑和监控工业设备（支持 Modbus / OPC UA / MQTT / REST）</p>
     </div>
     <div class="col-auto">
+        <button class="btn btn-success" onclick="showPresetsPanel()">
+            <i class="bi bi-grid-3x3-gap me-1"></i>预设设备
+        </button>
         <button class="btn btn-primary" onclick="showAddDeviceModal()">
-            <i class="bi bi-plus-circle me-1"></i>添加设备
+            <i class="bi bi-plus-circle me-1"></i>自定义添加
         </button>
         <button class="btn btn-outline-secondary" onclick="loadDevices()">
             <i class="bi bi-arrow-clockwise me-1"></i>刷新
         </button>
+    </div>
+</div>
+
+<!-- 预设设备面板（默认隐藏） -->
+<div class="card mb-4" id="presets-panel" style="display:none;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h6 class="mb-0"><i class="bi bi-grid-3x3-gap me-2"></i>模拟设备预设 — 一键添加</h6>
+        <div>
+            <button class="btn btn-sm btn-success" onclick="addAllPresets()">
+                <i class="bi bi-lightning me-1"></i>一键全部添加
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="hidePresetsPanel()">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        <!-- 分类标签 -->
+        <ul class="nav nav-pills mb-3" id="preset-category-tabs">
+            <li class="nav-item">
+                <button class="nav-link active" data-category="all" onclick="filterPresets('all')">全部</button>
+            </li>
+        </ul>
+        <!-- 预设卡片网格 -->
+        <div class="row" id="presets-grid">
+            <div class="col text-center text-muted py-3">加载中...</div>
+        </div>
     </div>
 </div>
 
@@ -1136,6 +1166,143 @@ async function applyTemplate(templateId) {
     }
 }
 
+// ==================== 预设设备管理 ====================
+
+let presetsCache = [];
+let presetCategoriesCache = [];
+
+function showPresetsPanel() {
+    document.getElementById('presets-panel').style.display = 'block';
+    loadPresets();
+}
+
+function hidePresetsPanel() {
+    document.getElementById('presets-panel').style.display = 'none';
+}
+
+async function loadPresets() {
+    try {
+        const response = await fetch('/api/devices/presets', { headers: getAuthHeaders() });
+        const data = await response.json();
+
+        if (!data.success) {
+            showAlert(data.message || '加载预设失败', 'danger');
+            return;
+        }
+
+        presetsCache = data.presets || [];
+        presetCategoriesCache = data.categories || [];
+
+        renderCategoryTabs(presetCategoriesCache);
+        renderPresets(presetsCache);
+    } catch (error) {
+        console.error('加载预设失败:', error);
+        showAlert('加载预设失败', 'danger');
+    }
+}
+
+function renderCategoryTabs(categories) {
+    const container = document.getElementById('preset-category-tabs');
+    let html = '<li class="nav-item"><button class="nav-link active" data-category="all" onclick="filterPresets(\'all\')">全部</button></li>';
+
+    const categoryIcons = {};
+    categories.forEach(c => { categoryIcons[c.id] = c.icon || 'bi-circle'; });
+
+    const usedCategories = [...new Set(presetsCache.map(p => p.category))];
+    usedCategories.forEach(cat => {
+        const catInfo = categories.find(c => c.id === cat);
+        const name = catInfo ? catInfo.name : cat;
+        const icon = categoryIcons[cat] || 'bi-circle';
+        html += `<li class="nav-item"><button class="nav-link" data-category="${cat}" onclick="filterPresets('${cat}')"><i class="bi ${icon} me-1"></i>${name}</button></li>`;
+    });
+
+    container.innerHTML = html;
+}
+
+function filterPresets(category) {
+    // 更新标签激活状态
+    document.querySelectorAll('#preset-category-tabs .nav-link').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.category === category);
+    });
+
+    const filtered = category === 'all' ? presetsCache : presetsCache.filter(p => p.category === category);
+    renderPresets(filtered);
+}
+
+function renderPresets(presets) {
+    const grid = document.getElementById('presets-grid');
+
+    if (!presets || presets.length === 0) {
+        grid.innerHTML = '<div class="col text-center text-muted py-3">暂无可用预设</div>';
+        return;
+    }
+
+    const protocolColors = {
+        'modbus_tcp': 'primary',
+        'modbus_rtu': 'primary',
+        'opcua': 'info',
+        'mqtt': 'warning',
+        'rest': 'success'
+    };
+
+    grid.innerHTML = presets.map(p => `
+        <div class="col-md-4 col-lg-3 mb-3">
+            <div class="card h-100 preset-card">
+                <div class="card-body p-3">
+                    <h6 class="card-title mb-1">${p.name}</h6>
+                    <p class="text-muted small mb-2">${p.description}</p>
+                    <div class="mb-2">
+                        <span class="badge bg-${protocolColors[p.protocol] || 'secondary'}">${p.protocol.toUpperCase()}</span>
+                        <code class="small ms-1">${p.device_id}</code>
+                    </div>
+                    <button class="btn btn-sm btn-outline-success w-100" onclick="addPreset('${p.preset_id}')">
+                        <i class="bi bi-plus-circle me-1"></i>添加
+                    </button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function addPreset(presetId) {
+    try {
+        const response = await fetch('/api/devices/presets/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({ preset_id: presetId })
+        });
+        const result = await response.json();
+        if (result.success) {
+            showAlert(result.message, 'success');
+            loadDevices();
+        } else {
+            showAlert(result.message || '添加失败', 'danger');
+        }
+    } catch (error) {
+        showAlert('添加失败: ' + error.message, 'danger');
+    }
+}
+
+async function addAllPresets() {
+    if (!confirm('确定要添加全部预设设备吗？')) return;
+
+    try {
+        const response = await fetch('/api/devices/presets/add-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+        });
+        const result = await response.json();
+        if (result.success) {
+            showAlert(result.message, 'success');
+            loadDevices();
+        } else {
+            showAlert(result.message || '添加失败', 'danger');
+        }
+    } catch (error) {
+        showAlert('添加失败: ' + error.message, 'danger');
+    }
+}
+
 // ==================== 工具函数 ====================
 
 function showAlert(message, type = 'info') {
@@ -1169,6 +1336,15 @@ function showAlert(message, type = 'info') {
 }
 .protocol-fields .card {
     border-left: 3px solid #0d6efd;
+}
+.preset-card {
+    transition: all 0.2s;
+    border: 1px solid #dee2e6;
+}
+.preset-card:hover {
+    border-color: #198754;
+    box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.25);
+    transform: translateY(-2px);
 }
 </style>
 {% endblock %}

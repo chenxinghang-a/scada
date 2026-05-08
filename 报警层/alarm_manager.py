@@ -1,27 +1,83 @@
 """
-报警管理器模块
-实现报警检测、记录和通知
-集成工业声光报警器、语音广播、前端推送
+报警管理器模块（重写版）
+实现报警检测、记录、通知，集成工业声光报警器、语音广播、前端推送
+
+核心改进：警告去重机制
+- 冷却窗口：同一报警在冷却时间内只推送一次前端通知
+- 确认抑制：用户确认报警后，同一报警在抑制时间内不再弹窗
+- 前端dismissed跟踪：用户关闭弹窗后，该报警在冷却期内不重复显示
+- 去重配置API：可动态调整去重参数
 """
 
 import logging
 import yaml
+import time
 from typing import Any, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Lock
 
 logger = logging.getLogger(__name__)
 
 
+class AlarmDedupConfig:
+    """报警去重配置"""
+
+    def __init__(self, config: dict[str, Any] | None = None):
+        config = config or {}
+        # 冷却窗口（秒）：同一报警在此时间内只推送一次前端通知
+        self.emit_cooldown_seconds: int = config.get('emit_cooldown_seconds', 60)
+        # 确认后抑制时间（秒）：用户确认报警后，同一报警在此时间内不再弹窗
+        self.acknowledge_suppress_seconds: int = config.get('acknowledge_suppress_seconds', 300)
+        # 是否启用去重
+        self.enabled: bool = config.get('enabled', True)
+        # 最大同时显示的报警数（前端）
+        self.max_visible_toasts: int = config.get('max_visible_toasts', 3)
+        # 前端toast自动消失时间：严重报警（秒）
+        self.critical_toast_duration: int = config.get('critical_toast_duration', 30)
+        # 前端toast自动消失时间：普通警告（秒）
+        self.warning_toast_duration: int = config.get('warning_toast_duration', 10)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'enabled': self.enabled,
+            'emit_cooldown_seconds': self.emit_cooldown_seconds,
+            'acknowledge_suppress_seconds': self.acknowledge_suppress_seconds,
+            'max_visible_toasts': self.max_visible_toasts,
+            'critical_toast_duration': self.critical_toast_duration,
+            'warning_toast_duration': self.warning_toast_duration,
+        }
+
+    def update(self, data: dict[str, Any]):
+        """从字典更新配置"""
+        if 'emit_cooldown_seconds' in data:
+            self.emit_cooldown_seconds = max(5, int(data['emit_cooldown_seconds']))
+        if 'acknowledge_suppress_seconds' in data:
+            self.acknowledge_suppress_seconds = max(30, int(data['acknowledge_suppress_seconds']))
+        if 'enabled' in data:
+            self.enabled = bool(data['enabled'])
+        if 'max_visible_toasts' in data:
+            self.max_visible_toasts = max(1, min(10, int(data['max_visible_toasts'])))
+        if 'critical_toast_duration' in data:
+            self.critical_toast_duration = max(5, int(data['critical_toast_duration']))
+        if 'warning_toast_duration' in data:
+            self.warning_toast_duration = max(5, int(data['warning_toast_duration']))
+
+
 class AlarmManager:
     """
-    报警管理器
+    报警管理器（重写版）
     负责报警检测、记录、声光输出、语音广播、前端推送
 
     报警输出总线（三级联动）：
     1. 声光报警器（Modbus DO -> 报警灯塔 + 蜂鸣器）
     2. 语音广播系统（MQTT -> IP网络广播/现场音柱）
     3. 前端WebSocket推送（页面弹窗/音效/语音合成）
+
+    去重机制：
+    - 同一报警（alarm_id + device_id + register_name）在冷却窗口内只推送一次
+    - 用户确认后，同一报警在抑制时间内不再弹窗
+    - 前端可通过 dismissed 列表告知后端跳过推送
     """
 
     def __init__(self, database, config_path: str = '配置/alarms.yaml',
@@ -39,10 +95,10 @@ class AlarmManager:
         self.config_path = config_path
 
         # 报警规则
-        self.rules = {}  # rule_id -> rule_config
+        self.rules: dict[str, dict] = {}  # rule_id -> rule_config
 
         # 报警状态
-        self.alarm_states = {}  # (device_id, register_name) -> alarm_state
+        self.alarm_states: dict[tuple, dict] = {}  # (device_id, register_name) -> alarm_state
 
         # 输出总线（延迟注入，启动后绑定）
         self.alarm_output = alarm_output
@@ -50,6 +106,20 @@ class AlarmManager:
 
         # WebSocket回调（由外部注入，用于前端推送）
         self._websocket_emit: Callable[..., Any] | None = None
+
+        # 去重配置
+        self.dedup_config = AlarmDedupConfig()
+
+        # 去重状态：记录每个报警的最后推送时间
+        # key: (alarm_id, device_id, register_name) -> last_emit_timestamp
+        self._emit_history: dict[tuple, float] = {}
+
+        # 确认记录：记录每个报警的确认时间
+        # key: (alarm_id, device_id, register_name) -> acknowledge_timestamp
+        self._acknowledge_history: dict[tuple, float] = {}
+
+        # 线程锁（保护去重状态的并发访问）
+        self._dedup_lock = Lock()
 
         # 加载报警配置
         self.load_config()
@@ -78,6 +148,13 @@ class AlarmManager:
                     logger.info(f"加载报警规则: {rule_id} - {rule_config.get('name')}")
 
             logger.info(f"共加载 {len(self.rules)} 条报警规则")
+
+            # 加载去重配置
+            dedup_cfg = config.get('dedup', {})
+            if dedup_cfg:
+                self.dedup_config = AlarmDedupConfig(dedup_cfg)
+                logger.info(f"加载去重配置: 冷却{self.dedup_config.emit_cooldown_seconds}s, "
+                            f"确认抑制{self.dedup_config.acknowledge_suppress_seconds}s")
 
         except Exception as e:
             logger.error(f"加载报警配置异常: {e}")
@@ -152,7 +229,7 @@ class AlarmManager:
                              device_id: str, register_name: str,
                              value: float, timestamp: datetime, triggered: bool):
         """
-        处理报警状态
+        处理报警状态（含去重逻辑）
 
         Args:
             rule_id: 规则ID
@@ -170,13 +247,18 @@ class AlarmManager:
         delay = rule_config.get('delay', 0)
 
         if triggered:
-            # 检查是否已经在报警状态
+            # 检查是否已经在报警状态（同一规则）
             if current_state.get('alarm_id') == rule_id:
                 # 已经在报警，更新时间
                 current_state['last_trigger_time'] = timestamp
                 current_state['trigger_count'] = current_state.get('trigger_count', 0) + 1
+
+                # 去重检查：是否需要重新推送前端通知
+                if self._should_emit(rule_id, device_id, register_name):
+                    self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
+                    self._record_emit(rule_id, device_id, register_name)
             else:
-                # 新报警
+                # 新报警（或不同规则覆盖同一设备/寄存器）
                 alarm_state = {
                     'alarm_id': rule_id,
                     'device_id': device_id,
@@ -193,9 +275,10 @@ class AlarmManager:
                     alarm_state['pending'] = True
                     alarm_state['confirm_time'] = timestamp
                 else:
-                    # 立即触发报警
+                    # 立即触发报警（新报警总是触发一次）
                     alarm_state['pending'] = False
                     self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
+                    self._record_emit(rule_id, device_id, register_name)
 
                 self.alarm_states[state_key] = alarm_state
         else:
@@ -204,6 +287,55 @@ class AlarmManager:
                 # 清除报警状态
                 del self.alarm_states[state_key]
                 logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
+
+    def _should_emit(self, rule_id: str, device_id: str, register_name: str) -> bool:
+        """
+        检查是否应该推送报警通知（去重核心逻辑）
+
+        Args:
+            rule_id: 规则ID
+            device_id: 设备ID
+            register_name: 寄存器名称
+
+        Returns:
+            bool: 是否应该推送
+        """
+        if not self.dedup_config.enabled:
+            return True
+
+        alarm_key = (rule_id, device_id, register_name)
+        now = time.time()
+
+        with self._dedup_lock:
+            # 检查确认后抑制
+            ack_time = self._acknowledge_history.get(alarm_key)
+            if ack_time is not None:
+                suppress_until = ack_time + self.dedup_config.acknowledge_suppress_seconds
+                if now < suppress_until:
+                    logger.debug(f"报警被确认抑制: {rule_id} (剩余{suppress_until - now:.0f}s)")
+                    return False
+
+            # 检查冷却窗口
+            last_emit = self._emit_history.get(alarm_key)
+            if last_emit is not None:
+                cooldown_until = last_emit + self.dedup_config.emit_cooldown_seconds
+                if now < cooldown_until:
+                    logger.debug(f"报警在冷却窗口内: {rule_id} (剩余{cooldown_until - now:.0f}s)")
+                    return False
+
+        return True
+
+    def _record_emit(self, rule_id: str, device_id: str, register_name: str):
+        """记录报警推送时间"""
+        alarm_key = (rule_id, device_id, register_name)
+        with self._dedup_lock:
+            self._emit_history[alarm_key] = time.time()
+
+    def _record_acknowledge(self, rule_id: str, device_id: str, register_name: str):
+        """记录报警确认时间"""
+        alarm_key = (rule_id, device_id, register_name)
+        with self._dedup_lock:
+            self._acknowledge_history[alarm_key] = time.time()
 
     def _trigger_alarm(self, rule_config: dict[str, Any], device_id: str,
                        register_name: str, value: float, timestamp: datetime):
@@ -265,7 +397,7 @@ class AlarmManager:
             except Exception as e:
                 logger.error(f"语音广播异常: {e}")
 
-        # 4. 前端WebSocket推送
+        # 4. 前端WebSocket推送（含去重标记）
         self._emit_websocket_alarm({
             'alarm_id': rule_id,
             'device_id': device_id,
@@ -275,7 +407,8 @@ class AlarmManager:
             'threshold': threshold,
             'actual_value': value,
             'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
-            'area': alarm_area
+            'area': alarm_area,
+            'dedup_key': f"{rule_id}:{device_id}:{register_name}",
         })
 
     def _emit_websocket_alarm(self, alarm_data: dict[str, Any]):
@@ -326,9 +459,10 @@ class AlarmManager:
     def acknowledge_alarm(self, alarm_id: str, device_id: str,
                           register_name: str, acknowledged_by: str) -> bool:
         """
-        确认报警（含声光消音）
+        确认报警（含声光消音 + 去重抑制）
 
         操作员到场后确认报警，自动关闭蜂鸣器（灯保持闪烁）
+        同时记录确认时间，触发去重抑制窗口
 
         Args:
             alarm_id: 报警ID
@@ -352,6 +486,10 @@ class AlarmManager:
 
         if success:
             logger.info(f"报警已确认: {alarm_id} by {acknowledged_by}")
+
+            # 记录确认时间（用于去重抑制）
+            self._record_acknowledge(alarm_id, device_id, register_name)
+
             # 声光消音（关蜂鸣器，灯保持）
             if self.alarm_output and self.alarm_output.enabled:
                 try:
@@ -374,6 +512,19 @@ class AlarmManager:
         else:
             self.alarm_states.clear()
 
+        # 清除去重历史（复位后允许重新推送）
+        with self._dedup_lock:
+            if device_id:
+                emit_keys = [k for k in self._emit_history if k[1] == device_id]
+                ack_keys = [k for k in self._acknowledge_history if k[1] == device_id]
+                for k in emit_keys:
+                    del self._emit_history[k]
+                for k in ack_keys:
+                    del self._acknowledge_history[k]
+            else:
+                self._emit_history.clear()
+                self._acknowledge_history.clear()
+
         # 声光复位（全部清零，绿灯恢复）
         if self.alarm_output and self.alarm_output.enabled:
             try:
@@ -386,7 +537,7 @@ class AlarmManager:
 
     def get_alarm_statistics(self) -> dict[str, Any]:
         """
-        获取报警统计信息（含输出总线状态）
+        获取报警统计信息（含输出总线状态 + 去重统计）
 
         Returns:
             dict[str, Any]: 统计信息
@@ -420,7 +571,59 @@ class AlarmManager:
             'broadcast': self.broadcast_system.get_status() if self.broadcast_system else None
         }
 
+        # 去重统计
+        with self._dedup_lock:
+            stats['dedup'] = {
+                'enabled': self.dedup_config.enabled,
+                'emit_cooldown_seconds': self.dedup_config.emit_cooldown_seconds,
+                'acknowledge_suppress_seconds': self.dedup_config.acknowledge_suppress_seconds,
+                'tracked_alarms': len(self._emit_history),
+                'acknowledged_alarms': len(self._acknowledge_history),
+            }
+
         return stats
+
+    def get_dedup_config(self) -> dict[str, Any]:
+        """获取去重配置"""
+        return self.dedup_config.to_dict()
+
+    def update_dedup_config(self, data: dict[str, Any]) -> dict[str, Any]:
+        """
+        更新去重配置
+
+        Args:
+            data: 新配置数据
+
+        Returns:
+            dict: 更新后的配置
+        """
+        self.dedup_config.update(data)
+
+        # 持久化到配置文件
+        self._save_dedup_config()
+
+        logger.info(f"去重配置已更新: {self.dedup_config.to_dict()}")
+        return self.dedup_config.to_dict()
+
+    def _save_dedup_config(self):
+        """保存去重配置到alarms.yaml"""
+        try:
+            config_file = Path(self.config_path)
+            if not config_file.exists():
+                return
+
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+
+            config['dedup'] = self.dedup_config.to_dict()
+
+            with open(config_file, 'w', encoding='utf-8') as f:
+                yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+
+            logger.info("去重配置已保存到配置文件")
+
+        except Exception as e:
+            logger.error(f"保存去重配置异常: {e}")
 
     def add_rule(self, rule_config: dict[str, Any]) -> bool:
         """

@@ -27,6 +27,16 @@
         </button>
     </li>
     <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-energy">
+            <i class="bi bi-lightning-charge"></i> 电价配置
+        </button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-alarm-output">
+            <i class="bi bi-lightbulb"></i> 报警输出配置
+        </button>
+    </li>
+    <li class="nav-item">
         <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logging">日志设置</button>
     </li>
 </ul>
@@ -238,6 +248,224 @@
         </div>
     </div>
 
+    <!-- ==================== 电价配置 ==================== -->
+    <div class="tab-pane fade" id="tab-energy">
+        <div class="row">
+            <!-- 分时电价 -->
+            <div class="col-md-6">
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <h6 class="mb-0"><i class="bi bi-currency-yen me-2"></i>分时电价设置 (元/kWh)</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row mb-3">
+                            <div class="col-4">
+                                <label class="form-label">峰时电价</label>
+                                <div class="input-group">
+                                    <input type="number" class="form-control" id="cfg-tariff-peak" step="0.01" min="0">
+                                    <span class="input-group-text">元</span>
+                                </div>
+                                <small class="text-muted">高峰时段用电单价</small>
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label">平时电价</label>
+                                <div class="input-group">
+                                    <input type="number" class="form-control" id="cfg-tariff-flat" step="0.01" min="0">
+                                    <span class="input-group-text">元</span>
+                                </div>
+                                <small class="text-muted">平段时段用电单价</small>
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label">谷时电价</label>
+                                <div class="input-group">
+                                    <input type="number" class="form-control" id="cfg-tariff-valley" step="0.01" min="0">
+                                    <span class="input-group-text">元</span>
+                                </div>
+                                <small class="text-muted">低谷时段用电单价</small>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">碳排放因子 (kgCO2/kWh)</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="cfg-carbon-factor" step="0.001" min="0">
+                                <span class="input-group-text">kgCO2/kWh</span>
+                            </div>
+                            <small class="text-muted">中国电网平均约0.581，用于计算碳排放量</small>
+                        </div>
+                        <button class="btn btn-primary" onclick="saveTariff()">
+                            <i class="bi bi-check-lg me-1"></i>保存电价设置
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 峰谷时段定义 -->
+            <div class="col-md-6">
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <h6 class="mb-0"><i class="bi bi-clock me-2"></i>峰谷时段定义 (24小时制)</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label text-danger"><i class="bi bi-arrow-up-circle me-1"></i>峰时段</label>
+                            <div id="peak-periods">
+                                <!-- 动态生成 -->
+                            </div>
+                            <button class="btn btn-sm btn-outline-danger mt-1" onclick="addPeriod('peak')">
+                                <i class="bi bi-plus"></i> 添加峰时段
+                            </button>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label text-success"><i class="bi bi-arrow-down-circle me-1"></i>谷时段</label>
+                            <div id="valley-periods">
+                                <!-- 动态生成 -->
+                            </div>
+                            <button class="btn btn-sm btn-outline-success mt-1" onclick="addPeriod('valley')">
+                                <i class="bi bi-plus"></i> 添加谷时段
+                            </button>
+                        </div>
+                        <div class="alert alert-info small mb-0">
+                            <i class="bi bi-info-circle me-1"></i>
+                            未在峰/谷时段内的小时自动归为<strong>平时段</strong>。时段不可重叠。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 当前电价预览 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0"><i class="bi bi-eye me-2"></i>当前电价预览</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row text-center" id="tariff-preview">
+                            <div class="col-4">
+                                <div class="badge bg-danger fs-6 mb-1">峰</div>
+                                <div id="preview-peak" class="fw-bold">-</div>
+                            </div>
+                            <div class="col-4">
+                                <div class="badge bg-primary fs-6 mb-1">平</div>
+                                <div id="preview-flat" class="fw-bold">-</div>
+                            </div>
+                            <div class="col-4">
+                                <div class="badge bg-success fs-6 mb-1">谷</div>
+                                <div id="preview-valley" class="fw-bold">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 报警输出配置 ==================== -->
+    <div class="tab-pane fade" id="tab-alarm-output">
+        <div class="row">
+            <!-- 声光报警器配置 -->
+            <div class="col-md-6">
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <h6 class="mb-0"><i class="bi bi-lightbulb me-2"></i>声光报警器配置</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="cfg-ao-enabled" checked>
+                                <label class="form-check-label" for="cfg-ao-enabled">启用声光报警器</label>
+                            </div>
+                        </div>
+                        <h6 class="text-muted">主报警灯塔 (Patlite LR7)</h6>
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <label class="form-label">Modbus IP</label>
+                                <input type="text" class="form-control" id="cfg-ao-host" placeholder="192.168.1.70">
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label">端口</label>
+                                <input type="number" class="form-control" id="cfg-ao-port" value="502">
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label">从站ID</label>
+                                <input type="number" class="form-control" id="cfg-ao-slave" value="1">
+                            </div>
+                        </div>
+                        <h6 class="text-muted">DO线圈映射</h6>
+                        <div class="row mb-3">
+                            <div class="col-3">
+                                <label class="form-label">红灯 DO</label>
+                                <input type="number" class="form-control" id="cfg-ao-do-red" value="0" min="0">
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label">黄灯 DO</label>
+                                <input type="number" class="form-control" id="cfg-ao-do-yellow" value="1" min="0">
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label">绿灯 DO</label>
+                                <input type="number" class="form-control" id="cfg-ao-do-green" value="2" min="0">
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label">蜂鸣器 DO</label>
+                                <input type="number" class="form-control" id="cfg-ao-do-buzzer" value="5" min="0">
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" onclick="saveAlarmOutputConfig()">
+                            <i class="bi bi-check-lg me-1"></i>保存报警输出配置
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 广播系统配置 -->
+            <div class="col-md-6">
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <h6 class="mb-0"><i class="bi bi-megaphone me-2"></i>广播系统配置</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="cfg-bc-enabled" checked>
+                                <label class="form-check-label" for="cfg-bc-enabled">启用广播系统</label>
+                            </div>
+                        </div>
+                        <h6 class="text-muted">MQTT连接 (对接IP网络广播/PA系统)</h6>
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <label class="form-label">MQTT Broker</label>
+                                <input type="text" class="form-control" id="cfg-bc-broker" placeholder="192.168.1.200">
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label">端口</label>
+                                <input type="number" class="form-control" id="cfg-bc-port" value="1883">
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label">主题前缀</label>
+                                <input type="text" class="form-control" id="cfg-bc-topic" value="pa/">
+                            </div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <label class="form-label">用户名</label>
+                                <input type="text" class="form-control" id="cfg-bc-username" placeholder="可选">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">密码</label>
+                                <input type="password" class="form-control" id="cfg-bc-password" placeholder="可选">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">广播区域 (逗号分隔)</label>
+                            <input type="text" class="form-control" id="cfg-bc-areas" placeholder="车间A,车间B,仓库,办公楼">
+                            <small class="text-muted">多个区域用逗号分隔</small>
+                        </div>
+                        <button class="btn btn-primary" onclick="saveBroadcastConfig()">
+                            <i class="bi bi-check-lg me-1"></i>保存广播配置
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ==================== 日志设置 ==================== -->
     <div class="tab-pane fade" id="tab-logging">
         <div class="card">
@@ -375,6 +603,9 @@ document.addEventListener('DOMContentLoaded', function() {
     loadConfig();
     loadAlarmRules();
     loadSystemStatus();
+    loadTariffConfig();
+    loadAlarmOutputConfig();
+    loadBroadcastConfig();
 });
 
 // ==================== 系统配置加载 & 保存 ====================
@@ -790,6 +1021,292 @@ async function loadSystemStatus() {
 
 // 定时刷新系统状态（每10秒）
 setInterval(loadSystemStatus, 10000);
+
+// ==================== 电价配置 ====================
+
+async function loadTariffConfig() {
+    try {
+        const r = await fetch('/api/industry40/energy/tariff', { headers: getAuthHeaders() });
+        const data = await r.json();
+        if (!data.success || !data.data) return;
+        
+        const cfg = data.data;
+        
+        // 电价
+        if (cfg.tariff) {
+            setVal('cfg-tariff-peak', cfg.tariff.peak);
+            setVal('cfg-tariff-flat', cfg.tariff.flat);
+            setVal('cfg-tariff-valley', cfg.tariff.valley);
+        }
+        
+        // 碳排放因子
+        if (cfg.carbon_factor !== undefined) {
+            setVal('cfg-carbon-factor', cfg.carbon_factor);
+        }
+        
+        // 时段
+        if (cfg.tariff_periods) {
+            renderPeriods('peak', cfg.tariff_periods.peak || []);
+            renderPeriods('valley', cfg.tariff_periods.valley || []);
+        }
+        
+        // 预览
+        updateTariffPreview();
+    } catch(e) {
+        console.error('加载电价配置失败:', e);
+    }
+}
+
+function renderPeriods(type, periods) {
+    const container = document.getElementById(`${type}-periods`);
+    container.innerHTML = '';
+    periods.forEach((p, i) => {
+        const row = document.createElement('div');
+        row.className = 'row g-1 mb-1';
+        row.innerHTML = `
+            <div class="col-4">
+                <input type="number" class="form-control form-control-sm" 
+                       value="${p[0]}" min="0" max="23" data-type="${type}" data-idx="${i}" data-field="start">
+            </div>
+            <div class="col-1 text-center align-self-center">-</div>
+            <div class="col-4">
+                <input type="number" class="form-control form-control-sm" 
+                       value="${p[1]}" min="1" max="24" data-type="${type}" data-idx="${i}" data-field="end">
+            </div>
+            <div class="col-3">
+                <button class="btn btn-sm btn-outline-danger w-100" onclick="removePeriod('${type}', ${i})">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        `;
+        container.appendChild(row);
+    });
+}
+
+function addPeriod(type) {
+    const container = document.getElementById(`${type}-periods`);
+    const idx = container.children.length;
+    const row = document.createElement('div');
+    row.className = 'row g-1 mb-1';
+    row.innerHTML = `
+        <div class="col-4">
+            <input type="number" class="form-control form-control-sm" 
+                   value="0" min="0" max="23" data-type="${type}" data-idx="${idx}" data-field="start">
+        </div>
+        <div class="col-1 text-center align-self-center">-</div>
+        <div class="col-4">
+            <input type="number" class="form-control form-control-sm" 
+                   value="8" min="1" max="24" data-type="${type}" data-idx="${idx}" data-field="end">
+        </div>
+        <div class="col-3">
+            <button class="btn btn-sm btn-outline-danger w-100" onclick="this.closest('.row').remove()">
+                <i class="bi bi-trash"></i>
+            </button>
+        </div>
+    `;
+    container.appendChild(row);
+}
+
+function removePeriod(type, idx) {
+    const container = document.getElementById(`${type}-periods`);
+    if (container.children[idx]) {
+        container.children[idx].remove();
+    }
+}
+
+function collectPeriods(type) {
+    const container = document.getElementById(`${type}-periods`);
+    const periods = [];
+    container.querySelectorAll('.row').forEach(row => {
+        const inputs = row.querySelectorAll('input[type="number"]');
+        if (inputs.length >= 2) {
+            const start = parseInt(inputs[0].value);
+            const end = parseInt(inputs[1].value);
+            if (!isNaN(start) && !isNaN(end) && start < end) {
+                periods.push([start, end]);
+            }
+        }
+    });
+    return periods;
+}
+
+function updateTariffPreview() {
+    const peak = document.getElementById('cfg-tariff-peak')?.value || '-';
+    const flat = document.getElementById('cfg-tariff-flat')?.value || '-';
+    const valley = document.getElementById('cfg-tariff-valley')?.value || '-';
+    document.getElementById('preview-peak').textContent = peak !== '-' ? `¥${peak}/kWh` : '-';
+    document.getElementById('preview-flat').textContent = flat !== '-' ? `¥${flat}/kWh` : '-';
+    document.getElementById('preview-valley').textContent = valley !== '-' ? `¥${valley}/kWh` : '-';
+}
+
+// 电价输入变化时实时更新预览
+['cfg-tariff-peak', 'cfg-tariff-flat', 'cfg-tariff-valley'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateTariffPreview);
+});
+
+async function saveTariff() {
+    const tariff = {
+        peak: parseFloat(document.getElementById('cfg-tariff-peak').value),
+        flat: parseFloat(document.getElementById('cfg-tariff-flat').value),
+        valley: parseFloat(document.getElementById('cfg-tariff-valley').value),
+    };
+    
+    if (isNaN(tariff.peak) || isNaN(tariff.flat) || isNaN(tariff.valley)) {
+        showAlert('请填写完整的电价信息', 'warning');
+        return;
+    }
+    
+    const carbonFactor = parseFloat(document.getElementById('cfg-carbon-factor').value);
+    
+    const payload = {
+        tariff: tariff,
+        tariff_periods: {
+            peak: collectPeriods('peak'),
+            valley: collectPeriods('valley'),
+        },
+    };
+    
+    if (!isNaN(carbonFactor) && carbonFactor > 0) {
+        payload.carbon_factor = carbonFactor;
+    }
+    
+    try {
+        const r = await fetch('/api/industry40/energy/tariff', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(payload)
+        });
+        const data = await r.json();
+        if (data.success) {
+            showAlert('电价配置已保存并实时生效', 'success');
+            updateTariffPreview();
+        } else {
+            showAlert(data.error || data.message || '保存失败', 'danger');
+        }
+    } catch(e) {
+        showAlert('保存失败: ' + e.message, 'danger');
+    }
+}
+
+// ==================== 报警输出配置 ====================
+
+async function loadAlarmOutputConfig() {
+    try {
+        const r = await fetch('/api/alarm-output/config', { headers: getAuthHeaders() });
+        const data = await r.json();
+        if (!data.success || !data.config) return;
+        
+        const cfg = data.config;
+        
+        document.getElementById('cfg-ao-enabled').checked = cfg.enabled !== false;
+        
+        const tower = cfg.signal_tower || {};
+        setVal('cfg-ao-host', tower.host);
+        setVal('cfg-ao-port', tower.port);
+        setVal('cfg-ao-slave', tower.slave_id);
+        
+        const doMap = tower.do_mapping || {};
+        setVal('cfg-ao-do-red', doMap.red_light);
+        setVal('cfg-ao-do-yellow', doMap.yellow_light);
+        setVal('cfg-ao-do-green', doMap.green_light);
+        setVal('cfg-ao-do-buzzer', doMap.buzzer);
+    } catch(e) {
+        console.error('加载报警输出配置失败:', e);
+    }
+}
+
+async function saveAlarmOutputConfig() {
+    const payload = {
+        enabled: document.getElementById('cfg-ao-enabled').checked,
+        signal_tower: {
+            host: document.getElementById('cfg-ao-host').value,
+            port: parseInt(document.getElementById('cfg-ao-port').value) || 502,
+            slave_id: parseInt(document.getElementById('cfg-ao-slave').value) || 1,
+            do_mapping: {
+                red_light: parseInt(document.getElementById('cfg-ao-do-red').value) || 0,
+                yellow_light: parseInt(document.getElementById('cfg-ao-do-yellow').value) || 1,
+                green_light: parseInt(document.getElementById('cfg-ao-do-green').value) || 2,
+                buzzer: parseInt(document.getElementById('cfg-ao-do-buzzer').value) || 5,
+            }
+        }
+    };
+    
+    try {
+        const r = await fetch('/api/alarm-output/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(payload)
+        });
+        const data = await r.json();
+        if (data.success) {
+            showAlert('报警输出配置已保存并实时生效', 'success');
+        } else {
+            showAlert(data.message || '保存失败', 'danger');
+        }
+    } catch(e) {
+        showAlert('保存失败: ' + e.message, 'danger');
+    }
+}
+
+// ==================== 广播系统配置 ====================
+
+async function loadBroadcastConfig() {
+    try {
+        const r = await fetch('/api/broadcast/config', { headers: getAuthHeaders() });
+        const data = await r.json();
+        if (!data.success) return;
+        
+        const cfg = data.config || {};
+        const runtime = data.runtime || {};
+        
+        document.getElementById('cfg-bc-enabled').checked = runtime.enabled !== false;
+        
+        const mqtt = cfg.mqtt || {};
+        setVal('cfg-bc-broker', mqtt.broker || runtime.broker);
+        setVal('cfg-bc-port', mqtt.port);
+        setVal('cfg-bc-topic', mqtt.topic_prefix);
+        setVal('cfg-bc-username', mqtt.username);
+        
+        const areas = cfg.areas || runtime.areas || [];
+        setVal('cfg-bc-areas', areas.join(','));
+    } catch(e) {
+        console.error('加载广播配置失败:', e);
+    }
+}
+
+async function saveBroadcastConfig() {
+    const areasStr = document.getElementById('cfg-bc-areas').value;
+    const areas = areasStr.split(',').map(s => s.trim()).filter(Boolean);
+    
+    const payload = {
+        enabled: document.getElementById('cfg-bc-enabled').checked,
+        mqtt: {
+            broker: document.getElementById('cfg-bc-broker').value || 'localhost',
+            port: parseInt(document.getElementById('cfg-bc-port').value) || 1883,
+            topic_prefix: document.getElementById('cfg-bc-topic').value || 'pa/',
+            username: document.getElementById('cfg-bc-username').value || '',
+            password: document.getElementById('cfg-bc-password').value || '',
+        },
+        areas: areas,
+    };
+    
+    try {
+        const r = await fetch('/api/broadcast/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(payload)
+        });
+        const data = await r.json();
+        if (data.success) {
+            showAlert('广播系统配置已保存并实时生效', 'success');
+        } else {
+            showAlert(data.message || '保存失败', 'danger');
+        }
+    } catch(e) {
+        showAlert('保存失败: ' + e.message, 'danger');
+    }
+}
 
 // ==================== 工具函数 ====================
 

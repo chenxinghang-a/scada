@@ -558,3 +558,106 @@ def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: 
         for key in ('base_url', 'poll_interval', 'auth_type', 'auth_token', 'auth_username', 'auth_password', 'endpoints'):
             if key in data:
                 device_config[key] = int(data[key]) if key == 'poll_interval' else data[key]
+
+
+# ==================== 模拟设备预设API ====================
+
+def _get_simulation_initializer():
+    """安全获取SimulationInitializer实例"""
+    try:
+        return getattr(current_app, 'simulation_initializer', None)
+    except Exception:
+        return None
+
+
+@devices_bp.route('/devices/presets', methods=['GET'])
+def get_simulation_presets():
+    """获取所有模拟设备预设列表"""
+    initializer = _get_simulation_initializer()
+    if initializer is None:
+        return jsonify({'success': False, 'message': '模拟初始化器未加载'}), 500
+
+    presets = initializer.get_presets()
+    categories = initializer.get_preset_categories()
+    return jsonify({'success': True, 'presets': presets, 'categories': categories})
+
+
+@devices_bp.route('/devices/presets/<preset_id>', methods=['GET'])
+def get_preset_detail(preset_id):
+    """获取单个预设详情"""
+    initializer = _get_simulation_initializer()
+    if initializer is None:
+        return jsonify({'success': False, 'message': '模拟初始化器未加载'}), 500
+
+    preset = initializer.get_preset_detail(preset_id)
+    if preset is None:
+        return jsonify({'success': False, 'message': f'预设 {preset_id} 不存在'}), 404
+
+    return jsonify({'success': True, 'preset': preset})
+
+
+@devices_bp.route('/devices/presets/add', methods=['POST'])
+@_require_engineer
+def add_preset_device():
+    """一键添加预设设备"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请提供预设配置'}), 400
+
+    preset_id = data.get('preset_id')
+    if not preset_id:
+        return jsonify({'success': False, 'message': '缺少 preset_id'}), 400
+
+    custom_device_id = data.get('device_id')  # 可选
+
+    initializer = _get_simulation_initializer()
+    if initializer is None:
+        return jsonify({'success': False, 'message': '模拟初始化器未加载'}), 500
+
+    result = initializer.add_preset_device(preset_id, custom_device_id)
+    if result['success']:
+        get_auth_manager().log_operation(
+            request.current_user['username'], 'add_preset',
+            f"添加预设设备: {preset_id} -> {result.get('device_id', '')}")
+    return jsonify(result)
+
+
+@devices_bp.route('/devices/presets/batch-add', methods=['POST'])
+@_require_engineer
+def batch_add_presets():
+    """批量添加预设设备"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请提供预设列表'}), 400
+
+    preset_ids = data.get('preset_ids', [])
+    if not preset_ids:
+        return jsonify({'success': False, 'message': '缺少 preset_ids'}), 400
+
+    initializer = _get_simulation_initializer()
+    if initializer is None:
+        return jsonify({'success': False, 'message': '模拟初始化器未加载'}), 500
+
+    result = initializer.add_preset_batch(preset_ids)
+    if result['success']:
+        get_auth_manager().log_operation(
+            request.current_user['username'], 'batch_add_presets',
+            f"批量添加预设: {preset_ids}")
+    return jsonify(result)
+
+
+@devices_bp.route('/devices/presets/add-all', methods=['POST'])
+@_require_engineer
+def add_all_presets():
+    """一键添加全部预设设备"""
+    initializer = _get_simulation_initializer()
+    if initializer is None:
+        return jsonify({'success': False, 'message': '模拟初始化器未加载'}), 500
+
+    all_preset_ids = [p['id'] for p in initializer.presets]
+    result = initializer.add_preset_batch(all_preset_ids)
+    if result['success']:
+        get_auth_manager().log_operation(
+            request.current_user['username'], 'add_all_presets',
+            f"添加全部预设: {result['message']}")
+    return jsonify(result)

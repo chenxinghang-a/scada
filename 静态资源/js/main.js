@@ -72,9 +72,144 @@ function handleAlarm(data) {
 }
 
 /**
- * 显示报警通知（非侵入式Toast通知，不影响操作）
+ * 报警去重管理器（前端）
+ * 防止同一报警重复弹窗：
+ * 1. 冷却窗口：同一 dedup_key 在冷却期内只显示一次 toast
+ * 2. 用户dismissed跟踪：用户手动关闭的报警在冷却期内不重复显示
+ * 3. 从后端动态获取去重配置
+ */
+const AlarmDedupManager = {
+    // 去重配置（初始默认值，会从后端加载）
+    config: {
+        enabled: true,
+        emit_cooldown_seconds: 60,
+        acknowledge_suppress_seconds: 300,
+        max_visible_toasts: 3,
+        critical_toast_duration: 30,
+        warning_toast_duration: 10,
+    },
+
+    // 推送记录：dedup_key -> last_show_timestamp
+    _emitHistory: {},
+
+    // 用户手动关闭记录：dedup_key -> dismiss_timestamp
+    _dismissed: {},
+
+    // 配置加载标记
+    _configLoaded: false,
+
+    /**
+     * 从后端加载去重配置
+     */
+    async loadConfig() {
+        try {
+            const resp = await fetch(`${API_BASE}/alarms/dedup-config`);
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.config) {
+                    Object.assign(this.config, data.config);
+                    this._configLoaded = true;
+                    console.log('[AlarmDedup] 配置已加载:', this.config);
+                }
+            }
+        } catch (e) {
+            console.warn('[AlarmDedup] 加载配置失败，使用默认值:', e);
+        }
+    },
+
+    /**
+     * 生成去重key
+     */
+    _getKey(alarm) {
+        return alarm.dedup_key || `${alarm.alarm_id || alarm.id || ''}:${alarm.device_id || ''}:${alarm.register_name || ''}`;
+    },
+
+    /**
+     * 检查是否应该显示此报警
+     * @returns {boolean} true=应该显示, false=应被去重
+     */
+    shouldShow(alarm) {
+        if (!this.config.enabled) return true;
+
+        const key = this._getKey(alarm);
+        const now = Date.now();
+        const cooldownMs = this.config.emit_cooldown_seconds * 1000;
+        const suppressMs = this.config.acknowledge_suppress_seconds * 1000;
+
+        // 检查用户dismissed记录
+        const dismissTime = this._dismissed[key];
+        if (dismissTime && (now - dismissTime) < suppressMs) {
+            console.log(`[AlarmDedup] 被用户dismissed抑制: ${key}`);
+            return false;
+        }
+
+        // 检查冷却窗口
+        const lastShow = this._emitHistory[key];
+        if (lastShow && (now - lastShow) < cooldownMs) {
+            console.log(`[AlarmDedup] 在冷却窗口内: ${key}`);
+            return false;
+        }
+
+        return true;
+    },
+
+    /**
+     * 记录报警已显示
+     */
+    recordShow(alarm) {
+        const key = this._getKey(alarm);
+        this._emitHistory[key] = Date.now();
+        // 清除dismissed记录（新报警覆盖旧的dismissed）
+        delete this._dismissed[key];
+    },
+
+    /**
+     * 记录用户手动关闭（dismissed）
+     */
+    recordDismiss(alarm) {
+        const key = this._getKey(alarm);
+        this._dismissed[key] = Date.now();
+    },
+
+    /**
+     * 清理过期记录（防止内存泄漏）
+     */
+    cleanup() {
+        const now = Date.now();
+        const maxAge = Math.max(
+            this.config.emit_cooldown_seconds,
+            this.config.acknowledge_suppress_seconds
+        ) * 1000 * 2;
+
+        for (const key in this._emitHistory) {
+            if (now - this._emitHistory[key] > maxAge) {
+                delete this._emitHistory[key];
+            }
+        }
+        for (const key in this._dismissed) {
+            if (now - this._dismissed[key] > maxAge) {
+                delete this._dismissed[key];
+            }
+        }
+    }
+};
+
+// 定期清理过期记录
+setInterval(() => AlarmDedupManager.cleanup(), 60000);
+
+/**
+ * 显示报警通知（非侵入式Toast通知，带去重逻辑）
  */
 function showAlarmNotification(alarm) {
+    // 去重检查
+    if (!AlarmDedupManager.shouldShow(alarm)) {
+        console.log('[Alarm] 报警被去重跳过:', alarm.dedup_key || alarm.alarm_id);
+        return;
+    }
+
+    // 记录已显示
+    AlarmDedupManager.recordShow(alarm);
+
     // 创建Toast容器（如果不存在）
     let toastContainer = document.getElementById('alarm-toast-container');
     if (!toastContainer) {
@@ -121,9 +256,19 @@ function showAlarmNotification(alarm) {
                     ${alarm.value || alarm.actual_value ? ' | 值: ' + (alarm.value || alarm.actual_value) : ''}
                 </small>
             </div>
-            <button type="button" class="btn-close btn-close-white me-2 m-auto" onclick="this.closest('.toast').remove()"></button>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" id="dismiss-${Date.now()}"></button>
         </div>
     `;
+    
+    // 绑定关闭按钮事件（记录dismissed）
+    const closeBtn = toast.querySelector('.btn-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', function() {
+            AlarmDedupManager.recordDismiss(alarm);
+            toast.style.animation = 'slideOutRight 0.3s ease-in';
+            setTimeout(() => toast.remove(), 300);
+        });
+    }
     
     // 添加到容器
     toastContainer.appendChild(toast);
@@ -133,8 +278,10 @@ function showAlarmNotification(alarm) {
         playAlarmSound();
     }
     
-    // 自动消失时间：严重报警30秒，普通警告8秒
-    const dismissTime = isCritical ? 30000 : 8000;
+    // 自动消失时间：使用后端配置
+    const dismissTime = isCritical
+        ? (AlarmDedupManager.config.critical_toast_duration * 1000)
+        : (AlarmDedupManager.config.warning_toast_duration * 1000);
     setTimeout(() => {
         if (toast.parentNode) {
             toast.style.animation = 'slideOutRight 0.3s ease-in';
@@ -142,9 +289,12 @@ function showAlarmNotification(alarm) {
         }
     }, dismissTime);
     
-    // 限制最多显示3个通知（避免堆积）
-    while (toastContainer.children.length > 3) {
-        toastContainer.firstChild.remove();
+    // 限制最多显示的通知数（使用后端配置）
+    const maxToasts = AlarmDedupManager.config.max_visible_toasts || 3;
+    while (toastContainer.children.length > maxToasts) {
+        // 移除最旧的toast时也记录dismissed
+        const oldest = toastContainer.firstChild;
+        if (oldest) oldest.remove();
     }
     
     // 更新报警计数（静默更新，不弹窗）
@@ -305,6 +455,9 @@ function formatNumber(value, decimals = 2) {
 document.addEventListener('DOMContentLoaded', function() {
     // 初始化WebSocket
     initWebSocket();
+    
+    // 加载去重配置
+    AlarmDedupManager.loadConfig();
     
     // 加载初始数据
     loadInitialData();

@@ -149,6 +149,16 @@ alarm_rules:
     enabled: true
     delay: 0
 
+# ==================== 报警去重配置 ====================
+# 防止同一报警重复弹窗
+dedup:
+  enabled: true                    # 是否启用去重
+  emit_cooldown_seconds: 60        # 冷却窗口（秒）：同一报警在此时间内只推送一次
+  acknowledge_suppress_seconds: 300 # 确认后抑制时间（秒）：用户确认后不再弹窗
+  max_visible_toasts: 3            # 前端最大同时显示的toast数
+  critical_toast_duration: 30      # 严重报警toast自动消失时间（秒）
+  warning_toast_duration: 10       # 普通警告toast自动消失时间（秒）
+
 # 通知配置
 notification:
   # 邮件通知

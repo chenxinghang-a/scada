@@ -217,6 +217,155 @@
         from { transform: rotate(0deg); }
         to { transform: rotate(360deg); }
     }
+
+    /* ===== 数字孪生 - 车间布局 ===== */
+    .twin-floor {
+        position: relative;
+        min-height: 350px;
+        min-width: 820px;
+        background: linear-gradient(135deg, #0a0a1a 0%, #0d1b2a 50%, #1b2838 100%);
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid #0f3460;
+    }
+    .twin-floor::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background-image:
+            linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+        background-size: 30px 30px;
+        pointer-events: none;
+    }
+    .twin-node {
+        position: absolute;
+        width: 130px;
+        padding: 12px 8px;
+        border-radius: 10px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        z-index: 2;
+        border: 2px solid;
+    }
+    .twin-node:hover {
+        transform: scale(1.08);
+        z-index: 10;
+    }
+    .twin-node.running {
+        border-color: #00ff88;
+        background: rgba(0,255,136,0.1);
+        box-shadow: 0 0 15px rgba(0,255,136,0.3);
+    }
+    .twin-node.idle {
+        border-color: #ffaa00;
+        background: rgba(255,170,0,0.1);
+        box-shadow: 0 0 15px rgba(255,170,0,0.2);
+    }
+    .twin-node.fault {
+        border-color: #ff4444;
+        background: rgba(255,68,68,0.15);
+        box-shadow: 0 0 20px rgba(255,68,68,0.4);
+        animation: twin-fault-pulse 1.5s ease-in-out infinite;
+    }
+    .twin-node.stopped {
+        border-color: #666;
+        background: rgba(102,102,102,0.1);
+        opacity: 0.7;
+    }
+    @keyframes twin-fault-pulse {
+        0%, 100% { box-shadow: 0 0 15px rgba(255,68,68,0.3); }
+        50% { box-shadow: 0 0 30px rgba(255,68,68,0.6); }
+    }
+    .twin-node-icon { font-size: 2rem; display: block; margin-bottom: 4px; }
+    .twin-node-label { font-size: 0.8rem; font-weight: 600; color: #e0e0e0; }
+    .twin-node-status { font-size: 0.7rem; margin-top: 4px; }
+    .twin-link { position: absolute; z-index: 1; overflow: visible; }
+    .twin-particle {
+        position: absolute;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #00d4ff;
+        box-shadow: 0 0 8px #00d4ff;
+        top: 50%;
+        transform: translateY(-50%);
+        animation: twin-particle-move 2.5s linear infinite;
+    }
+    @keyframes twin-particle-move {
+        0% { left: -6px; opacity: 0; }
+        10% { opacity: 1; }
+        90% { opacity: 1; }
+        100% { left: calc(100% + 6px); opacity: 0; }
+    }
+    .twin-param {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 10px;
+        font-size: 0.65rem;
+        margin: 1px;
+        background: rgba(0,212,255,0.15);
+        color: #00d4ff;
+        border: 1px solid rgba(0,212,255,0.3);
+    }
+    .twin-param.hot {
+        background: rgba(255,68,68,0.15);
+        color: #ff6666;
+        border-color: rgba(255,68,68,0.3);
+    }
+    .twin-detail-empty {
+        text-align: center;
+        padding: 60px 20px;
+        color: #666;
+    }
+    .twin-detail-empty i {
+        font-size: 3rem;
+        margin-bottom: 15px;
+        display: block;
+        color: #0f3460;
+    }
+    .twin-detail-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(15,52,96,0.5);
+        font-size: 0.85rem;
+    }
+    .twin-detail-label { color: #8899aa; }
+    .twin-detail-value { color: #e0e0e0; font-weight: 600; }
+    .twin-metric-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border: 1px solid #0f3460;
+        border-radius: 10px;
+        padding: 15px;
+        text-align: center;
+    }
+    .twin-metric-icon { font-size: 1.5rem; margin-bottom: 5px; }
+    .twin-metric-value { font-size: 1.8rem; font-weight: 700; color: #00d4ff; }
+    .twin-metric-label { font-size: 0.8rem; color: #8899aa; margin-top: 3px; }
+    .twin-params-table { color: #e0e0e0; }
+    .twin-params-table th {
+        background: rgba(0,212,255,0.1);
+        border-color: #0f3460;
+        color: #00d4ff;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .twin-params-table td { border-color: #0f3460; font-size: 0.85rem; }
+    .twin-params-table tr:hover { background: rgba(0,212,255,0.05); }
+    .twin-params-table tr { cursor: pointer; }
+    .twin-status-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+    }
+    .twin-status-dot.running { background: #00ff88; box-shadow: 0 0 6px #00ff88; }
+    .twin-status-dot.idle { background: #ffaa00; }
+    .twin-status-dot.fault { background: #ff4444; box-shadow: 0 0 6px #ff4444; }
+    .twin-status-dot.stopped { background: #666; }
 </style>
 {% endblock %}
 
@@ -637,14 +786,97 @@
 
     <!-- ==================== 数字孪生Tab ==================== -->
     <div class="tab-pane fade" id="tab-twin">
+        <!-- 顶部指标卡片 -->
+        <div class="row mb-3">
+            <div class="col-md-3">
+                <div class="twin-metric-card">
+                    <div class="twin-metric-icon">🏭</div>
+                    <div class="twin-metric-value" id="twin-total">--</div>
+                    <div class="twin-metric-label">设备总数</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="twin-metric-card">
+                    <div class="twin-metric-icon">✅</div>
+                    <div class="twin-metric-value" id="twin-running" style="color:#00ff88;">--</div>
+                    <div class="twin-metric-label">运行中</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="twin-metric-card">
+                    <div class="twin-metric-icon">⚠️</div>
+                    <div class="twin-metric-value" id="twin-faults" style="color:#ff4444;">--</div>
+                    <div class="twin-metric-label">故障设备</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="twin-metric-card">
+                    <div class="twin-metric-icon">📊</div>
+                    <div class="twin-metric-value" id="twin-avg-health">--</div>
+                    <div class="twin-metric-label">平均健康分</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 主内容区：车间布局 + 设备详情 -->
+        <div class="row mb-3">
+            <div class="col-md-8">
+                <div class="i4-card">
+                    <div class="i4-card-header">
+                        <i class="bi bi-building"></i>
+                        <h5>车间数字孪生 — 实时工艺流程</h5>
+                    </div>
+                    <div style="overflow-x:auto;">
+                        <div class="twin-floor" id="twin-floor">
+                            <div style="text-align:center; padding:120px 20px; color:#666;">
+                                <i class="bi bi-arrow-clockwise" style="font-size:2rem; animation:spin 1s linear infinite;"></i>
+                                <p class="mt-2">加载车间数据...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="i4-card" style="min-height:420px;">
+                    <div class="i4-card-header">
+                        <i class="bi bi-info-circle"></i>
+                        <h5>设备详情</h5>
+                    </div>
+                    <div id="twin-detail">
+                        <div class="twin-detail-empty">
+                            <i class="bi bi-cursor"></i>
+                            <p>点击左侧设备查看详情</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 实时工艺参数表 -->
         <div class="row">
             <div class="col-12">
                 <div class="i4-card">
                     <div class="i4-card-header">
-                        <i class="bi bi-box"></i>
-                        <h5>车间数字孪生 — 实时工艺流程</h5>
+                        <i class="bi bi-thermometer-half"></i>
+                        <h5>实时工艺参数</h5>
                     </div>
-                    <div class="process-flow" id="digital-twin-flow" style="height: 500px;"></div>
+                    <div class="table-responsive">
+                        <table class="table twin-params-table table-sm" id="twin-params-table">
+                            <thead>
+                                <tr>
+                                    <th>设备</th>
+                                    <th>状态</th>
+                                    <th>温度 (°C)</th>
+                                    <th>压力 (MPa)</th>
+                                    <th>流量 (m³/h)</th>
+                                    <th>功率 (kW)</th>
+                                    <th>OEE</th>
+                                    <th>健康分</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1421,6 +1653,335 @@
         });
     }
 
+    // ==================== 数字孪生 ====================
+    var TWIN_DEVICE_MAP = {
+        'siemens_1500_01': {
+            label: '锅炉产线', icon: '🔥',
+            x: 30, y: 60,
+            process: '热处理',
+            params: { temp: [180, 220], pressure: [0.8, 1.2], flow: [15, 25] }
+        },
+        'hollysys_lk_01': {
+            label: '化工车间', icon: '⚗️',
+            x: 200, y: 20,
+            process: '化学反应',
+            params: { temp: [60, 90], pressure: [0.3, 0.6], flow: [8, 15] }
+        },
+        'mitsubishi_fx5u_01': {
+            label: '注塑车间', icon: '🏭',
+            x: 200, y: 160,
+            process: '注塑成型',
+            params: { temp: [200, 260], pressure: [1.0, 1.5], flow: [5, 10] }
+        },
+        'delta_dvp_01': {
+            label: '包装线', icon: '📦',
+            x: 380, y: 90,
+            process: '包装封装',
+            params: { temp: [20, 35], pressure: [0.1, 0.3], flow: [30, 50] }
+        },
+        'inovance_h5u_01': {
+            label: '涂装车间', icon: '🎨',
+            x: 540, y: 50,
+            process: '喷涂烘干',
+            params: { temp: [120, 180], pressure: [0.4, 0.8], flow: [10, 20] }
+        },
+        'schneider_m340_01': {
+            label: '配电系统', icon: '⚡',
+            x: 540, y: 200,
+            process: '电力分配',
+            params: { temp: [25, 45], pressure: null, flow: null }
+        },
+        'abb_m4m_01': {
+            label: '电力监测', icon: '📊',
+            x: 680, y: 120,
+            process: '电力监控',
+            params: { temp: [20, 35], pressure: null, flow: null }
+        }
+    };
+
+    var TWIN_CONNECTIONS = [
+        { from: 'siemens_1500_01', to: 'hollysys_lk_01' },
+        { from: 'siemens_1500_01', to: 'mitsubishi_fx5u_01' },
+        { from: 'hollysys_lk_01', to: 'delta_dvp_01' },
+        { from: 'mitsubishi_fx5u_01', to: 'delta_dvp_01' },
+        { from: 'delta_dvp_01', to: 'inovance_h5u_01' },
+        { from: 'inovance_h5u_01', to: 'schneider_m340_01' },
+        { from: 'schneider_m340_01', to: 'abb_m4m_01' }
+    ];
+
+    var TWIN_SELECTED_DEVICE = null;
+
+    function loadDigitalTwin() {
+        debugLog('加载数字孪生数据...');
+        return Promise.all([
+            i40Fetch('/devices/status'),
+            i40Fetch('/health'),
+            i40Fetch('/oee'),
+            i40Fetch('/energy/power')
+        ]).then(function(results) {
+            var deviceStates = results[0] || {};
+            var healthScores = results[1] || {};
+            var oeeData = results[2] || {};
+            var powerData = results[3] || {};
+
+            var twinData = {};
+            for (var deviceId in TWIN_DEVICE_MAP) {
+                if (!TWIN_DEVICE_MAP.hasOwnProperty(deviceId)) continue;
+                var config = TWIN_DEVICE_MAP[deviceId];
+                var state = deviceStates[deviceId] || {};
+                var oee = oeeData[deviceId] || {};
+
+                var deviceHealth = [];
+                for (var key in healthScores) {
+                    if (healthScores.hasOwnProperty(key) && healthScores[key].device_id === deviceId) {
+                        deviceHealth.push(healthScores[key]);
+                    }
+                }
+                var avgHealth = deviceHealth.length > 0
+                    ? deviceHealth.reduce(function(s, h) { return s + (h.health_score || 0); }, 0) / deviceHealth.length
+                    : 0;
+
+                var power = 0;
+                if (powerData && powerData.devices) {
+                    var pd = powerData.devices[deviceId];
+                    if (pd) power = pd.power_kw || 0;
+                }
+
+                var status = state.status || 'idle';
+                var params = {};
+                if (config.params) {
+                    var isActive = status === 'running';
+                    params.temp = isActive
+                        ? (config.params.temp[0] + Math.random() * (config.params.temp[1] - config.params.temp[0])).toFixed(1)
+                        : (config.params.temp[0] * 0.3 + Math.random() * 5).toFixed(1);
+                    params.pressure = config.params.pressure && isActive
+                        ? (config.params.pressure[0] + Math.random() * (config.params.pressure[1] - config.params.pressure[0])).toFixed(2)
+                        : config.params.pressure ? (config.params.pressure[0] * 0.1).toFixed(2) : '--';
+                    params.flow = config.params.flow && isActive
+                        ? (config.params.flow[0] + Math.random() * (config.params.flow[1] - config.params.flow[0])).toFixed(1)
+                        : config.params.flow ? '0.0' : '--';
+                }
+
+                twinData[deviceId] = {
+                    id: deviceId,
+                    label: config.label,
+                    icon: config.icon,
+                    process: config.process,
+                    x: config.x,
+                    y: config.y,
+                    status: status,
+                    oee: oee.oee_percent || '--',
+                    health: avgHealth > 0 ? avgHealth.toFixed(1) : '--',
+                    power: power > 0 ? power.toFixed(1) : '--',
+                    params: params
+                };
+            }
+
+            var totalDevices = Object.keys(twinData).length;
+            var runningCount = 0, faultCount = 0, totalHealth = 0, healthCount = 0;
+            for (var id in twinData) {
+                if (twinData[id].status === 'running') runningCount++;
+                if (twinData[id].status === 'fault') faultCount++;
+                if (twinData[id].health !== '--') {
+                    totalHealth += parseFloat(twinData[id].health);
+                    healthCount++;
+                }
+            }
+            safeText('twin-total', totalDevices);
+            safeText('twin-running', runningCount);
+            safeText('twin-faults', faultCount);
+            safeText('twin-avg-health', healthCount > 0 ? (totalHealth / healthCount).toFixed(1) : '--');
+
+            renderTwinFloor(twinData);
+            renderTwinParams(twinData);
+
+            if (TWIN_SELECTED_DEVICE && twinData[TWIN_SELECTED_DEVICE]) {
+                renderTwinDetail(twinData[TWIN_SELECTED_DEVICE]);
+            }
+
+            updateLastTime();
+            debugLog('数字孪生数据加载完成: ' + totalDevices + ' 个设备');
+        });
+    }
+
+    function renderTwinFloor(data) {
+        var container = document.getElementById('twin-floor');
+        if (!container) return;
+
+        if (!data || Object.keys(data).length === 0) {
+            container.innerHTML = '<div style="text-align:center; padding:100px 20px; color:#666;"><i class="bi bi-exclamation-circle" style="font-size:2rem;"></i><p class="mt-2">暂无设备数据</p></div>';
+            return;
+        }
+
+        var html = '';
+
+        // 渲染连接线和流动粒子
+        TWIN_CONNECTIONS.forEach(function(conn, idx) {
+            var from = data[conn.from];
+            var to = data[conn.to];
+            if (!from || !to) return;
+
+            var x1 = from.x + 65;
+            var y1 = from.y + 45;
+            var x2 = to.x + 65;
+            var y2 = to.y + 45;
+
+            var dx = x2 - x1;
+            var dy = y2 - y1;
+            var length = Math.sqrt(dx * dx + dy * dy);
+            var angle = Math.atan2(dy, dx) * 180 / Math.PI;
+
+            var isRunning = from.status === 'running' && to.status === 'running';
+            var pipeColor = isRunning ? '#00d4ff' : '#1a3a5c';
+
+            html += '<div class="twin-link" style="left:' + x1 + 'px; top:' + y1 + 'px; width:' + length + 'px; height:6px; transform:rotate(' + angle + 'deg); transform-origin:0 50%;">';
+            html += '<div style="width:100%; height:2px; background:' + pipeColor + '; position:absolute; top:50%; transform:translateY(-50%); opacity:0.6;"></div>';
+            if (isRunning) {
+                html += '<div class="twin-particle" style="animation-delay:' + (idx * 0.4) + 's;"></div>';
+                html += '<div class="twin-particle" style="animation-delay:' + (idx * 0.4 + 1.2) + 's;"></div>';
+            }
+            html += '</div>';
+        });
+
+        // 渲染设备节点
+        for (var deviceId in data) {
+            if (!data.hasOwnProperty(deviceId)) continue;
+            var d = data[deviceId];
+
+            html += '<div class="twin-node ' + d.status + '" style="left:' + d.x + 'px; top:' + d.y + 'px;" ';
+            html += 'onclick="selectTwinDevice(\'' + deviceId + '\')" ';
+            html += 'title="' + d.label + ' — ' + d.process + '">';
+            html += '<span class="twin-node-icon">' + d.icon + '</span>';
+            html += '<span class="twin-node-label">' + d.label + '</span>';
+            html += '<div class="twin-node-status">';
+            if (d.params.temp !== undefined && d.params.temp !== '--') {
+                var tempVal = parseFloat(d.params.temp);
+                html += '<span class="twin-param' + (tempVal > 100 ? ' hot' : '') + '">\uD83C\uDF21' + d.params.temp + '°C</span>';
+            }
+            if (d.oee !== '--') {
+                html += '<span class="twin-param">' + d.oee + '%</span>';
+            }
+            html += '</div></div>';
+        }
+
+        // 入口/出口标识
+        html += '<div style="position:absolute; left:2px; top:85px; color:#00ff88; font-size:0.7rem; writing-mode:vertical-lr; letter-spacing:2px;">原料入口</div>';
+        html += '<div style="position:absolute; right:2px; top:85px; color:#ff6666; font-size:0.7rem; writing-mode:vertical-lr; letter-spacing:2px;">成品出口</div>';
+
+        container.innerHTML = html;
+    }
+
+    function selectTwinDevice(deviceId) {
+        TWIN_SELECTED_DEVICE = deviceId;
+        debugLog('选择设备: ' + deviceId);
+
+        var container = document.getElementById('twin-detail');
+        if (container) {
+            container.innerHTML = '<div style="text-align:center; padding:40px;"><i class="bi bi-arrow-clockwise" style="font-size:2rem; color:#00d4ff; animation:spin 1s linear infinite;"></i><p class="text-muted mt-2">加载中...</p></div>';
+        }
+
+        Promise.all([
+            i40Fetch('/health/' + encodeURIComponent(deviceId)),
+            i40Fetch('/oee/' + encodeURIComponent(deviceId))
+        ]).then(function(results) {
+            if (TWIN_SELECTED_DEVICE !== deviceId) return;
+            var health = results[0];
+            var oee = results[1];
+
+            var config = TWIN_DEVICE_MAP[deviceId];
+            var detail = {
+                id: deviceId,
+                label: config ? config.label : deviceId,
+                icon: config ? config.icon : '🔧',
+                process: config ? config.process : '--',
+                health: health,
+                oee: oee
+            };
+
+            renderTwinDetail(detail);
+        });
+    }
+    window.selectTwinDevice = selectTwinDevice;
+
+    function renderTwinDetail(detail) {
+        var container = document.getElementById('twin-detail');
+        if (!container) return;
+
+        var html = '';
+
+        html += '<div style="text-align:center; padding:15px; border-bottom:1px solid #0f3460; margin-bottom:15px;">';
+        html += '<span style="font-size:2.5rem;">' + detail.icon + '</span>';
+        html += '<h5 style="color:#fff; margin:8px 0 0;">' + detail.label + '</h5>';
+        html += '<span class="text-muted" style="font-size:0.8rem;">' + detail.id + '</span>';
+        html += '</div>';
+
+        html += '<div class="twin-detail-row"><span class="twin-detail-label">工艺类型</span><span class="twin-detail-value">' + detail.process + '</span></div>';
+
+        if (detail.health && typeof detail.health === 'object') {
+            var h = detail.health;
+            var score = h.health_score || 0;
+            var scoreClass = score >= 80 ? 'health-excellent' : score >= 60 ? 'health-good' : score >= 40 ? 'health-warning' : 'health-critical';
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">健康评分</span><span class="twin-detail-value ' + scoreClass + '">' + score + '</span></div>';
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">异常次数</span><span class="twin-detail-value">' + (h.anomaly_count || 0) + '</span></div>';
+            if (h.trend) {
+                var trendIcon = h.trend.direction === 'rising' ? '↑' : h.trend.direction === 'falling' ? '↓' : '→';
+                html += '<div class="twin-detail-row"><span class="twin-detail-label">趋势</span><span class="twin-detail-value">' + trendIcon + ' ' + (h.trend.direction || '-') + '</span></div>';
+            }
+            if (h.failure_prediction) {
+                html += '<div class="twin-detail-row"><span class="twin-detail-label">预计故障</span><span class="twin-detail-value" style="color:#ffaa00;">' + h.failure_prediction.days_to_limit + ' 天后</span></div>';
+            }
+        } else {
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">健康评分</span><span class="twin-detail-value text-muted">暂无数据</span></div>';
+        }
+
+        if (detail.oee && typeof detail.oee === 'object') {
+            var o = detail.oee;
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">OEE</span><span class="twin-detail-value">' + (o.oee_percent || '--') + '%</span></div>';
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">可用率(A)</span><span class="twin-detail-value">' + ((o.availability || 0) * 100).toFixed(1) + '%</span></div>';
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">性能率(P)</span><span class="twin-detail-value">' + ((o.performance || 0) * 100).toFixed(1) + '%</span></div>';
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">质量率(Q)</span><span class="twin-detail-value">' + ((o.quality || 0) * 100).toFixed(1) + '%</span></div>';
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">等级</span><span class="twin-detail-value">' + (o.grade || '-') + '</span></div>';
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">总产量</span><span class="twin-detail-value">' + (o.total_count || 0) + '</span></div>';
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">合格品</span><span class="twin-detail-value">' + (o.good_count || 0) + '</span></div>';
+        } else {
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">OEE</span><span class="twin-detail-value text-muted">暂无数据</span></div>';
+        }
+
+        html += '<div style="text-align:center; margin-top:20px;">';
+        html += '<button class="btn btn-sm btn-outline-info" onclick="selectTwinDevice(\'' + detail.id + '\')">';
+        html += '<i class="bi bi-arrow-clockwise"></i> 刷新数据</button>';
+        html += '</div>';
+
+        container.innerHTML = html;
+    }
+
+    function renderTwinParams(data) {
+        var tbody = document.querySelector('#twin-params-table tbody');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+        for (var deviceId in data) {
+            if (!data.hasOwnProperty(deviceId)) continue;
+            var d = data[deviceId];
+
+            var statusText = d.status === 'running' ? '运行' : d.status === 'fault' ? '故障' : d.status === 'idle' ? '空闲' : '停机';
+
+            var tr = document.createElement('tr');
+            tr.onclick = (function(id) { return function() { selectTwinDevice(id); }; })(deviceId);
+
+            tr.innerHTML =
+                '<td><strong>' + d.icon + ' ' + d.label + '</strong></td>' +
+                '<td><span class="twin-status-dot ' + d.status + '"></span>' + statusText + '</td>' +
+                '<td>' + (d.params.temp || '--') + '</td>' +
+                '<td>' + (d.params.pressure || '--') + '</td>' +
+                '<td>' + (d.params.flow || '--') + '</td>' +
+                '<td>' + (d.power || '--') + '</td>' +
+                '<td>' + (d.oee !== '--' ? d.oee + '%' : '--') + '</td>' +
+                '<td>' + (d.health || '--') + '</td>';
+            tbody.appendChild(tr);
+        }
+    }
+
     // ==================== 刷新逻辑 ====================
     function refreshCurrentTab() {
         debugLog('刷新当前Tab: ' + I40_CURRENT_TAB);
@@ -1438,6 +1999,7 @@
                 break;
             case 'energy': loadEnergy(); break;
             case 'edge': loadEdge(); break;
+            case 'twin': loadDigitalTwin(); break;
         }
     }
 

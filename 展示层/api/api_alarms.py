@@ -286,3 +286,228 @@ def update_notification():
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_notification', '更新通知设置')
     return jsonify({'success': True, 'message': '通知设置已保存'})
+
+
+# ==================== 报警输出配置API ====================
+
+@alarms_bp.route('/alarm-output/config', methods=['GET'])
+@_require_auth
+def get_alarm_output_config():
+    """获取声光报警器配置（Modbus连接、DO映射等）"""
+    config = load_yaml_config('配置/alarms.yaml')
+    alarm_output_cfg = config.get('alarm_output', {})
+    return jsonify({
+        'success': True,
+        'config': alarm_output_cfg
+    })
+
+
+@alarms_bp.route('/alarm-output/config', methods=['PUT'])
+@_require_auth
+@_require_engineer
+def update_alarm_output_config():
+    """
+    更新声光报警器配置（Modbus连接、DO映射等）
+    
+    请求体示例:
+    {
+        "signal_tower": {
+            "host": "192.168.1.70",
+            "port": 502,
+            "slave_id": 1,
+            "do_mapping": {
+                "red_light": 0,
+                "yellow_light": 1,
+                "green_light": 2,
+                "buzzer": 5
+            }
+        }
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请提供配置数据'}), 400
+
+    config = load_yaml_config('配置/alarms.yaml')
+    
+    # 更新alarm_output配置
+    if 'alarm_output' not in config:
+        config['alarm_output'] = {}
+    
+    alarm_output = config['alarm_output']
+    
+    if 'enabled' in data:
+        alarm_output['enabled'] = bool(data['enabled'])
+    
+    if 'signal_tower' in data:
+        if 'signal_tower' not in alarm_output:
+            alarm_output['signal_tower'] = {}
+        tower = data['signal_tower']
+        for key in ('device_id', 'protocol', 'host', 'port', 'slave_id'):
+            if key in tower:
+                alarm_output['signal_tower'][key] = tower[key]
+        if 'do_mapping' in tower:
+            if 'do_mapping' not in alarm_output['signal_tower']:
+                alarm_output['signal_tower']['do_mapping'] = {}
+            alarm_output['signal_tower']['do_mapping'].update(tower['do_mapping'])
+    
+    if 'relay_output' in data:
+        if 'relay_output' not in alarm_output:
+            alarm_output['relay_output'] = {}
+        relay = data['relay_output']
+        for key in ('device_id', 'protocol', 'host', 'port', 'slave_id'):
+            if key in relay:
+                alarm_output['relay_output'][key] = relay[key]
+        if 'do_mapping' in relay:
+            if 'do_mapping' not in alarm_output['relay_output']:
+                alarm_output['relay_output']['do_mapping'] = {}
+            alarm_output['relay_output']['do_mapping'].update(relay['do_mapping'])
+
+    save_yaml_config('配置/alarms.yaml', config)
+
+    # 同步更新运行时的alarm_output实例
+    alarm_manager = current_app.alarm_manager
+    if alarm_manager.alarm_output:
+        ao = alarm_manager.alarm_output
+        tower_cfg = alarm_output.get('signal_tower', {})
+        if 'host' in tower_cfg:
+            ao.config.setdefault('modbus', {})['host'] = tower_cfg['host']
+        if 'port' in tower_cfg:
+            ao.config.setdefault('modbus', {})['port'] = tower_cfg['port']
+        if 'slave_id' in tower_cfg:
+            ao.config.setdefault('modbus', {})['slave_id'] = tower_cfg['slave_id']
+        if 'do_mapping' in tower_cfg:
+            dm = tower_cfg['do_mapping']
+            if 'red_light' in dm:
+                ao.do_red = dm['red_light']
+            if 'yellow_light' in dm:
+                ao.do_yellow = dm['yellow_light']
+            if 'green_light' in dm:
+                ao.do_green = dm['green_light']
+            if 'buzzer' in dm:
+                ao.do_buzzer = dm['buzzer']
+        # 断开旧连接，下次操作时重新连接
+        if hasattr(ao, '_modbus_client') and ao._modbus_client:
+            ao._modbus_client.close()
+            ao._modbus_client = None
+
+    get_auth_manager().log_operation(
+        request.current_user['username'], 'update_alarm_output_config', '更新报警输出配置')
+    return jsonify({'success': True, 'message': '报警输出配置已保存（实时生效）'})
+
+
+@alarms_bp.route('/broadcast/config', methods=['GET'])
+@_require_auth
+def get_broadcast_config():
+    """获取广播系统配置"""
+    config = load_yaml_config('配置/alarms.yaml')
+    broadcast_cfg = config.get('broadcast', {})
+    
+    # 也返回运行时状态
+    alarm_manager = current_app.alarm_manager
+    runtime_status = {}
+    if alarm_manager.broadcast_system:
+        runtime_status = alarm_manager.broadcast_system.get_status()
+    
+    return jsonify({
+        'success': True,
+        'config': broadcast_cfg,
+        'runtime': runtime_status
+    })
+
+
+@alarms_bp.route('/broadcast/config', methods=['PUT'])
+@_require_auth
+@_require_engineer
+def update_broadcast_config():
+    """
+    更新广播系统配置
+    
+    请求体示例:
+    {
+        "enabled": true,
+        "mqtt": {
+            "broker": "192.168.1.200",
+            "port": 1883,
+            "username": "",
+            "password": "",
+            "topic_prefix": "pa/"
+        },
+        "areas": ["车间A", "车间B", "仓库", "办公楼"],
+        "preset_templates": {
+            "alarm_critical": "注意！{area}发生严重报警：{message}，请立即处置！",
+            "alarm_warning": "提醒：{area}出现告警：{message}，请关注。"
+        }
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请提供配置数据'}), 400
+
+    config = load_yaml_config('配置/alarms.yaml')
+    
+    if 'broadcast' not in config:
+        config['broadcast'] = {}
+    
+    broadcast = config['broadcast']
+    
+    for key in ('enabled', 'mqtt', 'areas', 'default_area', 'preset_templates'):
+        if key in data:
+            broadcast[key] = data[key]
+
+    save_yaml_config('配置/alarms.yaml', config)
+
+    # 同步更新运行时的broadcast实例
+    alarm_manager = current_app.alarm_manager
+    if alarm_manager.broadcast_system:
+        bs = alarm_manager.broadcast_system
+        if 'enabled' in data:
+            bs.enabled = bool(data['enabled'])
+        if 'areas' in data:
+            bs.areas = data['areas']
+        if 'default_area' in data:
+            bs.default_area = data['default_area']
+        if 'preset_templates' in data:
+            bs.preset_templates.update(data['preset_templates'])
+        if 'mqtt' in data:
+            bs._mqtt_config.update(data['mqtt'])
+            # 断开旧MQTT连接，下次发送时重连
+            if bs._mqtt_client:
+                try:
+                    bs._mqtt_client.loop_stop()
+                    bs._mqtt_client.disconnect()
+                except Exception:
+                    pass
+                bs._mqtt_client = None
+                bs._mqtt_connected = False
+
+    get_auth_manager().log_operation(
+        request.current_user['username'], 'update_broadcast_config', '更新广播系统配置')
+    return jsonify({'success': True, 'message': '广播系统配置已保存（实时生效）'})
+
+
+# ==================== 报警去重配置API ====================
+
+@alarms_bp.route('/alarms/dedup-config', methods=['GET'])
+def get_dedup_config():
+    """获取报警去重配置"""
+    alarm_manager = current_app.alarm_manager
+    return jsonify({'config': alarm_manager.get_dedup_config()})
+
+
+@alarms_bp.route('/alarms/dedup-config', methods=['PUT'])
+@_require_engineer
+def update_dedup_config():
+    """更新报警去重配置"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': '请提供去重配置'}), 400
+
+    alarm_manager = current_app.alarm_manager
+    updated_config = alarm_manager.update_dedup_config(data)
+
+    get_auth_manager().log_operation(
+        request.current_user['username'], 'update_dedup_config',
+        f'更新去重配置: emit_cooldown={updated_config["emit_cooldown_seconds"]}s, '
+        f'ack_suppress={updated_config["acknowledge_suppress_seconds"]}s')
+    return jsonify({'success': True, 'config': updated_config, 'message': '去重配置已更新'})

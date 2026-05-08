@@ -14,7 +14,7 @@ import traceback
 from datetime import datetime
 from flask import Blueprint, jsonify, request, current_app
 
-from 用户层.auth import jwt_required
+from 用户层.auth import jwt_required, role_required
 from core.service_response import ServiceResponse, success_response, error_response, module_unavailable_response
 
 logger = logging.getLogger(__name__)
@@ -292,6 +292,106 @@ def get_realtime_power():
     except Exception as e:
         logger.error(f"获取实时功率失败: {e}\n{traceback.format_exc()}")
         return error_response(f"获取实时功率失败: {str(e)}", 500)
+
+
+# ==================== 电价配置API ====================
+
+@industry40_bp.route('/industry40/energy/tariff', methods=['GET'])
+@_require_auth
+def get_energy_tariff():
+    """获取当前电价配置（电价、时段、碳排放因子）"""
+    try:
+        em, err = _module_check('energy_manager', '能源管理')
+        if err:
+            return err
+        
+        result = em.get_tariff_config()
+        logger.debug("获取电价配置成功")
+        return success_response(result, message="获取电价配置成功")
+    except Exception as e:
+        logger.error(f"获取电价配置失败: {e}\n{traceback.format_exc()}")
+        return error_response(f"获取电价配置失败: {str(e)}", 500)
+
+
+@industry40_bp.route('/industry40/energy/tariff', methods=['PUT'])
+@_require_auth
+@role_required('admin', 'engineer')
+def update_energy_tariff():
+    """
+    更新电价配置（实时生效 + 持久化到YAML）
+    
+    请求体示例:
+    {
+        "tariff": {"peak": 1.5, "flat": 0.8, "valley": 0.4},
+        "tariff_periods": {"peak": [[8,11],[18,23]], "valley": [[0,7],[23,24]]},
+        "carbon_factor": 0.6
+    }
+    所有字段可选，仅传需要修改的部分
+    """
+    try:
+        em, err = _module_check('energy_manager', '能源管理')
+        if err:
+            return err
+        
+        data = request.get_json()
+        if not data:
+            return error_response("请提供配置数据", 400)
+        
+        result = em.update_tariff(
+            tariff=data.get('tariff'),
+            tariff_periods=data.get('tariff_periods'),
+            carbon_factor=data.get('carbon_factor'),
+        )
+        
+        if result.get('success'):
+            logger.info(f"电价配置已更新: {data}")
+            return success_response(result.get('config'), message=result.get('message', '配置已更新'))
+        else:
+            return error_response(result.get('message', '更新失败'), 400)
+    except Exception as e:
+        logger.error(f"更新电价配置失败: {e}\n{traceback.format_exc()}")
+        return error_response(f"更新电价配置失败: {str(e)}", 500)
+
+
+@industry40_bp.route('/industry40/energy/anomaly-config', methods=['GET'])
+@_require_auth
+def get_energy_anomaly_config():
+    """获取能耗异常检测配置"""
+    try:
+        em, err = _module_check('energy_manager', '能源管理')
+        if err:
+            return err
+        
+        result = em.get_anomaly_config()
+        return success_response(result, message="获取异常检测配置成功")
+    except Exception as e:
+        logger.error(f"获取异常检测配置失败: {e}\n{traceback.format_exc()}")
+        return error_response(f"获取异常检测配置失败: {str(e)}", 500)
+
+
+@industry40_bp.route('/industry40/energy/anomaly-config', methods=['PUT'])
+@_require_auth
+@role_required('admin', 'engineer')
+def update_energy_anomaly_config():
+    """更新能耗异常检测配置"""
+    try:
+        em, err = _module_check('energy_manager', '能源管理')
+        if err:
+            return err
+        
+        data = request.get_json()
+        if not data:
+            return error_response("请提供配置数据", 400)
+        
+        result = em.update_anomaly_config(data)
+        
+        if result.get('success'):
+            return success_response(result.get('config'), message=result.get('message'))
+        else:
+            return error_response(result.get('message', '更新失败'), 400)
+    except Exception as e:
+        logger.error(f"更新异常检测配置失败: {e}\n{traceback.format_exc()}")
+        return error_response(f"更新异常检测配置失败: {str(e)}", 500)
 
 
 # ==================== 边缘决策API ====================
