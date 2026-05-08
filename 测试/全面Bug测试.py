@@ -3,6 +3,7 @@
 测试所有功能模块，发现潜在问题
 """
 
+from typing import Any
 import sys
 import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')

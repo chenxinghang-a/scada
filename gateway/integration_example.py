@@ -15,6 +15,7 @@
 - 协议无关：主系统不关心底层协议
 """
 
+from typing import Any
 import sys
 import logging
 from pathlib import Path

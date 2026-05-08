@@ -14,7 +14,7 @@ import time
 import logging
 import threading
 import requests
-from typing import Dict, List, Any, Optional, Callable
+from typing import Any, Callable
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class RESTDeviceClient:
     ```
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         初始化REST设备客户端
         
@@ -82,20 +82,20 @@ class RESTDeviceClient:
         self.connected = False
         
         # 最新数据缓存
-        self.latest_data: Dict[str, Dict] = {}
+        self.latest_data: dict[str, dict[str, Any]] = {}
         
         # 数据回调
-        self._data_callbacks: List[Callable] = []
+        self._data_callbacks: list[Callable[..., Any]] = []
         
         # 轮询线程
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
         
         # HTTP会话（复用连接）
-        self._session: Optional[requests.Session] = None
+        self._session: requests.Session | None = None
         
         # 统计
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'total_requests': 0,
             'successful_requests': 0,
             'failed_requests': 0,
@@ -106,7 +106,7 @@ class RESTDeviceClient:
         
         logger.info(f"REST设备客户端初始化: {self.base_url}")
     
-    def add_data_callback(self, callback: Callable):
+    def add_data_callback(self, callback: Callable[..., Any]):
         """添加数据回调函数"""
         self._data_callbacks.append(callback)
     
@@ -164,11 +164,11 @@ class RESTDeviceClient:
         self.connected = False
         logger.info(f"REST设备已断开: {self.device_id}")
     
-    def get_latest_data(self) -> Dict[str, Dict]:
+    def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取所有端点的最新数据"""
         return dict(self.latest_data)
     
-    def read_endpoint(self, endpoint_config: Dict) -> Optional[Any]:
+    def read_endpoint(self, endpoint_config: dict[str, Any]) -> Any:
         """
         读取单个端点数据
         
@@ -212,7 +212,7 @@ class RESTDeviceClient:
             logger.error(f"REST请求失败 [{endpoint_config.get('path')}]: {e}")
             return None
     
-    def write_endpoint(self, endpoint_config: Dict, value: Any) -> bool:
+    def write_endpoint(self, endpoint_config: dict[str, Any], value: Any) -> bool:
         """
         写入端点数据（控制命令）
         

@@ -18,7 +18,7 @@ SQLite到TDengine数据迁移工具
 import sqlite3
 import logging
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
+from typing import Any
 from pathlib import Path
 
 from .tdengine_client import TDengineClient
@@ -45,10 +45,10 @@ class SQLiteToTDengineMigrator:
         self.logger = logging.getLogger("Migrator")
         
         # SQLite连接
-        self._sqlite_conn: Optional[sqlite3.Connection] = None
+        self._sqlite_conn: sqlite3.Connection | None = None
         
         # 迁移统计
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'telemetry_migrated': 0,
             'alarms_migrated': 0,
             'oee_migrated': 0,
@@ -79,7 +79,7 @@ class SQLiteToTDengineMigrator:
             self._sqlite_conn.close()
             self._sqlite_conn = None
     
-    def migrate_all(self, batch_size: int = 1000) -> Dict:
+    def migrate_all(self, batch_size: int = 1000) -> dict[str, Any]:
         """
         执行完整迁移
         
@@ -87,7 +87,7 @@ class SQLiteToTDengineMigrator:
             batch_size: 批量写入大小
             
         Returns:
-            Dict: 迁移统计
+            dict[str, Any]: 迁移统计
         """
         self.stats['start_time'] = datetime.now()
         
@@ -338,7 +338,7 @@ class SQLiteToTDengineMigrator:
         self.logger.info(f"耗时: {duration:.2f} 秒")
         self.logger.info("=" * 50)
     
-    def verify_migration(self, sample_size: int = 100) -> Dict:
+    def verify_migration(self, sample_size: int = 100) -> dict[str, Any]:
         """
         验证迁移结果
         
@@ -346,7 +346,7 @@ class SQLiteToTDengineMigrator:
             sample_size: 抽样检查数量
             
         Returns:
-            Dict: 验证结果
+            dict[str, Any]: 验证结果
         """
         self.logger.info("开始验证迁移结果...")
         

@@ -8,7 +8,7 @@ import bcrypt
 import logging
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Optional, Dict, List
+from typing import Any
 from pathlib import Path
 from flask import request, jsonify, current_app
 
@@ -123,7 +123,7 @@ class AuthManager:
                 logger.info("已创建默认管理员账户: admin/admin123")
     
     def register(self, username: str, password: str, role: str = 'viewer',
-                 display_name: str = None, email: str = None, phone: str = None) -> Dict:
+                 display_name: str | None = None, email: str | None = None, phone: str | None = None) -> dict[str, Any]:
         """
         注册新用户
         
@@ -136,7 +136,7 @@ class AuthManager:
             phone: 手机号
             
         Returns:
-            Dict: 注册结果
+            dict[str, Any]: 注册结果
         """
         # 验证角色
         if role not in ROLES:
@@ -171,7 +171,7 @@ class AuthManager:
                 return {'success': False, 'message': '用户名已存在'}
             return {'success': False, 'message': f'注册失败: {str(e)}'}
     
-    def login(self, username: str, password: str, ip_address: str = None) -> Dict:
+    def login(self, username: str, password: str, ip_address: str | None = None) -> dict[str, Any]:
         """
         用户登录
         
@@ -181,7 +181,7 @@ class AuthManager:
             ip_address: 客户端IP
             
         Returns:
-            Dict: 登录结果（包含JWT令牌）
+            dict[str, Any]: 登录结果（包含JWT令牌）
         """
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
@@ -253,7 +253,7 @@ class AuthManager:
             }
         }
     
-    def verify_token(self, token: str) -> Optional[Dict]:
+    def verify_token(self, token: str) -> dict[str, Any] | None:
         """
         验证JWT令牌
         
@@ -261,7 +261,7 @@ class AuthManager:
             token: JWT令牌
             
         Returns:
-            Dict: 用户信息（验证失败返回None）
+            dict[str, Any]: 用户信息（验证失败返回None）
         """
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -292,7 +292,7 @@ class AuthManager:
             logger.warning(f"无效JWT令牌: {e}")
             return None
     
-    def refresh_token(self, refresh_token: str) -> Optional[Dict]:
+    def refresh_token(self, refresh_token: str) -> dict[str, Any] | None:
         """
         刷新JWT令牌
         
@@ -300,7 +300,7 @@ class AuthManager:
             refresh_token: 刷新令牌
             
         Returns:
-            Dict: 新的令牌信息
+            dict[str, Any]: 新的令牌信息
         """
         try:
             payload = jwt.decode(refresh_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -335,7 +335,7 @@ class AuthManager:
         except Exception:
             return None
     
-    def change_password(self, username: str, old_password: str, new_password: str) -> Dict:
+    def change_password(self, username: str, old_password: str, new_password: str) -> dict[str, Any]:
         """
         修改密码
         
@@ -345,7 +345,7 @@ class AuthManager:
             new_password: 新密码
             
         Returns:
-            Dict: 修改结果
+            dict[str, Any]: 修改结果
         """
         if len(new_password) < 6:
             return {'success': False, 'message': '新密码长度至少6位'}
@@ -373,7 +373,7 @@ class AuthManager:
         self._log_operation(username, 'change_password', None, '修改密码成功')
         return {'success': True, 'message': '密码修改成功'}
     
-    def get_users(self) -> List[Dict]:
+    def get_users(self) -> list[dict[str, Any]]:
         """获取所有用户列表"""
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
@@ -390,7 +390,7 @@ class AuthManager:
         
         return users
     
-    def update_user(self, username: str, **kwargs) -> Dict:
+    def update_user(self, username: str, **kwargs) -> dict[str, Any]:
         """更新用户信息"""
         allowed_fields = ['role', 'display_name', 'email', 'phone', 'is_active']
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
@@ -417,7 +417,7 @@ class AuthManager:
         self._log_operation('system', 'update_user', username, f'更新字段: {", ".join(updates.keys())}')
         return {'success': True, 'message': '更新成功'}
     
-    def delete_user(self, username: str) -> Dict:
+    def delete_user(self, username: str) -> dict[str, Any]:
         """删除用户（软删除）"""
         if username == 'admin':
             return {'success': False, 'message': '不能删除管理员账户'}
@@ -435,7 +435,7 @@ class AuthManager:
         self._log_operation('system', 'delete_user', username, '用户已禁用')
         return {'success': True, 'message': '用户已禁用'}
     
-    def get_operation_logs(self, username: str = None, limit: int = 100) -> List[Dict]:
+    def get_operation_logs(self, username: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         """获取操作日志"""
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
@@ -452,7 +452,7 @@ class AuthManager:
                 ''', (limit,))
             return [dict(row) for row in cursor.fetchall()]
     
-    def _generate_token(self, user: Dict) -> str:
+    def _generate_token(self, user: dict[str, Any]) -> str:
         """生成JWT访问令牌"""
         payload = {
             'username': user['username'],
@@ -463,7 +463,7 @@ class AuthManager:
         }
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     
-    def _generate_refresh_token(self, user: Dict) -> str:
+    def _generate_refresh_token(self, user: dict[str, Any]) -> str:
         """生成JWT刷新令牌"""
         payload = {
             'username': user['username'],
@@ -473,13 +473,13 @@ class AuthManager:
         }
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     
-    def log_operation(self, username: str, action: str, target: str = None,
-                      detail: str = None, ip_address: str = None):
+    def log_operation(self, username: str, action: str, target: str | None = None,
+                      detail: str | None = None, ip_address: str | None = None):
         """记录操作日志（公共接口）"""
         self._log_operation(username, action, target, detail, ip_address)
 
-    def _log_operation(self, username: str, action: str, target: str = None,
-                       detail: str = None, ip_address: str = None):
+    def _log_operation(self, username: str, action: str, target: str | None = None,
+                       detail: str | None = None, ip_address: str | None = None):
         """记录操作日志（内部实现）"""
         try:
             with self.database.get_connection() as conn:

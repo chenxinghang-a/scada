@@ -6,7 +6,7 @@ Modbus客户端模块
 import time
 import struct
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Any
 from pymodbus.client import ModbusTcpClient, ModbusSerialClient
 from pymodbus.exceptions import ModbusException, ConnectionException
 
@@ -19,7 +19,7 @@ class ModbusClient:
     支持Modbus TCP和RTU协议
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         初始化Modbus客户端
         
@@ -48,7 +48,7 @@ class ModbusClient:
             self.bytesize = config.get('bytesize', 8)
         
         # 统计信息
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'total_reads': 0,
             'successful_reads': 0,
             'failed_reads': 0,
@@ -103,7 +103,7 @@ class ModbusClient:
             logger.info(f"设备 {self.device_name} 已断开连接")
     
     def read_holding_registers(self, address: int, count: int, 
-                               slave_id: Optional[int] = None) -> Optional[List[int]]:
+                               slave_id: int | None = None) -> list[int] | None:
         """
         读取保持寄存器（功能码03）
         
@@ -113,7 +113,7 @@ class ModbusClient:
             slave_id: 从站地址（可选）
             
         Returns:
-            List[int]: 寄存器值列表，失败返回None
+            list[int]: 寄存器值列表，失败返回None
         """
         if not self.connected:
             logger.error(f"设备 {self.device_name} 未连接")
@@ -154,7 +154,7 @@ class ModbusClient:
             return None
     
     def read_input_registers(self, address: int, count: int,
-                             slave_id: Optional[int] = None) -> Optional[List[int]]:
+                             slave_id: int | None = None) -> list[int] | None:
         """
         读取输入寄存器（功能码04）
         
@@ -164,7 +164,7 @@ class ModbusClient:
             slave_id: 从站地址（可选）
             
         Returns:
-            List[int]: 寄存器值列表，失败返回None
+            list[int]: 寄存器值列表，失败返回None
         """
         if not self.connected:
             logger.error(f"设备 {self.device_name} 未连接")
@@ -196,7 +196,7 @@ class ModbusClient:
             return None
     
     def read_coils(self, address: int, count: int,
-                   slave_id: Optional[int] = None) -> Optional[List[bool]]:
+                   slave_id: int | None = None) -> list[bool] | None:
         """
         读取线圈状态（功能码01）
         
@@ -206,7 +206,7 @@ class ModbusClient:
             slave_id: 从站地址（可选）
             
         Returns:
-            List[bool]: 线圈状态列表，失败返回None
+            list[bool]: 线圈状态列表，失败返回None
         """
         if not self.connected:
             return None
@@ -230,7 +230,7 @@ class ModbusClient:
             return None
     
     def read_discrete_inputs(self, address: int, count: int,
-                             slave_id: Optional[int] = None) -> Optional[List[bool]]:
+                             slave_id: int | None = None) -> list[bool] | None:
         """
         读取离散输入（功能码02）
         
@@ -240,7 +240,7 @@ class ModbusClient:
             slave_id: 从站地址（可选）
             
         Returns:
-            List[bool]: 离散输入状态列表，失败返回None
+            list[bool]: 离散输入状态列表，失败返回None
         """
         if not self.connected:
             return None
@@ -264,7 +264,7 @@ class ModbusClient:
             return None
     
     def write_single_register(self, address: int, value: int,
-                              slave_id: Optional[int] = None) -> bool:
+                              slave_id: int | None = None) -> bool:
         """
         写入单个寄存器（功能码06）
         
@@ -295,7 +295,7 @@ class ModbusClient:
             return False
     
     def write_single_coil(self, address: int, value: bool,
-                          slave_id: Optional[int] = None) -> bool:
+                          slave_id: int | None = None) -> bool:
         """
         写入单个线圈（功能码05）
         
@@ -325,7 +325,7 @@ class ModbusClient:
             logger.error(f"写入线圈异常: {e}")
             return False
     
-    def decode_float32(self, registers: List[int]) -> float:
+    def decode_float32(self, registers: list[int]) -> float:
         """
         解码32位浮点数（两个寄存器）
         
@@ -340,7 +340,7 @@ class ModbusClient:
         # 解码为浮点数（大端序）
         return struct.unpack('>f', struct.pack('>I', raw))[0]
     
-    def decode_float64(self, registers: List[int]) -> float:
+    def decode_float64(self, registers: list[int]) -> float:
         """
         解码64位浮点数（四个寄存器）
         
@@ -379,7 +379,7 @@ class ModbusClient:
             return register - 0x10000
         return register
     
-    def decode_int32(self, registers: List[int]) -> int:
+    def decode_int32(self, registers: list[int]) -> int:
         """
         解码32位有符号整数（两个寄存器，Big-Endian）
         
@@ -394,7 +394,7 @@ class ModbusClient:
             raw -= 0x100000000
         return raw
     
-    def decode_uint32(self, registers: List[int]) -> int:
+    def decode_uint32(self, registers: list[int]) -> int:
         """
         解码32位无符号整数（两个寄存器，Big-Endian）
         
@@ -406,12 +406,12 @@ class ModbusClient:
         """
         return (registers[0] << 16) | registers[1]
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         获取统计信息
         
         Returns:
-            Dict: 统计信息字典
+            dict[str, Any]: 统计信息字典
         """
         return {
             'device_id': self.device_id,

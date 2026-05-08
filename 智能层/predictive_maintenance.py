@@ -18,7 +18,7 @@ import math
 import time
 import threading
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any
 from collections import defaultdict, deque
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class PredictiveMaintenance:
     5. 生成维护建议
     """
     
-    def __init__(self, database, config: Dict = None):
+    def __init__(self, database, config: dict[str, Any] | None = None):
         """
         Args:
             database: Database实例
@@ -47,18 +47,18 @@ class PredictiveMaintenance:
         
         # 滑动窗口：每个设备+寄存器保留最近N个数据点
         self.window_size = self.config.get('window_size', 500)
-        self.data_windows: Dict[str, deque] = defaultdict(
-            lambda: deque(maxlen=self.window_size)
+        self.data_windows: dict[str, deque[Any]] = defaultdict(
+            lambda: deque[Any](maxlen=self.window_size)
         )
         
         # 设备健康评分缓存
-        self.health_scores: Dict[str, Dict] = {}
+        self.health_scores: dict[str, dict[str, Any]] = {}
         
         # 维护建议队列
-        self.maintenance_alerts: List[Dict] = []
+        self.maintenance_alerts: list[dict[str, Any]] = []
         
         # 设备阈值配置（从devices.yaml或手动配置）
-        self.thresholds: Dict[str, Dict] = self.config.get('thresholds', {})
+        self.thresholds: dict[str, dict[str, Any]] = self.config.get('thresholds', {})
         
         # 如果没有配置阈值，设置常见参数的默认阈值
         if not self.thresholds:
@@ -83,7 +83,7 @@ class PredictiveMaintenance:
         logger.info("预测性维护模块初始化完成")
     
     def feed_data(self, device_id: str, register_name: str,
-                  value: float, timestamp: datetime = None):
+                  value: float, timestamp: datetime | None = None):
         """
         喂入实时数据（由DataCollector调用）
         
@@ -185,7 +185,7 @@ class PredictiveMaintenance:
             except Exception as e:
                 logger.warning(f"分析 {key} 时出错: {e}")
     
-    def _analyze_trend(self, window: List[Dict]) -> Dict:
+    def _analyze_trend(self, window: list[dict[str, Any]]) -> dict[str, Any]:
         """
         趋势分析 — 简单线性回归
         
@@ -245,7 +245,7 @@ class PredictiveMaintenance:
             'change_rate': round(change_rate, 4),
         }
     
-    def _detect_anomalies(self, window: List[Dict]) -> List[Dict]:
+    def _detect_anomalies(self, window: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         异常检测 — Z-Score + IQR双算法
         
@@ -310,8 +310,8 @@ class PredictiveMaintenance:
         return anomalies
     
     def _calculate_health_score(self, device_id: str, register_name: str,
-                                 window: List[Dict], trend: Dict,
-                                 anomalies: List[Dict]) -> float:
+                                 window: list[dict[str, Any]], trend: dict[str, Any],
+                                 anomalies: list[dict[str, Any]]) -> float:
         """
         设备健康评分 (0-100)
         
@@ -353,7 +353,7 @@ class PredictiveMaintenance:
         return round(min(100, max(0, total)), 1)
     
     def _predict_failure(self, device_id: str, register_name: str,
-                          window: List[Dict], trend: Dict) -> Optional[Dict]:
+                          window: list[dict[str, Any]], trend: dict[str, Any]) -> dict[str, Any] | None:
         """
         故障预测 — 基于趋势外推
         
@@ -414,8 +414,8 @@ class PredictiveMaintenance:
         return results[0] if results else None
     
     def _generate_maintenance_alert(self, device_id: str, register_name: str,
-                                      health: float, trend: Dict,
-                                      failure_pred: Optional[Dict]) -> Dict:
+                                      health: float, trend: dict[str, Any],
+                                      failure_pred: dict[str, Any] | None) -> dict[str, Any]:
         """生成维护建议"""
         severity = 'critical' if health < 40 else 'warning' if health < 60 else 'info'
         
@@ -448,12 +448,12 @@ class PredictiveMaintenance:
     
     # ==================== 公共查询接口 ====================
     
-    def get_health_scores(self) -> Dict[str, Dict]:
+    def get_health_scores(self) -> dict[str, dict[str, Any]]:
         """获取所有设备健康评分"""
         with self._lock:
             return dict(self.health_scores)
     
-    def get_device_health(self, device_id: str) -> Dict:
+    def get_device_health(self, device_id: str) -> dict[str, Any]:
         """获取指定设备的所有寄存器健康评分"""
         with self._lock:
             return {
@@ -461,12 +461,12 @@ class PredictiveMaintenance:
                 if v['device_id'] == device_id
             }
     
-    def get_maintenance_alerts(self, limit: int = 50) -> List[Dict]:
+    def get_maintenance_alerts(self, limit: int = 50) -> list[dict[str, Any]]:
         """获取维护建议列表"""
         with self._lock:
             return list(self.maintenance_alerts[-limit:])
     
-    def get_trend_data(self, device_id: str, register_name: str) -> Dict:
+    def get_trend_data(self, device_id: str, register_name: str) -> dict[str, Any]:
         """获取指定寄存器的趋势分析数据"""
         key = f"{device_id}:{register_name}"
         with self._lock:
@@ -489,7 +489,7 @@ class PredictiveMaintenance:
             'failure_prediction': score.get('failure_prediction'),
         }
     
-    def set_threshold(self, key: str, upper: float = None, lower: float = None):
+    def set_threshold(self, key: str, upper: float | None = None, lower: float | None = None):
         """设置设备阈值（用于故障预测）"""
         self.thresholds[key] = {}
         if upper is not None:

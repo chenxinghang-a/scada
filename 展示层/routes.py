@@ -3,6 +3,7 @@ Flask路由模块
 定义Web页面路由
 """
 
+from typing import Any
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 from flask_socketio import SocketIO
 

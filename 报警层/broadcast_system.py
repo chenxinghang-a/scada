@@ -17,7 +17,7 @@
 import logging
 import time
 import threading
-from typing import Dict, List, Any, Optional, Callable
+from typing import Any, Callable
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class BroadcastMessage:
         self.timestamp = datetime.now().isoformat()
         self.status = 'pending'
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             'text': self.text,
             'level': self.level,
@@ -83,14 +83,14 @@ class BroadcastSystem:
     }
     """
 
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or {}
         self.enabled = self.config.get('enabled', True)
         self.simulation = self.config.get('simulation', True)
 
-        self.areas: List[str] = self.config.get('areas', ['all'])
+        self.areas: list[str] = self.config.get('areas', ['all'])
         self.default_area = self.config.get('default_area', 'all')
-        self.preset_templates: Dict[str, str] = self.config.get('preset_templates', {})
+        self.preset_templates: dict[str, str] = self.config.get('preset_templates', {})
 
         # MQTT客户端（延迟连接）
         self._mqtt_client = None
@@ -98,23 +98,23 @@ class BroadcastSystem:
         self._mqtt_config = self.config.get('mqtt', {})
 
         # 广播历史（内存保留最近200条）
-        self._history: List[Dict[str, Any]] = []
+        self._history: list[dict[str, Any]] = []
         self._max_history = 200
         self._lock = threading.Lock()
 
         # 广播回调（用于前端同步显示）
-        self._callbacks: List[Callable] = []
+        self._callbacks: list[Callable[..., Any]] = []
 
         logger.info(f"广播系统初始化: {'模拟模式' if self.simulation else 'MQTT模式'}")
 
-    def add_callback(self, callback: Callable):
+    def add_callback(self, callback: Callable[..., Any]):
         """注册广播回调，前端可监听最新广播内容"""
         self._callbacks.append(callback)
 
     # ==================== 核心广播功能 ====================
 
     def speak(self, text: str, level: str = 'info',
-              area: str = None, source: str = 'manual') -> Dict[str, Any]:
+              area: str = "", source: str = 'manual') -> dict[str, Any]:
         """
         发起广播
 
@@ -156,7 +156,7 @@ class BroadcastSystem:
         return {'success': True, 'message': '广播已发送', 'data': msg.to_dict()}
 
     def speak_alarm(self, level: str, message: str,
-                    device_id: str = '', area: str = None) -> Dict[str, Any]:
+                    device_id: str = '', area: str = "") -> dict[str, Any]:
         """
         报警联动广播（自动按级别选择话术）
 
@@ -174,7 +174,7 @@ class BroadcastSystem:
         return self.speak(text=text, level=level, area=area, source='alarm')
 
     def speak_preset(self, template_key: str,
-                     area: str = None, **kwargs) -> Dict[str, Any]:
+                     area: str = "", **kwargs) -> dict[str, Any]:
         """
         使用预设模板广播
 
@@ -191,19 +191,19 @@ class BroadcastSystem:
 
     # ==================== 区域广播 ====================
     def speak_area(self, area: str, text: str,
-                   level: str = 'info') -> Dict[str, Any]:
+                   level: str = 'info') -> dict[str, Any]:
         """区域定向广播"""
         return self.speak(text=text, level=level, area=area, source='manual')
 
-    def get_areas(self) -> List[str]:
+    def get_areas(self) -> list[str]:
         return list(self.areas)
 
     # ==================== 历史与状态 ====================
-    def get_history(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_history(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._lock:
             return list(reversed(self._history[-limit:]))
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         return {
             'enabled': self.enabled,
             'simulation': self.simulation,

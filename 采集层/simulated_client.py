@@ -14,7 +14,7 @@ import struct
 import logging
 import threading
 from datetime import datetime
-from typing import Dict, List, Any, Callable, Optional
+from typing import Any, Callable
 
 from .base_client import ModbusClientInterface, PushClientInterface
 
@@ -157,7 +157,7 @@ _UNIT_RULES = [
 ]
 
 
-def _find_rule(name: str, unit: str, data_type: str = 'uint16') -> dict:
+def _find_rule(name: str, unit: str, data_type: str = 'uint16') -> dict[str, Any]:
     """
     从映射表查找匹配规则，先匹配name关键字，再匹配unit。
     如果都没匹配到，根据data_type和unit智能推断一个合理的规则。
@@ -195,7 +195,7 @@ def _find_rule(name: str, unit: str, data_type: str = 'uint16') -> dict:
     return _infer_rule_from_type(name, unit, data_type)
 
 
-def _infer_rule_from_type(name: str, unit: str, data_type: str) -> dict:
+def _infer_rule_from_type(name: str, unit: str, data_type: str) -> dict[str, Any]:
     """
     根据data_type和unit智能推断模拟规则。
     新增设备时的最后兜底，确保不会返回None。
@@ -274,7 +274,7 @@ def _infer_rule_from_type(name: str, unit: str, data_type: str) -> dict:
         return {'kw': name_lower, 'base': 100, 'amp': 50, 'period': 60, 'noise': 5, 'shape': 'sine'}
 
 
-def _generate_value(rule: dict, t: float, phase_offset: float = 0.0) -> float:
+def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0) -> float:
     """根据规则和时间生成模拟值"""
     shape = rule.get('shape', 'sine')
     base = rule['base']
@@ -317,7 +317,7 @@ class SimulatedModbusClient(ModbusClientInterface):
     新增设备只需改YAML，永远不需要改代码
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.connected = False
         self.start_time = time.time()
@@ -335,7 +335,7 @@ class SimulatedModbusClient(ModbusClientInterface):
                 'scale': reg.get('scale', 1.0)
             }
 
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'total_reads': 0, 'successful_reads': 0, 'failed_reads': 0,
             'last_read_time': None, 'last_error': None
         }
@@ -350,7 +350,7 @@ class SimulatedModbusClient(ModbusClientInterface):
         logger.info(f"[模拟] 设备 {self.device_name} 已断开")
 
     def read_holding_registers(self, address: int, count: int,
-                               slave_id: int = None) -> Optional[List[int]]:
+                               slave_id: int | None = None) -> list[int] | None:
         if not self.connected:
             return None
 
@@ -401,11 +401,11 @@ class SimulatedModbusClient(ModbusClientInterface):
             # uint16 / int16
             return [int(round(value)) & 0xFFFF]
 
-    def decode_float32(self, registers: List[int]) -> float:
+    def decode_float32(self, registers: list[int]) -> float:
         raw = (registers[0] << 16) | registers[1]
         return struct.unpack('>f', struct.pack('>I', raw))[0]
 
-    def decode_float64(self, registers: List[int]) -> float:
+    def decode_float64(self, registers: list[int]) -> float:
         raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
         return struct.unpack('>d', raw)[0]
 
@@ -417,46 +417,46 @@ class SimulatedModbusClient(ModbusClientInterface):
             return register - 0x10000
         return register
 
-    def decode_int32(self, registers: List[int]) -> int:
+    def decode_int32(self, registers: list[int]) -> int:
         raw = (registers[0] << 16) | registers[1]
         if raw & 0x80000000:
             raw -= 0x100000000
         return raw
 
-    def decode_uint32(self, registers: List[int]) -> int:
+    def decode_uint32(self, registers: list[int]) -> int:
         return (registers[0] << 16) | registers[1]
 
-    def write_single_register(self, address: int, value: int, slave_id: int = None) -> bool:
+    def write_single_register(self, address: int, value: int, slave_id: int | None = None) -> bool:
         if not self.connected:
             return False
         logger.info(f"[模拟] 设备 {self.device_name} 写入寄存器: address={address}, value={value}")
         return True
 
-    def write_single_coil(self, address: int, value: bool, slave_id: int = None) -> bool:
+    def write_single_coil(self, address: int, value: bool, slave_id: int | None = None) -> bool:
         if not self.connected:
             return False
         logger.info(f"[模拟] 设备 {self.device_name} 写入线圈: address={address}, value={value}")
         return True
 
-    def read_coils(self, address: int, count: int, slave_id: int = None) -> Optional[List[bool]]:
+    def read_coils(self, address: int, count: int, slave_id: int | None = None) -> list[bool] | None:
         if not self.connected:
             return None
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
         return [random.choice([True, False]) for _ in range(count)]
 
-    def read_discrete_inputs(self, address: int, count: int, slave_id: int = None) -> Optional[List[bool]]:
+    def read_discrete_inputs(self, address: int, count: int, slave_id: int | None = None) -> list[bool] | None:
         if not self.connected:
             return None
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
         return [random.choice([True, False]) for _ in range(count)]
 
-    def read_input_registers(self, address: int, count: int, slave_id: int = None) -> Optional[List[int]]:
+    def read_input_registers(self, address: int, count: int, slave_id: int | None = None) -> list[int] | None:
         """读取输入寄存器（与保持寄存器逻辑相同）"""
         return self.read_holding_registers(address, count, slave_id)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {'device_id': self.device_id, 'device_name': self.device_name,
                 'connected': self.connected, **self.stats}
 
@@ -469,15 +469,15 @@ class SimulatedOPCUAClient(PushClientInterface):
     从节点配置的 name/unit 自动推断模拟数据
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.connected = False
         self.start_time = time.time()
 
         self.node_configs = config.get('nodes', [])
-        self.latest_data: Dict[str, Dict] = {}
-        self._data_callbacks: List[Callable] = []
-        self._push_thread: Optional[threading.Thread] = None
+        self.latest_data: dict[str, dict[str, Any]] = {}
+        self._data_callbacks: list[Callable[..., Any]] = []
+        self._push_thread: threading.Thread | None = None
         self._running = False
 
         # 预缓存规则
@@ -486,12 +486,12 @@ class SimulatedOPCUAClient(PushClientInterface):
             name = node.get('name', node.get('node_id', ''))
             self._rules_cache[name] = _find_rule(name, node.get('unit', ''), 'float32')
 
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'connected_since': None, 'nodes_subscribed': 0,
             'data_updates': 0, 'errors': 0, 'last_error': None
         }
 
-    def add_data_callback(self, callback: Callable):
+    def add_data_callback(self, callback: Callable[..., Any]):
         self._data_callbacks.append(callback)
 
     def connect(self) -> bool:
@@ -517,12 +517,12 @@ class SimulatedOPCUAClient(PushClientInterface):
             if self._running and self.connected:
                 self._generate_data()
 
-    def get_latest_data(self) -> Dict[str, Dict]:
+    def get_latest_data(self) -> dict[str, dict[str, Any]]:
         if self.connected:
             self._generate_data()
         return dict(self.latest_data)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {'device_id': self.device_id, 'device_name': self.device_name,
                 'connected': self.connected, **self.stats}
 
@@ -572,7 +572,7 @@ class SimulatedMQTTClient(PushClientInterface):
     从topics配置的 name/unit 自动推断模拟数据
     """
 
-    def __init__(self, config: Dict[str, Any] = None, **kwargs):
+    def __init__(self, config: dict[str, Any] | None = None, **kwargs):
         config = config or kwargs
         super().__init__(config)
         self.broker_host = config.get('host', 'localhost')
@@ -581,10 +581,10 @@ class SimulatedMQTTClient(PushClientInterface):
         self.start_time = time.time()
 
         self.topics_config = self.config.get('topics', [])
-        self.latest_data: Dict[str, Dict] = {}
-        self._data_callbacks: List[Callable] = []
-        self._subscriptions: Dict[str, int] = {}
-        self._push_thread: Optional[threading.Thread] = None
+        self.latest_data: dict[str, dict[str, Any]] = {}
+        self._data_callbacks: list[Callable[..., Any]] = []
+        self._subscriptions: dict[str, int] = {}
+        self._push_thread: threading.Thread | None = None
         self._running = False
 
         # 预缓存规则
@@ -593,13 +593,13 @@ class SimulatedMQTTClient(PushClientInterface):
             name = topic_cfg.get('name', '')
             self._rules_cache[name] = _find_rule(name, topic_cfg.get('unit', ''), 'float32')
 
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'messages_received': 0, 'messages_parsed': 0,
             'parse_errors': 0, 'connected_since': None,
             'last_message_time': None
         }
 
-    def add_data_callback(self, callback: Callable):
+    def add_data_callback(self, callback: Callable[..., Any]):
         self._data_callbacks.append(callback)
 
     def connect(self) -> bool:
@@ -630,14 +630,14 @@ class SimulatedMQTTClient(PushClientInterface):
     def unsubscribe(self, topic: str):
         self._subscriptions.pop(topic, None)
 
-    def get_latest_data(self) -> Dict[str, Dict]:
+    def get_latest_data(self) -> dict[str, dict[str, Any]]:
         return dict(self.latest_data)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {'device_id': self.device_id, 'device_name': self.device_name,
                 'connected': self.connected, **self.stats}
 
-    def get_status(self) -> Dict:
+    def get_status(self) -> dict[str, Any]:
         return {
             'connected': self.connected,
             'broker': f'{self.broker_host}:{self.broker_port}',
@@ -690,15 +690,15 @@ class SimulatedRESTClient(PushClientInterface):
     从endpoints配置的 name/unit 自动推断模拟数据
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.base_url = config.get('base_url', 'http://localhost')
         self.connected = False
         self.start_time = time.time()
 
         self.endpoints = config.get('endpoints', [])
-        self.latest_data: Dict[str, Dict] = {}
-        self._data_callbacks: List[Callable] = []
+        self.latest_data: dict[str, dict[str, Any]] = {}
+        self._data_callbacks: list[Callable[..., Any]] = []
 
         # 预缓存规则
         self._rules_cache = {}
@@ -706,13 +706,13 @@ class SimulatedRESTClient(PushClientInterface):
             name = ep.get('name', '')
             self._rules_cache[name] = _find_rule(name, ep.get('unit', ''), 'float32')
 
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'total_requests': 0, 'successful_requests': 0,
             'failed_requests': 0, 'connected_since': None,
             'last_request_time': None, 'last_error': None
         }
 
-    def add_data_callback(self, callback: Callable):
+    def add_data_callback(self, callback: Callable[..., Any]):
         self._data_callbacks.append(callback)
 
     def connect(self) -> bool:
@@ -726,12 +726,12 @@ class SimulatedRESTClient(PushClientInterface):
         self.connected = False
         logger.info(f"[模拟] REST设备 {self.device_name} 已断开")
 
-    def get_latest_data(self) -> Dict[str, Dict]:
+    def get_latest_data(self) -> dict[str, dict[str, Any]]:
         if self.connected:
             self._generate_data()
         return dict(self.latest_data)
 
-    def read_endpoint(self, endpoint_config: Dict) -> Optional[Any]:
+    def read_endpoint(self, endpoint_config: dict[str, Any]) -> Any:
         self.stats['total_requests'] += 1
         self.stats['successful_requests'] += 1
         self.stats['last_request_time'] = datetime.now().isoformat()
@@ -745,11 +745,11 @@ class SimulatedRESTClient(PushClientInterface):
         else:
             return round(50 + 30 * math.sin(t / 20) + random.gauss(0, 2), 2)
 
-    def write_endpoint(self, endpoint_config: Dict, value: Any) -> bool:
+    def write_endpoint(self, endpoint_config: dict[str, Any], value: Any) -> bool:
         logger.info(f"[模拟] REST写入: {endpoint_config.get('name')} = {value}")
         return True
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {'device_id': self.device_id, 'device_name': self.device_name,
                 'connected': self.connected, **self.stats}
 

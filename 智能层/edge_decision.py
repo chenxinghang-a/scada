@@ -14,7 +14,7 @@ import logging
 import time
 import threading
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Callable
+from typing import Any, Callable
 from collections import deque
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class EdgeDecisionEngine:
     3. 自适应调节（分钟级响应）
     """
     
-    def __init__(self, database, config: Dict = None):
+    def __init__(self, database, config: dict[str, Any] | None = None):
         """
         Args:
             database: Database实例
@@ -42,22 +42,22 @@ class EdgeDecisionEngine:
         self.config = config or {}
         
         # 规则库
-        self.rules: Dict[str, Dict] = {}
+        self.rules: dict[str, dict[str, Any]] = {}
         
         # 联锁规则库
-        self.interlocks: Dict[str, Dict] = {}
+        self.interlocks: dict[str, dict[str, Any]] = {}
         
         # PID控制器库
-        self.pid_controllers: Dict[str, Dict] = {}
+        self.pid_controllers: dict[str, dict[str, Any]] = {}
         
         # 决策日志
-        self.decision_log: deque = deque(maxlen=1000)
+        self.decision_log: deque[Any] = deque(maxlen=1000)
         
         # 执行回调（用于实际控制设备）
-        self._action_callbacks: Dict[str, Callable] = {}
+        self._action_callbacks: dict[str, Callable[..., Any]] = {}
         
         # 当前数据快照
-        self._data_snapshot: Dict[str, float] = {}
+        self._data_snapshot: dict[str, float] = {}
         
         # 锁
         self._lock = threading.Lock()
@@ -228,7 +228,7 @@ class EdgeDecisionEngine:
         with self._lock:
             self._data_snapshot[key] = value
     
-    def register_action(self, action_name: str, callback: Callable):
+    def register_action(self, action_name: str, callback: Callable[..., Any]):
         """
         注册动作回调
         
@@ -241,7 +241,7 @@ class EdgeDecisionEngine:
     
     # ==================== 规则管理 ====================
     
-    def add_rule(self, rule_id: str, condition: Dict, action: Dict,
+    def add_rule(self, rule_id: str, condition: dict[str, Any], action: dict[str, Any],
                   name: str = '', priority: int = 10, enabled: bool = True):
         """
         添加决策规则
@@ -279,7 +279,7 @@ class EdgeDecisionEngine:
         }
         logger.info(f"添加决策规则: {rule_id} - {name}")
     
-    def add_interlock(self, interlock_id: str, condition: Dict, action: Dict,
+    def add_interlock(self, interlock_id: str, condition: dict[str, Any], action: dict[str, Any],
                        name: str = '', enabled: bool = True):
         """
         添加安全联锁规则
@@ -344,7 +344,7 @@ class EdgeDecisionEngine:
     
     # ==================== 条件评估 ====================
     
-    def _evaluate_condition(self, condition: Dict, snapshot: Dict) -> bool:
+    def _evaluate_condition(self, condition: dict[str, Any], snapshot: dict[str, Any]) -> bool:
         """评估条件表达式"""
         cond_type = condition.get('type', 'threshold')
         
@@ -383,8 +383,8 @@ class EdgeDecisionEngine:
     
     # ==================== 动作执行 ====================
     
-    def _execute_action(self, action: Dict, rule_id: str,
-                         rule_type: str, snapshot: Dict):
+    def _execute_action(self, action: dict[str, Any], rule_id: str,
+                         rule_type: str, snapshot: dict[str, Any]):
         """执行动作"""
         action_type = action.get('type', 'callback')
         
@@ -437,7 +437,7 @@ class EdgeDecisionEngine:
         
         logger.info(f"[{rule_type.upper()}] {rule_id}: {log_entry.get('result', '')}")
     
-    def _execute_pid(self, ctrl_id: str, ctrl: Dict, snapshot: Dict):
+    def _execute_pid(self, ctrl_id: str, ctrl: dict[str, Any], snapshot: dict[str, Any]):
         """执行PID控制计算"""
         input_key = ctrl['input_key']
         process_value = snapshot.get(input_key)
@@ -488,7 +488,7 @@ class EdgeDecisionEngine:
     
     # ==================== 查询接口 ====================
     
-    def get_rules(self) -> Dict[str, Dict]:
+    def get_rules(self) -> dict[str, dict[str, Any]]:
         """获取所有规则"""
         with self._lock:
             return {
@@ -500,16 +500,16 @@ class EdgeDecisionEngine:
                 },
             }
     
-    def get_decision_log(self, limit: int = 50) -> List[Dict]:
+    def get_decision_log(self, limit: int = 50) -> list[dict[str, Any]]:
         """获取决策日志"""
         return list(self.decision_log)[-limit:]
     
-    def get_data_snapshot(self) -> Dict[str, float]:
+    def get_data_snapshot(self) -> dict[str, float]:
         """获取当前数据快照"""
         with self._lock:
             return dict(self._data_snapshot)
     
-    def get_status(self) -> Dict:
+    def get_status(self) -> dict[str, Any]:
         """获取引擎状态"""
         return {
             'running': self._running,

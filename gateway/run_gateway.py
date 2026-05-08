@@ -12,6 +12,7 @@
     python gateway/run_gateway.py --all --config gateway/config.yaml
 """
 
+from typing import Any
 import sys
 import argparse
 import logging
@@ -38,13 +39,13 @@ def setup_logging(log_level: str = "INFO"):
     )
 
 
-def load_config(config_path: str) -> dict:
+def load_config(config_path: str) -> dict[str, Any]:
     """加载配置文件"""
     with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
 
-def create_gateway(gateway_type: str, config: dict):
+def create_gateway(gateway_type: str, config: dict[str, Any]):
     """根据类型创建网关实例"""
     gateway_map = {
         'modbus': ModbusGateway,

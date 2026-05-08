@@ -15,7 +15,7 @@ import math
 import threading
 import time
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any
 from collections import defaultdict, deque
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class SPCAnalyzer:
     4. 计算过程能力指数
     """
     
-    def __init__(self, database, config: Dict = None):
+    def __init__(self, database, config: dict[str, Any] | None = None):
         """
         Args:
             database: Database实例
@@ -46,19 +46,19 @@ class SPCAnalyzer:
         self.subgroup_size = self.config.get('subgroup_size', 5)  # 子组大小
         
         # 数据缓冲区
-        # key -> deque of subgroups (each subgroup is a list of values)
-        self.data_buffers: Dict[str, deque] = defaultdict(
-            lambda: deque(maxlen=self.window_size * self.subgroup_size)
+        # key -> deque[Any] of subgroups (each subgroup is a list of values)
+        self.data_buffers: dict[str, deque[Any]] = defaultdict(
+            lambda: deque[Any](maxlen=self.window_size * self.subgroup_size)
         )
         
         # 控制限缓存
-        self.control_limits: Dict[str, Dict] = {}
+        self.control_limits: dict[str, dict[str, Any]] = {}
         
         # 规格限配置（USL/LSL）
-        self.spec_limits: Dict[str, Dict] = self.config.get('spec_limits', {})
+        self.spec_limits: dict[str, dict[str, Any]] = self.config.get('spec_limits', {})
         
         # 判异结果
-        self.violations: Dict[str, List[Dict]] = defaultdict(list)
+        self.violations: dict[str, list[dict[str, Any]]] = defaultdict(list)
         
         # 锁
         self._lock = threading.Lock()
@@ -81,8 +81,8 @@ class SPCAnalyzer:
             if key not in self.spec_limits:
                 self._auto_set_spec_limits(key, register_name)
     
-    def set_spec_limits(self, key: str, usl: float = None, lsl: float = None,
-                         target: float = None):
+    def set_spec_limits(self, key: str, usl: float | None = None, lsl: float | None = None,
+                         target: float | None = None):
         """
         设置规格限
         
@@ -124,7 +124,7 @@ class SPCAnalyzer:
                 self.spec_limits[key] = spec
                 break
     
-    def calculate_xbar_r_chart(self, device_id: str, register_name: str) -> Optional[Dict]:
+    def calculate_xbar_r_chart(self, device_id: str, register_name: str) -> dict[str, Any] | None:
         """
         X̄-R控制图计算
         
@@ -204,7 +204,7 @@ class SPCAnalyzer:
         
         return result
     
-    def calculate_xbar_s_chart(self, device_id: str, register_name: str) -> Optional[Dict]:
+    def calculate_xbar_s_chart(self, device_id: str, register_name: str) -> dict[str, Any] | None:
         """
         X̄-S控制图计算
         
@@ -264,7 +264,7 @@ class SPCAnalyzer:
     
     # ==================== 过程能力分析 ====================
     
-    def calculate_capability(self, device_id: str, register_name: str) -> Optional[Dict]:
+    def calculate_capability(self, device_id: str, register_name: str) -> dict[str, Any] | None:
         """
         过程能力指数计算
         
@@ -388,8 +388,8 @@ class SPCAnalyzer:
     
     # ==================== 判异规则 ====================
     
-    def _check_violations(self, points: List[float], cl: float,
-                           ucl: float, lcl: float) -> List[Dict]:
+    def _check_violations(self, points: list[float], cl: float,
+                           ucl: float, lcl: float) -> list[dict[str, Any]]:
         """
         Western Electric判异规则检测
         
@@ -467,7 +467,7 @@ class SPCAnalyzer:
     
     # ==================== 辅助方法 ====================
     
-    def _form_subgroups(self, data: List[float]) -> List[List[float]]:
+    def _form_subgroups(self, data: list[float]) -> list[list[float]]:
         """将数据分成子组"""
         subgroups = []
         for i in range(0, len(data), self.subgroup_size):
@@ -476,7 +476,7 @@ class SPCAnalyzer:
                 subgroups.append(group)
         return subgroups
     
-    def _std_dev(self, data: List[float]) -> float:
+    def _std_dev(self, data: list[float]) -> float:
         """计算标准差"""
         n = len(data)
         if n < 2:
@@ -487,15 +487,15 @@ class SPCAnalyzer:
     
     # ==================== 查询接口 ====================
     
-    def get_control_chart(self, device_id: str, register_name: str) -> Optional[Dict]:
+    def get_control_chart(self, device_id: str, register_name: str) -> dict[str, Any] | None:
         """获取控制图数据"""
         return self.calculate_xbar_r_chart(device_id, register_name)
     
-    def get_capability(self, device_id: str, register_name: str) -> Optional[Dict]:
+    def get_capability(self, device_id: str, register_name: str) -> dict[str, Any] | None:
         """获取过程能力数据"""
         return self.calculate_capability(device_id, register_name)
     
-    def get_violations(self, device_id: str = None, limit: int = 50) -> List[Dict]:
+    def get_violations(self, device_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         """获取判异结果"""
         if device_id:
             key_prefix = f"{device_id}:"

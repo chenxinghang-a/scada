@@ -15,7 +15,7 @@ import json
 import time
 import logging
 import threading
-from typing import Dict, List, Optional, Callable, Any
+from typing import Any, Callable
 from datetime import datetime
 
 import paho.mqtt.client as mqtt
@@ -39,7 +39,7 @@ class MQTTSubscriber:
     """
     
     def __init__(self, broker_host: str = "localhost", broker_port: int = 1883,
-                 client_id: str = None):
+                 client_id: str | None = None):
         """
         初始化MQTT订阅客户端
         
@@ -55,25 +55,25 @@ class MQTTSubscriber:
         self.logger = logging.getLogger("MQTTSubscriber")
         
         # MQTT客户端
-        self._client: Optional[mqtt.Client] = None
+        self._client: mqtt.Client | None = None
         self._connected = False
         
         # 订阅的主题列表
-        self._subscribed_topics: List[str] = []
+        self._subscribed_topics: list[str] = []
         
         # 回调函数
-        self.on_telemetry: Optional[Callable[[DeviceTelemetry], None]] = None
-        self.on_status: Optional[Callable[[DeviceStatus], None]] = None
-        self.on_alarm: Optional[Callable[[AlarmMessage], None]] = None
-        self.on_raw_message: Optional[Callable[[str, str], None]] = None
+        self.on_telemetry: Callable[[DeviceTelemetry], None] | None = None
+        self.on_status: Callable[[DeviceStatus], None] | None = None
+        self.on_alarm: Callable[[AlarmMessage], None] | None = None
+        self.on_raw_message: Callable[[str, str], None] | None = None
         
         # 数据缓存（用于查询最新值）
-        self._telemetry_cache: Dict[str, DeviceTelemetry] = {}
-        self._status_cache: Dict[str, DeviceStatus] = {}
+        self._telemetry_cache: dict[str, DeviceTelemetry] = {}
+        self._status_cache: dict[str, DeviceStatus] = {}
         self._cache_lock = threading.Lock()
         
         # 统计信息
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'messages_received': 0,
             'errors': 0,
             'last_message_time': None,
@@ -277,27 +277,27 @@ class MQTTSubscriber:
                 self._client.unsubscribe(topic)
                 self.logger.info(f"取消订阅: {topic}")
     
-    def get_latest_telemetry(self, device_id: str) -> Optional[DeviceTelemetry]:
+    def get_latest_telemetry(self, device_id: str) -> DeviceTelemetry | None:
         """获取设备最新的遥测数据"""
         with self._cache_lock:
             return self._telemetry_cache.get(device_id)
     
-    def get_latest_status(self, device_id: str) -> Optional[DeviceStatus]:
+    def get_latest_status(self, device_id: str) -> DeviceStatus | None:
         """获取设备最新的状态"""
         with self._cache_lock:
             return self._status_cache.get(device_id)
     
-    def get_all_telemetry(self) -> Dict[str, DeviceTelemetry]:
+    def get_all_telemetry(self) -> dict[str, DeviceTelemetry]:
         """获取所有设备的最新遥测数据"""
         with self._cache_lock:
             return self._telemetry_cache.copy()
     
-    def get_all_status(self) -> Dict[str, DeviceStatus]:
+    def get_all_status(self) -> dict[str, DeviceStatus]:
         """获取所有设备的最新状态"""
         with self._cache_lock:
             return self._status_cache.copy()
     
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         stats = self.stats.copy()
         stats['connected'] = self._connected
@@ -319,7 +319,7 @@ class MQTTDataDistributor:
         self.logger = logging.getLogger("MQTTDataDistributor")
         
         # 业务模块引用
-        self._modules: Dict[str, Any] = {}
+        self._modules: dict[str, Any] = {}
         
         # 设置回调
         self.subscriber.on_telemetry = self._on_telemetry

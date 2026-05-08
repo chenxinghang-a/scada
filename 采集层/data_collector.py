@@ -8,7 +8,7 @@ import time
 import queue
 import logging
 import threading
-from typing import Dict, List, Any, Optional
+from typing import Any
 from datetime import datetime
 from queue import Queue
 
@@ -50,7 +50,7 @@ class DataCollector:
         
         # 统计信息（用锁保护，多线程安全）
         self._stats_lock = threading.Lock()
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'total_collections': 0,
             'successful_collections': 0,
             'failed_collections': 0,
@@ -109,7 +109,7 @@ class DataCollector:
         self.device_manager.disconnect_all()
         logger.info("数据采集器已停止")
     
-    def _setup_push_device(self, device_id: str, device_config: Dict):
+    def _setup_push_device(self, device_id: str, device_config: dict[str, Any]):
         """设置推送型设备（OPC UA / MQTT）"""
         protocol = device_config.get('protocol', 'modbus_tcp')
         client = self.device_manager.get_client(device_id)
@@ -140,7 +140,7 @@ class DataCollector:
         else:
             logger.error(f"[{protocol.upper()}] 设备 {device_id} 连接失败")
     
-    def _start_device_collection(self, device_id: str, device_config: Dict):
+    def _start_device_collection(self, device_id: str, device_config: dict[str, Any]):
         """启动单个设备的轮询采集任务（Modbus / REST）"""
         interval = device_config.get('collection_interval', 5)
         protocol = device_config.get('protocol', 'modbus_tcp')
@@ -159,7 +159,7 @@ class DataCollector:
         
         collect_task()
     
-    def _collect_device_data(self, device_id: str, device_config: Dict, protocol: str):
+    def _collect_device_data(self, device_id: str, device_config: dict[str, Any], protocol: str):
         """采集单个轮询型设备的数据"""
         self._inc_stat('total_collections')
         
@@ -195,7 +195,7 @@ class DataCollector:
             logger.error(f"采集设备 {device_id} 数据异常: {e}")
             self._inc_stat('failed_collections')
     
-    def _collect_modbus(self, client, device_id: str, device_config: Dict, timestamp):
+    def _collect_modbus(self, client, device_id: str, device_config: dict[str, Any], timestamp):
         """采集Modbus设备的寄存器数据"""
         registers = device_config.get('registers', [])
         for register in registers:
@@ -226,19 +226,19 @@ class DataCollector:
                 except (ValueError, TypeError):
                     pass
 
-    def _collect_rest(self, client, device_id: str, device_config: Dict, timestamp):
+    def _collect_rest(self, client, device_id: str, device_config: dict[str, Any], timestamp):
         """采集REST设备的缓存数据（客户端自带轮询）"""
         self._collect_from_cache(client, device_id, timestamp)
 
-    def _collect_opcua(self, client, device_id: str, device_config: Dict, timestamp):
+    def _collect_opcua(self, client, device_id: str, device_config: dict[str, Any], timestamp):
         """采集OPC UA设备的缓存数据（客户端通过订阅自动更新缓存）"""
         self._collect_from_cache(client, device_id, timestamp)
 
-    def _collect_mqtt(self, client, device_id: str, device_config: Dict, timestamp):
+    def _collect_mqtt(self, client, device_id: str, device_config: dict[str, Any], timestamp):
         """采集MQTT设备的缓存数据（客户端通过订阅自动更新缓存）"""
         self._collect_from_cache(client, device_id, timestamp)
     
-    def _read_register(self, client, register: Dict) -> Optional[float]:
+    def _read_register(self, client, register: dict[str, Any]) -> float | None:
         """读取单个Modbus寄存器数据"""
         try:
             address = register['address']
@@ -385,7 +385,7 @@ class DataCollector:
                     # 打印更多调试信息
                     logger.error(f"异常数据: {data if 'data' in locals() else 'N/A'}")
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         with self._stats_lock:
             return {

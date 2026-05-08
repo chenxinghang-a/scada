@@ -17,7 +17,7 @@ TDengine客户端封装
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Any
 
 import requests
 
@@ -67,7 +67,7 @@ class TDengineClient:
         self._connection = None
         
         # 统计信息
-        self.stats: Dict[str, Any] = {
+        self.stats: dict[str, Any] = {
             'writes': 0,
             'queries': 0,
             'errors': 0,
@@ -145,7 +145,7 @@ class TDengineClient:
         self._execute_sql(sql)
         self.logger.info(f"数据库 {self.database} 已就绪")
     
-    def _execute_sql(self, sql: str) -> Optional[Dict[str, Any]]:
+    def _execute_sql(self, sql: str) -> dict[str, Any] | None:
         """
         执行SQL语句
         
@@ -153,7 +153,7 @@ class TDengineClient:
             sql: SQL语句
             
         Returns:
-            Dict: 查询结果
+            dict[str, Any]: 查询结果
             None: 执行失败
         """
         if self.use_rest:
@@ -161,7 +161,7 @@ class TDengineClient:
         else:
             return self._execute_native(sql)
     
-    def _execute_rest(self, sql: str) -> Optional[Dict[str, Any]]:
+    def _execute_rest(self, sql: str) -> dict[str, Any] | None:
         """通过REST API执行SQL"""
         try:
             auth = (self.user, self.password)
@@ -195,7 +195,7 @@ class TDengineClient:
             self.stats['last_error'] = str(e)
             return None
     
-    def _execute_native(self, sql: str) -> Optional[Dict[str, Any]]:
+    def _execute_native(self, sql: str) -> dict[str, Any] | None:
         """通过原生连接执行SQL"""
         if not self._connection:
             self.logger.error("未连接")
@@ -239,7 +239,7 @@ class TDengineClient:
             else:
                 self.logger.error(f"创建超级表 {table_name} 失败")
     
-    def _ensure_table(self, table_name: str, stable_name: str, tags: Dict[str, str]):
+    def _ensure_table(self, table_name: str, stable_name: str, tags: dict[str, str]):
         """确保子表存在"""
         if table_name in self._created_tables:
             return
@@ -279,7 +279,7 @@ class TDengineClient:
         else:
             self.logger.error(f"写入遥测数据失败: {record.device_id}.{record.register_name}")
     
-    def write_telemetry_batch(self, records: List[TelemetryRecord]):
+    def write_telemetry_batch(self, records: list[TelemetryRecord]):
         """
         批量写入遥测数据
         
@@ -290,7 +290,7 @@ class TDengineClient:
             return
         
         # 按表分组
-        table_groups: Dict[str, List[TelemetryRecord]] = {}
+        table_groups: dict[str, list[TelemetryRecord]] = {}
         for record in records:
             table_name = get_telemetry_table_name(record.device_id, record.register_name)
             if table_name not in table_groups:
@@ -380,7 +380,7 @@ class TDengineClient:
     
     def query_telemetry(self, device_id: str, register_name: str,
                         start_time: datetime, end_time: datetime,
-                        limit: int = 1000) -> List[Dict]:
+                        limit: int = 1000) -> list[dict[str, Any]]:
         """
         查询遥测数据
         
@@ -392,7 +392,7 @@ class TDengineClient:
             limit: 返回记录数限制
             
         Returns:
-            List[Dict]: 数据列表
+            list[dict[str, Any]]: 数据列表
         """
         table_name = get_telemetry_table_name(device_id, register_name)
         
@@ -413,7 +413,7 @@ class TDengineClient:
             return self._format_query_result(result)
         return []
     
-    def query_telemetry_latest(self, device_id: str, register_name: str) -> Optional[Dict]:
+    def query_telemetry_latest(self, device_id: str, register_name: str) -> dict[str, Any] | None:
         """查询最新的遥测数据"""
         table_name = get_telemetry_table_name(device_id, register_name)
         
@@ -432,7 +432,7 @@ class TDengineClient:
     
     def query_telemetry_agg(self, device_id: str, register_name: str,
                             start_time: datetime, end_time: datetime,
-                            interval: str = "1h") -> List[Dict]:
+                            interval: str = "1h") -> list[dict[str, Any]]:
         """
         查询遥测数据聚合结果
         
@@ -462,7 +462,7 @@ class TDengineClient:
         return []
     
     def query_alarms(self, device_id: str, start_time: datetime, end_time: datetime,
-                     level: str = None, limit: int = 100) -> List[Dict]:
+                     level: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         """查询报警记录"""
         table_name = get_alarm_table_name(device_id)
         
@@ -489,7 +489,7 @@ class TDengineClient:
                         'value', 'threshold', 'acknowledged'])
         return []
     
-    def query_oee(self, device_id: str, start_time: datetime, end_time: datetime) -> List[Dict]:
+    def query_oee(self, device_id: str, start_time: datetime, end_time: datetime) -> list[dict[str, Any]]:
         """查询OEE记录"""
         table_name = get_oee_table_name(device_id)
         
@@ -513,7 +513,7 @@ class TDengineClient:
         return []
     
     def query_energy(self, device_id: str, start_time: datetime, end_time: datetime,
-                     interval: str = "1h") -> List[Dict]:
+                     interval: str = "1h") -> list[dict[str, Any]]:
         """查询能源数据聚合"""
         table_name = get_energy_table_name(device_id)
         
@@ -536,7 +536,7 @@ class TDengineClient:
                 columns=['timestamp', 'avg_power', 'max_power', 'total_energy'])
         return []
     
-    def _format_query_result(self, result: Dict[str, Any], columns: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def _format_query_result(self, result: dict[str, Any], columns: list[str] | None = None) -> list[dict[str, Any]]:
         """格式化查询结果"""
         if not result or not result.get('data'):
             return []
@@ -547,9 +547,9 @@ class TDengineClient:
             columns = [meta[0] for meta in column_meta]
         
         # 转换为字典列表
-        formatted: List[Dict[str, Any]] = []
+        formatted: list[dict[str, Any]] = []
         for row in result['data']:
-            record: Dict[str, Any] = {}
+            record: dict[str, Any] = {}
             for i, col in enumerate(columns):
                 if i < len(row):
                     record[col] = row[i]
@@ -557,7 +557,7 @@ class TDengineClient:
         
         return formatted
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         return self.stats.copy()
 

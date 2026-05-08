@@ -3,6 +3,7 @@
 测试内容：采集精度、响应时间、稳定性、报警触发
 """
 
+from typing import Any
 import requests
 import time
 import statistics

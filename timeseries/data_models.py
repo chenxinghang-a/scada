@@ -18,7 +18,7 @@ TDengine核心概念：
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Any
 
 
 @dataclass
@@ -42,7 +42,7 @@ class TelemetryRecord:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         return f"('{ts}', {self.value}, {self.quality})"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             'device_id': self.device_id,
             'register_name': self.register_name,
@@ -227,7 +227,7 @@ STABLE_DEFINITIONS = {
 }
 
 
-def get_create_table_sql(table_name: str, stable_name: str, tags: Dict[str, str]) -> str:
+def get_create_table_sql(table_name: str, stable_name: str, tags: dict[str, str]) -> str:
     """
     生成创建子表的SQL
     

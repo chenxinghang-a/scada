@@ -3,6 +3,7 @@
 支持协议: Modbus TCP/RTU, OPC UA, MQTT, REST HTTP
 """
 
+from typing import Any
 from .modbus_client import ModbusClient
 from .mqtt_client import MQTTClient
 from .data_collector import DataCollector

@@ -17,7 +17,7 @@ import math
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Any
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class EnergyManager:
     - 设备运行状态（关联能耗与产出）
     """
     
-    def __init__(self, database, config: Dict = None):
+    def __init__(self, database, config: dict[str, Any] | None = None):
         """
         Args:
             database: Database实例
@@ -62,20 +62,20 @@ class EnergyManager:
         
         # 实时功率数据
         # device_id -> {'power_kw': float, 'timestamp': datetime}
-        self.realtime_power: Dict[str, Dict] = {}
+        self.realtime_power: dict[str, dict[str, Any]] = {}
         
         # 能耗累积数据
         # device_id -> {'energy_kwh': float, 'water_m3': float, 'gas_m3': float, ...}
-        self.energy_accumulated: Dict[str, Dict] = defaultdict(lambda: {
+        self.energy_accumulated: dict[str, dict[str, Any]] = defaultdict(lambda: {
             'energy_kwh': 0, 'water_m3': 0, 'gas_m3': 0, 'steam_ton': 0,
             'peak_kwh': 0, 'flat_kwh': 0, 'valley_kwh': 0,
         })
         
         # 班次能耗记录
-        self.shift_records: List[Dict] = []
+        self.shift_records: list[dict[str, Any]] = []
         
         # 能耗基线（用于异常检测）
-        self.energy_baseline: Dict[str, float] = {}
+        self.energy_baseline: dict[str, float] = {}
         
         # 锁
         self._lock = threading.Lock()
@@ -113,7 +113,7 @@ class EnergyManager:
     # ==================== 数据输入接口 ====================
     
     def feed_power_data(self, device_id: str, power_kw: float,
-                         energy_kwh: float = None, timestamp: datetime = None):
+                         energy_kwh: float | None = None, timestamp: datetime | None = None):
         """
         喂入电力数据
         
@@ -149,7 +149,7 @@ class EnergyManager:
                 # 直接使用累积电量
                 self.energy_accumulated[device_id]['energy_kwh'] = energy_kwh
     
-    def feed_water_data(self, device_id: str, flow_m3h: float, timestamp: datetime = None):
+    def feed_water_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
         """喂入水表数据"""
         now = timestamp or datetime.now()
         with self._lock:
@@ -162,7 +162,7 @@ class EnergyManager:
                 'timestamp': now,
             }
     
-    def feed_gas_data(self, device_id: str, flow_m3h: float, timestamp: datetime = None):
+    def feed_gas_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
         """喂入气表数据"""
         now = timestamp or datetime.now()
         with self._lock:
@@ -192,7 +192,7 @@ class EnergyManager:
     
     # ==================== 能耗分析 ====================
     
-    def get_realtime_power(self, device_id: str = None) -> Dict:
+    def get_realtime_power(self, device_id: str | None = None) -> dict[str, Any]:
         """获取实时功率"""
         with self._lock:
             if device_id:
@@ -208,7 +208,7 @@ class EnergyManager:
                     total += v['power_kw']
             return round(total, 2)
     
-    def get_energy_summary(self, device_id: str = None) -> Dict:
+    def get_energy_summary(self, device_id: str | None = None) -> dict[str, Any]:
         """
         获取能耗汇总
         
@@ -255,7 +255,7 @@ class EnergyManager:
             'tariff_rates': self.tariff,
         }
     
-    def get_energy_cost_breakdown(self) -> Dict:
+    def get_energy_cost_breakdown(self) -> dict[str, Any]:
         """获取电费分时明细"""
         with self._lock:
             peak_total = sum(d.get('peak_kwh', 0) for d in self.energy_accumulated.values())
@@ -285,7 +285,7 @@ class EnergyManager:
             ),
         }
     
-    def get_carbon_emission(self) -> Dict:
+    def get_carbon_emission(self) -> dict[str, Any]:
         """获取碳排放数据"""
         summary = self.get_energy_summary()
         energy_mwh = summary['total_energy_kwh'] / 1000
@@ -299,7 +299,7 @@ class EnergyManager:
         }
     
     def get_energy_efficiency(self, production_count: int = 0,
-                                production_value: float = 0) -> Dict:
+                                production_value: float = 0) -> dict[str, Any]:
         """
         能效指标计算
         
@@ -340,7 +340,7 @@ class EnergyManager:
                             f"基线{baseline:.1f}kWh, 超出{(current/baseline-1)*100:.0f}%"
                         )
     
-    def get_anomalies(self) -> List[Dict]:
+    def get_anomalies(self) -> list[dict[str, Any]]:
         """获取能耗异常列表"""
         anomalies = []
         with self._lock:
@@ -361,7 +361,7 @@ class EnergyManager:
                         })
         return anomalies
     
-    def reset_accumulated(self, device_id: str = None):
+    def reset_accumulated(self, device_id: str | None = None):
         """重置能耗累积（新班次/新日）"""
         with self._lock:
             if device_id:

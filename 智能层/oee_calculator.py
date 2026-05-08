@@ -19,7 +19,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Any
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class OEECalculator:
     - 合格品数 vs 总产量
     """
     
-    def __init__(self, database, config: Dict = None):
+    def __init__(self, database, config: dict[str, Any] | None = None):
         """
         Args:
             database: Database实例
@@ -45,20 +45,20 @@ class OEECalculator:
         self.config = config or {}
         
         # 设备理论产能配置（件/小时 或 产品/小时）
-        self.theoretical_rates: Dict[str, float] = self.config.get('theoretical_rates', {})
+        self.theoretical_rates: dict[str, float] = self.config.get('theoretical_rates', {})
         
         # 设备运行状态追踪
         # device_id -> {'status': 'running'|'stopped'|'fault'|'idle', 'since': datetime}
-        self.device_states: Dict[str, Dict] = {}
+        self.device_states: dict[str, dict[str, Any]] = {}
         
         # 上次产量记录（用于计算增量）
-        self._last_production: Dict[str, Dict] = {}
+        self._last_production: dict[str, dict[str, Any]] = {}
         
         # 班次数据累积
         # device_id -> {'shift_start': datetime, 'planned_time': float,
         #               'actual_run_time': float, 'downtime': float,
         #               'total_count': int, 'good_count': int, 'ideal_cycle_time': float}
-        self.shift_data: Dict[str, Dict] = defaultdict(lambda: {
+        self.shift_data: dict[str, dict[str, Any]] = defaultdict(lambda: {
             'shift_start': None,
             'planned_production_time': 0,  # 计划生产时间(秒)
             'actual_run_time': 0,          # 实际运行时间(秒)
@@ -69,7 +69,7 @@ class OEECalculator:
         })
         
         # OEE历史记录
-        self.oee_history: List[Dict] = []
+        self.oee_history: list[dict[str, Any]] = []
         
         # 锁（使用RLock避免死锁：get_all_oee会调用calculate_oee，两者都需要加锁）
         self._lock = threading.RLock()
@@ -155,7 +155,7 @@ class OEECalculator:
                 'since': now,
             }
     
-    def record_production(self, device_id: str, count: int = None, good_count: int = None):
+    def record_production(self, device_id: str, count: int | None = None, good_count: int | None = None):
         """
         记录产量（支持绝对值和增量两种模式）
         
@@ -224,7 +224,7 @@ class OEECalculator:
     
     # ==================== OEE计算核心 ====================
     
-    def calculate_oee(self, device_id: str) -> Optional[Dict]:
+    def calculate_oee(self, device_id: str) -> dict[str, Any] | None:
         """
         计算指定设备的OEE
         
@@ -242,7 +242,7 @@ class OEECalculator:
                 'quality': float,       # 质量率 (0-1)
                 'oee': float,           # OEE (0-1)
                 'oee_percent': float,   # OEE百分比
-                'losses': dict,         # 六大损失分析
+                'losses': dict[str, Any],         # 六大损失分析
             }
         """
         with self._lock:
@@ -304,9 +304,9 @@ class OEECalculator:
                 'grade': self._oee_grade(oee),
             }
     
-    def _calculate_losses(self, device_id: str, sd: Dict,
+    def _calculate_losses(self, device_id: str, sd: dict[str, Any],
                            availability: float, performance: float,
-                           quality: float) -> Dict:
+                           quality: float) -> dict[str, Any]:
         """
         六大损失分析
         
@@ -364,7 +364,7 @@ class OEECalculator:
     
     # ==================== 查询接口 ====================
     
-    def get_all_oee(self) -> Dict[str, Dict]:
+    def get_all_oee(self) -> dict[str, dict[str, Any]]:
         """获取所有设备的当前OEE"""
         results = {}
         with self._lock:
@@ -374,23 +374,23 @@ class OEECalculator:
                     results[device_id] = oee
         return results
     
-    def get_device_oee(self, device_id: str) -> Optional[Dict]:
+    def get_device_oee(self, device_id: str) -> dict[str, Any] | None:
         """获取指定设备的OEE"""
         return self.calculate_oee(device_id)
     
-    def get_oee_history(self, device_id: str = None, limit: int = 100) -> List[Dict]:
+    def get_oee_history(self, device_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         """获取OEE历史记录"""
         with self._lock:
             if device_id:
                 return [h for h in self.oee_history if h['device_id'] == device_id][-limit:]
             return self.oee_history[-limit:]
     
-    def get_device_state(self, device_id: str) -> Optional[Dict]:
+    def get_device_state(self, device_id: str) -> dict[str, Any] | None:
         """获取设备当前状态"""
         with self._lock:
             return self.device_states.get(device_id)
     
-    def get_all_device_states(self) -> Dict[str, Dict]:
+    def get_all_device_states(self) -> dict[str, dict[str, Any]]:
         """获取所有设备状态"""
         with self._lock:
             return dict(self.device_states)

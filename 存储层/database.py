@@ -5,7 +5,7 @@
 
 import sqlite3
 import logging
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any
 from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import contextmanager
@@ -215,8 +215,8 @@ class Database:
                 VALUES (?, ?, ?, ?, ?)
             ''', (device_id, register_name, value, unit, timestamp))
     
-    def get_realtime_data(self, device_id: str = None, 
-                          limit: int = 100) -> List[Dict]:
+    def get_realtime_data(self, device_id: str | None = None, 
+                          limit: int = 100) -> list[dict[str, Any]]:
         """
         获取实时数据
         
@@ -225,7 +225,7 @@ class Database:
             limit: 返回数量限制
             
         Returns:
-            List[Dict]: 数据列表
+            list[dict[str, Any]]: 数据列表
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -247,7 +247,7 @@ class Database:
             return [dict(row) for row in cursor.fetchall()]
     
     def get_latest_data(self, device_id: str, 
-                        register_name: str = None) -> Optional[Dict]:
+                        register_name: str | None = None) -> dict[str, Any] | None:
         """
         获取最新数据
         
@@ -256,7 +256,7 @@ class Database:
             register_name: 寄存器名称（可选，不指定则返回所有寄存器最新值）
             
         Returns:
-            Dict: 最新数据（单个寄存器返回dict，所有寄存器返回{register_name: dict}）
+            dict[str, Any]: 最新数据（单个寄存器返回dict，所有寄存器返回{register_name: dict}）
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -293,7 +293,7 @@ class Database:
                     result[row_dict['register_name']] = row_dict
                 return result
     
-    def get_device_registers(self, device_id: str) -> List[str]:
+    def get_device_registers(self, device_id: str) -> list[str]:
         """
         获取设备的所有寄存器名称
         
@@ -301,7 +301,7 @@ class Database:
             device_id: 设备ID
             
         Returns:
-            List[str]: 寄存器名称列表
+            list[str]: 寄存器名称列表
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -315,7 +315,7 @@ class Database:
     
     def get_history_data(self, device_id: str, register_name: str,
                          start_time: datetime, end_time: datetime,
-                         interval: str = '1min') -> List[Dict]:
+                         interval: str = '1min') -> list[dict[str, Any]]:
         """
         获取历史数据
         
@@ -327,7 +327,7 @@ class Database:
             interval: 时间间隔（1min, 5min, 1hour, 1day）
             
         Returns:
-            List[Dict]: 历史数据列表
+            list[dict[str, Any]]: 历史数据列表
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -387,9 +387,9 @@ class Database:
             ''', (alarm_id, device_id, register_name, alarm_level, alarm_message,
                   threshold, actual_value, timestamp))
     
-    def get_alarm_records(self, device_id: str = None, alarm_level: str = None,
-                          start_time: datetime = None, end_time: datetime = None,
-                          acknowledged: bool = None, limit: int = 100) -> List[Dict]:
+    def get_alarm_records(self, device_id: str | None = None, alarm_level: str | None = None,
+                          start_time: datetime | None = None, end_time: datetime | None = None,
+                          acknowledged: bool | None = None, limit: int = 100) -> list[dict[str, Any]]:
         """
         获取报警记录
         
@@ -402,7 +402,7 @@ class Database:
             limit: 返回数量限制
             
         Returns:
-            List[Dict]: 报警记录列表
+            list[dict[str, Any]]: 报警记录列表
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -457,12 +457,12 @@ class Database:
             
             return cursor.rowcount > 0
     
-    def get_device_summary(self) -> List[Dict]:
+    def get_device_summary(self) -> list[dict[str, Any]]:
         """
         获取设备数据摘要
         
         Returns:
-            List[Dict]: 设备摘要列表
+            list[dict[str, Any]]: 设备摘要列表
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -510,12 +510,12 @@ class Database:
             
             logger.info(f"清理旧数据: 实时数据 {realtime_deleted} 条, 历史数据 {history_deleted} 条")
     
-    def get_database_stats(self) -> Dict[str, Any]:
+    def get_database_stats(self) -> dict[str, Any]:
         """
         获取数据库统计信息
         
         Returns:
-            Dict: 统计信息
+            dict[str, Any]: 统计信息
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -622,7 +622,7 @@ class Database:
             }
     
     def get_archive_data(self, device_id: str, register_name: str,
-                         start_date: str, end_date: str) -> List[Dict]:
+                         start_date: str, end_date: str) -> list[dict[str, Any]]:
         """
         获取归档数据
         
@@ -633,7 +633,7 @@ class Database:
             end_date: 结束日期 (YYYY-MM-DD)
             
         Returns:
-            List[Dict]: 归档数据列表
+            list[dict[str, Any]]: 归档数据列表
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -660,12 +660,12 @@ class Database:
             logger.error(f"数据库压缩失败: {e}")
             return False
     
-    def get_table_sizes(self) -> Dict[str, int]:
+    def get_table_sizes(self) -> dict[str, int]:
         """
         获取各表的记录数
         
         Returns:
-            Dict: 表名 -> 记录数
+            dict[str, Any]: 表名 -> 记录数
         """
         tables = ['realtime_data', 'history_data', 'alarm_records', 'history_archive', 'users', 'operation_logs']
         result = {}

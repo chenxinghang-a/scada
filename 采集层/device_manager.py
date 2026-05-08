@@ -8,14 +8,14 @@
 import logging
 import yaml
 import socket
-from typing import Dict, List, Any, Optional
+from typing import Any
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 # ---- 协议工厂：根据protocol字段自动选择客户端 ----
-def _create_client(config: Dict[str, Any], simulation_mode: bool):
+def _create_client(config: dict[str, Any], simulation_mode: bool):
     """
     根据协议类型创建对应的客户端实例
     
@@ -83,7 +83,7 @@ class DeviceManager:
     # 支持的协议列表
     SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest']
     
-    def __init__(self, config_path: str = None, simulation_mode: bool = True):
+    def __init__(self, config_path: str | None = None, simulation_mode: bool = True):
         """
         初始化设备管理器
         
@@ -146,11 +146,11 @@ class DeviceManager:
                 self.disconnect_device(did)
             logger.info(f"移除设备: {removed}")
     
-    def get_device_config(self, device_id: str) -> Optional[Dict]:
+    def get_device_config(self, device_id: str) -> dict[str, Any] | None:
         """获取设备配置"""
         return self.devices.get(device_id)
     
-    def get_all_devices(self) -> Dict[str, Dict]:
+    def get_all_devices(self) -> dict[str, dict[str, Any]]:
         """获取所有设备配置"""
         return self.devices.copy()
     
@@ -188,7 +188,7 @@ class DeviceManager:
         if client:
             client.disconnect()
     
-    def connect_all(self) -> Dict[str, bool]:
+    def connect_all(self) -> dict[str, bool]:
         """连接所有设备"""
         results = {}
         for device_id in self.devices:
@@ -203,7 +203,7 @@ class DeviceManager:
         for device_id in list(self.clients.keys()):
             self.disconnect_device(device_id)
     
-    def get_device_status(self, device_id: str) -> Dict[str, Any]:
+    def get_device_status(self, device_id: str) -> dict[str, Any]:
         """获取设备状态"""
         client = self.clients.get(device_id)
         device_config = self.devices.get(device_id)
@@ -230,11 +230,11 @@ class DeviceManager:
         
         return status
     
-    def get_all_status(self) -> List[Dict[str, Any]]:
+    def get_all_status(self) -> list[dict[str, Any]]:
         """获取所有设备状态"""
         return [self.get_device_status(did) for did in self.devices]
     
-    def add_device(self, device_config: Dict) -> bool:
+    def add_device(self, device_config: dict[str, Any]) -> bool:
         """
         添加设备（运行时热添加）
         
@@ -282,7 +282,7 @@ class DeviceManager:
             logger.error(f"移除设备异常: {e}")
             return False
     
-    def get_protocol_summary(self) -> Dict[str, int]:
+    def get_protocol_summary(self) -> dict[str, int]:
         """获取各协议设备数量统计"""
         summary = {}
         for d in self.devices.values():

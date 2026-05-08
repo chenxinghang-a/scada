@@ -1,6 +1,7 @@
 """
 合并论文所有章节为完整版
 """
+from typing import Any
 import sys
 import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')

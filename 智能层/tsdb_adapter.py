@@ -19,10 +19,10 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Any
 
-from timeseries.tdengine_client import TDengineClient
-from timeseries.data_models import (
+from ..timeseries.tdengine_client import TDengineClient
+from ..timeseries.data_models import (
     OEERecord, EnergyRecord, PredictiveRecord
 )
 
@@ -44,7 +44,7 @@ class TSDBAdapter:
                  predictive_maintenance=None,
                  spc_analyzer=None,
                  energy_manager=None,
-                 config: Dict = None):
+                 config: dict[str, Any] | None = None):
         """
         初始化适配器
         
@@ -71,15 +71,15 @@ class TSDBAdapter:
         
         # 运行状态
         self._running = False
-        self._sync_thread: Optional[threading.Thread] = None
-        self._result_thread: Optional[threading.Thread] = None
+        self._sync_thread: threading.Thread | None = None
+        self._result_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         
         # 设备注册表（需要同步的设备）
-        self._registered_devices: Dict[str, Dict] = {}
+        self._registered_devices: dict[str, dict[str, Any]] = {}
         
         # 统计信息
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'sync_cycles': 0,
             'records_synced': 0,
             'results_written': 0,
@@ -92,7 +92,7 @@ class TSDBAdapter:
         
         logger.info("TDengine智能层适配器初始化完成")
     
-    def register_device(self, device_id: str, registers: List[Dict]):
+    def register_device(self, device_id: str, registers: list[dict[str, Any]]):
         """
         注册设备及其寄存器
         
@@ -207,7 +207,7 @@ class TSDBAdapter:
         self.stats['sync_cycles'] += 1
         self.stats['last_sync_time'] = datetime.now().isoformat()
     
-    def _feed_to_modules(self, device_id: str, register_name: str, data: List[Dict]):
+    def _feed_to_modules(self, device_id: str, register_name: str, data: list[dict[str, Any]]):
         """将数据喂入各智能层模块"""
         
         for record in data:
@@ -282,6 +282,8 @@ class TSDBAdapter:
     
     def _write_oee_results(self):
         """写入OEE计算结果"""
+        if not self.oee_calculator:
+            return
         try:
             all_oee = self.oee_calculator.get_all_oee()
             
@@ -308,6 +310,8 @@ class TSDBAdapter:
     
     def _write_predictive_results(self):
         """写入预测性维护结果"""
+        if not self.predictive_maintenance:
+            return
         try:
             health_scores = self.predictive_maintenance.get_health_scores()
             
@@ -343,6 +347,8 @@ class TSDBAdapter:
     
     def _write_energy_results(self):
         """写入能源数据"""
+        if not self.energy_manager:
+            return
         try:
             # 获取所有设备的实时功率
             for device_id in self._registered_devices:
@@ -365,7 +371,7 @@ class TSDBAdapter:
             logger.error(f"写入能源数据失败: {e}")
             self.stats['errors'] += 1
     
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         stats = self.stats.copy()
         stats['running'] = self._running
@@ -393,18 +399,18 @@ class RealtimeDataBridge:
         
         # 批量写入缓冲
         from ..timeseries.data_models import TelemetryRecord
-        self._buffer: List = []
+        self._buffer: list[Any] = []
         self._buffer_lock = threading.Lock()
         self._batch_size = 100
         self._flush_interval = 5.0
         
         # 运行状态
         self._running = False
-        self._flush_thread: Optional[threading.Thread] = None
+        self._flush_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         
         # 统计
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'records_received': 0,
             'records_written': 0,
             'errors': 0
@@ -437,7 +443,7 @@ class RealtimeDataBridge:
         self.logger.info("实时数据桥接器已停止")
     
     def feed(self, device_id: str, register_name: str, value: float,
-             timestamp: datetime = None, unit: str = "", protocol: str = "",
+             timestamp: datetime | None = None, unit: str = "", protocol: str = "",
              gateway_id: str = "", quality: int = 192):
         """
         喂入实时数据
@@ -505,7 +511,7 @@ class RealtimeDataBridge:
             with self._buffer_lock:
                 self._buffer.extend(records)
     
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         stats = self.stats.copy()
         stats['running'] = self._running

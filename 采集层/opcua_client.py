@@ -8,7 +8,7 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Any, Callable
+from typing import Any, Callable
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class OPCUAClient:
     - 连接第三方SCADA/MES系统的OPC UA暴露接口
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         初始化OPC UA客户端
         
@@ -62,23 +62,23 @@ class OPCUAClient:
         self.node_configs = config.get('nodes', [])
         
         # 客户端实例
-        self.client: Optional[Client] = None
-        self.subscription: Optional[Subscription] = None
+        self.client: Client | None = None
+        self.subscription: Subscription | None = None
         self.connected = False
         
         # 最新数据缓存: {node_name: {"value": x, "timestamp": t, "quality": q}}
-        self.latest_data: Dict[str, Dict] = {}
+        self.latest_data: dict[str, dict[str, Any]] = {}
         
         # 数据回调
-        self._data_callbacks: List[Callable] = []
+        self._data_callbacks: list[Callable[..., Any]] = []
         
         # 事件循环（独立线程运行异步代码）
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._thread: Optional[threading.Thread] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
         self._running = False
         
         # 统计
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'connected_since': None,
             'nodes_subscribed': 0,
             'data_updates': 0,
@@ -88,7 +88,7 @@ class OPCUAClient:
         
         logger.info(f"OPC UA客户端初始化: {self.endpoint}")
     
-    def add_data_callback(self, callback: Callable):
+    def add_data_callback(self, callback: Callable[..., Any]):
         """添加数据回调函数"""
         self._data_callbacks.append(callback)
     
@@ -128,7 +128,7 @@ class OPCUAClient:
         self.connected = False
         logger.info("OPC UA客户端已断开")
     
-    def get_latest_data(self) -> Dict[str, Dict]:
+    def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取所有节点的最新数据"""
         return dict(self.latest_data)
     
@@ -266,7 +266,7 @@ class OPCUADiscovery:
     """
     
     @staticmethod
-    async def discover_servers(timeout: float = 5.0) -> List[Dict]:
+    async def discover_servers(timeout: float = 5.0) -> list[dict[str, Any]]:
         """
         发现局域网内的OPC UA服务器（通过LDS本地发现服务）
         
@@ -274,7 +274,7 @@ class OPCUADiscovery:
             timeout: 超时时间
             
         Returns:
-            List[Dict]: 发现的服务器列表
+            list[dict[str, Any]]: 发现的服务器列表
         """
         if not OPCUA_AVAILABLE:
             return []
@@ -317,12 +317,12 @@ class OPCUABridge:
     def __init__(self, opcua_client: OPCUAClient):
         self.client = opcua_client
     
-    def to_unified_format(self) -> Dict[str, Any]:
+    def to_unified_format(self) -> dict[str, Any]:
         """
         将OPC UA数据转为统一数据格式
         
         Returns:
-            Dict: 统一格式数据，兼容SCADA存储层
+            dict[str, Any]: 统一格式数据，兼容SCADA存储层
         """
         unified = {}
         for name, data in self.client.get_latest_data().items():

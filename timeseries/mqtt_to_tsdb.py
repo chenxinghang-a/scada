@@ -22,7 +22,7 @@ MQTT Broker → MQTTSubscriber → 本服务 → TDengine
 
 import logging
 from datetime import datetime
-from typing import Optional, List
+from typing import Any
 from collections import deque
 import threading
 
@@ -63,17 +63,17 @@ class MQTTToTSDBService:
         self.logger = logging.getLogger("MQTTToTSDB")
         
         # 数据缓冲区
-        self._telemetry_buffer: deque = deque(maxlen=10000)
-        self._alarm_buffer: deque = deque(maxlen=1000)
+        self._telemetry_buffer: deque[Any] = deque(maxlen=10000)
+        self._alarm_buffer: deque[Any] = deque(maxlen=1000)
         self._buffer_lock = threading.Lock()
         
         # 运行状态
         self.running = False
-        self._flush_thread: Optional[threading.Thread] = None
+        self._flush_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         
         # 统计信息
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'telemetry_received': 0,
             'alarms_received': 0,
             'telemetry_written': 0,
@@ -257,7 +257,7 @@ class MQTTToTSDBService:
             self.logger.error(f"写入报警数据失败: {e}")
             self.stats['errors'] += 1
     
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         stats = self.stats.copy()
         stats['running'] = self.running

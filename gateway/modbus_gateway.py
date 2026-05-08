@@ -16,7 +16,7 @@ Modbus网关 (Modbus Gateway)
 
 import time
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Any
 from datetime import datetime
 
 from pymodbus.client import ModbusTcpClient, ModbusSerialClient
@@ -58,14 +58,14 @@ class ModbusGateway(BaseGateway):
     }
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         
         # Modbus客户端缓存
-        self._clients: Dict[str, Any] = {}
+        self._clients: dict[str, Any] = {}
         
         # 寄存器配置缓存
-        self._register_configs: Dict[str, List[Dict]] = {}
+        self._register_configs: dict[str, list[dict[str, Any]]] = {}
         
         # 解析设备配置
         for device_config in self.devices_config:
@@ -111,7 +111,7 @@ class ModbusGateway(BaseGateway):
         self._clients.clear()
         self.connected_devices.clear()
     
-    def _create_client(self, device_config: Dict) -> Any:
+    def _create_client(self, device_config: dict[str, Any]) -> Any:
         """创建Modbus客户端"""
         protocol = device_config.get('protocol', 'tcp')
         
@@ -140,12 +140,12 @@ class ModbusGateway(BaseGateway):
             self.logger.error(f"不支持的协议: {protocol}")
             return None
     
-    def read_device_data(self, device_id: str) -> Optional[Dict[str, float]]:
+    def read_device_data(self, device_id: str) -> dict[str, float] | None:
         """
         读取单个设备的寄存器数据
         
         Returns:
-            Dict[str, float]: {register_name: value}
+            dict[str, float]: {register_name: value}
         """
         client = self._clients.get(device_id)
         if not client:
@@ -184,7 +184,7 @@ class ModbusGateway(BaseGateway):
         return result if result else None
     
     def _read_register(self, client, slave_id: int, address: int, 
-                       count: int, data_type: str) -> Optional[float]:
+                       count: int, data_type: str) -> float | None:
         """
         读取单个寄存器
         
@@ -255,7 +255,7 @@ class ModbusGateway(BaseGateway):
             self.logger.error(f"解码异常: {e}")
             return None
     
-    def convert_to_telemetry(self, device_id: str, raw_data: Dict[str, float]) -> DeviceTelemetry:
+    def convert_to_telemetry(self, device_id: str, raw_data: dict[str, float]) -> DeviceTelemetry:
         """将原始Modbus数据转换为统一物模型"""
         return ThingModelConverter.from_modbus_registers(
             device_id=device_id,
@@ -296,7 +296,7 @@ class ModbusGateway(BaseGateway):
         return False
     
     def write_register(self, device_id: str, address: int, value: int, 
-                       slave_id: int = None) -> bool:
+                       slave_id: int | None = None) -> bool:
         """
         写入单个寄存器（用于设备控制）
         
@@ -325,7 +325,7 @@ class ModbusGateway(BaseGateway):
             return False
     
     def write_coil(self, device_id: str, address: int, value: bool, 
-                   slave_id: int = None) -> bool:
+                   slave_id: int | None = None) -> bool:
         """
         写入线圈（用于开关控制）
         """

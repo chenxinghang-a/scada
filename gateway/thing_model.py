@@ -13,7 +13,7 @@
 
 import json
 import time
-from typing import Dict, Any, Optional, List
+from typing import Any
 from dataclasses import dataclass, asdict, field
 from enum import Enum
 
@@ -45,7 +45,7 @@ class MetricValue:
     quality: int = DataQuality.GOOD.value
     description: str = ""
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "value": self.value,
             "unit": self.unit,
@@ -77,20 +77,20 @@ class DeviceTelemetry:
     DeviceID: str
     Timestamp: float
     Protocol: str
-    Metrics: Dict[str, Dict[str, Any]]
+    Metrics: dict[str, dict[str, Any]]
     GatewayID: str = ""
-    Metadata: Dict[str, Any] = field(default_factory=dict)
+    Metadata: dict[str, Any] = field(default_factory=dict)
     
     def to_json(self) -> str:
         """转换为JSON字符串"""
         return json.dumps(asdict(self), ensure_ascii=False)
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         return asdict(self)
     
     @classmethod
-    def from_dict(cls, data: Dict) -> 'DeviceTelemetry':
+    def from_dict(cls, data: dict[str, Any]) -> 'DeviceTelemetry':
         """从字典创建"""
         return cls(**data)
     
@@ -109,12 +109,12 @@ class DeviceTelemetry:
             "description": description
         }
     
-    def get_metric_value(self, name: str) -> Optional[float]:
+    def get_metric_value(self, name: str) -> float | None:
         """获取指标值"""
         metric = self.Metrics.get(name)
         return metric["value"] if metric else None
     
-    def get_metric_quality(self, name: str) -> Optional[int]:
+    def get_metric_quality(self, name: str) -> int | None:
         """获取指标质量"""
         metric = self.Metrics.get(name)
         return metric["quality"] if metric else None
@@ -138,7 +138,7 @@ class DeviceStatus:
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -162,7 +162,7 @@ class AlarmMessage:
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -176,7 +176,7 @@ class ThingModelValidator:
     REQUIRED_FIELDS = ["DeviceID", "Timestamp", "Metrics"]
     
     @classmethod
-    def validate_telemetry(cls, data: Dict) -> tuple[bool, List[str]]:
+    def validate_telemetry(cls, data: dict[str, Any]) -> tuple[bool, list[str]]:
         """
         验证遥测数据
         
@@ -214,7 +214,7 @@ class ThingModelValidator:
         return (len(errors) == 0, errors)
     
     @classmethod
-    def validate_status(cls, data: Dict) -> tuple[bool, List[str]]:
+    def validate_status(cls, data: dict[str, Any]) -> tuple[bool, list[str]]:
         """验证状态数据"""
         errors = []
         
@@ -237,7 +237,7 @@ class ThingModelConverter:
     """
     
     @staticmethod
-    def from_modbus_registers(device_id: str, registers: Dict[str, float], 
+    def from_modbus_registers(device_id: str, registers: dict[str, float], 
                               gateway_id: str = "") -> DeviceTelemetry:
         """
         从Modbus寄存器数据转换
@@ -285,7 +285,7 @@ class ThingModelConverter:
         )
     
     @staticmethod
-    def from_mqtt_payload(device_id: str, payload: Dict) -> DeviceTelemetry:
+    def from_mqtt_payload(device_id: str, payload: dict[str, Any]) -> DeviceTelemetry:
         """从MQTT载荷转换"""
         metrics = {}
         for key, value in payload.items():

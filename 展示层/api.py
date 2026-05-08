@@ -8,6 +8,7 @@ REST API模块
 - 消除重复的 import yaml / Path
 """
 
+from typing import Any
 import yaml
 import logging
 from pathlib import Path
@@ -38,7 +39,7 @@ _require_engineer = role_required('admin', 'engineer')
 
 # ==================== 配置工具函数 ====================
 
-def _load_yaml_config(config_path: str) -> dict:
+def _load_yaml_config(config_path: str) -> dict[str, Any]:
     """加载YAML配置文件"""
     path = Path(config_path)
     if not path.exists():
@@ -47,7 +48,7 @@ def _load_yaml_config(config_path: str) -> dict:
         return yaml.safe_load(f) or {}
 
 
-def _save_yaml_config(config_path: str, config: dict) -> bool:
+def _save_yaml_config(config_path: str, config: dict[str, Any]) -> bool:
     """保存YAML配置文件"""
     try:
         path = Path(config_path)
@@ -1091,7 +1092,7 @@ def update_notification():
 
 # ==================== 内部辅助函数 ====================
 
-def _validate_protocol_fields(protocol: str, data: dict):
+def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
     """验证协议必填字段，失败抛异常"""
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         for field in ('host', 'port'):
@@ -1115,7 +1116,7 @@ def _validate_protocol_fields(protocol: str, data: dict):
             raise ValueError('REST设备缺少端点配置')
 
 
-def _build_device_config(protocol: str, data: dict) -> dict:
+def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
     """根据协议类型构建设备配置字典"""
     config = {
         'id': data['id'],
@@ -1163,7 +1164,7 @@ def _build_device_config(protocol: str, data: dict) -> dict:
     return config
 
 
-def _update_protocol_fields(protocol: str, device_config: dict, data: dict):
+def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: dict[str, Any]):
     """更新协议专属字段"""
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         for key in ('host', 'port', 'slave_id', 'registers', 'baudrate'):

@@ -21,7 +21,7 @@ import logging
 import threading
 import signal
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Callable, Any
+from typing import Any, Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -44,7 +44,7 @@ class BaseGateway(ABC):
     - convert_to_telemetry(): 转换为统一物模型
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         初始化网关
         
@@ -65,7 +65,7 @@ class BaseGateway(ABC):
         # MQTT配置
         self.mqtt_broker = config.get('mqtt_broker', 'localhost')
         self.mqtt_port = config.get('mqtt_port', 1883)
-        self.mqtt_client: Optional[mqtt.Client] = None
+        self.mqtt_client: mqtt.Client | None = None
         
         # 设备配置
         self.devices_config = config.get('devices', [])
@@ -77,12 +77,12 @@ class BaseGateway(ABC):
         
         # 运行状态
         self.running = False
-        self.connected_devices: Dict[str, bool] = {}
-        self._poll_thread: Optional[threading.Thread] = None
+        self.connected_devices: dict[str, bool] = {}
+        self._poll_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         
         # 统计信息
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'start_time': None,
             'messages_published': 0,
             'errors': 0,
@@ -91,8 +91,8 @@ class BaseGateway(ABC):
         }
         
         # 回调函数
-        self._on_data_callback: Optional[Callable] = None
-        self._on_alarm_callback: Optional[Callable] = None
+        self._on_data_callback: Callable[..., Any] | None = None
+        self._on_alarm_callback: Callable[..., Any] | None = None
         
         # 设置信号处理
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -119,7 +119,7 @@ class BaseGateway(ABC):
         pass
     
     @abstractmethod
-    def read_device_data(self, device_id: str) -> Optional[Dict[str, float]]:
+    def read_device_data(self, device_id: str) -> dict[str, float] | None:
         """
         读取单个设备数据
         
@@ -127,13 +127,13 @@ class BaseGateway(ABC):
             device_id: 设备ID
             
         Returns:
-            Dict[str, float]: 寄存器数据 {register_name: value}
+            dict[str, float]: 寄存器数据 {register_name: value}
             None: 读取失败
         """
         pass
     
     @abstractmethod
-    def convert_to_telemetry(self, device_id: str, raw_data: Dict[str, float]) -> DeviceTelemetry:
+    def convert_to_telemetry(self, device_id: str, raw_data: dict[str, float]) -> DeviceTelemetry:
         """
         将原始数据转换为统一物模型
         
@@ -359,7 +359,7 @@ class BaseGateway(ABC):
         """设置报警回调"""
         self._on_alarm_callback = callback
     
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         stats = self.stats.copy()
         stats['running'] = self.running
@@ -372,6 +372,6 @@ class BaseGateway(ABC):
         """检查设备是否连接"""
         return self.connected_devices.get(device_id, False)
     
-    def get_connected_devices(self) -> List[str]:
+    def get_connected_devices(self) -> list[str]:
         """获取已连接的设备列表"""
         return [did for did, connected in self.connected_devices.items() if connected]

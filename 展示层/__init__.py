@@ -2,6 +2,7 @@
 Web展示模块
 """
 
+from typing import Any
 from .routes import create_app
 from .api import api_bp
 from .websocket import init_socketio

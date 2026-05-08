@@ -6,7 +6,7 @@
 import csv
 import json
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Any
 from datetime import datetime
 from pathlib import Path
 
@@ -29,7 +29,7 @@ class DataExport:
         self.export_dir = Path(export_dir)
         self.export_dir.mkdir(parents=True, exist_ok=True)
     
-    def export_csv(self, data: List[Dict], filename: str = None) -> str:
+    def export_csv(self, data: list[dict[str, Any]], filename: str | None = None) -> str:
         """
         导出CSV格式
         
@@ -42,7 +42,7 @@ class DataExport:
         """
         if not data:
             logger.warning("没有数据可导出")
-            return None
+            return ""
         
         # 生成文件名
         if not filename:
@@ -65,9 +65,9 @@ class DataExport:
             
         except Exception as e:
             logger.error(f"CSV导出失败: {e}")
-            return None
+            return ""
     
-    def export_excel(self, data: List[Dict], filename: str = None,
+    def export_excel(self, data: list[dict[str, Any]], filename: str | None = None,
                      sheet_name: str = 'Sheet1') -> str:
         """
         导出Excel格式
@@ -108,7 +108,7 @@ class DataExport:
             logger.error(f"Excel导出失败: {e}")
             return None
     
-    def export_json(self, data: List[Dict], filename: str = None,
+    def export_json(self, data: list[dict[str, Any]], filename: str | None = None,
                     pretty: bool = True) -> str:
         """
         导出JSON格式
@@ -148,7 +148,7 @@ class DataExport:
     
     def export_device_data(self, database, device_id: str,
                            start_time: datetime, end_time: datetime,
-                           format: str = 'csv') -> Optional[str]:
+                           format: str = 'csv') -> str | None:
         """
         导出设备数据
         
@@ -198,9 +198,9 @@ class DataExport:
             logger.error(f"不支持的导出格式: {format}")
             return None
     
-    def export_alarm_records(self, database, device_id: str = None,
-                             start_time: datetime = None, end_time: datetime = None,
-                             format: str = 'csv') -> Optional[str]:
+    def export_alarm_records(self, database, device_id: str | None = None,
+                             start_time: datetime | None = None, end_time: datetime | None = None,
+                             format: str = 'csv') -> str | None:
         """
         导出报警记录
         
@@ -241,12 +241,12 @@ class DataExport:
             logger.error(f"不支持的导出格式: {format}")
             return None
     
-    def list_exports(self) -> List[Dict[str, Any]]:
+    def list_exports(self) -> list[dict[str, Any]]:
         """
         列出所有导出文件
         
         Returns:
-            List[Dict]: 导出文件列表
+            list[dict[str, Any]]: 导出文件列表
         """
         exports = []
         

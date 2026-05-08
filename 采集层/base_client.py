@@ -5,7 +5,7 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Callable, Optional, List
+from typing import Any, Callable
 
 
 class BaseDeviceClient(ABC):
@@ -16,7 +16,7 @@ class BaseDeviceClient(ABC):
     通过抽象基类强制接口一致性，编译期即可发现接口不匹配。
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         初始化客户端
         
@@ -45,16 +45,16 @@ class BaseDeviceClient(ABC):
         pass
     
     @abstractmethod
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         获取客户端统计信息
         
         Returns:
-            Dict: 包含 device_id, device_name, connected 等字段的统计字典
+            dict[str, Any]: 包含 device_id, device_name, connected 等字段的统计字典
         """
         pass
     
-    def get_latest_data(self) -> Dict[str, Dict]:
+    def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """
         获取最新数据缓存
         
@@ -62,11 +62,11 @@ class BaseDeviceClient(ABC):
         Modbus 客户端默认返回空字典（需要轮询读取）。
         
         Returns:
-            Dict: {register_name: {'value': ..., 'unit': ..., 'timestamp': ...}}
+            dict[str, Any]: {register_name: {'value': ..., 'unit': ..., 'timestamp': ...}}
         """
         return {}
     
-    def add_data_callback(self, callback: Callable) -> None:
+    def add_data_callback(self, callback: Callable[..., Any]) -> None:
         """
         添加数据回调函数
         
@@ -84,48 +84,48 @@ class ModbusClientInterface(BaseDeviceClient):
     
     @abstractmethod
     def read_holding_registers(self, address: int, count: int,
-                              slave_id: Optional[int] = None) -> Optional[List[int]]:
+                              slave_id: int | None = None) -> list[int] | None:
         """读取保持寄存器"""
         pass
     
     @abstractmethod
     def read_input_registers(self, address: int, count: int,
-                            slave_id: Optional[int] = None) -> Optional[List[int]]:
+                            slave_id: int | None = None) -> list[int] | None:
         """读取输入寄存器"""
         pass
     
     @abstractmethod
     def read_coils(self, address: int, count: int,
-                  slave_id: Optional[int] = None) -> Optional[List[bool]]:
+                  slave_id: int | None = None) -> list[bool] | None:
         """读取线圈状态"""
         pass
     
     @abstractmethod
     def read_discrete_inputs(self, address: int, count: int,
-                            slave_id: Optional[int] = None) -> Optional[List[bool]]:
+                            slave_id: int | None = None) -> list[bool] | None:
         """读取离散输入"""
         pass
     
     @abstractmethod
     def write_single_register(self, address: int, value: int,
-                             slave_id: Optional[int] = None) -> bool:
+                             slave_id: int | None = None) -> bool:
         """写入单个寄存器"""
         pass
     
     @abstractmethod
     def write_single_coil(self, address: int, value: bool,
-                         slave_id: Optional[int] = None) -> bool:
+                         slave_id: int | None = None) -> bool:
         """写入单个线圈"""
         pass
     
     # 数据解码方法（有默认实现）
-    def decode_float32(self, registers: List[int]) -> float:
+    def decode_float32(self, registers: list[int]) -> float:
         """解码32位浮点数（大端序）"""
         import struct
         raw = struct.pack('>HH', registers[0], registers[1])
         return struct.unpack('>f', raw)[0]
     
-    def decode_float64(self, registers: List[int]) -> float:
+    def decode_float64(self, registers: list[int]) -> float:
         """解码64位浮点数（大端序）"""
         import struct
         raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
@@ -141,11 +141,11 @@ class ModbusClientInterface(BaseDeviceClient):
             return register - 65536
         return register
     
-    def decode_uint32(self, registers: List[int]) -> int:
+    def decode_uint32(self, registers: list[int]) -> int:
         """解码32位无符号整数"""
         return (registers[0] << 16) | registers[1]
     
-    def decode_int32(self, registers: List[int]) -> int:
+    def decode_int32(self, registers: list[int]) -> int:
         """解码32位有符号整数"""
         value = (registers[0] << 16) | registers[1]
         if value > 2147483647:
@@ -157,11 +157,11 @@ class PushClientInterface(BaseDeviceClient):
     """推送型客户端接口（OPC UA / MQTT / REST）"""
     
     @abstractmethod
-    def get_latest_data(self) -> Dict[str, Dict]:
+    def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取最新数据缓存"""
         pass
     
     @abstractmethod
-    def add_data_callback(self, callback: Callable) -> None:
+    def add_data_callback(self, callback: Callable[..., Any]) -> None:
         """添加数据回调函数"""
         pass

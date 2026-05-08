@@ -21,7 +21,7 @@ TDengine查询构建器
 """
 
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 
 class QueryBuilder:
@@ -39,15 +39,15 @@ class QueryBuilder:
             table: 表名（可以是超级表或子表）
         """
         self._table = table
-        self._select_columns: List[str] = []
-        self._where_clauses: List[str] = []
-        self._group_by: List[str] = []
-        self._order_by: Optional[str] = None
-        self._limit: Optional[int] = None
-        self._offset: Optional[int] = None
-        self._interval: Optional[str] = None
-        self._fill: Optional[str] = None
-        self._aggregate_funcs: Dict[str, str] = {}
+        self._select_columns: list[str] = []
+        self._where_clauses: list[str] = []
+        self._group_by: list[str] = []
+        self._order_by: str | None = None
+        self._limit: int | None = None
+        self._offset: int | None = None
+        self._interval: str | None = None
+        self._fill: str | None = None
+        self._aggregate_funcs: dict[str, str] = {}
     
     def select(self, *columns: str) -> 'QueryBuilder':
         """
@@ -59,7 +59,7 @@ class QueryBuilder:
         self._select_columns.extend(columns)
         return self
     
-    def select_agg(self, func: str, column: str, alias: str = None) -> 'QueryBuilder':
+    def select_agg(self, func: str, column: str, alias: str | None = None) -> 'QueryBuilder':
         """
         选择聚合列
         
@@ -152,7 +152,7 @@ class QueryBuilder:
         self._offset = count
         return self
     
-    def interval(self, interval: str, fill: str = None) -> 'QueryBuilder':
+    def interval(self, interval: str, fill: str | None = None) -> 'QueryBuilder':
         """
         设置时间间隔（用于降采样）
         

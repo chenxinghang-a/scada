@@ -20,7 +20,7 @@
 import time
 import logging
 import threading
-from typing import Dict, Any, Optional
+from typing import Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class AlarmOutput:
     }
     """
     
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or {}
         self.enabled = self.config.get('enabled', True)
         self.simulation = self.config.get('simulation', True)
@@ -92,12 +92,12 @@ class AlarmOutput:
         self._lock = threading.Lock()
         
         # 闪烁线程（灯）
-        self._flash_thread: Optional[threading.Thread] = None
+        self._flash_thread: threading.Thread | None = None
         self._flash_running = False
         self._flash_state = False  # 闪烁当前帧
         
         # 蜂鸣器脉冲线程
-        self._buzzer_thread: Optional[threading.Thread] = None
+        self._buzzer_thread: threading.Thread | None = None
         self._buzzer_running = False
         
         logger.info(f"报警输出初始化: {'模拟模式' if self.simulation else '硬件模式'}")
@@ -254,9 +254,9 @@ class AlarmOutput:
     
     # ==================== 手动控制 ====================
     
-    def manual_control(self, red: bool = None, yellow: bool = None,
-                       green: bool = None, buzzer: bool = None,
-                       duration: int = 0) -> dict:
+    def manual_control(self, red: bool | None = None, yellow: bool | None = None,
+                       green: bool | None = None, buzzer: bool | None = None,
+                       duration: int = 0) -> dict[str, Any]:
         """
         手动控制灯和蜂鸣器（用于调试/测试）
         
@@ -372,7 +372,7 @@ class AlarmOutput:
     
     # ==================== 状态查询 ====================
     
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """获取当前输出状态"""
         return {
             'enabled': self.enabled,

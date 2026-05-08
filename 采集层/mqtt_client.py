@@ -6,7 +6,7 @@ MQTT数据采集模块
 import json
 import logging
 import threading
-from typing import Dict, List, Callable, Optional, Any
+from typing import Any, Callable
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ class MQTTClient:
         - 与OPCUA/REST客户端回调签名一致
     """
     
-    def __init__(self, config: Dict[str, Any] = None, **kwargs):
+    def __init__(self, config: dict[str, Any] | None = None, **kwargs):
         """
         初始化MQTT客户端
         
@@ -91,20 +91,20 @@ class MQTTClient:
         self.client.on_subscribe = self._on_subscribe
         
         # 数据回调函数
-        self._data_callbacks: List[Callable] = []
+        self._data_callbacks: list[Callable[..., Any]] = []
         
         # 订阅主题列表: {topic: qos}
-        self._subscriptions: Dict[str, int] = {}
+        self._subscriptions: dict[str, int] = {}
         
         # 最新数据缓存（与模拟客户端行为一致）
-        self.latest_data: Dict[str, Dict] = {}
+        self.latest_data: dict[str, dict[str, Any]] = {}
         
         # 连接状态
         self.connected = False
         self._lock = threading.Lock()
         
         # 统计信息
-        self.stats = {
+        self.stats: dict[str, Any] = {
             'messages_received': 0,
             'messages_parsed': 0,
             'parse_errors': 0,
@@ -114,7 +114,7 @@ class MQTTClient:
         
         logger.info(f"MQTT客户端初始化: {self.broker_host}:{self.broker_port} [{self.device_id}]")
     
-    def add_data_callback(self, callback: Callable):
+    def add_data_callback(self, callback: Callable[..., Any]):
         """添加数据回调函数（签名: callback(device_id, name, value, unit)）"""
         self._data_callbacks.append(callback)
     
@@ -173,7 +173,7 @@ class MQTTClient:
             self.client.unsubscribe(topic)
             logger.info(f"已取消订阅: {topic}")
     
-    def publish(self, topic: str, payload: dict, qos: int = 1) -> bool:
+    def publish(self, topic: str, payload: dict[str, Any], qos: int = 1) -> bool:
         """发布消息"""
         if not self.connected:
             logger.warning("MQTT未连接，无法发布")
@@ -187,11 +187,11 @@ class MQTTClient:
             logger.error(f"MQTT发布失败: {e}")
             return False
     
-    def get_latest_data(self) -> Dict[str, Dict]:
+    def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取最新数据缓存"""
         return dict(self.latest_data)
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息（与其他协议客户端接口统一）"""
         return {
             'device_id': self.device_id,
@@ -203,7 +203,7 @@ class MQTTClient:
             **self.stats
         }
     
-    def get_status(self) -> Dict:
+    def get_status(self) -> dict[str, Any]:
         """获取客户端状态"""
         return {
             'connected': self.connected,
@@ -261,7 +261,7 @@ class MQTTClient:
         """订阅成功回调"""
         logger.debug(f"订阅确认: mid={mid}, QoS={granted_qos}")
     
-    def _process_message(self, topic: str, data: dict):
+    def _process_message(self, topic: str, data: dict[str, Any]):
         """
         处理JSON格式消息
         
@@ -336,12 +336,12 @@ class MQTTDeviceManager:
     管理多个MQTT设备的数据采集
     """
     
-    def __init__(self, config: dict):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
         self.client = None
         self._running = False
     
-    def start(self, data_callback: Callable) -> bool:
+    def start(self, data_callback: Callable[..., Any]) -> bool:
         """启动MQTT数据采集"""
         try:
             self.client = MQTTClient(self.config)
@@ -374,7 +374,7 @@ class MQTTDeviceManager:
             self._running = False
             logger.info("MQTT设备管理器已停止")
     
-    def get_status(self) -> Dict:
+    def get_status(self) -> dict[str, Any]:
         """获取状态"""
         if self.client:
             return self.client.get_status()

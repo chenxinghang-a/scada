@@ -6,7 +6,7 @@
 
 import logging
 import yaml
-from typing import Dict, List, Any, Optional, Callable
+from typing import Any, Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -49,12 +49,12 @@ class AlarmManager:
         self.broadcast_system = broadcast_system
         
         # WebSocket回调（由外部注入，用于前端推送）
-        self._websocket_emit: Optional[Callable] = None
+        self._websocket_emit: Callable[..., Any] | None = None
         
         # 加载报警配置
         self.load_config()
     
-    def set_websocket_emit(self, emit_func: Callable):
+    def set_websocket_emit(self, emit_func: Callable[..., Any]):
         """注入WebSocket emit函数（由run.py启动时调用）"""
         self._websocket_emit = emit_func
     
@@ -148,7 +148,7 @@ class AlarmManager:
             logger.warning(f"未知的报警条件: {condition}")
             return False
     
-    def _process_alarm_state(self, rule_id: str, rule_config: Dict,
+    def _process_alarm_state(self, rule_id: str, rule_config: dict[str, Any],
                              device_id: str, register_name: str,
                              value: float, timestamp: datetime, triggered: bool):
         """
@@ -205,7 +205,7 @@ class AlarmManager:
                 del self.alarm_states[state_key]
                 logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
     
-    def _trigger_alarm(self, rule_config: Dict, device_id: str,
+    def _trigger_alarm(self, rule_config: dict[str, Any], device_id: str,
                        register_name: str, value: float, timestamp: datetime):
         """
         触发报警 → 三级联动输出
@@ -278,7 +278,7 @@ class AlarmManager:
             'area': alarm_area
         })
     
-    def _emit_websocket_alarm(self, alarm_data: Dict):
+    def _emit_websocket_alarm(self, alarm_data: dict[str, Any]):
         """通过WebSocket向前端推送报警"""
         try:
             if self._websocket_emit:
@@ -286,7 +286,7 @@ class AlarmManager:
         except Exception as e:
             logger.error(f"WebSocket报警推送异常: {e}")
     
-    def _send_notification(self, rule_config: Dict, device_id: str,
+    def _send_notification(self, rule_config: dict[str, Any], device_id: str,
                            register_name: str, value: float, timestamp: datetime):
         """
         发送报警通知（保留兼容，具体实现在 _trigger_alarm 中）
@@ -295,12 +295,12 @@ class AlarmManager:
         alarm_message = rule_config.get('name', '未知报警')
         logger.info(f"报警通知: [{alarm_level}] {alarm_message} - {device_id}/{register_name}")
     
-    def get_active_alarms(self) -> List[Dict]:
+    def get_active_alarms(self) -> list[dict[str, Any]]:
         """
         获取活动报警
         
         Returns:
-            List[Dict]: 活动报警列表
+            list[dict[str, Any]]: 活动报警列表
         """
         active_alarms = []
         
@@ -360,7 +360,7 @@ class AlarmManager:
                     logger.error(f"声光消音失败: {e}")
         return success
     
-    def reset_alarm(self, device_id: str = None) -> bool:
+    def reset_alarm(self, device_id: str | None = None) -> bool:
         """
         复位报警（清除所有/指定设备的报警状态，恢复绿灯）
         
@@ -384,12 +384,12 @@ class AlarmManager:
         logger.info(f"报警已复位: {'全部' if not device_id else device_id}")
         return True
     
-    def get_alarm_statistics(self) -> Dict[str, Any]:
+    def get_alarm_statistics(self) -> dict[str, Any]:
         """
         获取报警统计信息（含输出总线状态）
         
         Returns:
-            Dict: 统计信息
+            dict[str, Any]: 统计信息
         """
         # 活动报警统计
         active_alarms = self.get_active_alarms()
@@ -422,7 +422,7 @@ class AlarmManager:
         
         return stats
     
-    def add_rule(self, rule_config: Dict) -> bool:
+    def add_rule(self, rule_config: dict[str, Any]) -> bool:
         """
         添加报警规则
         

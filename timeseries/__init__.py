@@ -24,6 +24,7 @@
     data = client.query_telemetry("CNC_001", start_time, end_time)
 """
 
+from typing import Any
 from .tdengine_client import TDengineClient
 from .data_models import (
     TelemetryRecord,

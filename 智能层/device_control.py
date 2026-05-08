@@ -16,7 +16,7 @@ import time
 import logging
 import threading
 import json
-from typing import Dict, List, Any, Optional, Callable, Set
+from typing import Any, Callable, Set
 from datetime import datetime, timedelta
 from collections import deque
 from pathlib import Path
@@ -50,37 +50,37 @@ class DeviceControlSafety:
         self.alarm_manager = alarm_manager
 
         # ===== 安全联锁规则 =====
-        self._interlock_rules: Dict[str, Dict] = {}
-        self._interlock_states: Dict[str, bool] = {}  # rule_id -> is_triggered
+        self._interlock_rules: dict[str, dict[str, Any]] = {}
+        self._interlock_states: dict[str, bool] = {}  # rule_id -> is_triggered
         self._interlock_bypass: Set[str] = set()  # 被旁路的联锁ID
         self._lock = threading.Lock()
 
         # ===== 写操作安全配置 =====
         # 设备写操作白名单：device_id -> {register_address: (min_value, max_value)}
-        self._write_limits: Dict[str, Dict] = {}
+        self._write_limits: dict[str, dict[str, Any]] = {}
         # 设备可写地址白名单：device_id -> set of allowed addresses
-        self._write_whitelist: Dict[str, Set[int]] = {}
+        self._write_whitelist: dict[str, Set[int]] = {}
 
         # ===== 操作互斥锁 =====
-        self._device_locks: Dict[str, threading.Lock] = {}
-        self._device_lock_owners: Dict[str, str] = {}  # device_id -> operator
+        self._device_locks: dict[str, threading.Lock] = {}
+        self._device_lock_owners: dict[str, str] = {}  # device_id -> operator
 
         # ===== 紧急停机 =====
         self._estop_active = False
-        self._estop_time: Optional[datetime] = None
+        self._estop_time: datetime | None = None
         self._estop_reason = ''
-        self._estop_devices: List[str] = []  # 需要停机的设备列表
+        self._estop_devices: list[str] = []  # 需要停机的设备列表
 
         # ===== 故障降级 =====
-        self._device_health: Dict[str, Dict] = {}  # device_id -> health info
-        self._safe_state_handlers: Dict[str, Callable] = {}  # device_id -> safe_state_func
+        self._device_health: dict[str, dict[str, Any]] = {}  # device_id -> health info
+        self._safe_state_handlers: dict[str, Callable[..., Any]] = {}  # device_id -> safe_state_func
 
         # ===== 操作审计 =====
         self._audit_log = deque(maxlen=5000)
         self._audit_file = Path('data/audit_log.jsonl')
 
         # ===== 通信监控 =====
-        self._comm_failures: Dict[str, int] = {}  # device_id -> consecutive failures
+        self._comm_failures: dict[str, int] = {}  # device_id -> consecutive failures
         self._comm_threshold = 3  # 连续失败3次触发降级
 
         # 加载预置联锁规则
@@ -257,7 +257,7 @@ class DeviceControlSafety:
             }
         }
 
-    def add_interlock(self, rule: Dict) -> bool:
+    def add_interlock(self, rule: dict[str, Any]) -> bool:
         """添加自定义联锁规则"""
         rule_id = rule.get('id')
         if not rule_id:
@@ -354,7 +354,7 @@ class DeviceControlSafety:
                     self._interlock_states[rule_id] = False
                     logger.info(f"联锁条件解除: {rule_id}")
 
-    def _execute_interlock_action(self, rule: Dict):
+    def _execute_interlock_action(self, rule: dict[str, Any]):
         """执行联锁动作"""
         rule_id = rule['id']
         action = rule.get('action', {})
@@ -405,7 +405,7 @@ class DeviceControlSafety:
         self._audit('interlock_triggered', 'system',
                     f'联锁 {rule_id} ({rule.get("name")}) 触发')
 
-    def get_interlock_status(self) -> Dict[str, Any]:
+    def get_interlock_status(self) -> dict[str, Any]:
         """获取所有联锁状态"""
         with self._lock:
             result = {}
@@ -424,7 +424,7 @@ class DeviceControlSafety:
     # ==================== 写操作安全校验 ====================
 
     def validate_write(self, device_id: str, address: int, value: int,
-                       operator: str) -> Dict[str, Any]:
+                       operator: str) -> dict[str, Any]:
         """
         写操作安全校验
 
@@ -514,7 +514,7 @@ class DeviceControlSafety:
 
     # ==================== 紧急停机 ====================
 
-    def trigger_emergency_stop(self, reason: str = '手动触发') -> Dict[str, Any]:
+    def trigger_emergency_stop(self, reason: str = '手动触发') -> dict[str, Any]:
         """
         触发紧急停机
 
@@ -569,7 +569,7 @@ class DeviceControlSafety:
             'timestamp': self._estop_time.isoformat()
         }
 
-    def reset_emergency_stop(self, operator: str) -> Dict[str, Any]:
+    def reset_emergency_stop(self, operator: str) -> dict[str, Any]:
         """
         解除紧急停机（需要工程师权限+确认）
 
@@ -609,7 +609,7 @@ class DeviceControlSafety:
             'operator': operator
         }
 
-    def get_estop_status(self) -> Dict[str, Any]:
+    def get_estop_status(self) -> dict[str, Any]:
         """获取紧急停机状态"""
         return {
             'active': self._estop_active,
@@ -618,7 +618,7 @@ class DeviceControlSafety:
             'affected_devices': self._estop_devices
         }
 
-    def _get_controllable_devices(self) -> List[str]:
+    def _get_controllable_devices(self) -> list[str]:
         """获取所有可控设备ID列表"""
         devices = []
         if self.device_manager:
@@ -627,7 +627,7 @@ class DeviceControlSafety:
                     devices.append(device_id)
         return devices
 
-    def _resolve_register_address(self, device_id: str, register_name) -> Optional[int]:
+    def _resolve_register_address(self, device_id: str, register_name) -> int | None:
         """
         将寄存器名称解析为地址
         
@@ -717,11 +717,11 @@ class DeviceControlSafety:
         self._audit('fault_degradation', 'system',
                     f'设备 {device_id} 通信失败 {failures} 次，已降级到安全状态')
 
-    def register_safe_state_handler(self, device_id: str, handler: Callable):
+    def register_safe_state_handler(self, device_id: str, handler: Callable[..., Any]):
         """注册设备安全状态处理函数"""
         self._safe_state_handlers[device_id] = handler
 
-    def get_device_health_summary(self) -> Dict[str, Any]:
+    def get_device_health_summary(self) -> dict[str, Any]:
         """获取所有设备健康摘要"""
         summary = {
             'total': len(self._device_health),
@@ -739,7 +739,7 @@ class DeviceControlSafety:
     # ==================== 写操作回读验证 ====================
 
     def write_with_verification(self, device_id: str, address: int, value: int,
-                                operator: str, max_retries: int = 2) -> Dict[str, Any]:
+                                operator: str, max_retries: int = 2) -> dict[str, Any]:
         """
         带回读验证的写操作
 
@@ -854,14 +854,14 @@ class DeviceControlSafety:
         except Exception as e:
             logger.error(f"审计日志写入失败: {e}")
 
-    def get_audit_log(self, limit: int = 100, action_filter: str = None) -> List[Dict]:
+    def get_audit_log(self, limit: int = 100, action_filter: str | None = None) -> list[dict[str, Any]]:
         """获取操作审计日志"""
         logs = list(self._audit_log)
         if action_filter:
             logs = [l for l in logs if l.get('action') == action_filter]
         return list(reversed(logs[-limit:]))
 
-    def get_audit_stats(self) -> Dict[str, Any]:
+    def get_audit_stats(self) -> dict[str, Any]:
         """获取审计统计"""
         logs = list(self._audit_log)
         action_counts = {}
@@ -880,7 +880,7 @@ class DeviceControlSafety:
 
     # ==================== 综合状态 ====================
 
-    def get_full_status(self) -> Dict[str, Any]:
+    def get_full_status(self) -> dict[str, Any]:
         """获取设备控制安全系统完整状态"""
         return {
             'estop': self.get_estop_status(),

@@ -7,7 +7,7 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Dict, List, Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class Notification:
     支持邮件、短信等通知方式
     """
     
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         """
         初始化通知管理
         
@@ -36,7 +36,7 @@ class Notification:
         self.sms_enabled = self.sms_config.get('enabled', False)
     
     def send_email(self, subject: str, message: str, 
-                   recipients: List[str] = None) -> bool:
+                   recipients: list[str] = None) -> bool:
         """
         发送邮件通知
         
@@ -93,7 +93,7 @@ class Notification:
             logger.error(f"邮件发送失败: {e}")
             return False
     
-    def send_alarm_notification(self, alarm_data: Dict[str, Any]) -> bool:
+    def send_alarm_notification(self, alarm_data: dict[str, Any]) -> bool:
         """
         发送报警通知
         
@@ -148,7 +148,7 @@ class Notification:
         # 发送邮件
         return self.send_email(subject, message)
     
-    def send_sms(self, phone_numbers: List[str], message: str) -> bool:
+    def send_sms(self, phone_numbers: list[str], message: str) -> bool:
         """
         发送短信通知
         

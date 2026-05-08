@@ -1,6 +1,7 @@
 """
 简单测试系统启动
 """
+from typing import Any
 import sys
 import logging
 from pathlib import Path

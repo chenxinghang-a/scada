@@ -17,6 +17,7 @@
     gateway.start()
 """
 
+from typing import Any
 from .thing_model import (
     DeviceTelemetry,
     DeviceStatus,

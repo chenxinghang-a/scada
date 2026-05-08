@@ -3,6 +3,7 @@
 验证所有18台设备在模拟模式下能正确生成数据
 """
 
+from typing import Any
 import sys
 import yaml
 from pathlib import Path

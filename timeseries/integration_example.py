@@ -15,6 +15,7 @@ TDengine集成示例
 - 自动数据压缩和过期
 """
 
+from typing import Any
 import sys
 import logging
 from pathlib import Path

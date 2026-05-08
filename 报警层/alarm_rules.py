@@ -8,7 +8,7 @@
 """
 
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Any
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -96,12 +96,12 @@ class AlarmRule:
             logger.warning(f"未知的报警条件: {self.condition}")
             return False
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         转换为字典
         
         Returns:
-            Dict: 规则字典
+            dict[str, Any]: 规则字典
         """
         return {
             'id': self.rule_id,
@@ -117,7 +117,7 @@ class AlarmRule:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'AlarmRule':
+    def from_dict(cls, data: dict[str, Any]) -> 'AlarmRule':
         """
         从字典创建规则
         
@@ -172,7 +172,7 @@ class AlarmRules:
             del self.rules[rule_id]
             logger.info(f"移除报警规则: {rule_id}")
     
-    def get_rule(self, rule_id: str) -> Optional[AlarmRule]:
+    def get_rule(self, rule_id: str) -> AlarmRule | None:
         """
         获取规则
         
@@ -184,7 +184,7 @@ class AlarmRules:
         """
         return self.rules.get(rule_id)
     
-    def get_rules_for_device(self, device_id: str) -> List[AlarmRule]:
+    def get_rules_for_device(self, device_id: str) -> list[AlarmRule]:
         """
         获取设备的所有规则
         
@@ -192,13 +192,13 @@ class AlarmRules:
             device_id: 设备ID
             
         Returns:
-            List[AlarmRule]: 规则列表
+            list[AlarmRule]: 规则列表
         """
         return [rule for rule in self.rules.values() 
                 if rule.device_id == device_id and rule.enabled]
     
     def check_value(self, device_id: str, register_name: str, 
-                    value: float) -> List[AlarmRule]:
+                    value: float) -> list[AlarmRule]:
         """
         检查值是否触发报警
         
@@ -208,7 +208,7 @@ class AlarmRules:
             value: 实际值
             
         Returns:
-            List[AlarmRule]: 触发的规则列表
+            list[AlarmRule]: 触发的规则列表
         """
         triggered = []
         
@@ -220,7 +220,7 @@ class AlarmRules:
         
         return triggered
     
-    def load_from_dict(self, rules_data: List[Dict[str, Any]]):
+    def load_from_dict(self, rules_data: list[dict[str, Any]]):
         """
         从字典加载规则
         
@@ -231,11 +231,11 @@ class AlarmRules:
             rule = AlarmRule.from_dict(rule_data)
             self.add_rule(rule)
     
-    def to_dict(self) -> List[Dict[str, Any]]:
+    def to_dict(self) -> list[dict[str, Any]]:
         """
         转换为字典列表
         
         Returns:
-            List[Dict]: 规则字典列表
+            list[dict[str, Any]]: 规则字典列表
         """
         return [rule.to_dict() for rule in self.rules.values()]
