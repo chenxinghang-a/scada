@@ -203,6 +203,51 @@ class DeviceManager:
         for device_id in list(self.clients.keys()):
             self.disconnect_device(device_id)
 
+    def switch_simulation_mode(self, new_mode: bool) -> dict[str, Any]:
+        """
+        运行时切换模拟/真实模式（热切换，无需重启）
+
+        Args:
+            new_mode: True=模拟模式, False=真实模式
+
+        Returns:
+            切换结果字典
+        """
+        old_mode = self.simulation_mode
+        if old_mode == new_mode:
+            return {
+                'success': True,
+                'message': f'已经是{"模拟" if new_mode else "真实"}模式，无需切换',
+                'simulation_mode': new_mode,
+                'reconnected': 0
+            }
+
+        logger.info(f"切换模式: {'模拟' if old_mode else '真实'} → {'模拟' if new_mode else '真实'}")
+
+        # 1. 断开所有现有连接
+        self.disconnect_all()
+
+        # 2. 清除客户端缓存（下次get_client时会用新模式创建）
+        self.clients.clear()
+
+        # 3. 更新模式标志
+        self.simulation_mode = new_mode
+
+        # 4. 重新连接所有设备
+        results = self.connect_all()
+        connected = sum(1 for v in results.values() if v is True)
+        failed = sum(1 for v in results.values() if v is False)
+
+        logger.info(f"模式切换完成: {connected}个设备连接成功, {failed}个失败")
+
+        return {
+            'success': True,
+            'message': f'已切换到{"模拟" if new_mode else "真实"}模式',
+            'simulation_mode': new_mode,
+            'reconnected': connected,
+            'failed': failed
+        }
+
     def get_device_status(self, device_id: str) -> dict[str, Any]:
         """获取设备状态"""
         client = self.clients.get(device_id)

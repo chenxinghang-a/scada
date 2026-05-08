@@ -243,9 +243,14 @@
             const currentMode = text?.textContent === '模拟模式';
             const newMode = !currentMode;
             
-            if (!confirm(`确定要切换到${newMode ? '模拟' : '真实'}模式吗？\n注意：切换后需要重启服务才能生效。`)) {
+            if (!confirm(`确定要切换到${newMode ? '模拟' : '真实'}模式吗？`)) {
                 return;
             }
+            
+            // 显示切换中状态
+            const indicator = document.getElementById('sim-mode-indicator');
+            if (indicator) indicator.className = 'nav-link text-warning';
+            if (text) text.textContent = '切换中...';
             
             fetch('/api/system/simulation-mode', {
                 method: 'POST',
@@ -267,13 +272,33 @@
             .then(data => {
                 if (!data) return;
                 if (data.success) {
-                    alert(data.message);
+                    // 立即更新UI
                     updateSimModeIndicator();
+                    const msg = data.reconnected !== undefined 
+                        ? `${data.message} (${data.reconnected}个设备已重连)`
+                        : data.message;
+                    // 显示简短提示而非弹窗
+                    showToast(msg, 'success');
                 } else {
                     alert('切换失败: ' + (data.message || data.error || '未知错误'));
+                    updateSimModeIndicator();
                 }
             })
-            .catch(e => alert('切换失败: ' + (e.message || '网络错误')));
+            .catch(e => {
+                alert('切换失败: ' + (e.message || '网络错误'));
+                updateSimModeIndicator();
+            });
+        }
+        
+        // 简短提示框
+        function showToast(message, type) {
+            const toast = document.createElement('div');
+            toast.className = `alert alert-${type === 'success' ? 'success' : 'danger'} position-fixed top-0 end-0 m-3`;
+            toast.style.zIndex = '9999';
+            toast.style.minWidth = '300px';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
         }
         
         // 页面加载时检查认证

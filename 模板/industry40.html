@@ -588,29 +588,45 @@ async function loadOverview() {
     if (!data) return;
 
     // 健康评分
-    if (data.predictive_maintenance) {
-        document.getElementById('ov-health').textContent = data.predictive_maintenance.avg_health_score;
+    const healthEl = document.getElementById('ov-health');
+    if (healthEl) {
+        const score = data.predictive_maintenance?.avg_health_score;
+        healthEl.textContent = score != null && score > 0 ? score : '--';
     }
 
     // OEE
-    if (data.oee) {
-        document.getElementById('ov-oee').textContent = data.oee.avg_oee_percent + '%';
+    const oeeEl = document.getElementById('ov-oee');
+    if (oeeEl) {
+        const oee = data.oee?.avg_oee_percent;
+        oeeEl.textContent = oee != null && oee > 0 ? oee + '%' : '--%';
     }
 
     // 能源
-    if (data.energy) {
-        document.getElementById('ov-power').textContent = data.energy.total_power_kw;
-        document.getElementById('ov-carbon').textContent = data.energy.carbon_emission_kg;
+    const powerEl = document.getElementById('ov-power');
+    const carbonEl = document.getElementById('ov-carbon');
+    if (powerEl) {
+        const power = data.energy?.total_power_kw;
+        powerEl.textContent = power != null && power > 0 ? power : '--';
+    }
+    if (carbonEl) {
+        const carbon = data.energy?.carbon_emission_kg;
+        carbonEl.textContent = carbon != null && carbon > 0 ? carbon : '--';
     }
 
     // 维护建议
-    if (data.predictive_maintenance && data.predictive_maintenance.recent_alerts) {
-        const alertsHtml = data.predictive_maintenance.recent_alerts.map(a => `
-            <div class="alert-item alert-${a.severity}">
-                <strong>${a.device_id}</strong>: ${a.message}
-            </div>
-        `).join('');
-        document.getElementById('ov-alerts').innerHTML = alertsHtml || '<p class="text-muted">暂无维护建议</p>';
+    const alertsDiv = document.getElementById('ov-alerts');
+    if (alertsDiv) {
+        const alerts = data.predictive_maintenance?.recent_alerts;
+        if (alerts && alerts.length > 0) {
+            const alertsHtml = alerts.map(a => `
+                <div class="alert-item alert-${a.severity || 'info'}">
+                    <strong>${a.device_id || '未知'}</strong>: ${a.message || '无详细信息'}
+                </div>
+            `).join('');
+            alertsDiv.innerHTML = alertsHtml;
+        } else {
+            alertsDiv.innerHTML = '<p class="text-muted">系统运行正常，暂无维护建议</p>';
+        }
     }
 
     // 工艺流程
@@ -622,51 +638,64 @@ async function loadOverview() {
 // ==================== 预测性维护 ====================
 async function loadPredictive() {
     const scores = await apiGet('/health');
-    if (!scores) return;
-
     const tbody = document.querySelector('#health-table tbody');
-    tbody.innerHTML = '';
+    
+    if (!scores || Object.keys(scores).length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center">等待数据积累中...</td></tr>';
+    } else {
+        tbody.innerHTML = '';
+        for (const [key, data] of Object.entries(scores)) {
+            const score = data.health_score || 0;
+            const cls = score >= 80 ? 'health-excellent' : score >= 60 ? 'health-good' : score >= 40 ? 'health-warning' : 'health-critical';
+            const trend = data.trend ? data.trend.direction : '-';
+            const trendIcon = trend === 'rising' ? '↑' : trend === 'falling' ? '↓' : '→';
+            const failure = data.failure_prediction ? `${data.failure_prediction.days_to_limit}天` : '-';
 
-    for (const [key, data] of Object.entries(scores)) {
-        const score = data.health_score;
-        const cls = score >= 80 ? 'health-excellent' : score >= 60 ? 'health-good' : score >= 40 ? 'health-warning' : 'health-critical';
-        const trend = data.trend ? data.trend.direction : '-';
-        const trendIcon = trend === 'rising' ? '↑' : trend === 'falling' ? '↓' : '→';
-        const failure = data.failure_prediction ? `${data.failure_prediction.days_to_limit}天` : '-';
-
-        tbody.innerHTML += `
-            <tr>
-                <td>${data.device_id}</td>
-                <td>${data.register_name}</td>
-                <td class="${cls}"><strong>${score}</strong></td>
-                <td>${trendIcon} ${trend}</td>
-                <td>${data.anomaly_count}</td>
-                <td>${failure}</td>
-                <td>${new Date(data.updated_at).toLocaleTimeString()}</td>
-            </tr>
-        `;
+            tbody.innerHTML += `
+                <tr>
+                    <td>${data.device_id || '-'}</td>
+                    <td>${data.register_name || '-'}</td>
+                    <td class="${cls}"><strong>${score}</strong></td>
+                    <td>${trendIcon} ${trend}</td>
+                    <td>${data.anomaly_count || 0}</td>
+                    <td>${failure}</td>
+                    <td>${data.updated_at ? new Date(data.updated_at).toLocaleTimeString() : '-'}</td>
+                </tr>
+            `;
+        }
     }
 
     // 维护建议
     const alerts = await apiGet('/maintenance-alerts');
-    if (alerts) {
-        const div = document.getElementById('maintenance-alerts');
-        div.innerHTML = alerts.map(a => `
-            <div class="alert-item alert-${a.severity}">
-                <div><strong>${a.device_id}</strong> — ${a.register_name}</div>
-                <div style="font-size:0.85rem; margin-top:4px;">${a.message}</div>
-            </div>
-        `).join('') || '<p class="text-muted">暂无维护建议</p>';
+    const div = document.getElementById('maintenance-alerts');
+    if (div) {
+        if (alerts && alerts.length > 0) {
+            div.innerHTML = alerts.map(a => `
+                <div class="alert-item alert-${a.severity || 'info'}">
+                    <div><strong>${a.device_id || '未知'}</strong> — ${a.register_name || ''}</div>
+                    <div style="font-size:0.85rem; margin-top:4px;">${a.message || '无详细信息'}</div>
+                </div>
+            `).join('');
+        } else {
+            div.innerHTML = '<p class="text-muted">系统运行正常，暂无维护建议</p>';
+        }
     }
 }
 
 // ==================== OEE ====================
 async function loadOEE() {
     const data = await apiGet('/oee');
-    if (!data) return;
-
-    const devices = Object.entries(data);
-    if (devices.length === 0) return;
+    const devices = data ? Object.entries(data) : [];
+    
+    if (devices.length === 0) {
+        // 显示默认仪表盘
+        renderOEEGauge('oee-gauge-total', 0);
+        const tbody = document.querySelector('#oee-table tbody');
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">等待设备数据...</td></tr>';
+        }
+        return;
+    }
 
     // 全厂OEE仪表盘
     const avgOEE = devices.reduce((sum, [, d]) => sum + (d.oee_percent || 0), 0) / devices.length;
@@ -677,20 +706,22 @@ async function loadOEE() {
 
     // 明细表
     const tbody = document.querySelector('#oee-table tbody');
-    tbody.innerHTML = '';
-    for (const [id, d] of devices) {
-        tbody.innerHTML += `
-            <tr>
-                <td>${id}</td>
-                <td>${(d.availability * 100).toFixed(1)}%</td>
-                <td>${(d.performance * 100).toFixed(1)}%</td>
-                <td>${(d.quality * 100).toFixed(1)}%</td>
-                <td><strong>${d.oee_percent}%</strong></td>
-                <td>${d.grade || '-'}</td>
-                <td>${d.total_count || 0}</td>
-                <td>${d.good_count || 0}</td>
-            </tr>
-        `;
+    if (tbody) {
+        tbody.innerHTML = '';
+        for (const [id, d] of devices) {
+            tbody.innerHTML += `
+                <tr>
+                    <td>${id}</td>
+                    <td>${((d.availability || 0) * 100).toFixed(1)}%</td>
+                    <td>${((d.performance || 0) * 100).toFixed(1)}%</td>
+                    <td>${((d.quality || 0) * 100).toFixed(1)}%</td>
+                    <td><strong>${d.oee_percent || 0}%</strong></td>
+                    <td>${d.grade || '-'}</td>
+                    <td>${d.total_count || 0}</td>
+                    <td>${d.good_count || 0}</td>
+                </tr>
+            `;
+        }
     }
 }
 
@@ -751,15 +782,15 @@ function renderOEECompare(domId, devices) {
 // ==================== 能源 ====================
 async function loadEnergy() {
     const summary = await apiGet('/energy');
-    if (!summary) return;
-
-    document.getElementById('en-total').textContent = summary.total_energy_kwh;
-    document.getElementById('en-cost').textContent = summary.electricity_cost;
-    document.getElementById('en-carbon').textContent = summary.carbon_emission_kg;
+    if (summary) {
+        document.getElementById('en-total').textContent = summary.total_energy_kwh || 0;
+        document.getElementById('en-cost').textContent = summary.electricity_cost || 0;
+        document.getElementById('en-carbon').textContent = summary.carbon_emission_kg || 0;
+    }
 
     const carbon = await apiGet('/energy/carbon');
     if (carbon) {
-        document.getElementById('en-trees').textContent = carbon.equivalent_trees;
+        document.getElementById('en-trees').textContent = carbon.equivalent_trees || 0;
     }
 
     // 分时电价饼图
@@ -817,50 +848,57 @@ function renderPowerBar(domId, devices) {
 async function loadEdge() {
     const status = await apiGet('/edge/status');
     if (status) {
-        document.getElementById('edge-rules').textContent = status.rules_count;
-        document.getElementById('edge-interlocks').textContent = status.interlocks_count;
-        document.getElementById('edge-pid').textContent = status.pid_controllers_count;
+        document.getElementById('edge-rules').textContent = status.rules_count || 0;
+        document.getElementById('edge-interlocks').textContent = status.interlocks_count || 0;
+        document.getElementById('edge-pid').textContent = status.pid_controllers_count || 0;
     }
 
     const rules = await apiGet('/edge/rules');
-    if (rules) {
-        const tbody = document.querySelector('#edge-rules-table tbody');
-        tbody.innerHTML = '';
-
-        for (const [id, r] of Object.entries(rules.rules || {})) {
-            tbody.innerHTML += `
-                <tr>
-                    <td>${id}</td>
-                    <td>${r.name}</td>
-                    <td>规则</td>
-                    <td>${r.trigger_count}</td>
-                    <td>${r.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>'}</td>
-                </tr>
-            `;
-        }
-        for (const [id, r] of Object.entries(rules.interlocks || {})) {
-            tbody.innerHTML += `
-                <tr>
-                    <td>${id}</td>
-                    <td>${r.name}</td>
-                    <td><span style="color:#ff4444">联锁</span></td>
-                    <td>${r.trigger_count}</td>
-                    <td>${r.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>'}</td>
-                </tr>
-            `;
+    const tbody = document.querySelector('#edge-rules-table tbody');
+    if (tbody) {
+        if (rules && (Object.keys(rules.rules || {}).length > 0 || Object.keys(rules.interlocks || {}).length > 0)) {
+            tbody.innerHTML = '';
+            for (const [id, r] of Object.entries(rules.rules || {})) {
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${id}</td>
+                        <td>${r.name || '-'}</td>
+                        <td>规则</td>
+                        <td>${r.trigger_count || 0}</td>
+                        <td>${r.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>'}</td>
+                    </tr>
+                `;
+            }
+            for (const [id, r] of Object.entries(rules.interlocks || {})) {
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${id}</td>
+                        <td>${r.name || '-'}</td>
+                        <td><span style="color:#ff4444">联锁</span></td>
+                        <td>${r.trigger_count || 0}</td>
+                        <td>${r.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>'}</td>
+                    </tr>
+                `;
+            }
+        } else {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center">暂无规则配置</td></tr>';
         }
     }
 
     const log = await apiGet('/edge/log');
-    if (log) {
-        const div = document.getElementById('edge-log');
-        div.innerHTML = log.map(l => `
-            <div style="padding:5px 10px; border-bottom:1px solid #0f3460; font-size:0.85rem;">
-                <span style="color:#00d4ff">[${l.rule_type}]</span>
-                <strong>${l.rule_id}</strong>: ${l.result || ''}
-                <span style="color:#666; float:right">${new Date(l.timestamp).toLocaleTimeString()}</span>
-            </div>
-        `).join('') || '<p class="text-muted">暂无决策日志</p>';
+    const logDiv = document.getElementById('edge-log');
+    if (logDiv) {
+        if (log && log.length > 0) {
+            logDiv.innerHTML = log.map(l => `
+                <div style="padding:5px 10px; border-bottom:1px solid #0f3460; font-size:0.85rem;">
+                    <span style="color:#00d4ff">[${l.rule_type || 'rule'}]</span>
+                    <strong>${l.rule_id || '-'}</strong>: ${l.result || ''}
+                    <span style="color:#666; float:right">${l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : ''}</span>
+                </div>
+            `).join('');
+        } else {
+            logDiv.innerHTML = '<p class="text-muted">暂无决策日志</p>';
+        }
     }
 }
 

@@ -865,15 +865,20 @@ def get_simulation_mode():
 @api_bp.route('/system/simulation-mode', methods=['POST'])
 @role_required('admin', 'engineer')
 def toggle_simulation_mode():
-    """切换模拟/真实模式（需要重启服务生效）"""
+    """切换模拟/真实模式（运行时热切换，无需重启）"""
     data = request.get_json() or {}
     new_mode = data.get('simulation_mode')
 
     if new_mode is None:
         return jsonify({'success': False, 'message': '缺少simulation_mode参数'}), 400
 
-    # 注意：运行时切换模式需要重启所有客户端连接
-    # 这里只更新配置文件，提示用户重启
+    new_mode = bool(new_mode)
+
+    # 运行时热切换
+    dm = current_app.device_manager
+    result = dm.switch_simulation_mode(new_mode)
+
+    # 同时更新配置文件（持久化）
     from pathlib import Path
     import yaml
 
@@ -886,18 +891,13 @@ def toggle_simulation_mode():
 
     if 'system' not in config:
         config['system'] = {}
-    config['system']['simulation_mode'] = bool(new_mode)
+    config['system']['simulation_mode'] = new_mode
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, 'w', encoding='utf-8') as f:
         yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
 
-    return jsonify({
-        'success': True,
-        'message': f'模式已切换为{"模拟" if new_mode else "真实"}模式，重启服务后生效',
-        'simulation_mode': bool(new_mode),
-        'restart_required': True
-    })
+    return jsonify(result)
 
 
 # ==================== 数据导出API ====================
@@ -1192,8 +1192,9 @@ def get_health_scores():
     """获取所有设备健康评分"""
     pm = current_app.predictive_maintenance
     if not pm:
-        return jsonify({'error': '预测性维护模块未启用'}), 503
-    return jsonify(pm.get_health_scores())
+        return jsonify({})
+    scores = pm.get_health_scores()
+    return jsonify(scores if scores else {})
 
 
 @api_bp.route('/industry40/health/<device_id>', methods=['GET'])
@@ -1212,7 +1213,7 @@ def get_maintenance_alerts():
     """获取维护建议列表"""
     pm = current_app.predictive_maintenance
     if not pm:
-        return jsonify({'error': '预测性维护模块未启用'}), 503
+        return jsonify([])
     limit = request.args.get('limit', 50, type=int)
     return jsonify(pm.get_maintenance_alerts(limit))
 
@@ -1233,7 +1234,7 @@ def get_all_oee():
     """获取所有设备OEE"""
     oee = current_app.oee_calculator
     if not oee:
-        return jsonify({'error': 'OEE模块未启用'}), 503
+        return jsonify({})
     return jsonify(oee.get_all_oee())
 
 
@@ -1269,7 +1270,11 @@ def get_energy_summary():
     """获取能耗汇总"""
     em = current_app.energy_manager
     if not em:
-        return jsonify({'error': '能源管理模块未启用'}), 503
+        return jsonify({
+            'total_energy_kwh': 0,
+            'electricity_cost': 0,
+            'carbon_emission_kg': 0,
+        })
     return jsonify(em.get_energy_summary())
 
 
@@ -1279,7 +1284,11 @@ def get_energy_cost():
     """获取电费分时明细"""
     em = current_app.energy_manager
     if not em:
-        return jsonify({'error': '能源管理模块未启用'}), 503
+        return jsonify({
+            'peak': {'kwh': 0, 'cost': 0},
+            'flat': {'kwh': 0, 'cost': 0},
+            'valley': {'kwh': 0, 'cost': 0},
+        })
     return jsonify(em.get_energy_cost_breakdown())
 
 
@@ -1289,7 +1298,10 @@ def get_carbon_emission():
     """获取碳排放数据"""
     em = current_app.energy_manager
     if not em:
-        return jsonify({'error': '能源管理模块未启用'}), 503
+        return jsonify({
+            'carbon_emission_kg': 0,
+            'equivalent_trees': 0,
+        })
     return jsonify(em.get_carbon_emission())
 
 
@@ -1299,7 +1311,10 @@ def get_realtime_power():
     """获取实时功率"""
     em = current_app.energy_manager
     if not em:
-        return jsonify({'error': '能源管理模块未启用'}), 503
+        return jsonify({
+            'total_power_kw': 0,
+            'devices': {},
+        })
     return jsonify({
         'total_power_kw': em.get_total_power(),
         'devices': em.get_realtime_power(),
@@ -1312,7 +1327,12 @@ def get_edge_status():
     """获取边缘决策引擎状态"""
     edge = current_app.edge_decision
     if not edge:
-        return jsonify({'error': '边缘决策引擎未启用'}), 503
+        return jsonify({
+            'running': False,
+            'rules_count': 0,
+            'interlocks_count': 0,
+            'pid_controllers_count': 0,
+        })
     return jsonify(edge.get_status())
 
 
@@ -1322,7 +1342,7 @@ def get_edge_rules():
     """获取边缘决策规则"""
     edge = current_app.edge_decision
     if not edge:
-        return jsonify({'error': '边缘决策引擎未启用'}), 503
+        return jsonify({'rules': {}, 'interlocks': {}})
     return jsonify(edge.get_rules())
 
 
@@ -1332,7 +1352,7 @@ def get_edge_log():
     """获取决策日志"""
     edge = current_app.edge_decision
     if not edge:
-        return jsonify({'error': '边缘决策引擎未启用'}), 503
+        return jsonify([])
     limit = request.args.get('limit', 50, type=int)
     return jsonify(edge.get_decision_log(limit))
 
@@ -1342,10 +1362,28 @@ def get_edge_log():
 def get_industry40_overview():
     """工业4.0总览数据"""
     result = {
-        'predictive_maintenance': None,
-        'oee': None,
-        'energy': None,
-        'edge_decision': None,
+        'predictive_maintenance': {
+            'device_count': 0,
+            'avg_health_score': 0,
+            'recent_alerts': [],
+        },
+        'oee': {
+            'device_count': 0,
+            'avg_oee_percent': 0,
+            'devices': {},
+        },
+        'energy': {
+            'total_energy_kwh': 0,
+            'total_power_kw': 0,
+            'electricity_cost': 0,
+            'carbon_emission_kg': 0,
+        },
+        'edge_decision': {
+            'running': False,
+            'rules_count': 0,
+            'interlocks_count': 0,
+            'pid_controllers_count': 0,
+        },
     }
 
     pm = current_app.predictive_maintenance
