@@ -1034,8 +1034,6 @@
     function loadDeviceList() {
         debugLog('加载设备列表...');
         return i40Fetch('/health').then(function(scores) {
-            var globalSelect = document.getElementById('global-device-select');
-            var spcDevice = document.getElementById('spc-device-select');
             I40_DEVICE_LIST = [];
 
             if (scores && typeof scores === 'object') {
@@ -1055,27 +1053,121 @@
                 I40_DEVICE_LIST = Object.keys(devices).map(function(k) { return devices[k]; });
             }
 
-            // 如果health没数据，尝试从OEE获取
-            if (I40_DEVICE_LIST.length === 0) {
-                return i40Fetch('/oee').then(function(oee) {
-                    if (oee && typeof oee === 'object') {
-                        for (var id in oee) {
-                            if (oee.hasOwnProperty(id)) {
+            if (I40_DEVICE_LIST.length > 0) {
+                debugLog('从health接口获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
+                populateDeviceSelects();
+                return;
+            }
+
+            // 回退1: 尝试从OEE获取
+            debugLog('health无数据，尝试从OEE获取...');
+            return i40Fetch('/oee').then(function(oee) {
+                if (oee && typeof oee === 'object') {
+                    for (var id in oee) {
+                        if (oee.hasOwnProperty(id)) {
+                            I40_DEVICE_LIST.push({ id: id, registers: [] });
+                        }
+                    }
+                }
+
+                if (I40_DEVICE_LIST.length > 0) {
+                    debugLog('从OEE接口获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
+                    populateDeviceSelects();
+                    return;
+                }
+
+                // 回退2: 尝试从设备状态接口获取
+                debugLog('OEE无数据，尝试从设备状态接口获取...');
+                return i40Fetch('/devices/status').then(function(deviceStates) {
+                    if (deviceStates && typeof deviceStates === 'object') {
+                        for (var id in deviceStates) {
+                            if (deviceStates.hasOwnProperty(id)) {
                                 I40_DEVICE_LIST.push({ id: id, registers: [] });
                             }
                         }
                     }
-                    populateDeviceSelects();
-                });
-            }
 
-            populateDeviceSelects();
+                    if (I40_DEVICE_LIST.length > 0) {
+                        debugLog('从设备状态接口获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
+                        populateDeviceSelects();
+                        return;
+                    }
+
+                    // 回退3: 尝试从设备管理API获取
+                    debugLog('设备状态无数据，尝试从设备管理API获取...');
+                    fetch('/api/devices', { headers: i40Headers() })
+                        .then(function(resp) { return resp.ok ? resp.json() : null; })
+                        .then(function(data) {
+                            if (data && data.devices) {
+                                var deviceList = Array.isArray(data.devices) ? data.devices : Object.values(data.devices);
+                                deviceList.forEach(function(d) {
+                                    if (d && (d.id || d.device_id)) {
+                                        var devId = d.id || d.device_id;
+                                        var regs = [];
+                                        if (d.registers && Array.isArray(d.registers)) {
+                                            d.registers.forEach(function(r) {
+                                                if (r && r.name && regs.indexOf(r.name) === -1) {
+                                                    regs.push(r.name);
+                                                }
+                                            });
+                                        }
+                                        I40_DEVICE_LIST.push({ id: devId, registers: regs });
+                                    }
+                                });
+                            }
+
+                            if (I40_DEVICE_LIST.length > 0) {
+                                debugLog('从设备管理API获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
+                            } else {
+                                // 回退4: 使用页面硬编码的设备列表作为兜底
+                                debugLog('所有API无数据，使用硬编码设备列表兜底', 'warn');
+                                var fallbackDevices = typeof DEVICE_NODE_MAP !== 'undefined' ? DEVICE_NODE_MAP : {};
+                                for (var fid in fallbackDevices) {
+                                    if (fallbackDevices.hasOwnProperty(fid)) {
+                                        I40_DEVICE_LIST.push({ id: fid, registers: [] });
+                                    }
+                                }
+                                if (I40_DEVICE_LIST.length > 0) {
+                                    debugLog('使用兜底设备列表: ' + I40_DEVICE_LIST.length + ' 个设备');
+                                } else {
+                                    debugLog('无可用设备数据', 'err');
+                                }
+                            }
+                            populateDeviceSelects();
+                        })
+                        .catch(function(e) {
+                            debugLog('设备管理API请求失败: ' + e.message, 'err');
+                            // 最终兜底: 使用硬编码设备列表
+                            var fallbackDevices = typeof DEVICE_NODE_MAP !== 'undefined' ? DEVICE_NODE_MAP : {};
+                            for (var fid in fallbackDevices) {
+                                if (fallbackDevices.hasOwnProperty(fid)) {
+                                    I40_DEVICE_LIST.push({ id: fid, registers: [] });
+                                }
+                            }
+                            if (I40_DEVICE_LIST.length > 0) {
+                                debugLog('使用兜底设备列表: ' + I40_DEVICE_LIST.length + ' 个设备');
+                            }
+                            populateDeviceSelects();
+                        });
+                });
+            });
         });
     }
 
     function populateDeviceSelects() {
         var globalSelect = document.getElementById('global-device-select');
         var spcDevice = document.getElementById('spc-device-select');
+
+        // 去重处理
+        var seen = {};
+        var uniqueList = [];
+        I40_DEVICE_LIST.forEach(function(d) {
+            if (!seen[d.id]) {
+                seen[d.id] = true;
+                uniqueList.push(d);
+            }
+        });
+        I40_DEVICE_LIST = uniqueList;
 
         if (globalSelect) {
             globalSelect.innerHTML = '<option value="">全部设备</option>';
@@ -1085,6 +1177,9 @@
                 opt.textContent = d.id;
                 globalSelect.appendChild(opt);
             });
+            debugLog('全局设备选择器已填充: ' + I40_DEVICE_LIST.length + ' 个选项');
+        } else {
+            debugLog('未找到全局设备选择器元素', 'warn');
         }
 
         if (spcDevice) {
@@ -1096,6 +1191,9 @@
                 opt.dataset.registers = JSON.stringify(d.registers);
                 spcDevice.appendChild(opt);
             });
+            debugLog('SPC设备选择器已填充: ' + I40_DEVICE_LIST.length + ' 个选项');
+        } else {
+            debugLog('未找到SPC设备选择器元素', 'warn');
         }
 
         debugLog('设备列表加载完成: ' + I40_DEVICE_LIST.length + ' 个设备');

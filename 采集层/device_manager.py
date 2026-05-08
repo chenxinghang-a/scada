@@ -269,7 +269,6 @@ class DeviceManager:
 
     def get_device_status(self, device_id: str) -> dict[str, Any]:
         """获取设备状态"""
-        client = self.clients.get(device_id)
         device_config = self.devices.get(device_id)
 
         if not device_config:
@@ -288,7 +287,16 @@ class DeviceManager:
             'stats': {}
         }
 
+        # 使用 get_client() 实现懒创建，确保客户端存在
+        client = self.get_client(device_id)
         if client:
+            # 模拟模式下，如果客户端未连接则自动连接
+            if self.simulation_mode and not getattr(client, 'connected', False):
+                if device_config.get('enabled', True):
+                    try:
+                        client.connect()
+                    except Exception:
+                        pass
             status['connected'] = getattr(client, 'connected', False)
             status['stats'] = getattr(client, 'stats', {})
 
@@ -326,7 +334,19 @@ class DeviceManager:
             self.devices[device_id] = device_config
             self._save_config()
 
-            logger.info(f"添加设备: {device_id} [{protocol}]")
+            # 热添加后自动连接设备（模拟模式下立即可用）
+            if device_config.get('enabled', True):
+                try:
+                    connected = self.connect_device(device_id)
+                    if connected:
+                        logger.info(f"添加设备并连接成功: {device_id} [{protocol}]")
+                    else:
+                        logger.warning(f"添加设备成功但连接失败: {device_id} [{protocol}]")
+                except Exception as conn_e:
+                    logger.warning(f"添加设备成功但连接异常: {device_id} [{conn_e}]")
+            else:
+                logger.info(f"添加设备（已禁用）: {device_id} [{protocol}]")
+
             return True
 
         except Exception as e:
