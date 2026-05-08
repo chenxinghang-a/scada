@@ -1,29 +1,4 @@
 devices:
-- collection_interval: 3
-  description: 支持OPC UA的PLC控制器
-  enabled: true
-  endpoint: opc.tcp://192.168.1.50:4840
-  id: opcua_plc_01
-  name: OPC UA PLC控制器
-  nodes:
-  - description: 温度值
-    name: temperature
-    node_id: ns=3;s=Temperature
-    unit: °C
-  - description: 压力值
-    name: pressure
-    node_id: ns=3;s=Pressure
-    unit: MPa
-  - description: 电机转速
-    name: motor_speed
-    node_id: ns=3;s=MotorSpeed
-    unit: RPM
-  - description: 运行状态
-    name: running_status
-    node_id: ns=3;s=RunningStatus
-    unit: ''
-  protocol: opcua
-  security_mode: None
 - collection_interval: 2
   description: 注塑车间控制 — 注塑机/模具/脱模
   device_model: FX5U-64M
@@ -432,3 +407,393 @@ devices:
     unit: Pa
   slave_id: 1
   vendor: 图尔克
+- collection_interval: 5
+  description: 包装线控制 — 封箱/贴标/码垛
+  device_model: DVP32EH00T3
+  enabled: true
+  host: 192.168.1.57
+  id: delta_dvp_01
+  name: 台达DVP PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: uint16
+    description: 输送带速度
+    length: 1
+    name: conveyor_speed
+    scale: 0.1
+    unit: m/min
+  - address: 1
+    data_type: uint16
+    description: 封箱温度
+    length: 1
+    name: sealing_temperature
+    scale: 0.1
+    unit: °C
+  - address: 2
+    data_type: uint16
+    description: 贴标计数
+    length: 1
+    name: label_count
+    scale: 1
+    unit: 个
+  - address: 3
+    data_type: uint16
+    description: 码垛计数
+    length: 1
+    name: palletizing_count
+    scale: 1
+    unit: 个
+  - address: 4
+    data_type: uint16
+    description: 剔除计数
+    length: 1
+    name: reject_count
+    scale: 1
+    unit: 个
+  - address: 5
+    data_type: uint16
+    description: 包装线状态 0=停机/1=运行/2=换料/3=故障
+    length: 1
+    name: packing_status
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 台达电子
+- collection_interval: 3
+  description: 涂装车间控制 — 喷涂/烘干/输送
+  device_model: H5U-3232MT
+  enabled: true
+  host: 192.168.1.58
+  id: inovance_h5u_01
+  name: 汇川H5U PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 喷涂压力
+    length: 2
+    name: spray_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: 烘干炉温度
+    length: 2
+    name: oven_temperature
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 喷涂速度
+    length: 2
+    name: spray_speed
+    scale: 1.0
+    unit: m/min
+  - address: 6
+    data_type: float32
+    description: 涂层厚度
+    length: 2
+    name: coating_thickness
+    scale: 1.0
+    unit: μm
+  - address: 8
+    data_type: float32
+    description: 输送链速度
+    length: 2
+    name: conveyor_speed
+    scale: 1.0
+    unit: m/min
+  - address: 10
+    data_type: uint16
+    description: 喷涂计数
+    length: 1
+    name: painted_count
+    scale: 1
+    unit: 个
+  slave_id: 1
+  vendor: 汇川技术
+- collection_interval: 10
+  description: 旋转设备振动监测 — 电机/泵/风机
+  device_model: IoT-VIB-100 + LoRa GW
+  enabled: true
+  host: 192.168.1.200
+  id: vibration_sensor_01
+  name: MQTT振动监测节点
+  password: scada123
+  port: 1883
+  protocol: mqtt
+  topics:
+  - description: X轴振动速度
+    json_path: value
+    name: vibration_x
+    topic: factory/motor_group/vibration/x_axis
+    unit: mm/s
+  - description: Y轴振动速度
+    json_path: value
+    name: vibration_y
+    topic: factory/motor_group/vibration/y_axis
+    unit: mm/s
+  - description: Z轴振动速度
+    json_path: value
+    name: vibration_z
+    topic: factory/motor_group/vibration/z_axis
+    unit: mm/s
+  - description: 轴承温度
+    json_path: value
+    name: bearing_temperature
+    topic: factory/motor_group/vibration/temperature
+    unit: °C
+  username: scada
+  vendor: 自研物联网节点
+- collection_interval: 15
+  description: 出水口在线水质监测 — DO/浊度/电导率/pH
+  device_model: WQ-Multi-01
+  enabled: true
+  host: 192.168.1.200
+  id: water_quality_01
+  name: MQTT水质监测终端
+  password: scada123
+  port: 1883
+  protocol: mqtt
+  topics:
+  - description: 溶解氧
+    json_path: value
+    name: dissolved_oxygen
+    topic: factory/water_outlet/quality/dissolved_oxygen
+    unit: mg/L
+  - description: 浊度
+    json_path: value
+    name: turbidity
+    topic: factory/water_outlet/quality/turbidity
+    unit: NTU
+  - description: 电导率
+    json_path: value
+    name: conductivity
+    topic: factory/water_outlet/quality/conductivity
+    unit: μS/cm
+  - description: pH值
+    json_path: value
+    name: ph
+    topic: factory/water_outlet/quality/ph
+    unit: ''
+  - description: 水温
+    json_path: value
+    name: water_temperature
+    topic: factory/water_outlet/quality/temperature
+    unit: °C
+  username: scada
+  vendor: 自研物联网节点
+- auth_password: admin123
+  auth_type: basic
+  auth_username: admin
+  base_url: http://192.168.1.52
+  collection_interval: 5
+  description: S7-1500内置REST接口 — 备用数据通道
+  device_model: S7-1516-3 PN/DP
+  enabled: true
+  endpoints:
+  - json_path: value
+    method: GET
+    name: ambient_temperature
+    path: /api/v1/variables/DB1.temperature
+    unit: °C
+  - json_path: value
+    method: GET
+    name: system_pressure
+    path: /api/v1/variables/DB1.pressure
+    unit: MPa
+  - json_path: value
+    method: GET
+    name: production_count
+    path: /api/v1/variables/DB100.product_count
+    unit: 个
+  - json_path: value
+    method: GET
+    name: line_status
+    path: /api/v1/variables/DB100.line_status
+    unit: ''
+  id: siemens_web_01
+  name: 西门子S7-1500 Web API
+  poll_interval: 5
+  protocol: rest
+  vendor: 西门子
+- auth_token: mes-api-token-xxx
+  auth_type: bearer
+  base_url: http://192.168.1.250:8080
+  collection_interval: 30
+  description: MES生产数据接口 — 计划/质量/OEE
+  device_model: MES Enterprise v3.2
+  enabled: true
+  endpoints:
+  - json_path: data.oee
+    method: GET
+    name: oee
+    path: /api/v1/production/oee
+    unit: '%'
+  - json_path: data.rate
+    method: GET
+    name: quality_rate
+    path: /api/v1/quality/rate
+    unit: '%'
+  - json_path: data.quantity
+    method: GET
+    name: planned_quantity
+    path: /api/v1/production/plan/quantity
+    unit: 个
+  - json_path: data.quantity
+    method: GET
+    name: actual_quantity
+    path: /api/v1/production/actual/quantity
+    unit: 个
+  - json_path: data.rate
+    method: GET
+    name: defect_rate
+    path: /api/v1/quality/defect_rate
+    unit: '%'
+  id: mes_api_01
+  name: MES制造执行系统
+  poll_interval: 30
+  protocol: rest
+  vendor: 自研MES系统
+- collection_interval: 1
+  description: 产线1号设备状态指示灯塔 — 红黄绿蓝白+蜂鸣器
+  device_model: LR7-302NWFB
+  enabled: true
+  host: 192.168.1.70
+  id: signal_tower_01
+  name: Patlite LR7信号灯塔 — 1号线
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: uint16
+    description: 红色灯
+    length: 1
+    name: red_light
+    scale: 1
+    unit: ''
+  - address: 1
+    data_type: uint16
+    description: 黄色灯
+    length: 1
+    name: yellow_light
+    scale: 1
+    unit: ''
+  - address: 2
+    data_type: uint16
+    description: 绿色灯
+    length: 1
+    name: green_light
+    scale: 1
+    unit: ''
+  - address: 3
+    data_type: uint16
+    description: 蓝色灯
+    length: 1
+    name: blue_light
+    scale: 1
+    unit: ''
+  - address: 4
+    data_type: uint16
+    description: 白色灯
+    length: 1
+    name: white_light
+    scale: 1
+    unit: ''
+  - address: 5
+    data_type: uint16
+    description: 蜂鸣器
+    length: 1
+    name: buzzer
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: Patlite (日本帕特莱)
+- collection_interval: 1
+  description: 报警输出控制 — 外部警灯/蜂鸣器/电磁阀
+  device_model: ADAM-6060-AE
+  enabled: true
+  host: 192.168.1.72
+  id: relay_output_01
+  name: 研华ADAM-6060继电器模块
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - access: rw
+    address: 0
+    data_type: uint16
+    description: 继电器1
+    length: 1
+    name: relay_1
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 1
+    data_type: uint16
+    description: 继电器2
+    length: 1
+    name: relay_2
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 2
+    data_type: uint16
+    description: 继电器3
+    length: 1
+    name: relay_3
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 3
+    data_type: uint16
+    description: 继电器4
+    length: 1
+    name: relay_4
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 4
+    data_type: uint16
+    description: 继电器5
+    length: 1
+    name: relay_5
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 5
+    data_type: uint16
+    description: 继电器6
+    length: 1
+    name: relay_6
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 研华科技 (Advantech)
+- collection_interval: 3
+  description: 支持OPC UA的PLC控制器
+  enabled: true
+  endpoint: opc.tcp://192.168.1.50:4840
+  id: opcua_plc_01
+  name: OPC UA PLC控制器
+  nodes:
+  - description: 温度值
+    name: temperature
+    node_id: ns=3;s=Temperature
+    unit: °C
+  - description: 压力值
+    name: pressure
+    node_id: ns=3;s=Pressure
+    unit: MPa
+  - description: 电机转速
+    name: motor_speed
+    node_id: ns=3;s=MotorSpeed
+    unit: RPM
+  - description: 运行状态
+    name: running_status
+    node_id: ns=3;s=RunningStatus
+    unit: ''
+  protocol: opcua
+  security_mode: None
