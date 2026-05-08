@@ -26,7 +26,12 @@ from typing import Any
 from collections import deque
 import threading
 
-from ..gateway import MQTTSubscriber, DeviceTelemetry, DeviceStatus, AlarmMessage
+try:
+    from ..gateway import MQTTSubscriber, DeviceTelemetry, DeviceStatus, AlarmMessage
+except ImportError:
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+    from gateway import MQTTSubscriber, DeviceTelemetry, DeviceStatus, AlarmMessage
 from .tdengine_client import TDengineClient
 from .data_models import (
     TelemetryRecord, AlarmRecord, OEERecord, EnergyRecord, PredictiveRecord

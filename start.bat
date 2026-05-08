@@ -2,23 +2,26 @@
 chcp 65001 >nul
 title 工业数据采集与监控系统
 
+:: 设置Python路径（WorkBuddy内置Python）
+set "PYTHON=C:\Users\cxx\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+set "PIP=C:\Users\cxx\.workbuddy\binaries\python\envs\default\Scripts\pip.exe"
+
+:: 检查Python是否存在
+if not exist "%PYTHON%" (
+    echo [错误] 未找到Python: %PYTHON%
+    pause
+    exit /b 1
+)
+
 echo ========================================
 echo   工业数据采集与监控系统 v2.0
 echo   Industrial SCADA System
 echo ========================================
 echo.
 
-:: 检查Python环境
-where python >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [错误] 未找到Python，请先安装Python 3.8+
-    pause
-    exit /b 1
-)
-
 :: 检查依赖
 echo [1/3] 检查依赖包...
-pip install -q -r requirements.txt 2>nul
+"%PIP%" install -q -r requirements.txt 2>nul
 
 :: 创建必要目录
 echo [2/3] 初始化目录...
@@ -37,6 +40,6 @@ echo   按 Ctrl+C 停止系统
 echo ========================================
 echo.
 
-python run.py
+"%PYTHON%" run.py
 
 pause

@@ -21,10 +21,19 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
-from ..timeseries.tdengine_client import TDengineClient
-from ..timeseries.data_models import (
-    OEERecord, EnergyRecord, PredictiveRecord
-)
+try:
+    from ..timeseries.tdengine_client import TDengineClient
+    from ..timeseries.data_models import (
+        OEERecord, EnergyRecord, PredictiveRecord
+    )
+except ImportError:
+    # 绝对导入 fallback（当项目根目录没有 __init__.py 时）
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+    from timeseries.tdengine_client import TDengineClient
+    from timeseries.data_models import (
+        OEERecord, EnergyRecord, PredictiveRecord
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -398,7 +407,10 @@ class RealtimeDataBridge:
         self.logger = logging.getLogger("RealtimeDataBridge")
 
         # 批量写入缓冲
-        from ..timeseries.data_models import TelemetryRecord
+        try:
+            from ..timeseries.data_models import TelemetryRecord
+        except ImportError:
+            from timeseries.data_models import TelemetryRecord
         self._buffer: list[Any] = []
         self._buffer_lock = threading.Lock()
         self._batch_size = 100
@@ -458,7 +470,10 @@ class RealtimeDataBridge:
             gateway_id: 网关ID
             quality: 数据质量
         """
-        from ..timeseries.data_models import TelemetryRecord
+        try:
+            from ..timeseries.data_models import TelemetryRecord
+        except ImportError:
+            from timeseries.data_models import TelemetryRecord
 
         record = TelemetryRecord(
             device_id=device_id,
