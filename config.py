@@ -98,6 +98,9 @@ class LogConfig:
     # 日志保留天数
     RETENTION_DAYS = 30
 
+# Web服务器配置（兼容别名）
+WebConfig = FlaskConfig
+
 # 导出配置
 class ExportConfig:
     # 导出目录
