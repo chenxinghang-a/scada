@@ -574,30 +574,19 @@ function getHeaders() {
 
 // API请求封装（带错误提示）
 async function apiGet(path) {
-    const url = `${INDUSTRY40_API}${path}`;
-    console.log('[DEBUG] apiGet 请求:', url);
-    console.log('[DEBUG] apiGet headers:', getHeaders());
-    
     try {
-        const resp = await fetch(url, { headers: getHeaders() });
-        console.log('[DEBUG] apiGet 响应状态:', resp.status, resp.statusText);
-        
+        const resp = await fetch(`${INDUSTRY40_API}${path}`, { headers: getHeaders() });
         if (resp.status === 401) {
-            console.log('[DEBUG] apiGet 401未授权，跳转登录');
             window.location.href = '/login';
             return null;
         }
         if (!resp.ok) {
-            console.log('[DEBUG] apiGet 响应异常:', resp.status);
             showToast(`API错误: ${path} (${resp.status})`, 'warning');
             return null;
         }
-        
-        const data = await resp.json();
-        console.log('[DEBUG] apiGet 返回数据:', data);
-        return data;
+        return await resp.json();
     } catch (e) {
-        console.error(`[DEBUG] API请求失败: ${path}`, e);
+        console.error(`API请求失败: ${path}`, e);
         showToast(`网络请求失败: ${path}`, 'danger');
         return null;
     }
@@ -635,77 +624,55 @@ function setLoading(domId, loading) {
 
 // ==================== 总览 ====================
 async function loadOverview() {
-    console.log('[DEBUG] loadOverview() 开始执行');
-    console.log('[DEBUG] token:', token ? token.substring(0, 20) + '...' : 'null');
-    
-    try {
-        const data = await apiGet('/overview');
-        console.log('[DEBUG] API返回数据:', data);
-        
-        if (!data) {
-            console.log('[DEBUG] API返回数据为空，跳过更新');
-            return;
-        }
+    const data = await apiGet('/overview');
+    if (!data) return;
 
-        // 健康评分
-        const healthEl = document.getElementById('ov-health');
-        console.log('[DEBUG] healthEl:', healthEl);
-        if (healthEl) {
-            const score = data.predictive_maintenance?.avg_health_score;
-            console.log('[DEBUG] health score:', score);
-            healthEl.textContent = score != null && score > 0 ? score : '--';
-        }
-
-        // OEE
-        const oeeEl = document.getElementById('ov-oee');
-        if (oeeEl) {
-            const oee = data.oee?.avg_oee_percent;
-            console.log('[DEBUG] oee:', oee);
-            oeeEl.textContent = oee != null && oee > 0 ? oee + '%' : '--%';
-        }
-
-        // 能源
-        const powerEl = document.getElementById('ov-power');
-        const carbonEl = document.getElementById('ov-carbon');
-        if (powerEl) {
-            const power = data.energy?.total_power_kw;
-            console.log('[DEBUG] power:', power);
-            powerEl.textContent = power != null && power > 0 ? power : '--';
-        }
-        if (carbonEl) {
-            const carbon = data.energy?.carbon_emission_kg;
-            console.log('[DEBUG] carbon:', carbon);
-            carbonEl.textContent = carbon != null && carbon > 0 ? carbon : '--';
-        }
-
-        // 维护建议
-        const alertsDiv = document.getElementById('ov-alerts');
-        if (alertsDiv) {
-            const alerts = data.predictive_maintenance?.recent_alerts;
-            if (alerts && alerts.length > 0) {
-                const alertsHtml = alerts.map(a => `
-                    <div class="alert-item alert-${a.severity || 'info'}">
-                        <strong>${a.device_id || '未知'}</strong>: ${a.message || '无详细信息'}
-                    </div>
-                `).join('');
-                alertsDiv.innerHTML = alertsHtml;
-            } else {
-                alertsDiv.innerHTML = '<p class="text-muted">系统运行正常，暂无维护建议</p>';
-            }
-        }
-
-        // 工艺流程（异步，不阻塞）
-        renderProcessFlow('process-flow').catch(e => console.error('[DEBUG] renderProcessFlow error:', e));
-
-        const lastUpdateEl = document.getElementById('last-update');
-        if (lastUpdateEl) {
-            lastUpdateEl.textContent = `最后更新: ${new Date().toLocaleTimeString()}`;
-        }
-        
-        console.log('[DEBUG] loadOverview() 执行完成');
-    } catch (e) {
-        console.error('[DEBUG] loadOverview() 异常:', e);
+    // 健康评分
+    const healthEl = document.getElementById('ov-health');
+    if (healthEl) {
+        const score = data.predictive_maintenance?.avg_health_score;
+        healthEl.textContent = score != null && score > 0 ? score : '--';
     }
+
+    // OEE
+    const oeeEl = document.getElementById('ov-oee');
+    if (oeeEl) {
+        const oee = data.oee?.avg_oee_percent;
+        oeeEl.textContent = oee != null && oee > 0 ? oee + '%' : '--%';
+    }
+
+    // 能源
+    const powerEl = document.getElementById('ov-power');
+    const carbonEl = document.getElementById('ov-carbon');
+    if (powerEl) {
+        const power = data.energy?.total_power_kw;
+        powerEl.textContent = power != null && power > 0 ? power : '--';
+    }
+    if (carbonEl) {
+        const carbon = data.energy?.carbon_emission_kg;
+        carbonEl.textContent = carbon != null && carbon > 0 ? carbon : '--';
+    }
+
+    // 维护建议
+    const alertsDiv = document.getElementById('ov-alerts');
+    if (alertsDiv) {
+        const alerts = data.predictive_maintenance?.recent_alerts;
+        if (alerts && alerts.length > 0) {
+            const alertsHtml = alerts.map(a => `
+                <div class="alert-item alert-${a.severity || 'info'}">
+                    <strong>${a.device_id || '未知'}</strong>: ${a.message || '无详细信息'}
+                </div>
+            `).join('');
+            alertsDiv.innerHTML = alertsHtml;
+        } else {
+            alertsDiv.innerHTML = '<p class="text-muted">系统运行正常，暂无维护建议</p>';
+        }
+    }
+
+    // 工艺流程
+    renderProcessFlow('process-flow');
+
+    document.getElementById('last-update').textContent = `最后更新: ${new Date().toLocaleTimeString()}`;
 }
 
 // ==================== 预测性维护 ====================
