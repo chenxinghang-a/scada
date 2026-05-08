@@ -527,7 +527,7 @@ def jwt_required(f):
 
 def role_required(*required_roles):
     """
-    角色权限装饰器（内置JWT认证）
+    角色权限装饰器（组合jwt_required）
     要求用户具有指定角色之一
 
     Usage:
@@ -536,34 +536,17 @@ def role_required(*required_roles):
             ...
     """
     def decorator(f):
+        # 先应用jwt_required进行认证
+        @jwt_required
         @wraps(f)
         def decorated(*args, **kwargs):
-            # 先执行JWT认证
-            token = None
-            auth_header = request.headers.get('Authorization', '')
-            if auth_header.startswith('Bearer '):
-                token = auth_header[7:]
-            if not token:
-                token = request.args.get('token')
-            if not token:
-                return jsonify({'error': '未提供认证令牌'}), 401
-
-            from flask import current_app
-            auth_manager = current_app.auth_manager
-            user = auth_manager.verify_token(token)
-            if not user:
-                return jsonify({'error': '令牌无效或已过期'}), 401
-
-            request.current_user = user
-
-            # 检查角色权限
+            user = request.current_user
             if user['role'] not in required_roles:
                 return jsonify({
                     'error': '权限不足',
                     'required_roles': list(required_roles),
                     'current_role': user['role']
                 }), 403
-
             return f(*args, **kwargs)
         return decorated
     return decorator
