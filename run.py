@@ -228,28 +228,14 @@ def main():
         energy_manager.start()
         edge_decision.start()
 
-        # 为模拟模式预设OEE班次数据（让页面立即有数据显示）
+        # 为模拟模式预填充所有工业4.0模块数据
         if simulation_mode:
-            logger.info("模拟模式：初始化OEE班次数据...")
-            for device_id in device_manager.get_all_devices():
-                oee_calculator.start_shift(device_id, planned_hours=8.0)
-                # 设置理论产能（件/小时）
-                theoretical_rates = {
-                    'siemens_1500_01': 120,   # 锅炉产线
-                    'hollysys_lk_01': 80,     # 化工车间
-                    'mitsubishi_fx5u_01': 200, # 注塑车间
-                    'delta_dvp_01': 150,       # 包装线
-                    'inovance_h5u_01': 100,    # 涂装车间
-                }
-                if device_id in theoretical_rates:
-                    oee_calculator.set_theoretical_rate(device_id, theoretical_rates[device_id])
-            
-            # 预填充初始OEE数据（让页面立即显示）
-            logger.info("模拟模式：预填充OEE初始数据...")
-            for device_id in device_manager.get_all_devices():
-                # 模拟运行2小时的数据
-                oee_calculator.update_device_state(device_id, 'running')
-                oee_calculator.record_production(device_id, count=150, good_count=145)
+            logger.info("模拟模式：初始化工业4.0模块数据...")
+            from core.simulation_initializer import initialize_simulation_data
+            initialize_simulation_data(
+                device_manager, oee_calculator, predictive_maintenance,
+                spc_analyzer, energy_manager
+            )
 
         # 启动TDengine适配器（如果可用）
         if realtime_bridge:
@@ -264,61 +250,6 @@ def main():
                     tsdb_adapter.register_device(device_id, registers)
             tsdb_adapter.start()
             logger.info("TDengine智能层适配器已启动")
-
-        # 为模拟模式预设能源基线数据
-        if simulation_mode:
-            logger.info("模拟模式：初始化能源基线数据...")
-            energy_baselines = {
-                'abb_m4m_01': 500,           # 电力分析仪日均500kWh
-                'siemens_1500_01': 200,       # 锅炉产线日均200kWh
-                'hollysys_lk_01': 150,        # 化工车间日均150kWh
-                'mitsubishi_fx5u_01': 100,    # 注塑车间日均100kWh
-                'delta_dvp_01': 80,           # 包装线日均80kWh
-                'inovance_h5u_01': 120,       # 涂装车间日均120kWh
-            }
-            for device_id, baseline in energy_baselines.items():
-                energy_manager.set_baseline(device_id, baseline)
-            
-            # 预填充能源初始数据（让页面立即显示）
-            logger.info("模拟模式：预填充能源初始数据...")
-            import random
-            for device_id, baseline in energy_baselines.items():
-                # 模拟当前功率（基线的1/24 * 随机波动）
-                current_power = (baseline / 24) * random.uniform(0.8, 1.2)
-                energy_manager.feed_power_data(device_id, current_power)
-                # 设置累积电量
-                energy_manager.energy_accumulated[device_id]['energy_kwh'] = baseline * 0.5  # 半天的电量
-                energy_manager.energy_accumulated[device_id]['peak_kwh'] = baseline * 0.2
-                energy_manager.energy_accumulated[device_id]['flat_kwh'] = baseline * 0.2
-                energy_manager.energy_accumulated[device_id]['valley_kwh'] = baseline * 0.1
-
-        # 为模拟模式预填充预测性维护初始数据
-        if simulation_mode:
-            logger.info("模拟模式：预填充预测性维护初始数据...")
-            import random
-            from datetime import datetime, timedelta
-            
-            # 为每个设备的每个寄存器预填充历史数据
-            for device_id, device_config in device_manager.get_all_devices().items():
-                registers = device_config.get('registers', device_config.get('nodes', []))
-                for reg in registers:
-                    reg_name = reg.get('name', '')
-                    if not reg_name:
-                        continue
-                    
-                    # 生成过去1小时的历史数据（每分钟一个点）
-                    base_value = random.uniform(20, 80)
-                    for i in range(60):
-                        ts = datetime.now() - timedelta(minutes=60-i)
-                        value = base_value + random.gauss(0, 5) + 10 * math.sin(i / 10)
-                        predictive_maintenance.feed_data(device_id, reg_name, value, ts)
-                        
-                        # 同时喂入SPC分析器
-                        spc_analyzer.feed_data(device_id, reg_name, value)
-            
-            # 手动触发一次分析
-            predictive_maintenance._run_analysis()
-            logger.info("预测性维护和SPC初始数据预填充完成")
 
         # 启动Web服务
         mode_str = "真实设备模式" if not simulation_mode else "模拟模式：使用仿真数据"
