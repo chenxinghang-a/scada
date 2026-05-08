@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工业SCADA系统架构图</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            background: linear-gradient(90deg, #00d2ff, #3a7bd5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 30px rgba(0, 210, 255, 0.3);
+        }
+        
+        .architecture {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .layer {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        
+        .layer:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            border-color: rgba(0, 210, 255, 0.5);
+        }
+        
+        .layer-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .layer-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-right: 15px;
+        }
+        
+        .layer-title {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        
+        .layer-subtitle {
+            font-size: 0.9em;
+            color: #aaa;
+            margin-top: 5px;
+        }
+        
+        .modules {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .module {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .module::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.1));
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .module:hover::before {
+            opacity: 1;
+        }
+        
+        .module:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        .module-icon {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .module-name {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .module-status {
+            font-size: 0.8em;
+            padding: 3px 8px;
+            border-radius: 10px;
+            display: inline-block;
+        }
+        
+        .status-healthy {
+            background: rgba(0, 255, 0, 0.2);
+            color: #00ff00;
+        }
+        
+        .status-warning {
+            background: rgba(255, 255, 0, 0.2);
+            color: #ffff00;
+        }
+        
+        .status-error {
+            background: rgba(255, 0, 0, 0.2);
+            color: #ff0000;
+        }
+        
+        .status-unavailable {
+            background: rgba(128, 128, 128, 0.2);
+            color: #808080;
+        }
+        
+        .connections {
+            display: flex;
+            justify-content: center;
+            margin: 10px 0;
+        }
+        
+        .connection-line {
+            width: 2px;
+            height: 30px;
+            background: linear-gradient(to bottom, rgba(0, 210, 255, 0.5), rgba(0, 210, 255, 0.1));
+            position: relative;
+        }
+        
+        .connection-line::after {
+            content: '▼';
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(0, 210, 255, 0.7);
+            font-size: 12px;
+        }
+        
+        .legend {
+            margin-top: 30px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .legend-title {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            color: #00d2ff;
+        }
+        
+        .legend-items {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 5px;
+        }
+        
+        .improvements {
+            margin-top: 30px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .improvement-title {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            color: #00d2ff;
+        }
+        
+        .improvement-list {
+            list-style: none;
+        }
+        
+        .improvement-list li {
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .improvement-list li:last-child {
+            border-bottom: none;
+        }
+        
+        .improvement-icon {
+            color: #00ff00;
+            font-size: 1.2em;
+        }
+        
+        /* 颜色主题 */
+        .ui-layer .layer-icon { background: linear-gradient(135deg, #667eea, #764ba2); }
+        .gateway-layer .layer-icon { background: linear-gradient(135deg, #f093fb, #f5576c); }
+        .service-layer .layer-icon { background: linear-gradient(135deg, #4facfe, #00f2fe); }
+        .core-layer .layer-icon { background: linear-gradient(135deg, #43e97b, #38f9d7); }
+        .device-layer .layer-icon { background: linear-gradient(135deg, #fa709a, #fee140); }
+        .storage-layer .layer-icon { background: linear-gradient(135deg, #a18cd1, #fbc2eb); }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .modules {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .legend-items {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>工业SCADA系统架构图</h1>
+        
+        <div class="architecture">
+            <!-- 用户界面层 -->
+            <div class="layer ui-layer">
+                <div class="layer-header">
+                    <div class="layer-icon">🖥️</div>
+                    <div>
+                        <div class="layer-title">用户界面层 (HMI)</div>
+                        <div class="layer-subtitle">人机交互界面，提供可视化监控与操作</div>
+                    </div>
+                </div>
+                <div class="modules">
+                    <div class="module">
+                        <div class="module-icon">📊</div>
+                        <div class="module-name">仪表盘</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🔔</div>
+                        <div class="module-name">报警管理</div>
+                        <div class="module-status status-warning">需改进</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🎮</div>
+                        <div class="module-name">设备控制</div>
+                        <div class="module-status status-error">假接口</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">📈</div>
+                        <div class="module-name">历史趋势</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">⚙️</div>
+                        <div class="module-name">系统配置</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="connections">
+                <div class="connection-line"></div>
+            </div>
+            
+            <!-- API网关层 -->
+            <div class="layer gateway-layer">
+                <div class="layer-header">
+                    <div class="layer-icon">🌐</div>
+                    <div>
+                        <div class="layer-title">API网关层 (Gateway)</div>
+                        <div class="layer-subtitle">统一入口，提供认证、限流、路由、健康检查</div>
+                    </div>
+                </div>
+                <div class="modules">
+                    <div class="module">
+                        <div class="module-icon">🔐</div>
+                        <div class="module-name">认证授权</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">⏱️</div>
+                        <div class="module-name">限流熔断</div>
+                        <div class="module-status status-unavailable">未实现</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🔀</div>
+                        <div class="module-name">请求路由</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">💓</div>
+                        <div class="module-name">健康检查</div>
+                        <div class="module-status status-unavailable">未实现</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">📋</div>
+                        <div class="module-name">模块状态</div>
+                        <div class="module-status status-unavailable">未实现</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="connections">
+                <div class="connection-line"></div>
+            </div>
+            
+            <!-- 业务逻辑层 -->
+            <div class="layer service-layer">
+                <div class="layer-header">
+                    <div class="layer-icon">⚙️</div>
+                    <div>
+                        <div class="layer-title">业务逻辑层 (Services)</div>
+                        <div class="layer-subtitle">核心业务处理，实现SCADA功能</div>
+                    </div>
+                </div>
+                <div class="modules">
+                    <div class="module">
+                        <div class="module-icon">📡</div>
+                        <div class="module-name">数据采集</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🔔</div>
+                        <div class="module-name">报警服务</div>
+                        <div class="module-status status-warning">需改进</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🎮</div>
+                        <div class="module-name">设备控制</div>
+                        <div class="module-status status-error">假接口</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">📊</div>
+                        <div class="module-name">历史服务</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">⚡</div>
+                        <div class="module-name">能源服务</div>
+                        <div class="module-status status-error">假接口</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🏭</div>
+                        <div class="module-name">OEE服务</div>
+                        <div class="module-status status-error">假接口</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🔧</div>
+                        <div class="module-name">预测维护</div>
+                        <div class="module-status status-error">假接口</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🤖</div>
+                        <div class="module-name">边缘决策</div>
+                        <div class="module-status status-error">假接口</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="connections">
+                <div class="connection-line"></div>
+            </div>
+            
+            <!-- 核心抽象层 -->
+            <div class="layer core-layer">
+                <div class="layer-header">
+                    <div class="layer-icon">🧩</div>
+                    <div>
+                        <div class="layer-title">核心抽象层 (Core)</div>
+                        <div class="layer-subtitle">依赖注入、模块管理、配置中心、事件总线</div>
+                    </div>
+                </div>
+                <div class="modules">
+                    <div class="module">
+                        <div class="module-icon">💉</div>
+                        <div class="module-name">依赖注入</div>
+                        <div class="module-status status-unavailable">未实现</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">📦</div>
+                        <div class="module-name">模块注册表</div>
+                        <div class="module-status status-unavailable">未实现</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">⚙️</div>
+                        <div class="module-name">配置管理</div>
+                        <div class="module-status status-warning">需改进</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">📢</div>
+                        <div class="module-name">事件总线</div>
+                        <div class="module-status status-unavailable">未实现</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="connections">
+                <div class="connection-line"></div>
+            </div>
+            
+            <!-- 设备抽象层 -->
+            <div class="layer device-layer">
+                <div class="layer-header">
+                    <div class="layer-icon">🔌</div>
+                    <div>
+                        <div class="layer-title">设备抽象层 (Device)</div>
+                        <div class="layer-subtitle">统一设备接口，支持多种工业协议</div>
+                    </div>
+                </div>
+                <div class="modules">
+                    <div class="module">
+                        <div class="module-icon">📡</div>
+                        <div class="module-name">Modbus</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🔗</div>
+                        <div class="module-name">OPC-UA</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">📨</div>
+                        <div class="module-name">MQTT</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">🌐</div>
+                        <div class="module-name">REST</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="connections">
+                <div class="connection-line"></div>
+            </div>
+            
+            <!-- 数据存储层 -->
+            <div class="layer storage-layer">
+                <div class="layer-header">
+                    <div class="layer-icon">💾</div>
+                    <div>
+                        <div class="layer-title">数据存储层 (Storage)</div>
+                        <div class="layer-subtitle">数据持久化，支持多种存储引擎</div>
+                    </div>
+                </div>
+                <div class="modules">
+                    <div class="module">
+                        <div class="module-icon">🗄️</div>
+                        <div class="module-name">SQLite</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">⏱️</div>
+                        <div class="module-name">TDengine</div>
+                        <div class="module-status status-unavailable">未连接</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">⚡</div>
+                        <div class="module-name">Redis</div>
+                        <div class="module-status status-unavailable">未连接</div>
+                    </div>
+                    <div class="module">
+                        <div class="module-icon">📁</div>
+                        <div class="module-name">文件系统</div>
+                        <div class="module-status status-healthy">正常</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 图例 -->
+        <div class="legend">
+            <div class="legend-title">图例说明</div>
+            <div class="legend-items">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: rgba(0, 255, 0, 0.3);"></div>
+                    <span>正常 - 功能完整可用</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: rgba(255, 255, 0, 0.3);"></div>
+                    <span>需改进 - 功能存在但有缺陷</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: rgba(255, 0, 0, 0.3);"></div>
+                    <span>假接口 - 空实现或返回硬编码数据</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: rgba(128, 128, 128, 0.3);"></div>
+                    <span>未实现 - 功能缺失或未连接</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 改进计划 -->
+        <div class="improvements">
+            <div class="improvement-title">改进计划</div>
+            <ul class="improvement-list">
+                <li>
+                    <span class="improvement-icon">✅</span>
+                    <span>实现依赖注入容器和模块注册表，支持动态模块管理</span>
+                </li>
+                <li>
+                    <span class="improvement-icon">✅</span>
+                    <span>修复所有假接口，返回真实数据或明确的"未启用"状态</span>
+                </li>
+                <li>
+                    <span class="improvement-icon">✅</span>
+                    <span>实现健康检查API，实时监控各模块状态</span>
+                </li>
+                <li>
+                    <span class="improvement-icon">✅</span>
+                    <span>统一错误处理，所有API遵循统一的响应格式</span>
+                </li>
+                <li>
+                    <span class="improvement-icon">✅</span>
+                    <span>实现报警KPI监控，符合ISA-18.2标准</span>
+                </li>
+                <li>
+                    <span class="improvement-icon">✅</span>
+                    <span>实现数据备份恢复和模块动态启停功能</span>
+                </li>
+            </ul>
+        </div>
+    </div>
+    
+    <script>
+        // 添加交互效果
+        document.querySelectorAll('.module').forEach(module => {
+            module.addEventListener('click', function() {
+                const name = this.querySelector('.module-name').textContent;
+                const status = this.querySelector('.module-status').textContent;
+                alert(`模块: ${name}\n状态: ${status}`);
+            });
+        });
+        
+        // 添加动画效果
+        const layers = document.querySelectorAll('.layer');
+        layers.forEach((layer, index) => {
+            layer.style.opacity = '0';
+            layer.style.transform = 'translateY(20px)';
+            layer.style.transition = 'all 0.5s ease';
+            
+            setTimeout(() => {
+                layer.style.opacity = '1';
+                layer.style.transform = 'translateY(0)';
+            }, 100 * index);
+        });
+    </script>
+</body>
+</html>

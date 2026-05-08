@@ -383,9 +383,13 @@ async function loadLatestAlarms() {
  */
 function getDeviceName(deviceId) {
     const names = {
-        'temp_sensor_01': '温度传感器1号',
-        'pressure_sensor_01': '压力传感器1号',
-        'power_meter_01': '电力仪表1号'
+        'siemens_1500_01': '西门子S7-1500 PLC',
+        'hollysys_lk_01': '和利时LK PLC',
+        'abb_m4m_01': 'ABB M4M电力分析仪',
+        'schneider_m340_01': '施耐德M340 PLC',
+        'mitsubishi_fx5u_01': '三菱FX5U PLC',
+        'delta_dvp_01': '台达DVP PLC',
+        'inovance_h5u_01': '汇川H5U PLC'
     };
     return names[deviceId] || deviceId;
 }

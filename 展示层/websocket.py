@@ -115,15 +115,16 @@ def start_data_push_thread(database, data_collector):
 
 
 def emit_alarm(alarm_data):
-    """发送报警通知"""
+    """发送报警通知（广播给所有客户端）"""
     if socketio:
-        socketio.emit('alarm', alarm_data, broadcast=True)
+        # Flask-SocketIO 5.x: 不使用broadcast参数，直接emit即广播给所有客户端
+        socketio.emit('alarm', alarm_data)
 
 
 def emit_broadcast(broadcast_data):
-    """发送广播事件通知"""
+    """发送广播事件通知（广播给所有客户端）"""
     if socketio:
-        socketio.emit('broadcast', broadcast_data, broadcast=True)
+        socketio.emit('broadcast', broadcast_data)
 
 
 def emit_device_status(device_id, status):

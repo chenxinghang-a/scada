@@ -147,6 +147,9 @@
 {% endblock %}
 
 {% block content %}
+<!-- Toast通知容器 -->
+<div id="toast-container" style="position:fixed; top:20px; right:20px; z-index:9999; max-width:350px;"></div>
+
 <div class="container-fluid mt-3">
     <!-- 顶部状态栏 -->
     <div class="row mb-3">
@@ -558,6 +561,8 @@
 <script>
 const API_BASE = '/api/industry40';
 let token = localStorage.getItem('auth_token');
+let currentTab = 'overview';
+let refreshTimer = null;
 
 // 获取请求头
 function getHeaders() {
@@ -567,7 +572,7 @@ function getHeaders() {
     };
 }
 
-// API请求封装
+// API请求封装（带错误提示）
 async function apiGet(path) {
     try {
         const resp = await fetch(`${API_BASE}${path}`, { headers: getHeaders() });
@@ -575,10 +580,45 @@ async function apiGet(path) {
             window.location.href = '/login';
             return null;
         }
+        if (!resp.ok) {
+            showToast(`API错误: ${path} (${resp.status})`, 'warning');
+            return null;
+        }
         return await resp.json();
     } catch (e) {
         console.error(`API请求失败: ${path}`, e);
+        showToast(`网络请求失败: ${path}`, 'danger');
         return null;
+    }
+}
+
+// Toast通知
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    
+    const toast = document.createElement('div');
+    toast.className = `alert alert-${type} alert-dismissible fade show`;
+    toast.style.cssText = 'margin-bottom:8px; font-size:0.85rem; animation:fadeIn 0.3s;';
+    toast.innerHTML = `${message}<button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert"></button>`;
+    container.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// 加载状态指示
+function setLoading(domId, loading) {
+    const el = document.getElementById(domId);
+    if (!el) return;
+    if (loading) {
+        el.style.opacity = '0.6';
+        el.style.pointerEvents = 'none';
+    } else {
+        el.style.opacity = '1';
+        el.style.pointerEvents = 'auto';
     }
 }
 
@@ -902,27 +942,46 @@ async function loadEdge() {
     }
 }
 
-// ==================== 工艺流程数字孪生 ====================
-function renderProcessFlow(domId) {
+// ==================== 工艺流程数字孪生（动态） ====================
+// 设备ID到工艺节点的映射
+const DEVICE_NODE_MAP = {
+    'siemens_1500_01': { label: '锅炉产线', icon: '🔥', x: 30, y: 120 },
+    'hollysys_lk_01': { label: '化工车间', icon: '⚗️', x: 160, y: 80 },
+    'mitsubishi_fx5u_01': { label: '注塑车间', icon: '🏭', x: 160, y: 180 },
+    'delta_dvp_01': { label: '包装线', icon: '📦', x: 300, y: 120 },
+    'inovance_h5u_01': { label: '涂装车间', icon: '🎨', x: 440, y: 120 },
+    'schneider_m340_01': { label: '配电系统', icon: '⚡', x: 570, y: 80 },
+    'abb_m4m_01': { label: '电力监测', icon: '📊', x: 570, y: 180 },
+};
+
+async function renderProcessFlow(domId) {
     const container = document.getElementById(domId);
     if (!container) return;
 
-    // 工艺节点定义
-    const nodes = [
-        { id: 'raw', x: 30, y: 120, label: '原料仓', icon: '📦', status: 'running' },
-        { id: 'reactor', x: 160, y: 80, label: '反应釜A', icon: '⚗️', status: 'running' },
-        { id: 'reactor2', x: 160, y: 180, label: '反应釜B', icon: '⚗️', status: 'idle' },
-        { id: 'mixer', x: 300, y: 120, label: '混合机', icon: '🔄', status: 'running' },
-        { id: 'conveyor', x: 440, y: 120, label: '传送带', icon: '➡️', status: 'running' },
-        { id: 'packer', x: 570, y: 120, label: '包装机', icon: '📦', status: 'running' },
-        { id: 'warehouse', x: 700, y: 120, label: '成品仓', icon: '🏭', status: 'running' },
-    ];
+    // 获取设备状态
+    const deviceStates = await apiGet('/devices/status');
+    
+    // 构建节点列表
+    const nodes = [];
+    for (const [deviceId, config] of Object.entries(DEVICE_NODE_MAP)) {
+        const state = deviceStates?.[deviceId] || {};
+        const status = state.status || 'idle';
+        nodes.push({
+            id: deviceId,
+            x: config.x,
+            y: config.y,
+            label: config.label,
+            icon: config.icon,
+            status: status,
+            oee: state.oee_percent || '--',
+        });
+    }
 
     // 管道连接
     const pipes = [
         { x: 110, y: 155, w: 50, h: 3 },
         { x: 240, y: 115, w: 60, h: 3 },
-        { x: 240, y: 195, w: 60, h: 3, vertical: false },
+        { x: 240, y: 195, w: 60, h: 3 },
         { x: 380, y: 155, w: 60, h: 3 },
         { x: 520, y: 155, w: 50, h: 3 },
         { x: 650, y: 155, w: 50, h: 3 },
@@ -937,10 +996,12 @@ function renderProcessFlow(domId) {
 
     // 绘制节点
     nodes.forEach(n => {
+        const statusText = n.status === 'running' ? '运行' : n.status === 'fault' ? '故障' : n.status === 'idle' ? '空闲' : '停机';
         html += `
-            <div class="flow-node ${n.status}" style="left:${n.x}px; top:${n.y}px;" title="${n.label}">
+            <div class="flow-node ${n.status}" style="left:${n.x}px; top:${n.y}px;" title="${n.label} - ${statusText}">
                 <span style="font-size:1.5rem;">${n.icon}</span>
                 <span>${n.label}</span>
+                <span style="font-size:0.65rem; opacity:0.8;">${n.oee}%</span>
             </div>
         `;
     });
@@ -948,30 +1009,55 @@ function renderProcessFlow(domId) {
     container.innerHTML = html;
 }
 
-// ==================== 刷新 ====================
+// ==================== SPC ====================
+async function loadSPC() {
+    const violations = await apiGet('/spc/violations');
+    const div = document.getElementById('spc-violations');
+    if (div) {
+        if (violations && violations.length > 0) {
+            div.innerHTML = violations.slice(0, 20).map(v => `
+                <div style="padding:8px 12px; border-bottom:1px solid #0f3460; font-size:0.85rem;">
+                    <span style="color:${v.severity === 'critical' ? '#ff4444' : '#ffaa00'}">[规则${v.rule}]</span>
+                    <strong>${v.device_id || ''}</strong>: ${v.description || ''}
+                    <span style="color:#666; float:right">${v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : ''}</span>
+                </div>
+            `).join('');
+        } else {
+            div.innerHTML = '<p class="text-muted">暂无判异结果</p>';
+        }
+    }
+}
+
+// ==================== 刷新逻辑（按需加载） ====================
+function refreshCurrentTab() {
+    switch (currentTab) {
+        case 'overview': loadOverview(); break;
+        case 'predictive': loadPredictive(); break;
+        case 'oee': loadOEE(); break;
+        case 'spc': loadSPC(); break;
+        case 'energy': loadEnergy(); break;
+        case 'edge': loadEdge(); break;
+    }
+}
+
 function refreshAll() {
     loadOverview();
-    loadPredictive();
-    loadOEE();
-    loadEnergy();
-    loadEdge();
+    // 其他Tab在切换时按需加载
 }
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
-    refreshAll();
-    // 每30秒自动刷新
-    setInterval(refreshAll, 30000);
+    loadOverview();
+    // 每30秒刷新当前Tab
+    refreshTimer = setInterval(refreshCurrentTab, 30000);
 });
 
 // Tab切换时加载对应数据
 document.querySelectorAll('#i4Tabs .nav-link').forEach(tab => {
     tab.addEventListener('shown.bs.tab', (e) => {
         const target = e.target.getAttribute('href');
-        if (target === '#tab-predictive') loadPredictive();
-        if (target === '#tab-oee') loadOEE();
-        if (target === '#tab-energy') loadEnergy();
-        if (target === '#tab-edge') loadEdge();
+        currentTab = target.replace('#tab-', '');
+        refreshCurrentTab();
     });
 });
 </script>

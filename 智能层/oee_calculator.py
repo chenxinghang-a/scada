@@ -166,22 +166,25 @@ class OEECalculator:
         """
         with self._lock:
             sd = self.shift_data[device_id]
-            last = self._last_production.get(device_id, {'count': 0, 'good': 0})
+            # 确保_last_production中存在该设备的记录，且包含count和good两个键
+            if device_id not in self._last_production:
+                self._last_production[device_id] = {'count': 0, 'good': 0}
+            last = self._last_production[device_id]
 
             if count is not None:
                 # 计算增量（处理计数器归零的情况）
-                delta = count - last['count']
+                delta = count - last.get('count', 0)
                 if delta < 0:
                     delta = count  # 计数器归零
                 sd['total_count'] += max(0, delta)
-                self._last_production.setdefault(device_id, {})['count'] = count
+                self._last_production[device_id]['count'] = count
 
             if good_count is not None:
-                delta = good_count - last['good']
+                delta = good_count - last.get('good', 0)
                 if delta < 0:
                     delta = good_count
                 sd['good_count'] += max(0, delta)
-                self._last_production.setdefault(device_id, {})['good'] = good_count
+                self._last_production[device_id]['good'] = good_count
 
             # 如果没有传入任何参数，默认+1
             if count is None and good_count is None:

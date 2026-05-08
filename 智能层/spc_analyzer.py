@@ -179,6 +179,17 @@ class SPCAnalyzer:
         # 判异检测
         violations = self._check_violations(xbar_values, xbar_bar, xbar_ucl, xbar_lcl)
 
+        # 存储判异结果（带时间戳）
+        if violations:
+            for v in violations:
+                v['device_id'] = device_id
+                v['register_name'] = register_name
+                v['timestamp'] = datetime.now().isoformat()
+            self.violations[key].extend(violations)
+            # 限制每个key最多保留100条
+            if len(self.violations[key]) > 100:
+                self.violations[key] = self.violations[key][-100:]
+
         result = {
             'chart_type': 'X̄-R',
             'subgroup_size': n,
@@ -229,18 +240,51 @@ class SPCAnalyzer:
         xbar_bar = sum(xbar_values) / k
         s_bar = sum(s_values) / k
 
-        # A3系数 (近似)
-        a3 = 3 / math.sqrt(n)
+        # A3系数查表 (n=2~25)
+        a3_table = {
+            2: 2.659, 3: 1.954, 4: 1.628, 5: 1.427, 6: 1.287,
+            7: 1.182, 8: 1.099, 9: 1.032, 10: 0.975, 11: 0.927,
+            12: 0.886, 13: 0.850, 14: 0.817, 15: 0.789, 16: 0.763,
+            17: 0.739, 18: 0.718, 19: 0.698, 20: 0.680, 21: 0.663,
+            22: 0.647, 23: 0.633, 24: 0.619, 25: 0.606
+        }
+        a3 = a3_table.get(n, 3 / math.sqrt(n))
 
         xbar_ucl = xbar_bar + a3 * s_bar
         xbar_lcl = xbar_bar - a3 * s_bar
 
-        # B3, B4系数 (近似)
-        b4 = 1 + 3 * math.sqrt((n - 1) / n - 1) if n > 1 else 3
+        # B3, B4系数查表 (n=2~25)
+        b3_table = {
+            2: 0, 3: 0, 4: 0, 5: 0, 6: 0.030, 7: 0.118, 8: 0.185,
+            9: 0.239, 10: 0.284, 11: 0.321, 12: 0.354, 13: 0.382,
+            14: 0.406, 15: 0.428, 16: 0.448, 17: 0.466, 18: 0.482,
+            19: 0.497, 20: 0.510, 21: 0.523, 22: 0.534, 23: 0.545,
+            24: 0.555, 25: 0.565
+        }
+        b4_table = {
+            2: 3.267, 3: 2.568, 4: 2.266, 5: 2.089, 6: 1.970,
+            7: 1.882, 8: 1.815, 9: 1.761, 10: 1.716, 11: 1.679,
+            12: 1.646, 13: 1.618, 14: 1.594, 15: 1.572, 16: 1.552,
+            17: 1.534, 18: 1.518, 19: 1.503, 20: 1.490, 21: 1.477,
+            22: 1.466, 23: 1.455, 24: 1.445, 25: 1.435
+        }
+        b3 = b3_table.get(n, 0)
+        b4 = b4_table.get(n, 1 + 3 / math.sqrt(n))
+
         s_ucl = b4 * s_bar
-        s_lcl = max(0, s_bar * (1 - 3 * math.sqrt(1 / (2 * (n - 1))))) if n > 1 else 0
+        s_lcl = max(0, b3 * s_bar)
 
         violations = self._check_violations(xbar_values, xbar_bar, xbar_ucl, xbar_lcl)
+
+        # 存储判异结果
+        if violations:
+            for v in violations:
+                v['device_id'] = device_id
+                v['register_name'] = register_name
+                v['timestamp'] = datetime.now().isoformat()
+            self.violations[key].extend(violations)
+            if len(self.violations[key]) > 100:
+                self.violations[key] = self.violations[key][-100:]
 
         return {
             'chart_type': 'X̄-S',

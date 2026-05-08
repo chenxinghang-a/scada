@@ -278,7 +278,7 @@
             <div class="col-md-2"><strong>数据记录:</strong> <span id="info-data-count">-</span></div>
             <div class="col-md-2"><strong>报警记录:</strong> <span id="info-alarm-count">-</span></div>
             <div class="col-md-2"><strong>采集成功率:</strong> <span id="info-success-rate">-</span></div>
-            <div class="col-md-2"><strong>运行模式:</strong> <span id="info-sim-mode">-</span> <button id="sim-toggle-btn" class="btn btn-sm btn-outline-warning ms-1" onclick="toggleSimulationMode()">切换</button></div>
+            <div class="col-md-2"><strong>运行模式:</strong> <span id="info-sim-mode">-</span></div>
             <div class="col-md-2"><strong>运行时间:</strong> <span id="info-uptime">-</span></div>
         </div>
     </div>
@@ -761,16 +761,11 @@ async function loadSystemStatus() {
             document.getElementById('info-success-rate').textContent = total > 0 ? ((success / total) * 100).toFixed(1) + '%' : '-';
         }
         
-        // 更新模拟模式显示和切换按钮
+        // 更新模拟模式显示
         const simModeEl = document.getElementById('info-sim-mode');
-        const simToggleBtn = document.getElementById('sim-toggle-btn');
         if (simModeEl) {
             simModeEl.textContent = data.simulation_mode ? '模拟模式' : '真实设备';
             simModeEl.className = `badge ${data.simulation_mode ? 'bg-info' : 'bg-success'}`;
-        }
-        if (simToggleBtn) {
-            simToggleBtn.textContent = data.simulation_mode ? '切换到真实模式' : '切换到模拟模式';
-            simToggleBtn.dataset.currentMode = data.simulation_mode;
         }
         
         if (data.uptime_seconds) {
@@ -791,34 +786,7 @@ async function loadSystemStatus() {
     }
 }
 
-// 切换模拟/真实模式
-async function toggleSimulationMode() {
-    const btn = document.getElementById('sim-toggle-btn');
-    const currentMode = btn.dataset.currentMode === 'true';
-    const newMode = !currentMode;
-    
-    if (!confirm(`确定要切换到${newMode ? '模拟' : '真实'}模式吗？\n注意：切换后需要重启服务才能生效。`)) {
-        return;
-    }
-    
-    try {
-        const response = await fetch('/api/system/simulation-mode', {
-            method: 'POST',
-            headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
-            body: JSON.stringify({ simulation_mode: newMode })
-        });
-        const result = await response.json();
-        
-        if (result.success) {
-            showAlert(result.message, 'success');
-            loadSystemStatus(); // 刷新显示
-        } else {
-            showAlert('切换失败: ' + result.message, 'danger');
-        }
-    } catch (error) {
-        showAlert('切换失败: ' + error.message, 'danger');
-    }
-}
+
 
 // 定时刷新系统状态（每10秒）
 setInterval(loadSystemStatus, 10000);

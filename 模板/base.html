@@ -72,6 +72,11 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if request.path == '/charts' %}active{% endif %}" href="/charts">
+                            <i class="bi bi-graph-up"></i> 图表分析
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if request.path == '/config' %}active{% endif %}" href="/config">
                             <i class="bi bi-sliders"></i> 系统配置
                         </a>
@@ -81,7 +86,7 @@
                 <!-- 系统状态指示器 -->
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
-                        <span class="nav-link" id="sim-mode-indicator" title="点击切换模式" style="cursor:pointer;" onclick="toggleSimMode()">
+                        <span class="nav-link" id="sim-mode-indicator" title="当前运行模式">
                             <i class="bi bi-cpu"></i> <span id="sim-mode-text">-</span>
                         </span>
                     </li>
@@ -116,6 +121,14 @@
     
     <!-- 主内容区 -->
     <main class="container-fluid mt-3">
+        <!-- 面包屑导航 -->
+        <nav aria-label="breadcrumb" class="mb-3">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/"><i class="bi bi-house"></i> 首页</a></li>
+                {% block breadcrumb %}{% endblock %}
+            </ol>
+        </nav>
+        
         {% block content %}{% endblock %}
     </main>
     
@@ -224,71 +237,21 @@
                     const text = document.getElementById('sim-mode-text');
                     if (indicator && text) {
                         if (data.simulation_mode) {
+                            // 模拟模式：显示提示
                             text.textContent = '模拟模式';
                             indicator.className = 'nav-link text-info';
-                            indicator.title = '当前为模拟模式，点击切换到真实模式';
+                            indicator.title = '当前为模拟模式（使用仿真数据）';
+                            indicator.style.display = '';
                         } else {
-                            text.textContent = '真实设备';
-                            indicator.className = 'nav-link text-success';
-                            indicator.title = '当前为真实设备模式，点击切换到模拟模式';
+                            // 真实模式：隐藏标识，不干扰操作
+                            indicator.style.display = 'none';
                         }
                     }
                 })
                 .catch(() => {});
         }
         
-        // 切换模拟模式
-        function toggleSimMode() {
-            const text = document.getElementById('sim-mode-text');
-            const currentMode = text?.textContent === '模拟模式';
-            const newMode = !currentMode;
-            
-            if (!confirm(`确定要切换到${newMode ? '模拟' : '真实'}模式吗？`)) {
-                return;
-            }
-            
-            // 显示切换中状态
-            const indicator = document.getElementById('sim-mode-indicator');
-            if (indicator) indicator.className = 'nav-link text-warning';
-            if (text) text.textContent = '切换中...';
-            
-            fetch('/api/system/simulation-mode', {
-                method: 'POST',
-                headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
-                body: JSON.stringify({ simulation_mode: newMode })
-            })
-            .then(r => {
-                if (r.status === 401) {
-                    alert('切换失败: 未登录或登录已过期，请重新登录');
-                    logout();
-                    return null;
-                }
-                if (r.status === 403) {
-                    alert('切换失败: 权限不足，需要管理员或工程师角色');
-                    return null;
-                }
-                return r.json();
-            })
-            .then(data => {
-                if (!data) return;
-                if (data.success) {
-                    // 立即更新UI
-                    updateSimModeIndicator();
-                    const msg = data.reconnected !== undefined 
-                        ? `${data.message} (${data.reconnected}个设备已重连)`
-                        : data.message;
-                    // 显示简短提示而非弹窗
-                    showToast(msg, 'success');
-                } else {
-                    alert('切换失败: ' + (data.message || data.error || '未知错误'));
-                    updateSimModeIndicator();
-                }
-            })
-            .catch(e => {
-                alert('切换失败: ' + (e.message || '网络错误'));
-                updateSimModeIndicator();
-            });
-        }
+
         
         // 简短提示框
         function showToast(message, type) {

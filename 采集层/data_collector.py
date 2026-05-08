@@ -334,40 +334,60 @@ class DataCollector:
 
                 # 能源管理 — 电力数据喂入
                 if self.energy_manager:
-                    if 'power' in register_name.lower() or 'watt' in register_name.lower():
+                    power_keywords = ['power', 'watt', 'kw', 'active_power', 'reactive_power', 'apparent_power']
+                    energy_keywords = ['energy', 'kwh', 'mwh', 'electricity', 'consumption']
+                    
+                    if any(kw in register_name.lower() for kw in power_keywords):
+                        # 功率数据（kW）
+                        power_value = value
+                        if 'w' in register_name.lower() and 'kw' not in register_name.lower():
+                            power_value = value / 1000  # W转kW
                         self.energy_manager.feed_power_data(
-                            device_id, value, timestamp=timestamp)
-                    elif 'energy' in register_name.lower() or 'kwh' in register_name.lower():
+                            device_id, power_value, timestamp=timestamp)
+                    elif any(kw in register_name.lower() for kw in energy_keywords):
+                        # 累积电量数据（kWh）
                         self.energy_manager.feed_power_data(
                             device_id, 0, energy_kwh=value, timestamp=timestamp)
 
                 # SPC — 质量相关数据喂入（扩展关键词范围）
                 if self.spc_analyzer:
-                    spc_keywords = ['temperature', 'pressure', 'ph', 'quality', 'dimension',
-                                    'voltage', 'current', 'speed', 'flow', 'level',
-                                    'humidity', 'torque', 'frequency', 'thickness',
-                                    'viscosity', 'density', 'concentration']
+                    spc_keywords = [
+                        'temperature', 'pressure', 'ph', 'quality', 'dimension',
+                        'voltage', 'current', 'speed', 'flow', 'level',
+                        'humidity', 'torque', 'frequency', 'thickness',
+                        'viscosity', 'density', 'concentration', 'turbidity',
+                        'conductivity', 'oxygen', 'vibration', 'force',
+                        'position', 'distance', 'cycle_time', 'injection',
+                        'mold', 'dryer', 'distill', 'boiler', 'heat_exchanger',
+                        'spray', 'coating', 'sealing', 'conveyor'
+                    ]
                     if any(kw in register_name.lower() for kw in spc_keywords):
                         self.spc_analyzer.feed_data(device_id, register_name, value)
 
                 # OEE — 设备状态和产量数据喂入
                 if self.oee_calculator:
-                    # 设备运行状态
-                    if register_name == 'running_status':
+                    # 设备运行状态（兼容多种寄存器名称）
+                    status_keywords = ['status', 'state', 'running', 'line_status', 'boiler_status', 'packing_status']
+                    if any(kw in register_name.lower() for kw in status_keywords):
                         status_map = {0: 'stopped', 1: 'running', 2: 'fault', 3: 'idle'}
                         status = status_map.get(int(value), 'running')
                         self.oee_calculator.update_device_state(device_id, status)
-                    # 产品计数
-                    elif register_name in ('product_count', 'good_count', 'total_count'):
-                        if register_name == 'product_count':
-                            self.oee_calculator.record_production(device_id, count=int(value))
-                        elif register_name == 'good_count':
+                    
+                    # 产品计数（兼容多种寄存器名称）
+                    count_keywords = ['count', 'product', 'shot', 'label', 'palletizing', 'batch', 'painted', 'quantity']
+                    if any(kw in register_name.lower() for kw in count_keywords):
+                        # 区分合格品和总产量
+                        good_keywords = ['good', 'ok', 'pass', 'qualified']
+                        reject_keywords = ['reject', 'ng', 'defect', 'scrap']
+                        
+                        if any(kw in register_name.lower() for kw in good_keywords):
                             self.oee_calculator.record_production(device_id, good_count=int(value))
-
-                # 边缘决策 — 更新数据快照
-                if self.edge_decision:
-                    data_key = f"{device_id}:{register_name}"
-                    self.edge_decision.update_data(data_key, value)
+                        elif any(kw in register_name.lower() for kw in reject_keywords):
+                            # 不良品不计入合格品
+                            pass
+                        else:
+                            # 默认作为总产量
+                            self.oee_calculator.record_production(device_id, count=int(value))
 
                 # 安全联锁检查（每次数据采集时触发）
                 if self.device_control:

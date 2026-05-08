@@ -198,14 +198,9 @@ class Database:
             cursor = conn.cursor()
 
             # realtime_data: UPSERT — 每个(device_id, register_name)只保留最新值
-            # 先删除旧记录，再插入新记录（兼容无UNIQUE约束的表）
+            # 使用INSERT OR REPLACE避免DELETE+INSERT的竞态条件
             cursor.execute('''
-                DELETE FROM realtime_data 
-                WHERE device_id = ? AND register_name = ?
-            ''', (device_id, register_name))
-
-            cursor.execute('''
-                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp)
+                INSERT OR REPLACE INTO realtime_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
             ''', (device_id, register_name, value, unit, timestamp))
 
@@ -336,8 +331,22 @@ class Database:
             if interval == '1min':
                 group_format = '%Y-%m-%d %H:%M:00'
             elif interval == '5min':
-                group_format = '%Y-%m-%d %H:%M:00'
-                # 需要额外处理5分钟间隔
+                # 5分钟聚合：将分钟数除以5取整
+                cursor.execute('''
+                    SELECT 
+                        strftime('%Y-%m-%d %H:', timestamp) || 
+                        printf('%02d', (CAST(strftime('%M', timestamp) AS INTEGER) / 5) * 5) || ':00' as time_bucket,
+                        AVG(value) as avg_value,
+                        MIN(value) as min_value,
+                        MAX(value) as max_value,
+                        COUNT(*) as sample_count
+                    FROM history_data
+                    WHERE device_id = ? AND register_name = ?
+                        AND timestamp BETWEEN ? AND ?
+                    GROUP BY time_bucket
+                    ORDER BY time_bucket
+                ''', (device_id, register_name, start_time, end_time))
+                return [dict(row) for row in cursor.fetchall()]
             elif interval == '1hour':
                 group_format = '%Y-%m-%d %H:00:00'
             elif interval == '1day':

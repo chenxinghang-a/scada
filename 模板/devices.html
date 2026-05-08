@@ -2,6 +2,10 @@
 
 {% block title %}设备管理 - 工业数据采集与监控系统{% endblock %}
 
+{% block breadcrumb %}
+<li class="breadcrumb-item active">设备管理</li>
+{% endblock %}
+
 {% block content %}
 <div class="row mb-4">
     <div class="col">
@@ -474,28 +478,42 @@ function renderDevicesTable(devices) {
     
     tbody.innerHTML = devices.map(device => {
         const protocol = device.protocol || 'modbus_tcp';
+        const statusClass = device.connected ? 'online' : (device.enabled === false ? 'offline' : 'warning');
+        const statusText = device.connected ? '在线' : (device.enabled === false ? '已禁用' : '离线');
+        
         return `
         <tr>
             <td><code>${device.device_id}</code></td>
-            <td>${device.name}</td>
-            <td><span class="badge bg-${getProtocolBadgeColor(protocol)}">${protocol.toUpperCase()}</span></td>
-            <td><small>${getDeviceAddress(device)}</small></td>
             <td>
-                <span class="badge ${device.connected ? 'bg-success' : 'bg-secondary'}">
-                    ${device.connected ? '在线' : '离线'}
-                </span>
-                ${device.enabled === false ? '<span class="badge bg-warning ms-1">已禁用</span>' : ''}
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-hdd-rack me-2 text-muted"></i>
+                    <div>
+                        <div class="fw-medium">${device.name}</div>
+                        <small class="text-muted">${device.description || ''}</small>
+                    </div>
+                </div>
             </td>
-            <td>${getDataPointCount(device)}</td>
+            <td><span class="badge bg-${getProtocolBadgeColor(protocol)}">${protocol.toUpperCase()}</span></td>
+            <td><small class="text-muted">${getDeviceAddress(device)}</small></td>
             <td>
-                <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary" onclick="testDevice('${device.device_id}')" title="测试连接">
+                <span class="device-status-badge ${statusClass}">
+                    <i class="bi bi-${device.connected ? 'check-circle' : 'x-circle'} me-1"></i>
+                    ${statusText}
+                </span>
+            </td>
+            <td><span class="badge bg-light text-dark">${getDataPointCount(device)} 个</span></td>
+            <td>
+                <div class="action-btn-group">
+                    <button class="btn btn-outline-primary btn-sm" onclick="testDevice('${device.device_id}')" title="测试连接">
                         <i class="bi bi-wifi"></i>
                     </button>
-                    <button class="btn btn-outline-secondary" onclick="editDevice('${device.device_id}')" title="编辑">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="editDevice('${device.device_id}')" title="编辑">
                         <i class="bi bi-pencil"></i>
                     </button>
-                    <button class="btn btn-outline-danger" onclick="deleteDevice('${device.device_id}')" title="删除">
+                    <button class="btn btn-outline-info btn-sm" onclick="viewDeviceData('${device.device_id}')" title="查看数据">
+                        <i class="bi bi-graph-up"></i>
+                    </button>
+                    <button class="btn btn-outline-danger btn-sm" onclick="deleteDevice('${device.device_id}')" title="删除">
                         <i class="bi bi-trash"></i>
                     </button>
                 </div>
@@ -925,7 +943,12 @@ async function saveDevice() {
     }
 }
 
-// ==================== 删除 & 测试 ====================
+// ==================== 查看数据 & 删除 & 测试 ====================
+
+function viewDeviceData(deviceId) {
+    // 跳转到图表分析页面，并预选设备
+    window.location.href = `/charts?device=${deviceId}`;
+}
 
 async function deleteDevice(deviceId) {
     if (!confirm(`确定要删除设备 "${deviceId}" 吗？此操作不可恢复。`)) {

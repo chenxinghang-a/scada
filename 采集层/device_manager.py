@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---- 协议工厂：根据protocol字段自动选择客户端 ----
-def _create_client(config: dict[str, Any], simulation_mode: bool):
+def _create_client(config: dict[str, Any], simulation_mode: bool, use_enhanced: bool = True):
     """
     根据协议类型创建对应的客户端实例
 
@@ -25,6 +25,7 @@ def _create_client(config: dict[str, Any], simulation_mode: bool):
     Args:
         config: 设备配置字典
         simulation_mode: 是否模拟模式
+        use_enhanced: 是否使用增强版模拟客户端（默认True）
 
     Returns:
         协议客户端实例
@@ -33,32 +34,48 @@ def _create_client(config: dict[str, Any], simulation_mode: bool):
 
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         if simulation_mode:
-            from .simulated_client import SimulatedModbusClient
-            return SimulatedModbusClient(config)
+            if use_enhanced:
+                from .enhanced_simulated_client import EnhancedSimulatedModbusClient
+                return EnhancedSimulatedModbusClient(config)
+            else:
+                from .simulated_client import SimulatedModbusClient
+                return SimulatedModbusClient(config)
         else:
             from .modbus_client import ModbusClient
             return ModbusClient(config)
 
     elif protocol == 'opcua':
         if simulation_mode:
-            from .simulated_client import SimulatedOPCUAClient
-            return SimulatedOPCUAClient(config)
+            if use_enhanced:
+                from .enhanced_simulated_client import EnhancedSimulatedOPCUAClient
+                return EnhancedSimulatedOPCUAClient(config)
+            else:
+                from .simulated_client import SimulatedOPCUAClient
+                return SimulatedOPCUAClient(config)
         else:
             from .opcua_client import OPCUAClient
             return OPCUAClient(config)
 
     elif protocol == 'mqtt':
         if simulation_mode:
-            from .simulated_client import SimulatedMQTTClient
-            return SimulatedMQTTClient(config)
+            if use_enhanced:
+                from .enhanced_simulated_client import EnhancedSimulatedMQTTClient
+                return EnhancedSimulatedMQTTClient(config)
+            else:
+                from .simulated_client import SimulatedMQTTClient
+                return SimulatedMQTTClient(config)
         else:
             from .mqtt_client import MQTTClient
             return MQTTClient(config)
 
     elif protocol == 'rest':
         if simulation_mode:
-            from .simulated_client import SimulatedRESTClient
-            return SimulatedRESTClient(config)
+            if use_enhanced:
+                from .enhanced_simulated_client import EnhancedSimulatedRESTClient
+                return EnhancedSimulatedRESTClient(config)
+            else:
+                from .simulated_client import SimulatedRESTClient
+                return SimulatedRESTClient(config)
         else:
             from .rest_client import RESTDeviceClient
             return RESTDeviceClient(config)
@@ -83,16 +100,18 @@ class DeviceManager:
     # 支持的协议列表
     SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest']
 
-    def __init__(self, config_path: str | None = None, simulation_mode: bool = True):
+    def __init__(self, config_path: str | None = None, simulation_mode: bool = True, use_enhanced_simulation: bool = True):
         """
         初始化设备管理器
 
         Args:
             config_path: 设备配置文件路径
             simulation_mode: 是否启用模拟模式（无真实设备时使用模拟数据）
+            use_enhanced_simulation: 是否使用增强版模拟（物理模型驱动）
         """
         self.config_path = config_path or '配置/devices.yaml'
         self.simulation_mode = simulation_mode
+        self.use_enhanced_simulation = use_enhanced_simulation
         self.devices = {}  # device_id -> device_config
         self.clients = {}  # device_id -> protocol client
 
@@ -167,7 +186,7 @@ class DeviceManager:
                 logger.error(f"设备 {device_id} 配置不存在")
                 return None
 
-            client = _create_client(device_config, self.simulation_mode)
+            client = _create_client(device_config, self.simulation_mode, self.use_enhanced_simulation)
             if client is None:
                 return None
 

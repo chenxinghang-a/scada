@@ -6,7 +6,7 @@ Flask路由模块
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 from flask_socketio import SocketIO
 
-from .api import api_bp
+from .api import register_api_blueprints
 from .websocket import init_socketio
 from 用户层.auth import AuthManager
 
@@ -42,8 +42,8 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     # 初始化认证管理器
     auth_manager = AuthManager(database)
 
-    # 注册API蓝图
-    app.register_blueprint(api_bp, url_prefix='/api')
+    # 注册API蓝图（模块化拆分后的多个Blueprint）
+    register_api_blueprints(app)
 
     # 初始化WebSocket
     socketio = init_socketio(app, database, data_collector)
@@ -118,6 +118,11 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     def industry40_page():
         """工业4.0智能仪表盘"""
         return render_template('industry40.html')
+
+    @app.route('/charts')
+    def charts_page():
+        """图表自选页面"""
+        return render_template('charts.html')
 
     # 错误处理
     @app.errorhandler(404)

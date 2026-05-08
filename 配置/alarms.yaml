@@ -7,72 +7,72 @@
 # - info: 信息提示，仅记录
 
 alarm_rules:
-  # 温度报警规则 — 虹润NHR-5700通道1（反应釜A）
-  # devices.yaml: temp_sensor_01 -> temperature_ch1 (float32, °C)
+  # 温度报警规则 — 西门子S7-1500锅炉温度
+  # devices.yaml: siemens_1500_01 -> boiler_temperature (float32, °C)
   - id: temp_high
-    name: "反应釜A温度过高"
-    description: "反应釜A温度超过上限"
-    device_id: temp_sensor_01
-    register_name: "temperature_ch1"
+    name: "锅炉温度过高"
+    description: "锅炉出口温度超过上限"
+    device_id: siemens_1500_01
+    register_name: "boiler_temperature"
     condition: "greater_than"
-    threshold: 85.0
+    threshold: 180.0
     level: "critical"
     enabled: true
     delay: 0
     
   - id: temp_low
-    name: "反应釜A温度过低"
-    description: "反应釜A温度低于下限"
-    device_id: temp_sensor_01
-    register_name: "temperature_ch1"
+    name: "锅炉温度过低"
+    description: "锅炉出口温度低于下限"
+    device_id: siemens_1500_01
+    register_name: "boiler_temperature"
     condition: "less_than"
-    threshold: 15.0
+    threshold: 50.0
     level: "warning"
     enabled: true
     delay: 0
 
-  # 温度报警 — 虹润通道5（车间环境）
+  # 温度报警 — 和利时LK蒸馏塔温度
   - id: env_temp_high
-    name: "车间环境温度过高"
-    description: "车间环境温度超过上限"
-    device_id: temp_sensor_01
-    register_name: "temperature_ch5"
+    name: "蒸馏塔温度过高"
+    description: "蒸馏塔顶温度超过上限"
+    device_id: hollysys_lk_01
+    register_name: "distill_temperature"
     condition: "greater_than"
-    threshold: 38.0
+    threshold: 120.0
     level: "warning"
     enabled: true
     delay: 0
     
-  # 压力报警规则 — 西门子S7-1200管道压力
-  # devices.yaml: siemens_plc_01 -> pressure (float32, MPa)
+  # 压力报警规则 — 西门子S7-1500锅炉压力
+  # devices.yaml: siemens_1500_01 -> boiler_pressure (float32, MPa)
   - id: pressure_high
-    name: "管道压力过高"
-    description: "管道压力超过上限"
-    device_id: siemens_plc_01
-    register_name: "pressure"
+    name: "锅炉压力过高"
+    description: "锅炉压力超过上限"
+    device_id: siemens_1500_01
+    register_name: "boiler_pressure"
     condition: "greater_than"
-    threshold: 0.8
+    threshold: 1.2
     level: "critical"
     enabled: true
     delay: 0
     
   - id: pressure_low
-    name: "管道压力过低"
-    description: "管道压力低于下限"
-    device_id: siemens_plc_01
-    register_name: "pressure"
+    name: "锅炉压力过低"
+    description: "锅炉压力低于下限"
+    device_id: siemens_1500_01
+    register_name: "boiler_pressure"
     condition: "less_than"
     threshold: 0.2
     level: "warning"
     enabled: true
     delay: 0
     
-  # 电力报警规则 — 正泰DTSU666 A相电压/电流
-  # devices.yaml: power_meter_01 -> voltage_a (float32, V), current_a (float32, A)
+  # 电力报警规则 — ABB M4M A相电压/电流
+  # devices.yaml: abb_m4m_01 -> voltage_a (float32, V), current_a (float32, A)
   - id: voltage_high
     name: "A相电压过高"
     description: "A相电压超过上限"
-    device_id: power_meter_01
+    device_id: abb_m4m_01
     register_name: "voltage_a"
     condition: "greater_than"
     threshold: 242.0
@@ -83,7 +83,7 @@ alarm_rules:
   - id: voltage_low
     name: "A相电压过低"
     description: "A相电压低于下限"
-    device_id: power_meter_01
+    device_id: abb_m4m_01
     register_name: "voltage_a"
     condition: "less_than"
     threshold: 198.0
@@ -94,7 +94,7 @@ alarm_rules:
   - id: current_high
     name: "A相电流过高"
     description: "A相电流超过上限"
-    device_id: power_meter_01
+    device_id: abb_m4m_01
     register_name: "current_a"
     condition: "greater_than"
     threshold: 100.0

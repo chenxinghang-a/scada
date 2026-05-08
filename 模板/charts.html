@@ -1,0 +1,629 @@
+{% extends "base.html" %}
+
+{% block title %}图表分析 - 工业数据采集与监控系统{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">图表分析</li>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h2><i class="bi bi-graph-up me-2"></i>图表分析</h2>
+        <p class="text-muted">自选设备和寄存器，实时查看数据趋势</p>
+    </div>
+</div>
+
+<!-- 设备和寄存器选择 -->
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-hdd-rack me-2"></i>设备选择</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">选择设备</label>
+                    <select id="device-select" class="form-select" onchange="onDeviceChange()">
+                        <option value="">-- 请选择设备 --</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">选择寄存器</label>
+                    <select id="register-select" class="form-select" multiple size="6" onchange="onRegisterChange()">
+                    </select>
+                    <small class="text-muted">按住Ctrl可多选</small>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">时间范围</label>
+                    <select id="time-range" class="form-select" onchange="onTimeRangeChange()">
+                        <option value="1h">最近1小时</option>
+                        <option value="6h">最近6小时</option>
+                        <option value="24h" selected>最近24小时</option>
+                        <option value="7d">最近7天</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                </div>
+                <div id="custom-time-range" style="display: none;">
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label">开始时间</label>
+                            <input type="datetime-local" id="start-time" class="form-control">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">结束时间</label>
+                            <input type="datetime-local" id="end-time" class="form-control">
+                        </div>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">聚合间隔</label>
+                    <select id="interval-select" class="form-select">
+                        <option value="raw">原始数据</option>
+                        <option value="1min">1分钟</option>
+                        <option value="5min" selected>5分钟</option>
+                        <option value="1hour">1小时</option>
+                        <option value="1day">1天</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary w-100" onclick="loadChartData()">
+                    <i class="bi bi-search me-1"></i>查询数据
+                </button>
+            </div>
+        </div>
+        
+        <!-- 已选寄存器列表 -->
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>已选寄存器</h5>
+            </div>
+            <div class="card-body">
+                <div id="selected-registers" class="list-group">
+                    <div class="text-muted text-center py-3">未选择任何寄存器</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-8">
+        <!-- 图表区域 -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-bar-chart me-2"></i>数据图表</h5>
+                <div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="toggleChartType('line')">
+                        <i class="bi bi-graph-up"></i> 折线图
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="toggleChartType('bar')">
+                        <i class="bi bi-bar-chart"></i> 柱状图
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="exportChart()">
+                        <i class="bi bi-download"></i> 导出
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="main-chart" style="height: 500px;"></div>
+                <div id="chart-placeholder" class="text-center text-muted py-5">
+                    <i class="bi bi-graph-up" style="font-size: 3rem;"></i>
+                    <p class="mt-2">请选择设备和寄存器查看图表</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 数据统计 -->
+        <div class="row mt-3">
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h6 class="card-title text-muted">当前值</h6>
+                        <h3 id="stat-current" class="text-primary">--</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h6 class="card-title text-muted">平均值</h6>
+                        <h3 id="stat-avg" class="text-success">--</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h6 class="card-title text-muted">最大值</h6>
+                        <h3 id="stat-max" class="text-danger">--</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h6 class="card-title text-muted">最小值</h6>
+                        <h3 id="stat-min" class="text-warning">--</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 数据表格 -->
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-table me-2"></i>数据明细</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+                    <table class="table table-sm table-hover">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>寄存器</th>
+                                <th>值</th>
+                                <th>单位</th>
+                            </tr>
+                        </thead>
+                        <tbody id="data-table-body">
+                            <tr>
+                                <td colspan="4" class="text-center text-muted">暂无数据</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 实时数据订阅 -->
+<div class="card mt-3">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-broadcast me-2"></i>实时数据监控</h5>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-6">
+                <div class="mb-3">
+                    <label class="form-label">实时刷新间隔</label>
+                    <select id="refresh-interval" class="form-select" onchange="updateRefreshInterval()">
+                        <option value="0">关闭</option>
+                        <option value="1000">1秒</option>
+                        <option value="2000">2秒</option>
+                        <option value="5000" selected>5秒</option>
+                        <option value="10000">10秒</option>
+                    </select>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="mb-3">
+                    <label class="form-label">状态</label>
+                    <div id="realtime-status" class="form-control-plaintext">
+                        <span class="badge bg-secondary">未连接</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="realtime-data" class="row">
+            <!-- 实时数据将在这里显示 -->
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const API_BASE = '/api';
+let token = localStorage.getItem('auth_token');
+let chart = null;
+let chartType = 'line';
+let selectedRegisters = [];
+let refreshTimer = null;
+let socket = null;
+
+// 获取请求头
+function getHeaders() {
+    return {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+    };
+}
+
+// API请求封装
+async function apiGet(path) {
+    try {
+        const resp = await fetch(`${API_BASE}${path}`, { headers: getHeaders() });
+        if (resp.status === 401) {
+            window.location.href = '/login';
+            return null;
+        }
+        return await resp.json();
+    } catch (e) {
+        console.error(`API请求失败: ${path}`, e);
+        return null;
+    }
+}
+
+// 初始化
+document.addEventListener('DOMContentLoaded', () => {
+    loadDevices().then(() => {
+        // 检查URL参数，预选设备
+        const urlParams = new URLSearchParams(window.location.search);
+        const deviceId = urlParams.get('device');
+        if (deviceId) {
+            document.getElementById('device-select').value = deviceId;
+            onDeviceChange();
+        }
+    });
+    initChart();
+    initWebSocket();
+});
+
+// 加载设备列表
+async function loadDevices() {
+    const data = await apiGet('/devices');
+    if (data && data.devices) {
+        const select = document.getElementById('device-select');
+        select.innerHTML = '<option value="">-- 请选择设备 --</option>';
+        
+        // 支持列表和字典两种格式
+        const devices = Array.isArray(data.devices) ? data.devices : Object.entries(data.devices);
+        
+        for (const item of devices) {
+            let deviceId, device;
+            if (Array.isArray(item)) {
+                [deviceId, device] = item;
+            } else {
+                deviceId = item.device_id || item.id;
+                device = item;
+            }
+            
+            const option = document.createElement('option');
+            option.value = deviceId;
+            option.textContent = `${device.name || deviceId} (${device.protocol || 'modbus_tcp'})`;
+            select.appendChild(option);
+        }
+    }
+}
+
+// 设备选择变化
+async function onDeviceChange() {
+    const deviceId = document.getElementById('device-select').value;
+    const registerSelect = document.getElementById('register-select');
+    registerSelect.innerHTML = '';
+    
+    if (!deviceId) return;
+    
+    const data = await apiGet(`/devices/${deviceId}`);
+    if (data && data.registers) {
+        data.registers.forEach(reg => {
+            const option = document.createElement('option');
+            option.value = reg.name;
+            option.textContent = `${reg.description || reg.name} (${reg.unit || ''})`;
+            registerSelect.appendChild(option);
+        });
+    }
+}
+
+// 寄存器选择变化
+function onRegisterChange() {
+    const select = document.getElementById('register-select');
+    selectedRegisters = Array.from(select.selectedOptions).map(opt => ({
+        name: opt.value,
+        label: opt.textContent
+    }));
+    updateSelectedRegistersList();
+}
+
+// 更新已选寄存器列表
+function updateSelectedRegistersList() {
+    const container = document.getElementById('selected-registers');
+    
+    if (selectedRegisters.length === 0) {
+        container.innerHTML = '<div class="text-muted text-center py-3">未选择任何寄存器</div>';
+        return;
+    }
+    
+    container.innerHTML = selectedRegisters.map((reg, index) => `
+        <div class="list-group-item d-flex justify-content-between align-items-center">
+            <span>${reg.label}</span>
+            <button class="btn btn-sm btn-outline-danger" onclick="removeRegister(${index})">
+                <i class="bi bi-x"></i>
+            </button>
+        </div>
+    `).join('');
+}
+
+// 移除寄存器
+function removeRegister(index) {
+    selectedRegisters.splice(index, 1);
+    updateSelectedRegistersList();
+    
+    // 更新select的选中状态
+    const select = document.getElementById('register-select');
+    Array.from(select.options).forEach(opt => {
+        opt.selected = selectedRegisters.some(reg => reg.name === opt.value);
+    });
+}
+
+// 时间范围变化
+function onTimeRangeChange() {
+    const range = document.getElementById('time-range').value;
+    document.getElementById('custom-time-range').style.display = 
+        range === 'custom' ? 'block' : 'none';
+}
+
+// 初始化图表
+function initChart() {
+    chart = echarts.init(document.getElementById('main-chart'));
+    window.addEventListener('resize', () => chart.resize());
+}
+
+// 加载图表数据
+async function loadChartData() {
+    const deviceId = document.getElementById('device-select').value;
+    if (!deviceId || selectedRegisters.length === 0) {
+        alert('请选择设备和寄存器');
+        return;
+    }
+    
+    const timeRange = document.getElementById('time-range').value;
+    const interval = document.getElementById('interval-select').value;
+    
+    let startTime, endTime;
+    const now = new Date();
+    
+    switch (timeRange) {
+        case '1h':
+            startTime = new Date(now - 60 * 60 * 1000);
+            endTime = now;
+            break;
+        case '6h':
+            startTime = new Date(now - 6 * 60 * 60 * 1000);
+            endTime = now;
+            break;
+        case '24h':
+            startTime = new Date(now - 24 * 60 * 60 * 1000);
+            endTime = now;
+            break;
+        case '7d':
+            startTime = new Date(now - 7 * 24 * 60 * 60 * 1000);
+            endTime = now;
+            break;
+        case 'custom':
+            startTime = new Date(document.getElementById('start-time').value);
+            endTime = new Date(document.getElementById('end-time').value);
+            break;
+    }
+    
+    // 显示加载状态
+    document.getElementById('chart-placeholder').style.display = 'none';
+    document.getElementById('main-chart').style.display = 'block';
+    chart.showLoading();
+    
+    // 并行加载所有选中寄存器的数据
+    const promises = selectedRegisters.map(async reg => {
+        const url = `/data/history/${deviceId}/${reg.name}?start_time=${startTime.toISOString()}&end_time=${endTime.toISOString()}&interval=${interval}`;
+        const data = await apiGet(url);
+        return { register: reg, data: data || [] };
+    });
+    
+    const results = await Promise.all(promises);
+    chart.hideLoading();
+    
+    // 构建图表数据
+    const series = [];
+    const allTimestamps = new Set();
+    
+    results.forEach(result => {
+        if (result.data.length > 0) {
+            result.data.forEach(item => allTimestamps.add(item.time_bucket || item.timestamp));
+        }
+    });
+    
+    const timestamps = Array.from(allTimestamps).sort();
+    
+    results.forEach((result, index) => {
+        const dataMap = {};
+        result.data.forEach(item => {
+            const time = item.time_bucket || item.timestamp;
+            dataMap[time] = item.avg_value || item.value;
+        });
+        
+        series.push({
+            name: result.register.label,
+            type: chartType,
+            data: timestamps.map(t => dataMap[t] || null),
+            smooth: true,
+            markPoint: {
+                data: [
+                    { type: 'max', name: '最大值' },
+                    { type: 'min', name: '最小值' }
+                ]
+            }
+        });
+    });
+    
+    // 更新图表选项
+    const option = {
+        title: {
+            text: `${deviceId} - 数据趋势`,
+            left: 'center'
+        },
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: {
+                type: 'cross'
+            }
+        },
+        legend: {
+            data: series.map(s => s.name),
+            bottom: 0
+        },
+        grid: {
+            left: '3%',
+            right: '4%',
+            bottom: '15%',
+            containLabel: true
+        },
+        xAxis: {
+            type: 'category',
+            data: timestamps.map(t => new Date(t).toLocaleString()),
+            axisLabel: {
+                rotate: 45
+            }
+        },
+        yAxis: {
+            type: 'value',
+            name: '值'
+        },
+        series: series,
+        dataZoom: [
+            { type: 'inside', start: 0, end: 100 },
+            { type: 'slider', start: 0, end: 100 }
+        ]
+    };
+    
+    chart.setOption(option, true);
+    
+    // 更新统计数据
+    updateStatistics(results);
+    
+    // 更新数据表格
+    updateDataTable(results);
+}
+
+// 更新统计数据
+function updateStatistics(results) {
+    if (results.length === 0 || results[0].data.length === 0) {
+        return;
+    }
+    
+    const firstResult = results[0];
+    const values = firstResult.data.map(d => d.avg_value || d.value).filter(v => v !== null);
+    
+    if (values.length > 0) {
+        document.getElementById('stat-current').textContent = values[values.length - 1].toFixed(2);
+        document.getElementById('stat-avg').textContent = (values.reduce((a, b) => a + b, 0) / values.length).toFixed(2);
+        document.getElementById('stat-max').textContent = Math.max(...values).toFixed(2);
+        document.getElementById('stat-min').textContent = Math.min(...values).toFixed(2);
+    }
+}
+
+// 更新数据表格
+function updateDataTable(results) {
+    const tbody = document.getElementById('data-table-body');
+    let html = '';
+    
+    results.forEach(result => {
+        result.data.slice(-50).forEach(item => {
+            const time = item.time_bucket || item.timestamp;
+            const value = item.avg_value || item.value;
+            const unit = result.register.label.match(/\(([^)]+)\)/)?.[1] || '';
+            
+            html += `
+                <tr>
+                    <td>${new Date(time).toLocaleString()}</td>
+                    <td>${result.register.label}</td>
+                    <td>${value?.toFixed(4) || '--'}</td>
+                    <td>${unit}</td>
+                </tr>
+            `;
+        });
+    });
+    
+    tbody.innerHTML = html || '<tr><td colspan="4" class="text-center text-muted">暂无数据</td></tr>';
+}
+
+// 切换图表类型
+function toggleChartType(type) {
+    chartType = type;
+    if (chart.getOption().series.length > 0) {
+        loadChartData();
+    }
+}
+
+// 导出图表
+function exportChart() {
+    if (chart) {
+        const url = chart.getDataURL({
+            type: 'png',
+            pixelRatio: 2,
+            backgroundColor: '#fff'
+        });
+        
+        const link = document.createElement('a');
+        link.download = `chart_${new Date().toISOString().slice(0, 10)}.png`;
+        link.href = url;
+        link.click();
+    }
+}
+
+// 初始化WebSocket
+function initWebSocket() {
+    socket = io();
+    
+    socket.on('connect', () => {
+        document.getElementById('realtime-status').innerHTML = 
+            '<span class="badge bg-success">已连接</span>';
+    });
+    
+    socket.on('disconnect', () => {
+        document.getElementById('realtime-status').innerHTML = 
+            '<span class="badge bg-danger">已断开</span>';
+    });
+    
+    socket.on('data_update', (data) => {
+        updateRealtimeData(data);
+    });
+}
+
+// 更新实时数据
+function updateRealtimeData(data) {
+    const container = document.getElementById('realtime-data');
+    
+    if (data && data.device_id) {
+        const deviceId = data.device_id;
+        const registerName = data.register_name;
+        const value = data.value;
+        const unit = data.unit || '';
+        
+        // 检查是否是已选中的寄存器
+        const isSelected = selectedRegisters.some(reg => reg.name === registerName);
+        if (!isSelected) return;
+        
+        // 更新或添加实时数据显示
+        let card = document.getElementById(`realtime-${deviceId}-${registerName}`);
+        if (!card) {
+            card = document.createElement('div');
+            card.id = `realtime-${deviceId}-${registerName}`;
+            card.className = 'col-md-3 mb-3';
+            container.appendChild(card);
+        }
+        
+        card.innerHTML = `
+            <div class="card">
+                <div class="card-body text-center">
+                    <h6 class="card-title text-muted">${registerName}</h6>
+                    <h4 class="text-primary">${value?.toFixed(2) || '--'} ${unit}</h4>
+                    <small class="text-muted">${new Date().toLocaleTimeString()}</small>
+                </div>
+            </div>
+        `;
+    }
+}
+
+// 更新刷新间隔
+function updateRefreshInterval() {
+    const interval = parseInt(document.getElementById('refresh-interval').value);
+    
+    if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+    }
+    
+    if (interval > 0 && selectedRegisters.length > 0) {
+        refreshTimer = setInterval(loadChartData, interval);
+    }
+}
+</script>
+{% endblock %}

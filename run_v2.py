@@ -1,9 +1,8 @@
 """
-工业数据采集与监控系统启动脚本
+工业数据采集与监控系统启动脚本 (v2 - 完全分离的模拟/真实模式)
 """
 
 import sys
-import math
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -40,52 +39,42 @@ def main():
 
         # 导入模块
         from 存储层.database import Database
-        from 采集层.device_manager import DeviceManager
-        from 采集层.real_device_manager import RealDeviceManager
-        from 采集层.simulated_device_manager import SimulatedDeviceManager
         from 报警层.alarm_manager import AlarmManager
         from 采集层.data_collector import DataCollector
         from 展示层.routes import create_app
-
-        # 判断是否使用模拟模式
-        simulation_mode = '--real' not in sys.argv
-
-        # 根据模式选择配置文件和数据库
-        if simulation_mode:
-            config_path = '配置/devices_simulated.yaml'
-            db_path = 'data/scada_simulated.db'
-            logger.info("模拟模式：使用模拟设备配置")
-        else:
-            config_path = '配置/devices_real.yaml'
-            db_path = 'data/scada_real.db'
-            logger.info("真实设备模式：使用真实设备配置")
+        from factory import SystemFactory
 
         # 初始化数据库
         logger.info("初始化数据库...")
-        database = Database(str(project_root / db_path))
+        database = Database(str(project_root / 'data' / 'scada.db'))
 
-        # 初始化设备管理器（根据模式选择不同的管理器）
-        logger.info("加载设备配置...")
-        if simulation_mode:
-            device_manager = SimulatedDeviceManager(config_path)
+        # 判断运行模式
+        if '--real' in sys.argv:
+            mode = 'real'
+            logger.info("运行模式: 真实设备模式")
         else:
-            device_manager = RealDeviceManager(config_path)
+            mode = 'simulated'
+            logger.info("运行模式: 模拟模式")
 
-        # 初始化报警管理器（含声光报警器+广播系统）
-        logger.info("加载报警配置...")
-        from 报警层.alarm_output import AlarmOutput
-        from 报警层.broadcast_system import BroadcastSystem
+        # 创建系统工厂
+        factory = SystemFactory(mode=mode)
 
-        # 从alarms.yaml读取灯控设备配置
+        # 使用工厂创建独立的组件
+        logger.info("创建系统组件...")
+        
+        # 1. 创建设备管理器（完全独立）
+        device_manager = factory.create_device_manager('配置/devices.yaml')
+        
+        # 2. 创建报警输出（完全独立）
         import yaml
         alarms_config_path = Path('配置/alarms.yaml')
-        alarm_output_cfg = {'enabled': True, 'simulation': simulation_mode}
+        alarm_output_cfg = {'enabled': True}
+        
         if alarms_config_path.exists():
             with open(alarms_config_path, 'r', encoding='utf-8') as f:
                 alarms_yaml = yaml.safe_load(f) or {}
             ao_cfg = alarms_yaml.get('alarm_output', {})
             if ao_cfg:
-                # 使用Patlite信号灯塔作为主输出
                 tower = ao_cfg.get('signal_tower', {})
                 alarm_output_cfg.update({
                     'modbus': {
@@ -98,20 +87,32 @@ def main():
                         'green_light': 2, 'buzzer': 5
                     }),
                 })
-                logger.info(f"灯控设备: {tower.get('device_id')} @ {tower.get('host')}")
-        alarm_output = AlarmOutput(alarm_output_cfg)
-        broadcast_system = BroadcastSystem({
+        
+        alarm_output = factory.create_alarm_output(alarm_output_cfg)
+        
+        # 3. 创建广播系统（完全独立）
+        broadcast_config = {
             'enabled': True,
-            'simulation': simulation_mode,
             'areas': ['车间A', '车间B', '仓库', '办公楼'],
-            'default_area': 'all',
             'preset_templates': {
                 'alarm_critical': '注意！{area}发生严重报警：{message}，请立即处置！',
                 'alarm_warning': '提醒：{area}出现告警：{message}，请关注。',
                 'evacuation': '请注意，{area}发生紧急状况，请沿疏散通道撤离！',
                 'all_clear': '广播通知，{area}警报解除，恢复正常。',
             }
-        })
+        }
+        
+        # 真实模式需要MQTT配置
+        if mode == 'real':
+            broadcast_config.update({
+                'mqtt_broker': 'localhost',
+                'mqtt_port': 1883,
+                'topic_prefix': 'pa/',
+            })
+        
+        broadcast_system = factory.create_broadcast_system(broadcast_config)
+        
+        # 4. 创建报警管理器
         alarm_manager = AlarmManager(database, '配置/alarms.yaml',
                                      alarm_output=alarm_output,
                                      broadcast_system=broadcast_system)
@@ -228,29 +229,6 @@ def main():
         energy_manager.start()
         edge_decision.start()
 
-        # 为模拟模式预设OEE班次数据（让页面立即有数据显示）
-        if simulation_mode:
-            logger.info("模拟模式：初始化OEE班次数据...")
-            for device_id in device_manager.get_all_devices():
-                oee_calculator.start_shift(device_id, planned_hours=8.0)
-                # 设置理论产能（件/小时）
-                theoretical_rates = {
-                    'siemens_1500_01': 120,   # 锅炉产线
-                    'hollysys_lk_01': 80,     # 化工车间
-                    'mitsubishi_fx5u_01': 200, # 注塑车间
-                    'delta_dvp_01': 150,       # 包装线
-                    'inovance_h5u_01': 100,    # 涂装车间
-                }
-                if device_id in theoretical_rates:
-                    oee_calculator.set_theoretical_rate(device_id, theoretical_rates[device_id])
-            
-            # 预填充初始OEE数据（让页面立即显示）
-            logger.info("模拟模式：预填充OEE初始数据...")
-            for device_id in device_manager.get_all_devices():
-                # 模拟运行2小时的数据
-                oee_calculator.update_device_state(device_id, 'running')
-                oee_calculator.record_production(device_id, count=150, good_count=145)
-
         # 启动TDengine适配器（如果可用）
         if realtime_bridge:
             realtime_bridge.start()
@@ -265,63 +243,10 @@ def main():
             tsdb_adapter.start()
             logger.info("TDengine智能层适配器已启动")
 
-        # 为模拟模式预设能源基线数据
-        if simulation_mode:
-            logger.info("模拟模式：初始化能源基线数据...")
-            energy_baselines = {
-                'abb_m4m_01': 500,           # 电力分析仪日均500kWh
-                'siemens_1500_01': 200,       # 锅炉产线日均200kWh
-                'hollysys_lk_01': 150,        # 化工车间日均150kWh
-                'mitsubishi_fx5u_01': 100,    # 注塑车间日均100kWh
-                'delta_dvp_01': 80,           # 包装线日均80kWh
-                'inovance_h5u_01': 120,       # 涂装车间日均120kWh
-            }
-            for device_id, baseline in energy_baselines.items():
-                energy_manager.set_baseline(device_id, baseline)
-            
-            # 预填充能源初始数据（让页面立即显示）
-            logger.info("模拟模式：预填充能源初始数据...")
-            import random
-            for device_id, baseline in energy_baselines.items():
-                # 模拟当前功率（基线的1/24 * 随机波动）
-                current_power = (baseline / 24) * random.uniform(0.8, 1.2)
-                energy_manager.feed_power_data(device_id, current_power)
-                # 设置累积电量
-                energy_manager.energy_accumulated[device_id]['energy_kwh'] = baseline * 0.5  # 半天的电量
-                energy_manager.energy_accumulated[device_id]['peak_kwh'] = baseline * 0.2
-                energy_manager.energy_accumulated[device_id]['flat_kwh'] = baseline * 0.2
-                energy_manager.energy_accumulated[device_id]['valley_kwh'] = baseline * 0.1
-
-        # 为模拟模式预填充预测性维护初始数据
-        if simulation_mode:
-            logger.info("模拟模式：预填充预测性维护初始数据...")
-            import random
-            from datetime import datetime, timedelta
-            
-            # 为每个设备的每个寄存器预填充历史数据
-            for device_id, device_config in device_manager.get_all_devices().items():
-                registers = device_config.get('registers', device_config.get('nodes', []))
-                for reg in registers:
-                    reg_name = reg.get('name', '')
-                    if not reg_name:
-                        continue
-                    
-                    # 生成过去1小时的历史数据（每分钟一个点）
-                    base_value = random.uniform(20, 80)
-                    for i in range(60):
-                        ts = datetime.now() - timedelta(minutes=60-i)
-                        value = base_value + random.gauss(0, 5) + 10 * math.sin(i / 10)
-                        predictive_maintenance.feed_data(device_id, reg_name, value, ts)
-                        
-                        # 同时喂入SPC分析器
-                        spc_analyzer.feed_data(device_id, reg_name, value)
-            
-            # 手动触发一次分析
-            predictive_maintenance._run_analysis()
-            logger.info("预测性维护和SPC初始数据预填充完成")
+        logger.info("智能层已启动: 预测性维护 | OEE | SPC | 能源管理 | 边缘决策")
 
         # 启动Web服务
-        mode_str = "真实设备模式" if not simulation_mode else "模拟模式：使用仿真数据"
+        mode_str = "真实设备模式" if mode == 'real' else "模拟模式：使用仿真数据"
         logger.info("启动Web服务...")
         logger.info("=" * 50)
         logger.info("工业数据采集与监控系统已启动")

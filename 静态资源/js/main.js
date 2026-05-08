@@ -72,27 +72,107 @@ function handleAlarm(data) {
 }
 
 /**
- * 显示报警通知
+ * 显示报警通知（非侵入式Toast通知，不影响操作）
  */
 function showAlarmNotification(alarm) {
-    // 创建通知元素
-    const notification = document.createElement('div');
-    notification.className = `alert alert-${alarm.level === 'critical' ? 'danger' : 'warning'} alert-dismissible fade show`;
-    notification.innerHTML = `
-        <strong><i class="bi bi-bell-fill"></i> ${alarm.message}</strong>
-        <br>
-        <small>设备: ${alarm.device_id} | 参数: ${alarm.register_name} | 值: ${alarm.value}</small>
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    // 创建Toast容器（如果不存在）
+    let toastContainer = document.getElementById('alarm-toast-container');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'alarm-toast-container';
+        toastContainer.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 9999;
+            max-width: 350px;
+            display: flex;
+            flex-direction: column-reverse;
+            gap: 8px;
+        `;
+        document.body.appendChild(toastContainer);
+    }
+    
+    // 创建Toast元素
+    const toast = document.createElement('div');
+    const isCritical = alarm.level === 'critical' || alarm.alarm_level === 'critical';
+    
+    toast.className = `toast show align-items-center border-0`;
+    toast.style.cssText = `
+        background-color: ${isCritical ? '#dc3545' : '#ffc107'};
+        color: ${isCritical ? 'white' : '#333'};
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        animation: slideInRight 0.3s ease-out;
+        max-width: 100%;
     `;
     
-    // 添加到页面
-    const container = document.querySelector('.container-fluid');
-    container.insertBefore(notification, container.firstChild);
+    toast.innerHTML = `
+        <div class="d-flex">
+            <div class="toast-body">
+                <div class="d-flex align-items-center mb-1">
+                    <i class="bi bi-${isCritical ? 'exclamation-triangle-fill' : 'exclamation-circle-fill'} me-2"></i>
+                    <strong class="me-auto">${isCritical ? '严重报警' : '警告'}</strong>
+                    <small>${new Date().toLocaleTimeString()}</small>
+                </div>
+                <div class="mb-1">${alarm.message || alarm.alarm_message || '报警'}</div>
+                <small class="opacity-75">
+                    ${alarm.device_id ? '设备: ' + alarm.device_id : ''}
+                    ${alarm.register_name ? ' | 参数: ' + alarm.register_name : ''}
+                    ${alarm.value || alarm.actual_value ? ' | 值: ' + (alarm.value || alarm.actual_value) : ''}
+                </small>
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" onclick="this.closest('.toast').remove()"></button>
+        </div>
+    `;
     
-    // 5秒后自动消失
+    // 添加到容器
+    toastContainer.appendChild(toast);
+    
+    // 播放提示音（仅严重报警）
+    if (isCritical) {
+        playAlarmSound();
+    }
+    
+    // 自动消失时间：严重报警30秒，普通警告8秒
+    const dismissTime = isCritical ? 30000 : 8000;
     setTimeout(() => {
-        notification.remove();
-    }, 5000);
+        if (toast.parentNode) {
+            toast.style.animation = 'slideOutRight 0.3s ease-in';
+            setTimeout(() => toast.remove(), 300);
+        }
+    }, dismissTime);
+    
+    // 限制最多显示3个通知（避免堆积）
+    while (toastContainer.children.length > 3) {
+        toastContainer.firstChild.remove();
+    }
+    
+    // 更新报警计数（静默更新，不弹窗）
+    updateAlarmCountSilent();
+}
+
+/**
+ * 播放报警提示音
+ */
+function playAlarmSound() {
+    try {
+        // 使用Web Audio API播放简单提示音
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        oscillator.frequency.value = 800;
+        oscillator.type = 'sine';
+        gainNode.gain.value = 0.3;
+        
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.2);
+    } catch (e) {
+        // 忽略音频播放错误
+    }
 }
 
 /**
@@ -111,6 +191,27 @@ function updateAlarmCount() {
                 countCard.textContent = count;
             }
         });
+}
+
+/**
+ * 静默更新报警计数（不弹窗）
+ */
+function updateAlarmCountSilent() {
+    fetch(`${API_BASE}/alarms/active`)
+        .then(response => response.json())
+        .then(data => {
+            const count = data.alarms ? data.alarms.length : 0;
+            const alarmEl = document.getElementById('active-alarms');
+            if (alarmEl) {
+                alarmEl.textContent = count;
+            }
+            
+            const countCard = document.getElementById('alarm-count-card');
+            if (countCard) {
+                countCard.textContent = count;
+            }
+        })
+        .catch(() => {}); // 静默失败
 }
 
 /**
