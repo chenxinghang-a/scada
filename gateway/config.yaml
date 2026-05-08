@@ -1,0 +1,195 @@
+# 工业SCADA协议网关配置文件
+# 
+# 本配置文件定义了所有协议网关的参数。
+# 每个网关独立运行，通过MQTT与主系统通信。
+
+# 全局配置
+global:
+  # MQTT Broker配置
+  mqtt_broker: "localhost"
+  mqtt_port: 1883
+  mqtt_username: ""  # 如果需要认证
+  mqtt_password: ""
+  
+  # 日志配置
+  log_level: "INFO"
+  log_file: "logs/gateway.log"
+  
+  # 默认轮询间隔（秒）
+  default_poll_interval: 5.0
+  
+  # 重连配置
+  reconnect_interval: 10.0  # 重连间隔（秒）
+  max_reconnect_attempts: 0  # 最大重连次数，0=无限重试
+
+# 网关列表
+gateways:
+  # Modbus TCP网关
+  - type: "modbus"
+    gateway_id: "modbus_gateway_01"
+    mqtt_broker: "localhost"
+    mqtt_port: 1883
+    poll_interval: 5.0
+    
+    # 设备列表
+    devices:
+      - device_id: "PLC_001"
+        protocol: "tcp"
+        host: "192.168.1.100"
+        port: 502
+        slave_id: 1
+        
+        # 寄存器映射
+        registers:
+          - name: "temperature"
+            address: 0
+            count: 2
+            type: "float32"
+            description: "温度传感器"
+          
+          - name: "pressure"
+            address: 2
+            count: 2
+            type: "float32"
+            description: "压力传感器"
+          
+          - name: "running_status"
+            address: 10
+            count: 1
+            type: "uint16"
+            description: "运行状态 (0=停止, 1=运行, 2=故障)"
+          
+          - name: "product_count"
+            address: 12
+            count: 2
+            type: "uint32"
+            description: "产品计数"
+          
+          - name: "good_count"
+            address: 14
+            count: 2
+            type: "uint32"
+            description: "合格品计数"
+      
+      - device_id: "PLC_002"
+        protocol: "tcp"
+        host: "192.168.1.101"
+        port: 502
+        slave_id: 1
+        
+        registers:
+          - name: "voltage"
+            address: 0
+            count: 2
+            type: "float32"
+            description: "电压"
+          
+          - name: "current"
+            address: 2
+            count: 2
+            type: "float32"
+            description: "电流"
+          
+          - name: "power"
+            address: 4
+            count: 2
+            type: "float32"
+            description: "功率"
+          
+          - name: "energy"
+            address: 6
+            count: 4
+            type: "float64"
+            description: "累计电量"
+  
+  # Modbus RTU网关（串口）
+  - type: "modbus"
+    gateway_id: "modbus_rtu_gateway_01"
+    mqtt_broker: "localhost"
+    mqtt_port: 1883
+    poll_interval: 10.0
+    
+    devices:
+      - device_id: "Sensor_001"
+        protocol: "rtu"
+        serial_port: "COM1"
+        baudrate: 9600
+        parity: "N"
+        stopbits: 1
+        bytesize: 8
+        slave_id: 1
+        
+        registers:
+          - name: "temperature"
+            address: 0
+            count: 1
+            type: "int16"
+            description: "温度 (0.1°C)"
+          
+          - name: "humidity"
+            address: 1
+            count: 1
+            type: "uint16"
+            description: "湿度 (0.1%)"
+  
+  # TODO: 西门子S7网关
+  # - type: "s7"
+  #   gateway_id: "s7_gateway_01"
+  #   mqtt_broker: "localhost"
+  #   mqtt_port: 1883
+  #   poll_interval: 5.0
+  #   
+  #   devices:
+  #     - device_id: "S7_1200_001"
+  #       host: "192.168.1.200"
+  #       rack: 0
+  #       slot: 1
+  #       
+  #       registers:
+  #         - name: "temperature"
+  #           db: 1
+  #           offset: 0
+  #           type: "real"
+  
+  # TODO: OPC UA网关
+  # - type: "opcua"
+  #   gateway_id: "opcua_gateway_01"
+  #   mqtt_broker: "localhost"
+  #   mqtt_port: 1883
+  #   poll_interval: 5.0
+  #   
+  #   devices:
+  #     - device_id: "OPCUA_Server_001"
+  #       endpoint: "opc.tcp://192.168.1.300:4840"
+  #       
+  #       nodes:
+  #         - name: "temperature"
+  #           node_id: "ns=2;s=Temperature"
+  #           description: "温度"
+
+# 报警配置
+alarms:
+  # 温度报警阈值
+  temperature:
+    high_high: 100.0
+    high: 80.0
+    low: 10.0
+    low_low: 0.0
+  
+  # 压力报警阈值
+  pressure:
+    high_high: 1.0
+    high: 0.8
+    low: 0.1
+    low_low: 0.0
+
+# 数据质量配置
+quality:
+  # 通信超时（秒）
+  communication_timeout: 10.0
+  
+  # 数据有效期（秒）
+  data_expiry: 60.0
+  
+  # 坏数据标记
+  bad_data_value: -9999.0

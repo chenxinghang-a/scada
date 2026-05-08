@@ -326,11 +326,33 @@ class DataCollector:
                         self.energy_manager.feed_power_data(
                             device_id, 0, energy_kwh=value, timestamp=timestamp)
                 
-                # SPC — 质量相关数据喂入
+                # SPC — 质量相关数据喂入（扩展关键词范围）
                 if self.spc_analyzer:
-                    if any(kw in register_name.lower() for kw in
-                           ['temperature', 'pressure', 'ph', 'quality', 'dimension']):
+                    spc_keywords = ['temperature', 'pressure', 'ph', 'quality', 'dimension',
+                                    'voltage', 'current', 'speed', 'flow', 'level',
+                                    'humidity', 'torque', 'frequency', 'thickness',
+                                    'viscosity', 'density', 'concentration']
+                    if any(kw in register_name.lower() for kw in spc_keywords):
                         self.spc_analyzer.feed_data(device_id, register_name, value)
+                
+                # OEE — 设备状态和产量数据喂入
+                if self.oee_calculator:
+                    # 设备运行状态
+                    if register_name == 'running_status':
+                        status_map = {0: 'stopped', 1: 'running', 2: 'fault', 3: 'idle'}
+                        status = status_map.get(int(value), 'running')
+                        self.oee_calculator.update_device_state(device_id, status)
+                    # 产品计数
+                    elif register_name in ('product_count', 'good_count', 'total_count'):
+                        if register_name == 'product_count':
+                            self.oee_calculator.record_production(device_id, count=int(value))
+                        elif register_name == 'good_count':
+                            self.oee_calculator.record_production(device_id, good_count=int(value))
+                
+                # 边缘决策 — 更新数据快照
+                if self.edge_decision:
+                    data_key = f"{device_id}:{register_name}"
+                    self.edge_decision.update_data(data_key, value)
                 
                 # 安全联锁检查（每次数据采集时触发）
                 if self.device_control:
@@ -345,6 +367,8 @@ class DataCollector:
             except Exception as e:
                 if self.running:
                     logger.error(f"数据处理异常: {e}", exc_info=True)
+                    # 打印更多调试信息
+                    logger.error(f"异常数据: {data if 'data' in locals() else 'N/A'}")
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""

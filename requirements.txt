@@ -36,5 +36,9 @@ openpyxl>=3.1.0
 # HTTP requests
 requests>=2.31.0
 
+# Time series database
+# TDengine client (optional, for native connection)
+# taos>=3.0.0
+
 # Development
 python-dotenv>=1.0.0

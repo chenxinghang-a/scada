@@ -60,6 +60,18 @@ class PredictiveMaintenance:
         # 设备阈值配置（从devices.yaml或手动配置）
         self.thresholds: Dict[str, Dict] = self.config.get('thresholds', {})
         
+        # 如果没有配置阈值，设置常见参数的默认阈值
+        if not self.thresholds:
+            self.thresholds = {
+                'temperature': {'upper': 150.0, 'lower': -10.0},
+                'pressure': {'upper': 1.2, 'lower': 0.0},
+                'voltage': {'upper': 250.0, 'lower': 180.0},
+                'current': {'upper': 15.0, 'lower': 0.0},
+                'speed': {'upper': 1800.0, 'lower': 0.0},
+                'vibration': {'upper': 10.0, 'lower': 0.0},
+                'temperature': {'upper': 150.0, 'lower': -10.0},
+            }
+        
         # 分析间隔（秒）
         self.analysis_interval = self.config.get('analysis_interval', 60)
         

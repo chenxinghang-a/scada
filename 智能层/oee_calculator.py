@@ -51,6 +51,9 @@ class OEECalculator:
         # device_id -> {'status': 'running'|'stopped'|'fault'|'idle', 'since': datetime}
         self.device_states: Dict[str, Dict] = {}
         
+        # 上次产量记录（用于计算增量）
+        self._last_production: Dict[str, Dict] = {}
+        
         # 班次数据累积
         # device_id -> {'shift_start': datetime, 'planned_time': float,
         #               'actual_run_time': float, 'downtime': float,
@@ -62,14 +65,14 @@ class OEECalculator:
             'downtime': 0,                 # 停机时间(秒)
             'total_count': 0,              # 总产量
             'good_count': 0,               # 合格品数
-            'ideal_cycle_time': 0,         # 理想节拍时间(秒/件)
+            'ideal_cycle_time': 60.0,      # 默认理想节拍60秒/件
         })
         
         # OEE历史记录
         self.oee_history: List[Dict] = []
         
-        # 锁
-        self._lock = threading.Lock()
+        # 锁（使用RLock避免死锁：get_all_oee会调用calculate_oee，两者都需要加锁）
+        self._lock = threading.RLock()
         
         # 运行状态
         self._running = False
@@ -137,6 +140,9 @@ class OEECalculator:
             sd = self.shift_data[device_id]
             if sd['shift_start'] is None:
                 sd['shift_start'] = now
+            # 如果没有设置计划生产时间，默认8小时
+            if sd['planned_production_time'] <= 0:
+                sd['planned_production_time'] = 8 * 3600  # 8小时 = 28800秒
             
             if old_status == 'running':
                 sd['actual_run_time'] += duration
@@ -149,19 +155,38 @@ class OEECalculator:
                 'since': now,
             }
     
-    def record_production(self, device_id: str, count: int = 1, good_count: int = None):
+    def record_production(self, device_id: str, count: int = None, good_count: int = None):
         """
-        记录产量
+        记录产量（支持绝对值和增量两种模式）
         
         Args:
             device_id: 设备ID
-            count: 总产量增量
-            good_count: 合格品增量（默认等于count）
+            count: 总产量（绝对值，自动计算增量）
+            good_count: 合格品数（绝对值，自动计算增量）
         """
         with self._lock:
             sd = self.shift_data[device_id]
-            sd['total_count'] += count
-            sd['good_count'] += (good_count if good_count is not None else count)
+            last = self._last_production.get(device_id, {'count': 0, 'good': 0})
+            
+            if count is not None:
+                # 计算增量（处理计数器归零的情况）
+                delta = count - last['count']
+                if delta < 0:
+                    delta = count  # 计数器归零
+                sd['total_count'] += max(0, delta)
+                self._last_production.setdefault(device_id, {})['count'] = count
+            
+            if good_count is not None:
+                delta = good_count - last['good']
+                if delta < 0:
+                    delta = good_count
+                sd['good_count'] += max(0, delta)
+                self._last_production.setdefault(device_id, {})['good'] = good_count
+            
+            # 如果没有传入任何参数，默认+1
+            if count is None and good_count is None:
+                sd['total_count'] += 1
+                sd['good_count'] += 1
     
     def set_theoretical_rate(self, device_id: str, rate: float):
         """

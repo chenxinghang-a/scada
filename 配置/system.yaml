@@ -47,9 +47,9 @@ performance:
     timeout: 30
 system:
   author: 陈星行
-  description: 基于Python的工业数据采集与监控系统
+  description: 基于Python的工业数据采集与监控系统（四层漏斗架构）
   name: 工业数据采集与监控系统
-  version: 1.1.0
+  version: 2.0.0
 web:
   cors:
     enabled: true

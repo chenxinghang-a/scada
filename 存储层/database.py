@@ -198,14 +198,15 @@ class Database:
             cursor = conn.cursor()
             
             # realtime_data: UPSERT — 每个(device_id, register_name)只保留最新值
+            # 先删除旧记录，再插入新记录（兼容无UNIQUE约束的表）
+            cursor.execute('''
+                DELETE FROM realtime_data 
+                WHERE device_id = ? AND register_name = ?
+            ''', (device_id, register_name))
+            
             cursor.execute('''
                 INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(device_id, register_name) DO UPDATE SET
-                    value = excluded.value,
-                    unit = excluded.unit,
-                    timestamp = excluded.timestamp,
-                    created_at = CURRENT_TIMESTAMP
             ''', (device_id, register_name, value, unit, timestamp))
             
             # history_data: INSERT — 保留全量历史

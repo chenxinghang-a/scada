@@ -77,6 +77,9 @@ class SPCAnalyzer:
         key = f"{device_id}:{register_name}"
         with self._lock:
             self.data_buffers[key].append(value)
+            # 自动设置默认规格限（如果未配置）
+            if key not in self.spec_limits:
+                self._auto_set_spec_limits(key, register_name)
     
     def set_spec_limits(self, key: str, usl: float = None, lsl: float = None,
                          target: float = None):
@@ -97,6 +100,29 @@ class SPCAnalyzer:
         logger.info(f"SPC规格限设置 {key}: USL={usl}, LSL={lsl}, Target={target}")
     
     # ==================== 控制图计算 ====================
+    
+    def _auto_set_spec_limits(self, key: str, register_name: str):
+        """根据寄存器名称自动设置默认规格限"""
+        # 常见工业参数的默认规格限
+        default_specs = {
+            'temperature': {'usl': 100.0, 'lsl': 0.0, 'target': 50.0},
+            'pressure': {'usl': 1.0, 'lsl': 0.0, 'target': 0.5},
+            'ph': {'usl': 9.0, 'lsl': 5.0, 'target': 7.0},
+            'voltage': {'usl': 250.0, 'lsl': 200.0, 'target': 220.0},
+            'current': {'usl': 20.0, 'lsl': 0.0, 'target': 10.0},
+            'speed': {'usl': 1500.0, 'lsl': 0.0, 'target': 1000.0},
+            'flow': {'usl': 100.0, 'lsl': 0.0, 'target': 50.0},
+            'level': {'usl': 100.0, 'lsl': 0.0, 'target': 50.0},
+            'humidity': {'usl': 90.0, 'lsl': 30.0, 'target': 60.0},
+            'torque': {'usl': 100.0, 'lsl': 0.0, 'target': 50.0},
+            'frequency': {'usl': 60.0, 'lsl': 40.0, 'target': 50.0},
+            'thickness': {'usl': 2.0, 'lsl': 0.5, 'target': 1.0},
+        }
+        
+        for kw, spec in default_specs.items():
+            if kw in register_name.lower():
+                self.spec_limits[key] = spec
+                break
     
     def calculate_xbar_r_chart(self, device_id: str, register_name: str) -> Optional[Dict]:
         """

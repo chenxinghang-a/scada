@@ -72,6 +72,11 @@ class EdgeDecisionEngine:
         """启动决策引擎"""
         if self._running:
             return
+        
+        # 加载默认规则（如果规则库为空）
+        if not self.rules and not self.interlocks:
+            self._load_default_rules()
+        
         self._running = True
         self._thread = threading.Thread(target=self._decision_loop, daemon=True)
         self._thread.start()
@@ -82,6 +87,90 @@ class EdgeDecisionEngine:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
+    
+    def _load_default_rules(self):
+        """加载默认决策规则和安全联锁"""
+        # 安全联锁规则
+        self.add_interlock(
+            'high_temp_interlock',
+            condition={
+                'type': 'threshold',
+                'key': 'siemens_plc_01:temperature',
+                'operator': 'gt',
+                'value': 150.0
+            },
+            action={'type': 'set_alarm', 'message': '反应釜温度过高，紧急停机！', 'level': 'critical'},
+            name='高温安全联锁',
+            enabled=True
+        )
+        
+        self.add_interlock(
+            'high_pressure_interlock',
+            condition={
+                'type': 'threshold',
+                'key': 'siemens_plc_01:pressure',
+                'operator': 'gt',
+                'value': 1.0
+            },
+            action={'type': 'set_alarm', 'message': '管道压力超限，紧急泄压！', 'level': 'critical'},
+            name='高压安全联锁',
+            enabled=True
+        )
+        
+        # 决策规则
+        self.add_rule(
+            'temp_control_rule',
+            condition={
+                'type': 'threshold',
+                'key': 'siemens_plc_01:temperature',
+                'operator': 'gt',
+                'value': 80.0
+            },
+            action={'type': 'set_alarm', 'message': '反应釜温度偏高，建议检查冷却系统', 'level': 'warning'},
+            name='温度预警规则',
+            priority=10,
+            enabled=True
+        )
+        
+        self.add_rule(
+            'pressure_control_rule',
+            condition={
+                'type': 'threshold',
+                'key': 'siemens_plc_01:pressure',
+                'operator': 'gt',
+                'value': 0.8
+            },
+            action={'type': 'set_alarm', 'message': '管道压力偏高，建议检查阀门', 'level': 'warning'},
+            name='压力预警规则',
+            priority=20,
+            enabled=True
+        )
+        
+        self.add_rule(
+            'motor_current_rule',
+            condition={
+                'type': 'threshold',
+                'key': 'siemens_plc_01:motor_current',
+                'operator': 'gt',
+                'value': 10.0
+            },
+            action={'type': 'set_alarm', 'message': '电机电流过高，可能过载', 'level': 'warning'},
+            name='电机过载预警',
+            priority=15,
+            enabled=True
+        )
+        
+        # PID控制器
+        self.add_pid_controller(
+            'temp_pid',
+            input_key='siemens_plc_01:temperature',
+            output_key='siemens_plc_01:motor_speed',
+            setpoint=75.0,
+            kp=2.0, ki=0.5, kd=0.1,
+            output_min=0, output_max=1500
+        )
+        
+        logger.info(f"已加载默认规则: {len(self.rules)}条规则, {len(self.interlocks)}条联锁, {len(self.pid_controllers)}个PID控制器")
     
     def _decision_loop(self):
         """决策主循环"""

@@ -114,6 +114,28 @@ def main():
         edge_decision = EdgeDecisionEngine(database)
         device_control = DeviceControlSafety(database, device_manager, alarm_manager)
         
+        # 注册边缘决策的动作回调
+        def edge_set_alarm(message, level='warning'):
+            """边缘决策报警回调"""
+            from datetime import datetime
+            logger.warning(f"[边缘决策报警] [{level.upper()}] {message}")
+            # 记录到数据库
+            try:
+                database.insert_alarm(
+                    alarm_id=f'edge_{int(datetime.now().timestamp())}',
+                    device_id='edge_decision',
+                    register_name='auto',
+                    alarm_level=level,
+                    alarm_message=message,
+                    threshold=0,
+                    actual_value=0,
+                    timestamp=datetime.now()
+                )
+            except Exception as e:
+                logger.error(f"边缘决策报警记录失败: {e}")
+        
+        edge_decision.register_action('set_alarm', edge_set_alarm)
+        
         data_collector = DataCollector(
             device_manager, database, alarm_manager,
             predictive_maintenance=predictive_maintenance,
