@@ -973,6 +973,13 @@
                 }
                 return resp.json();
             })
+            .then(function(json) {
+                // 解包 {success: true, data: ...} 格式
+                if (json && typeof json === 'object' && json.hasOwnProperty('data')) {
+                    return json.data;
+                }
+                return json;
+            })
             .then(function(result) {
                 if (!result) return null;
                 debugLog('响应: ' + JSON.stringify(result).substring(0, 150) + '...');
@@ -1033,125 +1040,136 @@
     // ==================== 设备列表加载 ====================
     function loadDeviceList() {
         debugLog('加载设备列表...');
-        return i40Fetch('/health').then(function(scores) {
-            I40_DEVICE_LIST = [];
+        I40_DEVICE_LIST = [];
 
-            if (scores && typeof scores === 'object') {
-                var devices = {};
-                for (var key in scores) {
-                    if (scores.hasOwnProperty(key)) {
-                        var d = scores[key];
-                        var deviceId = d.device_id || key;
-                        if (!devices[deviceId]) {
-                            devices[deviceId] = { id: deviceId, registers: [] };
+        // 主要数据源：从设备管理API获取（最可靠）
+        fetch('/api/devices', { headers: i40Headers() })
+            .then(function(resp) { return resp.ok ? resp.json() : null; })
+            .then(function(data) {
+                if (data && data.devices) {
+                    var deviceList = Array.isArray(data.devices) ? data.devices : Object.values(data.devices);
+                    deviceList.forEach(function(d) {
+                        if (d && (d.id || d.device_id)) {
+                            var devId = d.id || d.device_id;
+                            var regs = [];
+                            // 从registers数组提取寄存器名称
+                            if (d.registers && Array.isArray(d.registers)) {
+                                d.registers.forEach(function(r) {
+                                    if (r && r.name && regs.indexOf(r.name) === -1) {
+                                        regs.push(r.name);
+                                    }
+                                });
+                            }
+                            // 从nodes数组提取节点名称（OPC UA）
+                            if (d.nodes && Array.isArray(d.nodes)) {
+                                d.nodes.forEach(function(n) {
+                                    if (n && n.name && regs.indexOf(n.name) === -1) {
+                                        regs.push(n.name);
+                                    }
+                                });
+                            }
+                            // 从topics数组提取主题名称（MQTT）
+                            if (d.topics && Array.isArray(d.topics)) {
+                                d.topics.forEach(function(t) {
+                                    if (t && t.name && regs.indexOf(t.name) === -1) {
+                                        regs.push(t.name);
+                                    }
+                                });
+                            }
+                            // 从endpoints数组提取端点名称（REST）
+                            if (d.endpoints && Array.isArray(d.endpoints)) {
+                                d.endpoints.forEach(function(e) {
+                                    if (e && e.name && regs.indexOf(e.name) === -1) {
+                                        regs.push(e.name);
+                                    }
+                                });
+                            }
+                            I40_DEVICE_LIST.push({ id: devId, registers: regs, name: d.name || devId });
                         }
-                        if (d.register_name && devices[deviceId].registers.indexOf(d.register_name) === -1) {
-                            devices[deviceId].registers.push(d.register_name);
-                        }
-                    }
-                }
-                I40_DEVICE_LIST = Object.keys(devices).map(function(k) { return devices[k]; });
-            }
-
-            if (I40_DEVICE_LIST.length > 0) {
-                debugLog('从health接口获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
-                populateDeviceSelects();
-                return;
-            }
-
-            // 回退1: 尝试从OEE获取
-            debugLog('health无数据，尝试从OEE获取...');
-            return i40Fetch('/oee').then(function(oee) {
-                if (oee && typeof oee === 'object') {
-                    for (var id in oee) {
-                        if (oee.hasOwnProperty(id)) {
-                            I40_DEVICE_LIST.push({ id: id, registers: [] });
-                        }
-                    }
+                    });
                 }
 
                 if (I40_DEVICE_LIST.length > 0) {
-                    debugLog('从OEE接口获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
+                    debugLog('从设备管理API获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
                     populateDeviceSelects();
+                    // 补充从health接口获取的寄存器信息
+                    supplementFromHealth();
                     return;
                 }
 
-                // 回退2: 尝试从设备状态接口获取
-                debugLog('OEE无数据，尝试从设备状态接口获取...');
-                return i40Fetch('/devices/status').then(function(deviceStates) {
-                    if (deviceStates && typeof deviceStates === 'object') {
-                        for (var id in deviceStates) {
-                            if (deviceStates.hasOwnProperty(id)) {
-                                I40_DEVICE_LIST.push({ id: id, registers: [] });
+                // 回退1: 尝试从health接口获取
+                debugLog('设备管理API无数据，尝试从health接口获取...');
+                return i40Fetch('/health').then(function(scores) {
+                    if (scores && typeof scores === 'object') {
+                        var devices = {};
+                        for (var key in scores) {
+                            if (scores.hasOwnProperty(key)) {
+                                var d = scores[key];
+                                var deviceId = d.device_id || key;
+                                if (!devices[deviceId]) {
+                                    devices[deviceId] = { id: deviceId, registers: [] };
+                                }
+                                if (d.register_name && devices[deviceId].registers.indexOf(d.register_name) === -1) {
+                                    devices[deviceId].registers.push(d.register_name);
+                                }
                             }
                         }
+                        I40_DEVICE_LIST = Object.keys(devices).map(function(k) { return devices[k]; });
                     }
 
                     if (I40_DEVICE_LIST.length > 0) {
-                        debugLog('从设备状态接口获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
+                        debugLog('从health接口获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
                         populateDeviceSelects();
                         return;
                     }
 
-                    // 回退3: 尝试从设备管理API获取
-                    debugLog('设备状态无数据，尝试从设备管理API获取...');
-                    fetch('/api/devices', { headers: i40Headers() })
-                        .then(function(resp) { return resp.ok ? resp.json() : null; })
-                        .then(function(data) {
-                            if (data && data.devices) {
-                                var deviceList = Array.isArray(data.devices) ? data.devices : Object.values(data.devices);
-                                deviceList.forEach(function(d) {
-                                    if (d && (d.id || d.device_id)) {
-                                        var devId = d.id || d.device_id;
-                                        var regs = [];
-                                        if (d.registers && Array.isArray(d.registers)) {
-                                            d.registers.forEach(function(r) {
-                                                if (r && r.name && regs.indexOf(r.name) === -1) {
-                                                    regs.push(r.name);
-                                                }
-                                            });
-                                        }
-                                        I40_DEVICE_LIST.push({ id: devId, registers: regs });
-                                    }
-                                });
+                    // 回退2: 尝试从OEE获取
+                    debugLog('health无数据，尝试从OEE获取...');
+                    return i40Fetch('/oee').then(function(oee) {
+                        if (oee && typeof oee === 'object') {
+                            for (var id in oee) {
+                                if (oee.hasOwnProperty(id)) {
+                                    I40_DEVICE_LIST.push({ id: id, registers: [] });
+                                }
                             }
+                        }
 
-                            if (I40_DEVICE_LIST.length > 0) {
-                                debugLog('从设备管理API获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
-                            } else {
-                                // 回退4: 使用页面硬编码的设备列表作为兜底
-                                debugLog('所有API无数据，使用硬编码设备列表兜底', 'warn');
-                                var fallbackDevices = typeof DEVICE_NODE_MAP !== 'undefined' ? DEVICE_NODE_MAP : {};
-                                for (var fid in fallbackDevices) {
-                                    if (fallbackDevices.hasOwnProperty(fid)) {
-                                        I40_DEVICE_LIST.push({ id: fid, registers: [] });
-                                    }
-                                }
-                                if (I40_DEVICE_LIST.length > 0) {
-                                    debugLog('使用兜底设备列表: ' + I40_DEVICE_LIST.length + ' 个设备');
-                                } else {
-                                    debugLog('无可用设备数据', 'err');
-                                }
-                            }
-                            populateDeviceSelects();
-                        })
-                        .catch(function(e) {
-                            debugLog('设备管理API请求失败: ' + e.message, 'err');
-                            // 最终兜底: 使用硬编码设备列表
-                            var fallbackDevices = typeof DEVICE_NODE_MAP !== 'undefined' ? DEVICE_NODE_MAP : {};
-                            for (var fid in fallbackDevices) {
-                                if (fallbackDevices.hasOwnProperty(fid)) {
-                                    I40_DEVICE_LIST.push({ id: fid, registers: [] });
-                                }
-                            }
-                            if (I40_DEVICE_LIST.length > 0) {
-                                debugLog('使用兜底设备列表: ' + I40_DEVICE_LIST.length + ' 个设备');
-                            }
-                            populateDeviceSelects();
-                        });
+                        if (I40_DEVICE_LIST.length > 0) {
+                            debugLog('从OEE接口获取到 ' + I40_DEVICE_LIST.length + ' 个设备');
+                        } else {
+                            debugLog('所有API无设备数据', 'warn');
+                        }
+                        populateDeviceSelects();
+                    });
                 });
+            })
+            .catch(function(e) {
+                debugLog('设备管理API请求失败: ' + e.message, 'err');
+                populateDeviceSelects();
             });
-        });
+    }
+
+    // 从health接口补充寄存器信息
+    function supplementFromHealth() {
+        i40Fetch('/health').then(function(scores) {
+            if (!scores || typeof scores !== 'object') return;
+            var updated = false;
+            for (var key in scores) {
+                if (scores.hasOwnProperty(key)) {
+                    var d = scores[key];
+                    var deviceId = d.device_id || key;
+                    var device = I40_DEVICE_LIST.find(function(x) { return x.id === deviceId; });
+                    if (device && d.register_name && device.registers.indexOf(d.register_name) === -1) {
+                        device.registers.push(d.register_name);
+                        updated = true;
+                    }
+                }
+            }
+            if (updated) {
+                debugLog('从health接口补充了寄存器信息');
+                populateDeviceSelects();
+            }
+        }).catch(function() {});
     }
 
     function populateDeviceSelects() {
@@ -1174,7 +1192,7 @@
             I40_DEVICE_LIST.forEach(function(d) {
                 var opt = document.createElement('option');
                 opt.value = d.id;
-                opt.textContent = d.id;
+                opt.textContent = d.name ? (d.name + ' (' + d.id + ')') : d.id;
                 globalSelect.appendChild(opt);
             });
             debugLog('全局设备选择器已填充: ' + I40_DEVICE_LIST.length + ' 个选项');
@@ -1187,7 +1205,7 @@
             I40_DEVICE_LIST.forEach(function(d) {
                 var opt = document.createElement('option');
                 opt.value = d.id;
-                opt.textContent = d.id;
+                opt.textContent = d.name ? (d.name + ' (' + d.id + ')') : d.id;
                 opt.dataset.registers = JSON.stringify(d.registers);
                 spcDevice.appendChild(opt);
             });

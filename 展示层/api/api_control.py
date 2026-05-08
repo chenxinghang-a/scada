@@ -205,6 +205,27 @@ def get_device_health():
     return jsonify(device_control.get_device_health_summary())
 
 
+@control_bp.route('/control/batch', methods=['POST'])
+@_require_engineer
+def batch_control():
+    """批量控制所有设备（启动/停止/复位）"""
+    data = request.get_json() or {}
+    action = data.get('action')
+    if action not in ('start', 'stop', 'reset'):
+        return jsonify({'error': '无效的操作类型，支持: start, stop, reset'}), 400
+
+    operator = request.current_user['username']
+
+    device_control = getattr(current_app, 'device_control', None)
+    if not device_control:
+        return jsonify({'error': '设备控制安全模块未启用'}), 503
+
+    result = device_control.batch_control(action, operator)
+    get_auth_manager().log_operation(
+        operator, f'batch_{action}', f'批量{action}所有设备')
+    return jsonify(result)
+
+
 @control_bp.route('/control/audit', methods=['GET'])
 @_require_auth
 def get_audit_log():

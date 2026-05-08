@@ -87,6 +87,8 @@ class DeviceControlSafety:
         self._load_preset_interlocks()
         # 加载写操作限制
         self._load_write_limits()
+        # 初始化设备健康数据
+        self._init_device_health()
 
         logger.info("工厂级设备控制安全管理器已初始化")
 
@@ -255,6 +257,128 @@ class DeviceControlSafety:
             'signal_tower_02': {
                 'default': (0, 1)
             }
+        }
+
+    def _init_device_health(self):
+        """从设备管理器初始化设备健康数据"""
+        if not self.device_manager:
+            return
+        try:
+            all_devices = self.device_manager.get_all_devices()
+            for device_id, config in all_devices.items():
+                client = self.device_manager.get_client(device_id)
+                connected = getattr(client, 'connected', False) if client else False
+                self._device_health[device_id] = {
+                    'status': 'connected' if connected else 'disconnected',
+                    'last_seen': datetime.now().isoformat() if connected else None,
+                    'consecutive_failures': 0 if connected else 3,
+                    'avg_response_ms': 0,
+                    'name': config.get('name', device_id),
+                    'protocol': config.get('protocol', 'unknown'),
+                }
+            logger.info(f"已初始化 {len(self._device_health)} 个设备的健康数据")
+        except Exception as e:
+            logger.error(f"初始化设备健康数据失败: {e}")
+
+    def refresh_device_health(self):
+        """刷新所有设备健康状态（供API调用）"""
+        if not self.device_manager:
+            return
+        try:
+            all_devices = self.device_manager.get_all_devices()
+            for device_id, config in all_devices.items():
+                client = self.device_manager.get_client(device_id)
+                connected = getattr(client, 'connected', False) if client else False
+                if device_id not in self._device_health:
+                    self._device_health[device_id] = {
+                        'status': 'unknown',
+                        'last_seen': None,
+                        'consecutive_failures': 0,
+                        'avg_response_ms': 0,
+                        'name': config.get('name', device_id),
+                        'protocol': config.get('protocol', 'unknown'),
+                    }
+                health = self._device_health[device_id]
+                health['status'] = 'connected' if connected else 'disconnected'
+                if connected:
+                    health['last_seen'] = datetime.now().isoformat()
+                    health['consecutive_failures'] = 0
+                health['name'] = config.get('name', device_id)
+                health['protocol'] = config.get('protocol', 'unknown')
+        except Exception as e:
+            logger.error(f"刷新设备健康数据失败: {e}")
+
+    def batch_control(self, action: str, operator: str = 'system') -> dict[str, Any]:
+        """
+        批量控制所有设备
+
+        Args:
+            action: 'start' | 'stop' | 'reset'
+            operator: 操作者
+
+        Returns:
+            操作结果
+        """
+        if self._estop_active and action != 'reset':
+            return {
+                'success': False,
+                'message': '紧急停机状态中，请先解除紧急停机',
+                'results': {}
+            }
+
+        results = {}
+        controllable = self._get_controllable_devices()
+
+        if not controllable:
+            # 如果没有可识别的可控设备，尝试操作所有设备
+            if self.device_manager:
+                controllable = list(self.device_manager.get_all_devices().keys())
+
+        for device_id in controllable:
+            try:
+                client = self.device_manager.get_client(device_id) if self.device_manager else None
+                if not client:
+                    results[device_id] = {'success': False, 'message': '设备客户端不存在'}
+                    continue
+
+                success = False
+                if action == 'start':
+                    if hasattr(client, 'write_single_coil'):
+                        success = client.write_single_coil(0, True)
+                    elif hasattr(client, 'write_single_register'):
+                        success = client.write_single_register(100, 1)
+                elif action == 'stop':
+                    if hasattr(client, 'write_single_coil'):
+                        success = client.write_single_coil(0, False)
+                    elif hasattr(client, 'write_single_register'):
+                        success = client.write_single_register(100, 0)
+                elif action == 'reset':
+                    if hasattr(client, 'write_single_register'):
+                        success = client.write_single_register(100, 0)
+                    elif hasattr(client, 'write_single_coil'):
+                        success = client.write_single_coil(0, False)
+
+                results[device_id] = {
+                    'success': success,
+                    'message': f'{action}操作{"成功" if success else "失败"}'
+                }
+
+                self._audit(f'batch_{action}', operator,
+                            f'批量{action}设备 {device_id}: {"成功" if success else "失败"}')
+
+            except Exception as e:
+                results[device_id] = {'success': False, 'message': str(e)}
+                logger.error(f"批量控制设备 {device_id} 失败: {e}")
+
+        success_count = sum(1 for r in results.values() if r.get('success'))
+        total = len(results)
+
+        return {
+            'success': success_count > 0,
+            'message': f'批量{action}完成: {success_count}/{total} 成功',
+            'results': results,
+            'success_count': success_count,
+            'total': total
         }
 
     def add_interlock(self, rule: dict[str, Any]) -> bool:
@@ -722,7 +846,9 @@ class DeviceControlSafety:
         self._safe_state_handlers[device_id] = handler
 
     def get_device_health_summary(self) -> dict[str, Any]:
-        """获取所有设备健康摘要"""
+        """获取所有设备健康摘要（自动刷新）"""
+        # 每次请求时刷新设备连接状态
+        self.refresh_device_health()
         summary = {
             'total': len(self._device_health),
             'connected': 0,

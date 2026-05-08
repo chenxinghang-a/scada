@@ -958,6 +958,12 @@ async function saveDevice() {
             body: JSON.stringify(deviceConfig)
         });
         
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '未知错误');
+            showAlert(`保存失败 (${response.status}): ${errorText}`, 'danger');
+            return;
+        }
+        
         const result = await response.json();
         
         if (result.success) {
@@ -990,6 +996,12 @@ async function deleteDevice(deviceId) {
             method: 'DELETE',
             headers: getAuthHeaders()
         });
+        
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '未知错误');
+            showAlert(`删除失败 (${response.status}): ${errorText}`, 'danger');
+            return;
+        }
         
         const result = await response.json();
         
@@ -1271,6 +1283,11 @@ async function addPreset(presetId) {
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({ preset_id: presetId })
         });
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '未知错误');
+            showAlert(`添加失败 (${response.status}): ${errorText}`, 'danger');
+            return;
+        }
         const result = await response.json();
         if (result.success) {
             showAlert(result.message, 'success');
@@ -1279,6 +1296,7 @@ async function addPreset(presetId) {
             showAlert(result.message || '添加失败', 'danger');
         }
     } catch (error) {
+        console.error('添加预设失败:', error);
         showAlert('添加失败: ' + error.message, 'danger');
     }
 }
@@ -1291,15 +1309,21 @@ async function addAllPresets() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
         });
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '未知错误');
+            showAlert(`添加全部失败 (${response.status}): ${errorText}`, 'danger');
+            return;
+        }
         const result = await response.json();
         if (result.success) {
             showAlert(result.message, 'success');
             loadDevices();
         } else {
-            showAlert(result.message || '添加失败', 'danger');
+            showAlert(result.message || '添加全部失败', 'danger');
         }
     } catch (error) {
-        showAlert('添加失败: ' + error.message, 'danger');
+        console.error('添加全部预设失败:', error);
+        showAlert('添加全部失败: ' + error.message, 'danger');
     }
 }
 

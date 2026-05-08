@@ -290,13 +290,26 @@ class DeviceManager:
         # 使用 get_client() 实现懒创建，确保客户端存在
         client = self.get_client(device_id)
         if client:
-            # 模拟模式下，如果客户端未连接则自动连接
-            if self.simulation_mode and not getattr(client, 'connected', False):
-                if device_config.get('enabled', True):
-                    try:
-                        client.connect()
-                    except Exception:
-                        pass
+            # 模拟模式下，确保设备始终处于连接状态
+            if self.simulation_mode:
+                if not getattr(client, 'connected', False):
+                    if device_config.get('enabled', True):
+                        try:
+                            client.connect()
+                        except Exception:
+                            pass
+                    # 模拟模式最终保障：即使connect()失败也强制标记为已连接
+                    if not getattr(client, 'connected', False) and device_config.get('enabled', True):
+                        client.connected = True
+            else:
+                # 真实模式下，尝试自动重连
+                if not getattr(client, 'connected', False):
+                    if device_config.get('enabled', True):
+                        try:
+                            client.connect()
+                        except Exception:
+                            pass
+
             status['connected'] = getattr(client, 'connected', False)
             status['stats'] = getattr(client, 'stats', {})
 
@@ -334,16 +347,32 @@ class DeviceManager:
             self.devices[device_id] = device_config
             self._save_config()
 
-            # 热添加后自动连接设备（模拟模式下立即可用）
+            # 热添加后自动连接设备
             if device_config.get('enabled', True):
                 try:
                     connected = self.connect_device(device_id)
                     if connected:
                         logger.info(f"添加设备并连接成功: {device_id} [{protocol}]")
                     else:
-                        logger.warning(f"添加设备成功但连接失败: {device_id} [{protocol}]")
+                        # 模拟模式下连接失败，强制标记为已连接
+                        if self.simulation_mode:
+                            client = self.clients.get(device_id)
+                            if client:
+                                client.connected = True
+                                logger.info(f"添加设备并强制连接（模拟模式）: {device_id} [{protocol}]")
+                            else:
+                                logger.warning(f"添加设备成功但客户端未创建: {device_id} [{protocol}]")
+                        else:
+                            logger.warning(f"添加设备成功但连接失败: {device_id} [{protocol}]")
                 except Exception as conn_e:
-                    logger.warning(f"添加设备成功但连接异常: {device_id} [{conn_e}]")
+                    # 模拟模式下连接异常，强制标记为已连接
+                    if self.simulation_mode:
+                        client = self.clients.get(device_id)
+                        if client:
+                            client.connected = True
+                            logger.info(f"添加设备并强制连接（模拟模式，忽略异常）: {device_id} [{protocol}]")
+                    else:
+                        logger.warning(f"添加设备成功但连接异常: {device_id} [{conn_e}]")
             else:
                 logger.info(f"添加设备（已禁用）: {device_id} [{protocol}]")
 

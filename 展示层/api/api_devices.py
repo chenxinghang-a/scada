@@ -65,7 +65,14 @@ def add_device():
     if success:
         get_auth_manager().log_operation(
             request.current_user['username'], 'add_device', f"添加设备: {data['id']}")
-        return jsonify({'success': True, 'message': f"设备 {data['id']} 添加成功"})
+        # 获取设备状态（包含连接状态）
+        device_status = current_app.device_manager.get_device_status(data['id'])
+        return jsonify({
+            'success': True,
+            'message': f"设备 {data['id']} 添加成功",
+            'connected': device_status.get('connected', False),
+            'device': device_status
+        })
     else:
         return jsonify({'success': False, 'message': '添加失败'}), 400
 
@@ -103,12 +110,29 @@ def update_device(device_id):
 @_require_engineer
 def delete_device(device_id):
     """删除设备"""
-    success = current_app.device_manager.remove_device(device_id)
-    if success:
-        get_auth_manager().log_operation(
-            request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
-        return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
-    return jsonify({'success': False, 'message': '删除失败'}), 400
+    # 优先通过 simulation_initializer 删除（会清理模拟参数）
+    initializer = _get_simulation_initializer()
+    if initializer is not None:
+        result = initializer.remove_device(device_id)
+        if result['success']:
+            get_auth_manager().log_operation(
+                request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
+            return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
+        # 如果simulation_initializer删除失败，尝试直接通过device_manager删除
+        success = current_app.device_manager.remove_device(device_id)
+        if success:
+            get_auth_manager().log_operation(
+                request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
+            return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
+        return jsonify(result), 400
+    else:
+        # 没有simulation_initializer，直接通过device_manager删除
+        success = current_app.device_manager.remove_device(device_id)
+        if success:
+            get_auth_manager().log_operation(
+                request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
+            return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
+        return jsonify({'success': False, 'message': f'删除设备 {device_id} 失败'}), 400
 
 
 @devices_bp.route('/devices/<device_id>/test', methods=['POST'])
@@ -654,7 +678,11 @@ def add_all_presets():
     if initializer is None:
         return jsonify({'success': False, 'message': '模拟初始化器未加载'}), 500
 
-    all_preset_ids = [p['id'] for p in initializer.presets]
+    presets = getattr(initializer, 'presets', [])
+    if not presets:
+        return jsonify({'success': False, 'message': '没有可用的预设设备配置，请检查 simulation_presets.yaml 文件'}), 400
+
+    all_preset_ids = [p['id'] for p in presets]
     result = initializer.add_preset_batch(all_preset_ids)
     if result['success']:
         get_auth_manager().log_operation(

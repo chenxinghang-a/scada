@@ -21,11 +21,12 @@ class BaseDeviceClient(ABC):
         初始化客户端
 
         Args:
-            config: 设备配置字典，包含 device_id, device_name, protocol 等字段
+            config: 设备配置字典，包含 id/device_id, name/device_name, protocol 等字段
         """
         self.config = config
-        self.device_id = config.get('device_id', 'unknown')
-        self.device_name = config.get('device_name', self.device_id)
+        # 兼容 'id' 和 'device_id' 两种配置格式
+        self.device_id = config.get('device_id', config.get('id', 'unknown'))
+        self.device_name = config.get('device_name', config.get('name', self.device_id))
         self.protocol = config.get('protocol', 'unknown')
         self.connected = False
 

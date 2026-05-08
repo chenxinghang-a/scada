@@ -530,31 +530,49 @@ async function writeCoil(deviceId, address, value) {
 
 // 批量控制
 async function batchControl(action) {
-    const deviceId = document.getElementById('device-select').value;
-    if (!deviceId) {
-        showAlert('请先选择设备', 'warning');
-        return;
-    }
-    
-    let message = '';
-    let callback = null;
-    
+    let actionText = '';
     switch (action) {
-        case 'start':
-            message = `确定要启动设备 <strong>${deviceId}</strong> 吗？`;
-            callback = () => writeCoil(deviceId, 0, true);
-            break;
-        case 'stop':
-            message = `确定要停止设备 <strong>${deviceId}</strong> 吗？`;
-            callback = () => writeCoil(deviceId, 0, false);
-            break;
-        case 'reset':
-            message = `确定要复位设备 <strong>${deviceId}</strong> 吗？`;
-            callback = () => writeRegister(deviceId, 100, 0);
-            break;
+        case 'start': actionText = '启动所有设备'; break;
+        case 'stop': actionText = '停止所有设备'; break;
+        case 'reset': actionText = '复位所有设备'; break;
     }
     
-    showConfirm(message, callback);
+    showConfirm(
+        `确定要<strong>${actionText}</strong>吗？<br><small class="text-muted">此操作将对所有已连接设备执行。</small>`,
+        async () => {
+            try {
+                const response = await fetch('/api/control/batch', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...getAuthHeaders()
+                    },
+                    body: JSON.stringify({ action })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showAlert(`${actionText}完成: ${result.success_count}/${result.total} 成功`, 'success');
+                } else {
+                    showAlert(result.message || `${actionText}失败`, 'danger');
+                }
+                
+                // 显示详细结果
+                if (result.results) {
+                    const details = Object.entries(result.results)
+                        .map(([id, r]) => `${id}: ${r.success ? '成功' : '失败'}`)
+                        .join(', ');
+                    console.log(`批量控制详情: ${details}`);
+                }
+                
+                loadControlLogs();
+                loadControlSafetyStatus();
+            } catch (error) {
+                showAlert(`${actionText}失败: ${error.message}`, 'danger');
+            }
+        }
+    );
 }
 
 // 加载操作日志
@@ -587,9 +605,9 @@ async function loadControlLogs() {
 
 // 显示确认对话框
 function showConfirm(message, callback) {
-    // 安全地设置确认消息
+    // 安全地设置确认消息（支持HTML）
     const confirmMessageEl = document.getElementById('confirm-message');
-    confirmMessageEl.textContent = message;
+    confirmMessageEl.innerHTML = message;
     pendingAction = callback;
     const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
     modal.show();

@@ -139,8 +139,11 @@ class SimulationInitializer:
         # 保存模拟参数
         self.device_sim_params[device_id] = sim_params
 
-        # 为新设备初始化智能层数据
-        self._init_device_data(device_id, device_config, sim_params)
+        # 为新设备初始化智能层数据（错误不影响设备添加）
+        try:
+            self._init_device_data(device_id, device_config, sim_params)
+        except Exception as e:
+            logger.error(f"  ✗ {device_id} 智能层数据初始化失败: {e}")
 
         logger.info(f"已添加预设设备: {device_id} (预设: {preset_id})")
         return {'success': True, 'message': f'设备 {device_id} 添加成功', 'device_id': device_id}
@@ -172,8 +175,11 @@ class SimulationInitializer:
         if sim_params:
             self.device_sim_params[device_id] = sim_params
 
-        # 初始化智能层数据
-        self._init_device_data(device_id, device_config, sim_params or {})
+        # 初始化智能层数据（错误不影响设备添加）
+        try:
+            self._init_device_data(device_id, device_config, sim_params or {})
+        except Exception as e:
+            logger.error(f"  ✗ {device_id} 智能层数据初始化失败: {e}")
 
         logger.info(f"已添加自定义设备: {device_id}")
         return {'success': True, 'message': f'设备 {device_id} 添加成功', 'device_id': device_id}
@@ -189,16 +195,24 @@ class SimulationInitializer:
 
     def add_preset_batch(self, preset_ids: list[str]) -> dict:
         """批量添加预设设备"""
+        if not preset_ids:
+            return {'success': False, 'message': '没有可添加的预设设备', 'results': []}
+
         results = []
         success_count = 0
+        total = len(preset_ids)
         for pid in preset_ids:
-            r = self.add_preset_device(pid)
+            try:
+                r = self.add_preset_device(pid)
+            except Exception as e:
+                logger.error(f"添加预设设备 {pid} 异常: {e}")
+                r = {'success': False, 'message': f'添加预设 {pid} 异常: {e}', 'device_id': ''}
             results.append(r)
-            if r['success']:
+            if r.get('success'):
                 success_count += 1
         return {
             'success': success_count > 0,
-            'message': f'成功添加 {success_count}/{len(preset_ids)} 个设备',
+            'message': f'成功添加 {success_count}/{total} 个设备',
             'results': results
         }
 
