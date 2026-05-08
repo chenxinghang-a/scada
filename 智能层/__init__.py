@@ -7,6 +7,7 @@
 - 能源管理 (Energy Management)
 - 边缘决策引擎 (Edge Decision Engine)
 - 设备控制安全 (Device Control Safety)
+- TDengine适配器 (TSDB Adapter) — 连接智能层与TDengine
 """
 
 from .predictive_maintenance import PredictiveMaintenance
@@ -15,6 +16,7 @@ from .spc_analyzer import SPCAnalyzer
 from .energy_manager import EnergyManager
 from .edge_decision import EdgeDecisionEngine
 from .device_control import DeviceControlSafety
+from .tsdb_adapter import TSDBAdapter, RealtimeDataBridge
 
 __all__ = [
     'PredictiveMaintenance',
@@ -23,4 +25,6 @@ __all__ = [
     'EnergyManager',
     'EdgeDecisionEngine',
     'DeviceControlSafety',
+    'TSDBAdapter',
+    'RealtimeDataBridge',
 ]

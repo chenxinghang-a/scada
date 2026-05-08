@@ -114,6 +114,35 @@ def main():
         edge_decision = EdgeDecisionEngine(database)
         device_control = DeviceControlSafety(database, device_manager, alarm_manager)
         
+        # 初始化TDengine适配器（可选，需要TDengine服务）
+        realtime_bridge = None
+        tsdb_adapter = None
+        try:
+            from 智能层.tsdb_adapter import TSDBAdapter, RealtimeDataBridge
+            from timeseries.tdengine_client import TDengineClient
+            
+            tdengine = TDengineClient("localhost", 6041)
+            if tdengine.connect():
+                tdengine.init_tables()
+                
+                # 创建实时数据桥接器
+                realtime_bridge = RealtimeDataBridge(tdengine)
+                
+                # 创建智能层适配器
+                tsdb_adapter = TSDBAdapter(
+                    tdengine,
+                    oee_calculator=oee_calculator,
+                    predictive_maintenance=predictive_maintenance,
+                    spc_analyzer=spc_analyzer,
+                    energy_manager=energy_manager
+                )
+                
+                logger.info("TDengine适配器初始化成功")
+            else:
+                logger.warning("TDengine连接失败，跳过TDengine集成")
+        except Exception as e:
+            logger.warning(f"TDengine初始化失败（可选组件）: {e}")
+        
         # 注册边缘决策的动作回调
         def edge_set_alarm(message, level='warning'):
             """边缘决策报警回调"""
@@ -144,6 +173,7 @@ def main():
             energy_manager=energy_manager,
             edge_decision=edge_decision,
             device_control=device_control,
+            realtime_bridge=realtime_bridge,
         )
         
         # 创建Flask应用
@@ -176,6 +206,21 @@ def main():
         oee_calculator.start()
         energy_manager.start()
         edge_decision.start()
+        
+        # 启动TDengine适配器（如果可用）
+        if realtime_bridge:
+            realtime_bridge.start()
+            logger.info("TDengine实时数据桥接器已启动")
+        if tsdb_adapter:
+            # 注册设备到适配器
+            devices = device_manager.get_all_devices()
+            for device_id, device_config in devices.items():
+                registers = device_config.get('registers', [])
+                if registers:
+                    tsdb_adapter.register_device(device_id, registers)
+            tsdb_adapter.start()
+            logger.info("TDengine智能层适配器已启动")
+        
         logger.info("智能层已启动: 预测性维护 | OEE | SPC | 能源管理 | 边缘决策")
         
         # 启动Web服务
@@ -206,6 +251,10 @@ def main():
         logger.info("系统正在关闭...")
         if 'data_collector' in locals():
             data_collector.stop()
+        if 'tsdb_adapter' in locals() and tsdb_adapter:
+            tsdb_adapter.stop()
+        if 'realtime_bridge' in locals() and realtime_bridge:
+            realtime_bridge.stop()
         if 'alarm_output' in locals():
             alarm_output.disconnect()
         if 'broadcast_system' in locals():

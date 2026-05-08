@@ -268,5 +268,5 @@ def get_energy_table_name(device_id: str) -> str:
 
 def get_predictive_table_name(device_id: str) -> str:
     """生成预测性维护记录子表名称"""
-    clean_device = device_id.replace('-', '_').replace('.', '_)
+    clean_device = device_id.replace('-', '_').replace('.', '_')
     return f"predict_{clean_device}"

@@ -25,7 +25,7 @@ class DataCollector:
     def __init__(self, device_manager, database, alarm_manager=None,
                  predictive_maintenance=None, oee_calculator=None,
                  spc_analyzer=None, energy_manager=None, edge_decision=None,
-                 device_control=None):
+                 device_control=None, realtime_bridge=None):
         self.device_manager = device_manager
         self.database = database
         self.alarm_manager = alarm_manager
@@ -37,6 +37,9 @@ class DataCollector:
         self.energy_manager = energy_manager
         self.edge_decision = edge_decision
         self.device_control = device_control
+        
+        # TDengine实时数据桥接器（可选）
+        self.realtime_bridge = realtime_bridge
         
         # 采集任务
         self.tasks = {}  # device_id -> threading.Timer
@@ -292,6 +295,18 @@ class DataCollector:
                     timestamp=data['timestamp'],
                     unit=data['unit']
                 )
+                
+                # 同时写入TDengine（如果配置了桥接器）
+                if self.realtime_bridge:
+                    self.realtime_bridge.feed(
+                        device_id=data['device_id'],
+                        register_name=data['register_name'],
+                        value=data['value'],
+                        timestamp=data['timestamp'],
+                        unit=data.get('unit', ''),
+                        protocol=data.get('protocol', ''),
+                        gateway_id=data.get('gateway_id', '')
+                    )
                 
                 if self.alarm_manager:
                     self.alarm_manager.check_alarm(
