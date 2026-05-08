@@ -21,7 +21,7 @@ if not TOKEN:
     gh_config = Path.home() / ".config" / "gh" / "hosts.yml"
     if not gh_config.exists():
         gh_config = Path.home() / ".config" / "gh" / "config.yml"
-    
+
     # 尝试从git credential读
     git_cred = Path.home() / ".git-credentials"
     if git_cred.exists():
@@ -62,30 +62,30 @@ PROJECT_DIR = Path(r"c:\Users\cxx\WorkBuddy\Claw\industrial_scada")
 def should_ignore(rel_path: str) -> bool:
     parts = Path(rel_path).parts
     name = Path(rel_path).name
-    
+
     # 检查目录
     for part in parts:
         if part in IGNORE_DIRS:
             return True
-    
+
     # 检查文件名
     if name in IGNORE_FILES:
         return True
-    
+
     # 检查扩展名
     for ext in IGNORE_EXTS:
         if name.endswith(ext):
             return True
-    
+
     # 检查前缀模式
     for pat in IGNORE_PATTERNS:
         if name.startswith(pat):
             return True
-    
+
     # 排除临时文件
     if name.startswith("_git_") or name == "_push.bat":
         return True
-    
+
     return False
 
 
@@ -126,7 +126,7 @@ def create_blob(file_path: Path):
         # 二进制文件用base64
         content = base64.b64encode(file_path.read_bytes()).decode('ascii')
         encoding = 'base64'
-    
+
     url = f"{BASE}/repos/{REPO}/git/blobs"
     data = {"content": content, "encoding": encoding}
     r = requests.post(url, headers=HEADERS, json=data, proxies=PROXY, timeout=30)
@@ -190,34 +190,34 @@ def collect_local_files():
 
 def main():
     print("=== 通过GitHub API推送 ===\n")
-    
+
     # 1. 获取远程HEAD
     remote_sha = get_remote_ref()
     if not remote_sha:
         sys.exit(1)
-    
+
     # 2. 获取远程tree
     remote_commit = get_commit(remote_sha)
     remote_tree_sha = remote_commit["tree"]["sha"]
     remote_tree = get_tree(remote_tree_sha)
-    
+
     # 构建远程文件hash映射 {path: sha}
     remote_files = {}
     if "tree" in remote_tree:
         for item in remote_tree["tree"]:
             if item["type"] == "blob":
                 remote_files[item["path"]] = item["sha"]
-    
+
     print(f"远程文件数: {len(remote_files)}")
-    
+
     # 3. 收集本地文件
     local_files = collect_local_files()
     print(f"本地文件数: {len(local_files)}")
-    
+
     # 4. 找出需要更新/新增的文件
     tree_entries = []
     changed = []
-    
+
     for rel_path, local_path in local_files.items():
         # 计算本地文件的git blob hash（SHA-1 of "blob {size}\0{content}"）
         try:
@@ -225,13 +225,13 @@ def main():
         except Exception as e:
             print(f"  跳过 {rel_path}: {e}")
             continue
-        
+
         # git blob hash
         git_header = f"blob {len(content)}\0".encode()
-        local_hash = hashlib.sha1(git_header + content).hexdigest()
-        
+        local_hash = hashlib.sha1(git_header + content, usedforsecurity=False).hexdigest()
+
         remote_hash = remote_files.get(rel_path)
-        
+
         if remote_hash != local_hash:
             # 需要上传
             blob_sha = create_blob(local_path)
@@ -244,10 +244,10 @@ def main():
                 })
                 action = "更新" if remote_hash else "新增"
                 changed.append(f"  {action}: {rel_path}")
-        
+
         # 从远程映射中删除已处理的
         remote_files.pop(rel_path, None)
-    
+
     # 5. 标记需要删除的文件（远程有但本地没有）
     for deleted_path in remote_files:
         tree_entries.append({
@@ -257,22 +257,22 @@ def main():
             "sha": None  # None = 删除
         })
         changed.append(f"  删除: {deleted_path}")
-    
+
     if not tree_entries:
         print("\n没有变更，无需推送")
         return
-    
+
     print(f"\n变更文件 {len(tree_entries)} 个:")
     for c in changed:
         print(c)
-    
+
     # 6. 创建tree
     print("\n创建tree...")
     new_tree_sha = create_tree(remote_tree_sha, tree_entries)
     if not new_tree_sha:
         sys.exit(1)
     print(f"新tree: {new_tree_sha[:12]}")
-    
+
     # 7. 创建commit
     commit_msg = f"fix: alarm_output - buzzer pulse, manual toggle, flash thread safety\n\n{len(changed)} files changed"
     print("创建commit...")
@@ -280,7 +280,7 @@ def main():
     if not new_commit_sha:
         sys.exit(1)
     print(f"新commit: {new_commit_sha[:12]}")
-    
+
     # 8. 更新ref
     print("更新分支...")
     if update_ref(new_commit_sha):

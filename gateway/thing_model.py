@@ -44,7 +44,7 @@ class MetricValue:
     unit: str = ""
     quality: int = DataQuality.GOOD.value
     description: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "value": self.value,
@@ -58,9 +58,9 @@ class MetricValue:
 class DeviceTelemetry:
     """
     设备遥测数据 — 统一物模型
-    
+
     这是整个系统的核心数据结构，所有设备数据必须转换为此格式。
-    
+
     示例：
     {
         "DeviceID": "CNC_001",
@@ -80,25 +80,25 @@ class DeviceTelemetry:
     Metrics: dict[str, dict[str, Any]]
     GatewayID: str = ""
     Metadata: dict[str, Any] = field(default_factory=dict)
-    
+
     def to_json(self) -> str:
         """转换为JSON字符串"""
         return json.dumps(asdict(self), ensure_ascii=False)
-    
+
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> 'DeviceTelemetry':
         """从字典创建"""
         return cls(**data)
-    
+
     @classmethod
     def from_json(cls, json_str: str) -> 'DeviceTelemetry':
         """从JSON字符串创建"""
         return cls.from_dict(json.loads(json_str))
-    
+
     def add_metric(self, name: str, value: float, unit: str = "", 
                    quality: int = DataQuality.GOOD.value, description: str = ""):
         """添加一个指标"""
@@ -108,12 +108,12 @@ class DeviceTelemetry:
             "quality": quality,
             "description": description
         }
-    
+
     def get_metric_value(self, name: str) -> float | None:
         """获取指标值"""
         metric = self.Metrics.get(name)
         return metric["value"] if metric else None
-    
+
     def get_metric_quality(self, name: str) -> int | None:
         """获取指标质量"""
         metric = self.Metrics.get(name)
@@ -124,7 +124,7 @@ class DeviceTelemetry:
 class DeviceStatus:
     """
     设备状态数据
-    
+
     用于表示设备的在线/离线/故障等状态信息。
     """
     DeviceID: str
@@ -134,10 +134,10 @@ class DeviceStatus:
     ErrorCode: int = 0
     ErrorMessage: str = ""
     Uptime: float = 0  # 运行时间（秒）
-    
+
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
-    
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -146,7 +146,7 @@ class DeviceStatus:
 class AlarmMessage:
     """
     报警消息
-    
+
     用于在MQTT总线上传输报警信息。
     """
     AlarmID: str
@@ -158,10 +158,10 @@ class AlarmMessage:
     Value: float = 0
     Threshold: float = 0
     Acknowledged: bool = False
-    
+
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
-    
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -169,35 +169,35 @@ class AlarmMessage:
 class ThingModelValidator:
     """
     物模型验证器
-    
+
     验证数据是否符合统一物模型规范。
     """
-    
+
     REQUIRED_FIELDS = ["DeviceID", "Timestamp", "Metrics"]
-    
+
     @classmethod
     def validate_telemetry(cls, data: dict[str, Any]) -> tuple[bool, list[str]]:
         """
         验证遥测数据
-        
+
         Returns:
             (is_valid, errors)
         """
         errors = []
-        
+
         # 检查必需字段
         for field in cls.REQUIRED_FIELDS:
             if field not in data:
                 errors.append(f"缺少必需字段: {field}")
-        
+
         # 检查DeviceID类型
         if "DeviceID" in data and not isinstance(data["DeviceID"], str):
             errors.append("DeviceID必须是字符串")
-        
+
         # 检查Timestamp类型
         if "Timestamp" in data and not isinstance(data["Timestamp"], (int, float)):
             errors.append("Timestamp必须是数字")
-        
+
         # 检查Metrics结构
         if "Metrics" in data:
             if not isinstance(data["Metrics"], dict):
@@ -210,38 +210,38 @@ class ThingModelValidator:
                         errors.append(f"Metrics.{key}缺少value字段")
                     elif not isinstance(metric["value"], (int, float)):
                         errors.append(f"Metrics.{key}.value必须是数字")
-        
+
         return (len(errors) == 0, errors)
-    
+
     @classmethod
     def validate_status(cls, data: dict[str, Any]) -> tuple[bool, list[str]]:
         """验证状态数据"""
         errors = []
-        
+
         required = ["DeviceID", "Timestamp", "Online", "Status"]
         for field in required:
             if field not in data:
                 errors.append(f"缺少必需字段: {field}")
-        
+
         if "Status" in data and data["Status"] not in ["running", "stopped", "fault", "maintenance"]:
             errors.append(f"无效的Status值: {data['Status']}")
-        
+
         return (len(errors) == 0, errors)
 
 
 class ThingModelConverter:
     """
     物模型转换器
-    
+
     将不同协议的原始数据转换为统一物模型。
     """
-    
+
     @staticmethod
     def from_modbus_registers(device_id: str, registers: dict[str, float], 
                               gateway_id: str = "") -> DeviceTelemetry:
         """
         从Modbus寄存器数据转换
-        
+
         Args:
             device_id: 设备ID
             registers: 寄存器数据 {register_name: value}
@@ -257,7 +257,7 @@ class ThingModelConverter:
                 "quality": DataQuality.GOOD.value,
                 "description": ""
             }
-        
+
         return DeviceTelemetry(
             DeviceID=device_id,
             Timestamp=time.time(),
@@ -265,7 +265,7 @@ class ThingModelConverter:
             Metrics=metrics,
             GatewayID=gateway_id
         )
-    
+
     @staticmethod
     def from_opcua_node(device_id: str, node_id: str, value: float, 
                         unit: str = "", quality: int = DataQuality.GOOD.value) -> DeviceTelemetry:
@@ -283,7 +283,7 @@ class ThingModelConverter:
                 }
             }
         )
-    
+
     @staticmethod
     def from_mqtt_payload(device_id: str, payload: dict[str, Any]) -> DeviceTelemetry:
         """从MQTT载荷转换"""
@@ -296,19 +296,19 @@ class ThingModelConverter:
                     "quality": DataQuality.GOOD.value,
                     "description": ""
                 }
-        
+
         return DeviceTelemetry(
             DeviceID=device_id,
             Timestamp=time.time(),
             Protocol=ProtocolType.MQTT.value,
             Metrics=metrics
         )
-    
+
     @staticmethod
     def _infer_unit(register_name: str) -> str:
         """根据寄存器名称推断单位"""
         name_lower = register_name.lower()
-        
+
         unit_map = {
             "temperature": "°C",
             "temp": "°C",
@@ -329,11 +329,11 @@ class ThingModelConverter:
             "weight": "kg",
             "count": "pcs",
         }
-        
+
         for keyword, unit in unit_map.items():
             if keyword in name_lower:
                 return unit
-        
+
         return ""
 
 
@@ -341,53 +341,53 @@ class ThingModelConverter:
 class MQTTTopics:
     """
     MQTT Topic规范
-    
+
     所有模块必须使用这些标准Topic进行通信。
     """
-    
+
     # 设备遥测数据
     DEVICE_TELEMETRY = "scada/devices/{device_id}/telemetry"
-    
+
     # 设备状态
     DEVICE_STATUS = "scada/devices/{device_id}/status"
-    
+
     # 报警信息
     ALARM = "scada/alarms/{level}"
-    
+
     # OEE计算结果
     OEE = "scada/oee/{device_id}"
-    
+
     # 预测性维护结果
     PREDICTIVE = "scada/predictive/{device_id}"
-    
+
     # 能源数据
     ENERGY = "scada/energy/{area}"
-    
+
     # SPC分析结果
     SPC = "scada/spc/{device_id}/{register}"
-    
+
     # 边缘决策
     EDGE_DECISION = "scada/edge/{device_id}"
-    
+
     # 系统命令
     COMMAND = "scada/commands/{target}"
-    
+
     @classmethod
     def get_telemetry_topic(cls, device_id: str) -> str:
         return cls.DEVICE_TELEMETRY.format(device_id=device_id)
-    
+
     @classmethod
     def get_status_topic(cls, device_id: str) -> str:
         return cls.DEVICE_STATUS.format(device_id=device_id)
-    
+
     @classmethod
     def get_alarm_topic(cls, level: str) -> str:
         return cls.ALARM.format(level=level)
-    
+
     @classmethod
     def get_oee_topic(cls, device_id: str) -> str:
         return cls.OEE.format(device_id=device_id)
-    
+
     @classmethod
     def get_predictive_topic(cls, device_id: str) -> str:
         return cls.PREDICTIVE.format(device_id=device_id)
@@ -407,17 +407,17 @@ if __name__ == "__main__":
         },
         GatewayID="gateway_01"
     )
-    
+
     print("=== 物模型测试 ===")
     print(telemetry.to_json())
-    
+
     # 测试验证器
     is_valid, errors = ThingModelValidator.validate_telemetry(telemetry.to_dict())
     print(f"\n验证结果: {'通过' if is_valid else '失败'}")
     if errors:
         for error in errors:
             print(f"  - {error}")
-    
+
     # 测试转换器
     modbus_data = {
         "temperature": 25.5,
@@ -428,7 +428,7 @@ if __name__ == "__main__":
     converted = ThingModelConverter.from_modbus_registers("PLC_001", modbus_data)
     print(f"\n转换后的物模型:")
     print(converted.to_json())
-    
+
     # 测试MQTT Topic
     print(f"\nMQTT Topic示例:")
     print(f"  遥测: {MQTTTopics.get_telemetry_topic('CNC_001')}")

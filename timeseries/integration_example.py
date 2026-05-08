@@ -15,7 +15,6 @@ TDengine集成示例
 - 自动数据压缩和过期
 """
 
-from typing import Any
 import sys
 import logging
 from pathlib import Path
@@ -37,25 +36,25 @@ def demonstrate_basic_usage():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger("IntegrationExample")
-    
+
     # 1. 创建TDengine客户端
     logger.info("创建TDengine客户端...")
     client = TDengineClient("localhost", 6041)
-    
+
     # 2. 连接
     if not client.connect():
         logger.error("TDengine连接失败，请确保TDengine已启动")
         logger.info("启动TDengine: docker run -d --name tdengine -p 6041:6041 tdengine/tdengine")
         return
-    
+
     # 3. 初始化表
     logger.info("初始化表结构...")
     client.init_tables()
-    
+
     # 4. 写入测试数据
     logger.info("写入测试数据...")
     from timeseries.data_models import TelemetryRecord
-    
+
     for i in range(10):
         record = TelemetryRecord(
             device_id="CNC_001",
@@ -68,20 +67,20 @@ def demonstrate_basic_usage():
             gateway_id="gateway_01"
         )
         client.write_telemetry(record)
-    
+
     logger.info("写入完成")
-    
+
     # 5. 查询数据
     logger.info("查询数据...")
     end_time = datetime.now()
     start_time = end_time - timedelta(hours=1)
-    
+
     data = client.query_telemetry("CNC_001", "temperature", start_time, end_time)
     logger.info(f"查询到 {len(data)} 条记录")
-    
+
     for record in data[:5]:  # 只显示前5条
         logger.info(f"  {record['timestamp']}: {record['value']}")
-    
+
     # 6. 查询聚合数据
     logger.info("查询聚合数据...")
     agg_data = client.query_telemetry_agg(
@@ -90,7 +89,7 @@ def demonstrate_basic_usage():
         interval="5m"
     )
     logger.info(f"聚合结果: {len(agg_data)} 条")
-    
+
     # 7. 打印统计
     logger.info(f"统计信息: {client.get_stats()}")
 
@@ -102,26 +101,26 @@ def demonstrate_mqtt_integration():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger("MQTTIntegration")
-    
+
     # 1. 创建客户端
     logger.info("创建客户端...")
     tdengine = TDengineClient("localhost", 6041)
     subscriber = MQTTSubscriber("localhost", 1883)
-    
+
     # 2. 创建服务
     logger.info("创建MQTT到TDengine服务...")
     service = MQTTToTSDBService(subscriber, tdengine)
-    
+
     # 3. 启动服务
     logger.info("启动服务...")
     service.start()
-    
+
     logger.info("=" * 50)
     logger.info("服务已启动")
     logger.info("等待MQTT数据...")
     logger.info("按 Ctrl+C 停止")
     logger.info("=" * 50)
-    
+
     try:
         import time
         while True:
@@ -141,14 +140,14 @@ def demonstrate_query_builder():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger("QueryBuilder")
-    
+
     # 创建查询构建器
     builder = QueryBuilder("device_telemetry")
-    
+
     # 构建查询
     end_time = datetime.now()
     start_time = end_time - timedelta(hours=24)
-    
+
     sql = (builder
            .select("ts", "value", "quality")
            .where_device("CNC_001")
@@ -158,10 +157,10 @@ def demonstrate_query_builder():
            .order_by("ts", "DESC")
            .limit(100)
            .build())
-    
+
     logger.info("构建的SQL:")
     logger.info(sql)
-    
+
     # 构建聚合查询
     builder2 = QueryBuilder("device_telemetry")
     sql2 = (builder2
@@ -172,7 +171,7 @@ def demonstrate_query_builder():
             .where_time(start_time, end_time)
             .interval("1h")
             .build())
-    
+
     logger.info("\n聚合查询SQL:")
     logger.info(sql2)
 
@@ -184,18 +183,18 @@ def demonstrate_business_integration():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger("BusinessIntegration")
-    
+
     # 创建客户端
     tdengine = TDengineClient("localhost", 6041)
-    
+
     if not tdengine.connect():
         logger.error("TDengine连接失败")
         return
-    
+
     # 创建业务写入器
     oee_writer = OEEDataWriter(tdengine)
     energy_writer = EnergyDataWriter(tdengine)
-    
+
     # 模拟OEE计算结果
     logger.info("写入OEE数据...")
     oee_writer.write_oee(
@@ -209,7 +208,7 @@ def demonstrate_business_integration():
         run_time=28800,
         downtime=1440
     )
-    
+
     # 模拟能源数据
     logger.info("写入能源数据...")
     energy_writer.write_energy(
@@ -220,17 +219,17 @@ def demonstrate_business_integration():
         current=70.5,
         power_factor=0.95
     )
-    
+
     logger.info("写入完成")
-    
+
     # 查询OEE数据
     logger.info("查询OEE数据...")
     end_time = datetime.now()
     start_time = end_time - timedelta(hours=1)
-    
+
     oee_data = tdengine.query_oee("CNC_001", start_time, end_time)
     logger.info(f"OEE数据: {len(oee_data)} 条")
-    
+
     # 查询能源数据
     logger.info("查询能源数据...")
     energy_data = tdengine.query_energy("CNC_001", start_time, end_time, interval="1h")
@@ -298,15 +297,15 @@ def show_architecture():
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='TDengine集成示例')
     parser.add_argument('--demo', type=str, 
                         choices=['basic', 'mqtt', 'query', 'business'],
                         help='运行指定演示')
     parser.add_argument('--arch', action='store_true', help='显示架构图')
-    
+
     args = parser.parse_args()
-    
+
     if args.arch:
         show_architecture()
     elif args.demo == 'basic':

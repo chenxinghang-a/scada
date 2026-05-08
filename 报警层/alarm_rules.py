@@ -36,14 +36,14 @@ class AlarmRule:
     报警规则类
     定义单个报警规则
     """
-    
+
     def __init__(self, rule_id: str, name: str, device_id: str,
                  register_name: str, condition: str, threshold: float,
                  level: str = "warning", enabled: bool = True,
                  delay: int = 0, description: str = ""):
         """
         初始化报警规则
-        
+
         Args:
             rule_id: 规则ID
             name: 规则名称
@@ -66,20 +66,20 @@ class AlarmRule:
         self.enabled = enabled
         self.delay = delay
         self.description = description
-    
+
     def check(self, value: float) -> bool:
         """
         检查是否触发报警
-        
+
         Args:
             value: 实际值
-            
+
         Returns:
             bool: 是否触发报警
         """
         if not self.enabled:
             return False
-        
+
         if self.condition == AlarmCondition.GREATER_THAN.value:
             return value > self.threshold
         elif self.condition == AlarmCondition.LESS_THAN.value:
@@ -95,11 +95,11 @@ class AlarmRule:
         else:
             logger.warning(f"未知的报警条件: {self.condition}")
             return False
-    
+
     def to_dict(self) -> dict[str, Any]:
         """
         转换为字典
-        
+
         Returns:
             dict[str, Any]: 规则字典
         """
@@ -115,15 +115,15 @@ class AlarmRule:
             'delay': self.delay,
             'description': self.description
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> 'AlarmRule':
         """
         从字典创建规则
-        
+
         Args:
             data: 规则字典
-            
+
         Returns:
             AlarmRule: 规则实例
         """
@@ -146,95 +146,95 @@ class AlarmRules:
     报警规则管理类
     管理所有报警规则
     """
-    
+
     def __init__(self):
         """初始化报警规则管理"""
         self.rules = {}  # rule_id -> AlarmRule
-    
+
     def add_rule(self, rule: AlarmRule):
         """
         添加规则
-        
+
         Args:
             rule: 报警规则
         """
         self.rules[rule.rule_id] = rule
         logger.info(f"添加报警规则: {rule.rule_id}")
-    
+
     def remove_rule(self, rule_id: str):
         """
         移除规则
-        
+
         Args:
             rule_id: 规则ID
         """
         if rule_id in self.rules:
             del self.rules[rule_id]
             logger.info(f"移除报警规则: {rule_id}")
-    
+
     def get_rule(self, rule_id: str) -> AlarmRule | None:
         """
         获取规则
-        
+
         Args:
             rule_id: 规则ID
-            
+
         Returns:
             AlarmRule: 规则实例
         """
         return self.rules.get(rule_id)
-    
+
     def get_rules_for_device(self, device_id: str) -> list[AlarmRule]:
         """
         获取设备的所有规则
-        
+
         Args:
             device_id: 设备ID
-            
+
         Returns:
             list[AlarmRule]: 规则列表
         """
         return [rule for rule in self.rules.values() 
                 if rule.device_id == device_id and rule.enabled]
-    
+
     def check_value(self, device_id: str, register_name: str, 
                     value: float) -> list[AlarmRule]:
         """
         检查值是否触发报警
-        
+
         Args:
             device_id: 设备ID
             register_name: 寄存器名称
             value: 实际值
-            
+
         Returns:
             list[AlarmRule]: 触发的规则列表
         """
         triggered = []
-        
+
         for rule in self.rules.values():
             if (rule.device_id == device_id and 
                 rule.register_name == register_name and
                 rule.enabled and rule.check(value)):
                 triggered.append(rule)
-        
+
         return triggered
-    
+
     def load_from_dict(self, rules_data: list[dict[str, Any]]):
         """
         从字典加载规则
-        
+
         Args:
             rules_data: 规则字典列表
         """
         for rule_data in rules_data:
             rule = AlarmRule.from_dict(rule_data)
             self.add_rule(rule)
-    
+
     def to_dict(self) -> list[dict[str, Any]]:
         """
         转换为字典列表
-        
+
         Returns:
             list[dict[str, Any]]: 规则字典列表
         """

@@ -34,7 +34,7 @@ from .thing_model import (
 class ModbusGateway(BaseGateway):
     """
     Modbus网关
-    
+
     配置示例：
     {
         "gateway_id": "modbus_gateway_01",
@@ -57,31 +57,31 @@ class ModbusGateway(BaseGateway):
         ]
     }
     """
-    
+
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
-        
+
         # Modbus客户端缓存
         self._clients: dict[str, Any] = {}
-        
+
         # 寄存器配置缓存
         self._register_configs: dict[str, list[dict[str, Any]]] = {}
-        
+
         # 解析设备配置
         for device_config in self.devices_config:
             device_id = device_config.get('device_id')
             if device_id:
                 self._register_configs[device_id] = device_config.get('registers', [])
-    
+
     def connect(self) -> bool:
         """连接所有Modbus设备"""
         all_connected = True
-        
+
         for device_config in self.devices_config:
             device_id = device_config.get('device_id')
             if not device_id:
                 continue
-            
+
             try:
                 client = self._create_client(device_config)
                 if client and client.connect():
@@ -96,9 +96,9 @@ class ModbusGateway(BaseGateway):
                 self.logger.error(f"设备 {device_id} 连接异常: {e}")
                 self.connected_devices[device_id] = False
                 all_connected = False
-        
+
         return all_connected
-    
+
     def disconnect(self):
         """断开所有Modbus设备"""
         for device_id, client in self._clients.items():
@@ -107,26 +107,26 @@ class ModbusGateway(BaseGateway):
                 self.logger.info(f"设备 {device_id} 已断开")
             except Exception as e:
                 self.logger.error(f"设备 {device_id} 断开异常: {e}")
-        
+
         self._clients.clear()
         self.connected_devices.clear()
-    
+
     def _create_client(self, device_config: dict[str, Any]) -> Any:
         """创建Modbus客户端"""
         protocol = device_config.get('protocol', 'tcp')
-        
+
         if protocol == 'tcp':
             host = device_config.get('host', 'localhost')
             port = device_config.get('port', 502)
             return ModbusTcpClient(host, port=port, timeout=10)
-        
+
         elif protocol == 'rtu':
             port = device_config.get('serial_port', 'COM1')
             baudrate = device_config.get('baudrate', 9600)
             parity = device_config.get('parity', 'N')
             stopbits = device_config.get('stopbits', 1)
             bytesize = device_config.get('bytesize', 8)
-            
+
             return ModbusSerialClient(
                 port=port,
                 baudrate=baudrate,
@@ -135,15 +135,15 @@ class ModbusGateway(BaseGateway):
                 bytesize=bytesize,
                 timeout=1
             )
-        
+
         else:
             self.logger.error(f"不支持的协议: {protocol}")
             return None
-    
+
     def read_device_data(self, device_id: str) -> dict[str, float] | None:
         """
         读取单个设备的寄存器数据
-        
+
         Returns:
             dict[str, float]: {register_name: value}
         """
@@ -151,27 +151,27 @@ class ModbusGateway(BaseGateway):
         if not client:
             self.logger.error(f"设备 {device_id} 未连接")
             return None
-        
+
         register_configs = self._register_configs.get(device_id, [])
         if not register_configs:
             self.logger.warning(f"设备 {device_id} 无寄存器配置")
             return None
-        
+
         # 获取slave_id
         device_config = next(
             (d for d in self.devices_config if d.get('device_id') == device_id), 
             {}
         )
         slave_id = device_config.get('slave_id', 1)
-        
+
         result = {}
-        
+
         for reg_config in register_configs:
             name = reg_config.get('name')
             address = reg_config.get('address', 0)
             count = reg_config.get('count', 1)
             data_type = reg_config.get('type', 'uint16')
-            
+
             try:
                 value = self._read_register(client, slave_id, address, count, data_type)
                 if value is not None:
@@ -180,14 +180,14 @@ class ModbusGateway(BaseGateway):
                     self.logger.warning(f"设备 {device_id} 寄存器 {name} 读取失败")
             except Exception as e:
                 self.logger.error(f"设备 {device_id} 寄存器 {name} 读取异常: {e}")
-        
+
         return result if result else None
-    
+
     def _read_register(self, client, slave_id: int, address: int, 
                        count: int, data_type: str) -> float | None:
         """
         读取单个寄存器
-        
+
         Args:
             client: Modbus客户端
             slave_id: 从站地址
@@ -198,23 +198,23 @@ class ModbusGateway(BaseGateway):
         try:
             # 读取保持寄存器
             response = client.read_holding_registers(address, count, slave=slave_id)
-            
+
             if response.isError():
                 self.logger.error(f"Modbus错误: {response}")
                 return None
-            
+
             registers = response.registers
-            
+
             # 根据数据类型解码
             if data_type == 'uint16':
                 return float(registers[0])
-            
+
             elif data_type == 'int16':
                 value = registers[0]
                 if value > 32767:
                     value -= 65536
                 return float(value)
-            
+
             elif data_type == 'float32':
                 if len(registers) < 2:
                     return None
@@ -222,7 +222,7 @@ class ModbusGateway(BaseGateway):
                     registers, byteorder=Endian.BIG, wordorder=Endian.BIG
                 )
                 return decoder.decode_32bit_float()
-            
+
             elif data_type == 'float64':
                 if len(registers) < 4:
                     return None
@@ -230,12 +230,12 @@ class ModbusGateway(BaseGateway):
                     registers, byteorder=Endian.BIG, wordorder=Endian.BIG
                 )
                 return decoder.decode_64bit_float()
-            
+
             elif data_type == 'uint32':
                 if len(registers) < 2:
                     return None
                 return float((registers[0] << 16) | registers[1])
-            
+
             elif data_type == 'int32':
                 if len(registers) < 2:
                     return None
@@ -243,18 +243,18 @@ class ModbusGateway(BaseGateway):
                 if value > 2147483647:
                     value -= 4294967296
                 return float(value)
-            
+
             else:
                 self.logger.error(f"不支持的数据类型: {data_type}")
                 return None
-        
+
         except ModbusException as e:
             self.logger.error(f"Modbus异常: {e}")
             return None
         except Exception as e:
             self.logger.error(f"解码异常: {e}")
             return None
-    
+
     def convert_to_telemetry(self, device_id: str, raw_data: dict[str, float]) -> DeviceTelemetry:
         """将原始Modbus数据转换为统一物模型"""
         return ThingModelConverter.from_modbus_registers(
@@ -262,17 +262,17 @@ class ModbusGateway(BaseGateway):
             registers=raw_data,
             gateway_id=self.gateway_id
         )
-    
+
     def reconnect_device(self, device_id: str) -> bool:
         """重连单个设备"""
         device_config = next(
             (d for d in self.devices_config if d.get('device_id') == device_id),
             None
         )
-        
+
         if not device_config:
             return False
-        
+
         # 关闭旧连接
         old_client = self._clients.get(device_id)
         if old_client:
@@ -280,7 +280,7 @@ class ModbusGateway(BaseGateway):
                 old_client.close()
             except:
                 pass
-        
+
         # 创建新连接
         try:
             client = self._create_client(device_config)
@@ -291,15 +291,15 @@ class ModbusGateway(BaseGateway):
                 return True
         except Exception as e:
             self.logger.error(f"设备 {device_id} 重连失败: {e}")
-        
+
         self.connected_devices[device_id] = False
         return False
-    
+
     def write_register(self, device_id: str, address: int, value: int, 
                        slave_id: int | None = None) -> bool:
         """
         写入单个寄存器（用于设备控制）
-        
+
         Args:
             device_id: 设备ID
             address: 寄存器地址
@@ -309,21 +309,21 @@ class ModbusGateway(BaseGateway):
         client = self._clients.get(device_id)
         if not client:
             return False
-        
+
         if slave_id is None:
             device_config = next(
                 (d for d in self.devices_config if d.get('device_id') == device_id),
                 {}
             )
             slave_id = device_config.get('slave_id', 1)
-        
+
         try:
             response = client.write_register(address, value, slave=slave_id)
             return not response.isError()
         except Exception as e:
             self.logger.error(f"写入失败: {e}")
             return False
-    
+
     def write_coil(self, device_id: str, address: int, value: bool, 
                    slave_id: int | None = None) -> bool:
         """
@@ -332,14 +332,14 @@ class ModbusGateway(BaseGateway):
         client = self._clients.get(device_id)
         if not client:
             return False
-        
+
         if slave_id is None:
             device_config = next(
                 (d for d in self.devices_config if d.get('device_id') == device_id),
                 {}
             )
             slave_id = device_config.get('slave_id', 1)
-        
+
         try:
             response = client.write_coil(address, value, slave=slave_id)
             return not response.isError()
@@ -355,7 +355,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     # 测试配置
     config = {
         "gateway_id": "modbus_gateway_test",
@@ -377,19 +377,19 @@ if __name__ == "__main__":
             }
         ]
     }
-    
+
     # 创建并启动网关
     gateway = ModbusGateway(config)
-    
+
     try:
         gateway.start()
-        
+
         # 保持运行
         while True:
             time.sleep(1)
             stats = gateway.get_stats()
             print(f"统计: {stats}")
-    
+
     except KeyboardInterrupt:
         print("正在停止...")
     finally:

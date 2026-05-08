@@ -42,7 +42,7 @@ for item in data:
     name = item['register_name']
     unit = item.get('unit', '')
     device = item['device_id']
-    
+
     if name == 'temperature' and (v < -50 or v > 100):
         issues.append(f'  WARN: {device}/{name}={v}{unit} 温度异常!')
     elif name == 'pressure' and (v < 0 or v > 10):

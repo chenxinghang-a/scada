@@ -18,11 +18,11 @@ class ModbusClient:
     Modbus客户端封装类
     支持Modbus TCP和RTU协议
     """
-    
+
     def __init__(self, config: dict[str, Any]):
         """
         初始化Modbus客户端
-        
+
         Args:
             config: 设备配置字典
         """
@@ -31,11 +31,11 @@ class ModbusClient:
         self.device_name = config.get('name')
         self.protocol = config.get('protocol', 'modbus_tcp')
         self.slave_id = config.get('slave_id', 1)
-        
+
         # 客户端实例
         self.client = None
         self.connected = False
-        
+
         # 连接参数
         if self.protocol == 'modbus_tcp':
             self.host = config.get('host', '127.0.0.1')
@@ -46,7 +46,7 @@ class ModbusClient:
             self.parity = config.get('parity', 'N')
             self.stopbits = config.get('stopbits', 1)
             self.bytesize = config.get('bytesize', 8)
-        
+
         # 统计信息
         self.stats: dict[str, Any] = {
             'total_reads': 0,
@@ -55,11 +55,11 @@ class ModbusClient:
             'last_read_time': None,
             'last_error': None
         }
-    
+
     def connect(self) -> bool:
         """
         建立Modbus连接
-        
+
         Returns:
             bool: 连接是否成功
         """
@@ -79,259 +79,259 @@ class ModbusClient:
                     bytesize=self.bytesize,
                     timeout=10
                 )
-            
+
             # 建立连接
             self.connected = self.client.connect()
-            
+
             if self.connected:
                 logger.info(f"设备 {self.device_name} 连接成功")
             else:
                 logger.error(f"设备 {self.device_name} 连接失败")
-            
+
             return self.connected
-            
+
         except Exception as e:
             logger.error(f"设备 {self.device_name} 连接异常: {e}")
             self.stats['last_error'] = str(e)
             return False
-    
+
     def disconnect(self):
         """断开Modbus连接"""
         if self.client:
             self.client.close()
             self.connected = False
             logger.info(f"设备 {self.device_name} 已断开连接")
-    
+
     def read_holding_registers(self, address: int, count: int, 
                                slave_id: int | None = None) -> list[int] | None:
         """
         读取保持寄存器（功能码03）
-        
+
         Args:
             address: 起始地址
             count: 读取数量
             slave_id: 从站地址（可选）
-            
+
         Returns:
             list[int]: 寄存器值列表，失败返回None
         """
         if not self.connected:
             logger.error(f"设备 {self.device_name} 未连接")
             return None
-        
+
         slave = slave_id or self.slave_id
         self.stats['total_reads'] += 1
-        
+
         try:
             result = self.client.read_holding_registers(
                 address=address,
                 count=count,
                 slave=slave
             )
-            
+
             if result.isError():
                 logger.error(f"读取寄存器失败: {result}")
                 self.stats['failed_reads'] += 1
                 self.stats['last_error'] = str(result)
                 return None
-            
+
             self.stats['successful_reads'] += 1
             self.stats['last_read_time'] = time.time()
-            
+
             return result.registers
-            
+
         except ConnectionException as e:
             logger.error(f"连接异常: {e}")
             self.connected = False
             self.stats['failed_reads'] += 1
             self.stats['last_error'] = str(e)
             return None
-            
+
         except Exception as e:
             logger.error(f"读取异常: {e}")
             self.stats['failed_reads'] += 1
             self.stats['last_error'] = str(e)
             return None
-    
+
     def read_input_registers(self, address: int, count: int,
                              slave_id: int | None = None) -> list[int] | None:
         """
         读取输入寄存器（功能码04）
-        
+
         Args:
             address: 起始地址
             count: 读取数量
             slave_id: 从站地址（可选）
-            
+
         Returns:
             list[int]: 寄存器值列表，失败返回None
         """
         if not self.connected:
             logger.error(f"设备 {self.device_name} 未连接")
             return None
-        
+
         slave = slave_id or self.slave_id
         self.stats['total_reads'] += 1
-        
+
         try:
             result = self.client.read_input_registers(
                 address=address,
                 count=count,
                 slave=slave
             )
-            
+
             if result.isError():
                 logger.error(f"读取输入寄存器失败: {result}")
                 self.stats['failed_reads'] += 1
                 return None
-            
+
             self.stats['successful_reads'] += 1
             self.stats['last_read_time'] = time.time()
-            
+
             return result.registers
-            
+
         except Exception as e:
             logger.error(f"读取异常: {e}")
             self.stats['failed_reads'] += 1
             return None
-    
+
     def read_coils(self, address: int, count: int,
                    slave_id: int | None = None) -> list[bool] | None:
         """
         读取线圈状态（功能码01）
-        
+
         Args:
             address: 起始地址
             count: 读取数量
             slave_id: 从站地址（可选）
-            
+
         Returns:
             list[bool]: 线圈状态列表，失败返回None
         """
         if not self.connected:
             return None
-        
+
         slave = slave_id or self.slave_id
-        
+
         try:
             result = self.client.read_coils(
                 address=address,
                 count=count,
                 slave=slave
             )
-            
+
             if result.isError():
                 return None
-            
+
             return result.bits[:count]
-            
+
         except Exception as e:
             logger.error(f"读取线圈异常: {e}")
             return None
-    
+
     def read_discrete_inputs(self, address: int, count: int,
                              slave_id: int | None = None) -> list[bool] | None:
         """
         读取离散输入（功能码02）
-        
+
         Args:
             address: 起始地址
             count: 读取数量
             slave_id: 从站地址（可选）
-            
+
         Returns:
             list[bool]: 离散输入状态列表，失败返回None
         """
         if not self.connected:
             return None
-        
+
         slave = slave_id or self.slave_id
-        
+
         try:
             result = self.client.read_discrete_inputs(
                 address=address,
                 count=count,
                 slave=slave
             )
-            
+
             if result.isError():
                 return None
-            
+
             return result.bits[:count]
-            
+
         except Exception as e:
             logger.error(f"读取离散输入异常: {e}")
             return None
-    
+
     def write_single_register(self, address: int, value: int,
                               slave_id: int | None = None) -> bool:
         """
         写入单个寄存器（功能码06）
-        
+
         Args:
             address: 寄存器地址
             value: 写入值
             slave_id: 从站地址（可选）
-            
+
         Returns:
             bool: 写入是否成功
         """
         if not self.connected:
             return False
-        
+
         slave = slave_id or self.slave_id
-        
+
         try:
             result = self.client.write_register(
                 address=address,
                 value=value,
                 slave=slave
             )
-            
+
             return not result.isError()
-            
+
         except Exception as e:
             logger.error(f"写入寄存器异常: {e}")
             return False
-    
+
     def write_single_coil(self, address: int, value: bool,
                           slave_id: int | None = None) -> bool:
         """
         写入单个线圈（功能码05）
-        
+
         Args:
             address: 线圈地址
             value: 写入值
             slave_id: 从站地址（可选）
-            
+
         Returns:
             bool: 写入是否成功
         """
         if not self.connected:
             return False
-        
+
         slave = slave_id or self.slave_id
-        
+
         try:
             result = self.client.write_coil(
                 address=address,
                 value=value,
                 slave=slave
             )
-            
+
             return not result.isError()
-            
+
         except Exception as e:
             logger.error(f"写入线圈异常: {e}")
             return False
-    
+
     def decode_float32(self, registers: list[int]) -> float:
         """
         解码32位浮点数（两个寄存器）
-        
+
         Args:
             registers: 寄存器值列表（2个）
-            
+
         Returns:
             float: 解码后的浮点数
         """
@@ -339,53 +339,53 @@ class ModbusClient:
         raw = (registers[0] << 16) | registers[1]
         # 解码为浮点数（大端序）
         return struct.unpack('>f', struct.pack('>I', raw))[0]
-    
+
     def decode_float64(self, registers: list[int]) -> float:
         """
         解码64位浮点数（四个寄存器）
-        
+
         Args:
             registers: 寄存器值列表（4个）
-            
+
         Returns:
             float: 解码后的浮点数
         """
         raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
         return struct.unpack('>d', raw)[0]
-    
+
     def decode_uint16(self, register: int) -> int:
         """
         解码16位无符号整数
-        
+
         Args:
             register: 寄存器值
-            
+
         Returns:
             int: 解码后的整数
         """
         return register & 0xFFFF
-    
+
     def decode_int16(self, register: int) -> int:
         """
         解码16位有符号整数
-        
+
         Args:
             register: 寄存器值
-            
+
         Returns:
             int: 解码后的整数
         """
         if register & 0x8000:
             return register - 0x10000
         return register
-    
+
     def decode_int32(self, registers: list[int]) -> int:
         """
         解码32位有符号整数（两个寄存器，Big-Endian）
-        
+
         Args:
             registers: 寄存器值列表（2个）
-            
+
         Returns:
             int: 解码后的整数
         """
@@ -393,23 +393,23 @@ class ModbusClient:
         if raw & 0x80000000:
             raw -= 0x100000000
         return raw
-    
+
     def decode_uint32(self, registers: list[int]) -> int:
         """
         解码32位无符号整数（两个寄存器，Big-Endian）
-        
+
         Args:
             registers: 寄存器值列表（2个）
-            
+
         Returns:
             int: 解码后的整数
         """
         return (registers[0] << 16) | registers[1]
-    
+
     def get_stats(self) -> dict[str, Any]:
         """
         获取统计信息
-        
+
         Returns:
             dict[str, Any]: 统计信息字典
         """

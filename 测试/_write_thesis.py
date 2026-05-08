@@ -26,7 +26,7 @@ def ask_gemini(prompt, max_tokens=8000):
         "max_tokens": max_tokens,
         "temperature": 0.7
     }
-    
+
     try:
         r = requests.post(
             BASE_URL,
@@ -233,12 +233,12 @@ for i, ch in enumerate(chapters):
     print(f"\n{'='*60}")
     print(f"正在写 {ch['file']} ...")
     print(f"{'='*60}")
-    
+
     content = ask_gemini(ch["prompt"], max_tokens=8000)
-    
+
     with open(ch["file"], "w", encoding="utf-8") as f:
         f.write(content)
-    
+
     print(f"已保存: {ch['file']}")
     print(f"字数: {len(content)}")
 

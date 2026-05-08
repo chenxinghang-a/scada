@@ -69,17 +69,17 @@ def login():
     data = request.get_json()
     if not data:
         return jsonify({'success': False, 'message': '请提供登录信息'}), 400
-    
+
     username = data.get('username', '').strip()
     password = data.get('password', '')
-    
+
     if not username or not password:
         return jsonify({'success': False, 'message': '用户名和密码不能为空'}), 400
-    
+
     auth_manager = _get_auth_manager()
     ip_address = request.remote_addr
     result = auth_manager.login(username, password, ip_address)
-    
+
     return jsonify(result), (200 if result['success'] else 401)
 
 
@@ -90,9 +90,9 @@ def register():
     auth_header = request.headers.get('Authorization', '')
     if auth_header.startswith('Bearer '):
         token = auth_header[7:]
-    
+
     auth_manager = _get_auth_manager()
-    
+
     # 无token时：检查是否是第一个用户（允许直接注册admin）
     if not token:
         users = auth_manager.get_users()
@@ -102,11 +102,11 @@ def register():
         user = auth_manager.verify_token(token)
         if not user or user['role'] != 'admin':
             return jsonify({'success': False, 'message': '需要管理员权限'}), 403
-    
+
     data = request.get_json()
     if not data:
         return jsonify({'success': False, 'message': '请提供注册信息'}), 400
-    
+
     result = auth_manager.register(
         username=data.get('username', '').strip(),
         password=data.get('password', ''),
@@ -115,7 +115,7 @@ def register():
         email=data.get('email'),
         phone=data.get('phone')
     )
-    
+
     return jsonify(result), (201 if result['success'] else 400)
 
 
@@ -131,13 +131,13 @@ def refresh_token():
     """刷新令牌"""
     data = request.get_json()
     rtoken = data.get('refresh_token')
-    
+
     if not rtoken:
         return jsonify({'success': False, 'message': '请提供刷新令牌'}), 400
-    
+
     auth_manager = _get_auth_manager()
     result = auth_manager.refresh_token(rtoken)
-    
+
     if result:
         return jsonify(result)
     else:
@@ -218,14 +218,14 @@ def add_device():
     data = request.get_json()
     if not data:
         return jsonify({'error': '请提供设备配置'}), 400
-    
+
     # 基础必填字段
     for field in ('id', 'name'):
         if field not in data:
             return jsonify({'error': f'缺少必填字段: {field}'}), 400
-    
+
     protocol = data.get('protocol', 'modbus_tcp')
-    
+
     # 协议级必填字段验证
     try:
         _validate_protocol_fields(protocol, data)
@@ -233,10 +233,10 @@ def add_device():
         # 记录验证错误到日志，返回通用错误信息
         logger.warning(f"设备配置验证失败: {e}")
         return jsonify({'error': '设备配置验证失败，请检查必填字段'}), 400
-    
+
     # 构建设备配置
     device_config = _build_device_config(protocol, data)
-    
+
     success = current_app.device_manager.add_device(device_config)
     if success:
         _get_auth_manager().log_operation(
@@ -253,22 +253,22 @@ def update_device(device_id):
     data = request.get_json()
     if not data:
         return jsonify({'error': '请提供设备配置'}), 400
-    
+
     device_manager = current_app.device_manager
     if device_id not in device_manager.devices:
         return jsonify({'error': f'设备 {device_id} 不存在'}), 404
-    
+
     device_config = device_manager.devices[device_id]
     protocol = data.get('protocol', device_config.get('protocol', 'modbus_tcp'))
-    
+
     # 通用字段
     for key in ('name', 'description', 'enabled', 'collection_interval', 'protocol'):
         if key in data:
             device_config[key] = int(data[key]) if key == 'collection_interval' else data[key]
-    
+
     # 协议专属字段
     _update_protocol_fields(protocol, device_config, data)
-    
+
     device_manager._save_config()
     _get_auth_manager().log_operation(
         request.current_user['username'], 'update_device', f"更新设备: {device_id}")
@@ -292,19 +292,19 @@ def test_device_connection(device_id):
     """测试设备连接（支持所有协议）"""
     device_manager = current_app.device_manager
     device_config = device_manager.devices.get(device_id)
-    
+
     if not device_config:
         return jsonify({'success': False, 'message': f'设备 {device_id} 不存在'}), 404
-    
+
     protocol = device_config.get('protocol', 'modbus_tcp')
-    
+
     try:
         from 采集层.device_manager import _create_client
-        
+
         test_client = _create_client(device_config, device_manager.simulation_mode)
         if test_client is None:
             return jsonify({'success': False, 'message': f'不支持的协议: {protocol}'}), 400
-        
+
         connected = test_client.connect()
         if not connected:
             return jsonify({
@@ -313,7 +313,7 @@ def test_device_connection(device_id):
                 'protocol': protocol,
                 'endpoint': device_config.get('host', device_config.get('endpoint', ''))
             })
-        
+
         # 读取示例数据
         sample = {}
         if protocol in ('modbus_tcp', 'modbus_rtu'):
@@ -339,7 +339,7 @@ def test_device_connection(device_id):
             test_client.disconnect()
         elif protocol == 'mqtt':
             test_client.disconnect()
-        
+
         return jsonify({
             'success': True, 'message': f'连接成功（协议: {protocol}）',
             'protocol': protocol, 'sample_data': sample
@@ -664,10 +664,10 @@ def get_history_data(device_id, register_name):
     start_time = request.args.get('start_time')
     end_time = request.args.get('end_time')
     interval = request.args.get('interval', '1min')
-    
+
     start_time = datetime.fromisoformat(start_time) if start_time else datetime.now() - timedelta(hours=1)
     end_time = datetime.fromisoformat(end_time) if end_time else datetime.now()
-    
+
     data = current_app.database.get_history_data(
         device_id=device_id, register_name=register_name,
         start_time=start_time, end_time=end_time, interval=interval)
@@ -683,10 +683,10 @@ def get_alarms():
     alarm_level = request.args.get('alarm_level')
     acknowledged = request.args.get('acknowledged')
     limit = request.args.get('limit', 100, type=int)
-    
+
     if acknowledged is not None:
         acknowledged = acknowledged.lower() == 'true'
-    
+
     data = current_app.database.get_alarm_records(
         device_id=device_id, alarm_level=alarm_level,
         acknowledged=acknowledged, limit=limit)
@@ -766,7 +766,7 @@ def alarm_output_manual():
     alarm_manager = current_app.alarm_manager
     if not alarm_manager.alarm_output:
         return jsonify({'success': False, 'message': '声光报警输出未启用'}), 400
-    
+
     result = alarm_manager.alarm_output.manual_control(
         red=data.get('red'),
         yellow=data.get('yellow'),
@@ -791,11 +791,11 @@ def broadcast_speak():
     data = request.get_json()
     if not data or not data.get('text'):
         return jsonify({'success': False, 'message': '请提供广播内容(text)'}), 400
-    
+
     alarm_manager = current_app.alarm_manager
     if not alarm_manager.broadcast_system:
         return jsonify({'success': False, 'message': '广播系统未启用'}), 400
-    
+
     result = alarm_manager.broadcast_system.speak(
         text=data['text'],
         level=data.get('level', 'info'),
@@ -836,7 +836,7 @@ def get_system_status():
     """获取系统状态"""
     start_time = getattr(current_app, 'system_start_time', None)
     uptime_seconds = (datetime.now() - start_time).total_seconds() if start_time else 0
-    
+
     return jsonify({
         'database': current_app.database.get_database_stats(),
         'devices': current_app.device_manager.get_all_status(),
@@ -868,30 +868,30 @@ def toggle_simulation_mode():
     """切换模拟/真实模式（需要重启服务生效）"""
     data = request.get_json() or {}
     new_mode = data.get('simulation_mode')
-    
+
     if new_mode is None:
         return jsonify({'success': False, 'message': '缺少simulation_mode参数'}), 400
-    
+
     # 注意：运行时切换模式需要重启所有客户端连接
     # 这里只更新配置文件，提示用户重启
     from pathlib import Path
     import yaml
-    
+
     config_path = Path('配置/system.yaml')
     if config_path.exists():
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f) or {}
     else:
         config = {}
-    
+
     if 'system' not in config:
         config['system'] = {}
     config['system']['simulation_mode'] = bool(new_mode)
-    
+
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, 'w', encoding='utf-8') as f:
         yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
-    
+
     return jsonify({
         'success': True,
         'message': f'模式已切换为{"模拟" if new_mode else "真实"}模式，重启服务后生效',
@@ -906,14 +906,14 @@ def toggle_simulation_mode():
 def export_device_data(device_id):
     """导出设备数据"""
     from 存储层.data_export import DataExport
-    
+
     data = request.get_json() or {}
     start_time_str = data.get('start_time')
     end_time_str = data.get('end_time')
-    
+
     if not start_time_str or not end_time_str:
         return jsonify({'success': False, 'message': '缺少start_time或end_time参数'}), 400
-    
+
     exporter = DataExport()
     filepath = exporter.export_device_data(
         database=current_app.database,
@@ -922,7 +922,7 @@ def export_device_data(device_id):
         end_time=datetime.fromisoformat(end_time_str),
         format=data.get('format', 'csv')
     )
-    
+
     if filepath:
         return jsonify({'success': True, 'filepath': filepath})
     return jsonify({'success': False, 'message': '导出失败'}), 500
@@ -932,7 +932,7 @@ def export_device_data(device_id):
 def export_alarms():
     """导出报警记录"""
     from 存储层.data_export import DataExport
-    
+
     data = request.get_json() or {}
     exporter = DataExport()
     filepath = exporter.export_alarm_records(
@@ -941,7 +941,7 @@ def export_alarms():
         end_time=datetime.fromisoformat(data['end_time']) if data.get('end_time') else None,
         format=data.get('format', 'csv')
     )
-    
+
     if filepath:
         return jsonify({'success': True, 'filepath': filepath})
     return jsonify({'success': False, 'message': '没有报警记录可导出'})
@@ -965,17 +965,17 @@ def update_config():
     data = request.get_json()
     if not data:
         return jsonify({'error': '请提供配置数据'}), 400
-    
+
     config = _load_yaml_config('配置/system.yaml')
-    
+
     section = data.get('section')
     if section and section in config:
         config[section].update(data.get('data', {}))
     else:
         config.update(data)
-    
+
     _save_yaml_config('配置/system.yaml', config)
-    
+
     _get_auth_manager().log_operation(
         request.current_user['username'], 'update_config', f"更新系统配置: {section or 'global'}")
     return jsonify({'success': True, 'message': '配置已保存'})
@@ -997,18 +997,18 @@ def add_alarm_rule():
     data = request.get_json()
     if not data or 'id' not in data:
         return jsonify({'error': '请提供规则ID'}), 400
-    
+
     config = _load_yaml_config('配置/alarms.yaml')
-    
+
     rules = config.get('alarm_rules', [])
     if any(r.get('id') == data['id'] for r in rules):
         return jsonify({'error': f'规则 {data["id"]} 已存在'}), 400
-    
+
     rules.append(data)
     config['alarm_rules'] = rules
-    
+
     _save_yaml_config('配置/alarms.yaml', config)
-    
+
     current_app.alarm_manager.rules[data['id']] = data
     _get_auth_manager().log_operation(
         request.current_user['username'], 'add_alarm_rule', f"添加报警规则: {data['id']}")
@@ -1022,9 +1022,9 @@ def update_alarm_rule(rule_id):
     data = request.get_json()
     if not data:
         return jsonify({'error': '请提供更新数据'}), 400
-    
+
     config = _load_yaml_config('配置/alarms.yaml')
-    
+
     rules = config.get('alarm_rules', [])
     found = False
     for i, r in enumerate(rules):
@@ -1032,13 +1032,13 @@ def update_alarm_rule(rule_id):
             rules[i].update(data)
             found = True
             break
-    
+
     if not found:
         return jsonify({'error': f'规则 {rule_id} 不存在'}), 404
-    
+
     config['alarm_rules'] = rules
     _save_yaml_config('配置/alarms.yaml', config)
-    
+
     current_app.alarm_manager.rules[rule_id] = rules[[r['id'] for r in rules].index(rule_id)]
     _get_auth_manager().log_operation(
         request.current_user['username'], 'update_alarm_rule', f"更新报警规则: {rule_id}")
@@ -1050,19 +1050,19 @@ def update_alarm_rule(rule_id):
 def delete_alarm_rule(rule_id):
     """删除报警规则"""
     config = _load_yaml_config('配置/alarms.yaml')
-    
+
     rules = config.get('alarm_rules', [])
     new_rules = [r for r in rules if r.get('id') != rule_id]
-    
+
     if len(new_rules) == len(rules):
         return jsonify({'error': f'规则 {rule_id} 不存在'}), 404
-    
+
     config['alarm_rules'] = new_rules
     _save_yaml_config('配置/alarms.yaml', config)
-    
+
     if rule_id in current_app.alarm_manager.rules:
         del current_app.alarm_manager.rules[rule_id]
-    
+
     _get_auth_manager().log_operation(
         request.current_user['username'], 'delete_alarm_rule', f"删除报警规则: {rule_id}")
     return jsonify({'success': True, 'message': f'规则 {rule_id} 已删除'})
@@ -1075,16 +1075,16 @@ def update_notification():
     data = request.get_json()
     if not data:
         return jsonify({'error': '请提供通知配置'}), 400
-    
+
     config = _load_yaml_config('配置/alarms.yaml')
-    
+
     if 'email' in data:
         config.setdefault('notification', {})['email'] = data['email']
     if 'sound' in data:
         config.setdefault('notification', {})['sound'] = data['sound']
-    
+
     _save_yaml_config('配置/alarms.yaml', config)
-    
+
     _get_auth_manager().log_operation(
         request.current_user['username'], 'update_notification', '更新通知设置')
     return jsonify({'success': True, 'message': '通知设置已保存'})
@@ -1126,7 +1126,7 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         'enabled': data.get('enabled', True),
         'collection_interval': int(data.get('collection_interval', 5))
     }
-    
+
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         config['host'] = data['host']
         config['port'] = int(data['port'])
@@ -1160,7 +1160,7 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
                 config['auth_username'] = data.get('auth_username', '')
                 config['auth_password'] = data.get('auth_password', '')
         config['endpoints'] = data['endpoints']
-    
+
     return config
 
 
@@ -1347,7 +1347,7 @@ def get_industry40_overview():
         'energy': None,
         'edge_decision': None,
     }
-    
+
     pm = current_app.predictive_maintenance
     if pm:
         scores = pm.get_health_scores()
@@ -1359,7 +1359,7 @@ def get_industry40_overview():
                 'avg_health_score': round(avg_health, 1),
                 'recent_alerts': alerts,
             }
-    
+
     oee_calc = current_app.oee_calculator
     if oee_calc:
         all_oee = oee_calc.get_all_oee()
@@ -1370,14 +1370,14 @@ def get_industry40_overview():
                 'avg_oee_percent': round(avg_oee, 1),
                 'devices': all_oee,
             }
-    
+
     em = current_app.energy_manager
     if em:
         result['energy'] = em.get_energy_summary()
         result['energy']['total_power_kw'] = em.get_total_power()
-    
+
     edge = current_app.edge_decision
     if edge:
         result['edge_decision'] = edge.get_status()
-    
+
     return jsonify(result)

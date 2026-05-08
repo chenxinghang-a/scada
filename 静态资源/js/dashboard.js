@@ -81,10 +81,30 @@ async function loadRealtimeData() {
         const response = await fetch('/api/data/realtime?limit=20');
         const data = await response.json();
         
-        if (data.data) {
+        if (data.data && data.data.length > 0) {
             updateRealtimeTable(data.data);
             updateCharts(data.data);
             updateGaugeValues(data.data);
+            
+            // 更新数据状态
+            const dataStatus = document.getElementById('data-status');
+            if (dataStatus) {
+                dataStatus.textContent = '实时更新中';
+                dataStatus.className = 'badge bg-success';
+            }
+            
+            // 更新最后更新时间
+            const lastUpdate = document.getElementById('last-update');
+            if (lastUpdate) {
+                lastUpdate.textContent = new Date().toLocaleTimeString('zh-CN');
+            }
+        } else {
+            // 没有数据时显示提示
+            const dataStatus = document.getElementById('data-status');
+            if (dataStatus) {
+                dataStatus.textContent = '等待数据...';
+                dataStatus.className = 'badge bg-warning';
+            }
         }
         
         // 更新系统统计
@@ -106,6 +126,11 @@ async function loadRealtimeData() {
         
     } catch (error) {
         console.error('加载实时数据失败:', error);
+        const dataStatus = document.getElementById('data-status');
+        if (dataStatus) {
+            dataStatus.textContent = '连接失败';
+            dataStatus.className = 'badge bg-danger';
+        }
     }
 }
 

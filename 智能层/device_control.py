@@ -338,7 +338,7 @@ class DeviceControlSafety:
                         reg_addr = int(register_name)
                     except (ValueError, TypeError):
                         reg_addr = self._resolve_register_address(device_id, register_name)
-                    
+
                     if (cond.get('device_id') == device_id and
                             cond_address is not None and reg_addr is not None and
                             int(cond_address) == int(reg_addr)):
@@ -630,24 +630,24 @@ class DeviceControlSafety:
     def _resolve_register_address(self, device_id: str, register_name) -> int | None:
         """
         将寄存器名称解析为地址
-        
+
         Args:
             device_id: 设备ID
             register_name: 寄存器名称或地址（可能是字符串名称或整数地址）
-            
+
         Returns:
             寄存器地址，找不到返回None
         """
         # 如果已经是整数，直接返回
         if isinstance(register_name, int):
             return register_name
-        
+
         # 尝试转换为整数
         try:
             return int(register_name)
         except (ValueError, TypeError):
             pass
-        
+
         # 从设备配置中查找寄存器名称对应的地址
         if self.device_manager:
             device_config = self.device_manager.devices.get(device_id, {})
@@ -655,7 +655,7 @@ class DeviceControlSafety:
             for reg in registers:
                 if reg.get('name') == register_name:
                     return reg.get('address')
-        
+
         return None
 
     # ==================== 故障降级 ====================

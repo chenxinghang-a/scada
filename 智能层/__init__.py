@@ -10,7 +10,6 @@
 - TDengine适配器 (TSDB Adapter) — 连接智能层与TDengine
 """
 
-from typing import Any
 from .predictive_maintenance import PredictiveMaintenance
 from .oee_calculator import OEECalculator
 from .spc_analyzer import SPCAnalyzer

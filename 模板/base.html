@@ -136,7 +136,7 @@
     <script>
         // 检查登录状态
         function checkAuth() {
-            const token = localStorage.getItem('scada_token');
+            const token = localStorage.getItem('auth_token');
             if (!token) {
                 window.location.href = '/login';
                 return false;
@@ -149,7 +149,7 @@
             .then(r => r.json())
             .then(data => {
                 if (!data.valid) {
-                    localStorage.removeItem('scada_token');
+                    localStorage.removeItem('auth_token');
                     localStorage.removeItem('scada_user');
                     window.location.href = '/login';
                 }
@@ -173,13 +173,13 @@
         
         // 获取认证头
         function getAuthHeaders() {
-            const token = localStorage.getItem('scada_token');
+            const token = localStorage.getItem('auth_token');
             return token ? { 'Authorization': `Bearer ${token}` } : {};
         }
         
         // 退出登录
         function logout() {
-            localStorage.removeItem('scada_token');
+            localStorage.removeItem('auth_token');
             localStorage.removeItem('scada_user');
             localStorage.removeItem('scada_refresh_token');
             window.location.href = '/login';
@@ -215,7 +215,10 @@
         // 更新模拟模式指示器
         function updateSimModeIndicator() {
             fetch('/api/system/simulation-mode', { headers: getAuthHeaders() })
-                .then(r => r.json())
+                .then(r => {
+                    if (!r.ok) throw new Error('请求失败');
+                    return r.json();
+                })
                 .then(data => {
                     const indicator = document.getElementById('sim-mode-indicator');
                     const text = document.getElementById('sim-mode-text');
@@ -249,16 +252,28 @@
                 headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify({ simulation_mode: newMode })
             })
-            .then(r => r.json())
+            .then(r => {
+                if (r.status === 401) {
+                    alert('切换失败: 未登录或登录已过期，请重新登录');
+                    logout();
+                    return null;
+                }
+                if (r.status === 403) {
+                    alert('切换失败: 权限不足，需要管理员或工程师角色');
+                    return null;
+                }
+                return r.json();
+            })
             .then(data => {
+                if (!data) return;
                 if (data.success) {
                     alert(data.message);
                     updateSimModeIndicator();
                 } else {
-                    alert('切换失败: ' + (data.message || '未知错误'));
+                    alert('切换失败: ' + (data.message || data.error || '未知错误'));
                 }
             })
-            .catch(e => alert('切换失败: ' + e.message));
+            .catch(e => alert('切换失败: ' + (e.message || '网络错误')));
         }
         
         // 页面加载时检查认证

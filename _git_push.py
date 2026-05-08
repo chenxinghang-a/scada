@@ -1,5 +1,4 @@
 """Git push helper - commit and push to GitHub"""
-from typing import Any
 import subprocess
 import sys
 import os

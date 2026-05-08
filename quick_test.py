@@ -1,4 +1,3 @@
-from typing import Any
 import requests, json
 base = 'http://localhost:5000'
 r = requests.post(f'{base}/api/auth/login', json={'username':'admin','password':'admin123'})

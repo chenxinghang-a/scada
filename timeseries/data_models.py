@@ -25,7 +25,7 @@ from typing import Any
 class TelemetryRecord:
     """
     遥测数据记录
-    
+
     对应TDengine超级表：device_telemetry
     """
     device_id: str          # 设备ID
@@ -36,12 +36,12 @@ class TelemetryRecord:
     unit: str = ""          # 单位
     protocol: str = ""      # 协议类型
     gateway_id: str = ""    # 网关ID
-    
+
     def to_sql_values(self) -> str:
         """转换为SQL VALUES格式"""
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         return f"('{ts}', {self.value}, {self.quality})"
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             'device_id': self.device_id,
@@ -59,7 +59,7 @@ class TelemetryRecord:
 class AlarmRecord:
     """
     报警记录
-    
+
     对应TDengine超级表：alarm_records
     """
     alarm_id: str           # 报警ID
@@ -71,7 +71,7 @@ class AlarmRecord:
     value: float = 0        # 实际值
     threshold: float = 0    # 阈值
     acknowledged: bool = False  # 是否已确认
-    
+
     def to_sql_values(self) -> str:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         ack = 1 if self.acknowledged else 0
@@ -84,7 +84,7 @@ class AlarmRecord:
 class OEERecord:
     """
     OEE记录
-    
+
     对应TDengine超级表：oee_records
     """
     device_id: str          # 设备ID
@@ -97,7 +97,7 @@ class OEERecord:
     good_count: int = 0     # 合格品数
     run_time: float = 0     # 运行时间（秒）
     downtime: float = 0     # 停机时间（秒）
-    
+
     def to_sql_values(self) -> str:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         return (f"('{ts}', {self.availability}, {self.performance}, "
@@ -109,7 +109,7 @@ class OEERecord:
 class EnergyRecord:
     """
     能源记录
-    
+
     对应TDengine超级表：energy_records
     """
     device_id: str          # 设备ID
@@ -119,7 +119,7 @@ class EnergyRecord:
     voltage: float = 0      # 电压 (V)
     current: float = 0      # 电流 (A)
     power_factor: float = 1.0  # 功率因数
-    
+
     def to_sql_values(self) -> str:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         return (f"('{ts}', {self.power}, {self.energy}, "
@@ -130,7 +130,7 @@ class EnergyRecord:
 class PredictiveRecord:
     """
     预测性维护记录
-    
+
     对应TDengine超级表：predictive_records
     """
     device_id: str          # 设备ID
@@ -140,7 +140,7 @@ class PredictiveRecord:
     remaining_life: float   # 剩余寿命（小时）
     anomaly_score: float = 0    # 异常分数
     trend: str = "stable"   # 趋势 (improving, stable, degrading)
-    
+
     def to_sql_values(self) -> str:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         return (f"('{ts}', {self.health_score}, {self.failure_probability}, "
@@ -163,7 +163,7 @@ STABLE_DEFINITIONS = {
             gateway_id NCHAR(64)
         )
     """,
-    
+
     # 报警记录超级表
     'alarm_records': """
         CREATE STABLE IF NOT EXISTS alarm_records (
@@ -179,7 +179,7 @@ STABLE_DEFINITIONS = {
             alarm_id NCHAR(64)
         )
     """,
-    
+
     # OEE记录超级表
     'oee_records': """
         CREATE STABLE IF NOT EXISTS oee_records (
@@ -196,7 +196,7 @@ STABLE_DEFINITIONS = {
             device_id NCHAR(64)
         )
     """,
-    
+
     # 能源记录超级表
     'energy_records': """
         CREATE STABLE IF NOT EXISTS energy_records (
@@ -210,7 +210,7 @@ STABLE_DEFINITIONS = {
             device_id NCHAR(64)
         )
     """,
-    
+
     # 预测性维护记录超级表
     'predictive_records': """
         CREATE STABLE IF NOT EXISTS predictive_records (
@@ -230,7 +230,7 @@ STABLE_DEFINITIONS = {
 def get_create_table_sql(table_name: str, stable_name: str, tags: dict[str, str]) -> str:
     """
     生成创建子表的SQL
-    
+
     Args:
         table_name: 子表名称
         stable_name: 超级表名称

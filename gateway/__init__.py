@@ -11,13 +11,12 @@
 
 使用方式：
     from gateway import ModbusGateway
-    
+
     config = {...}
     gateway = ModbusGateway(config)
     gateway.start()
 """
 
-from typing import Any
 from .thing_model import (
     DeviceTelemetry,
     DeviceStatus,
@@ -48,13 +47,13 @@ __all__ = [
     'ProtocolType',
     'DataQuality',
     'MetricValue',
-    
+
     # 网关基类
     'BaseGateway',
-    
+
     # 协议网关
     'ModbusGateway',
-    
+
     # MQTT订阅
     'MQTTSubscriber',
     'MQTTDataDistributor',

@@ -7,7 +7,7 @@
 使用方式：
     # 启动Modbus网关
     python gateway/run_gateway.py --type modbus --config gateway/config.yaml
-    
+
     # 启动所有网关
     python gateway/run_gateway.py --all --config gateway/config.yaml
 """
@@ -54,11 +54,11 @@ def create_gateway(gateway_type: str, config: dict[str, Any]):
         # 'opcua': OPCUAGateway,
         # 'mqtt': MQTTGateway,
     }
-    
+
     gateway_class = gateway_map.get(gateway_type)
     if not gateway_class:
         raise ValueError(f"不支持的网关类型: {gateway_type}")
-    
+
     return gateway_class(config)
 
 
@@ -74,23 +74,23 @@ def main():
     parser.add_argument('--log-level', type=str, default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         help='日志级别')
-    
+
     args = parser.parse_args()
-    
+
     # 配置日志
     setup_logging(args.log_level)
     logger = logging.getLogger("GatewayMain")
-    
+
     # 加载配置
     try:
         config = load_config(args.config)
     except Exception as e:
         logger.error(f"加载配置失败: {e}")
         sys.exit(1)
-    
+
     # 创建网关实例
     gateways = []
-    
+
     if args.all:
         # 启动所有网关
         for gw_config in config.get('gateways', []):
@@ -111,43 +111,43 @@ def main():
         except Exception as e:
             logger.error(f"创建{args.type}网关失败: {e}")
             sys.exit(1)
-    
+
     if not gateways:
         logger.error("没有可用的网关配置")
         sys.exit(1)
-    
+
     # 启动所有网关
     logger.info(f"启动 {len(gateways)} 个网关...")
-    
+
     for gateway in gateways:
         try:
             gateway.start()
         except Exception as e:
             logger.error(f"启动网关失败: {e}")
-    
+
     # 信号处理
     def signal_handler(signum, frame):
         logger.info("接收到停止信号，正在关闭...")
         for gateway in gateways:
             gateway.stop()
         sys.exit(0)
-    
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     # 保持运行
     logger.info("网关服务已启动，按 Ctrl+C 停止")
-    
+
     try:
         while True:
             import time
             time.sleep(1)
-            
+
             # 打印统计信息
             for gateway in gateways:
                 stats = gateway.get_stats()
                 logger.debug(f"网关 {gateway.gateway_id}: {stats}")
-    
+
     except KeyboardInterrupt:
         logger.info("正在停止...")
     finally:

@@ -161,7 +161,7 @@ def _find_rule(name: str, unit: str, data_type: str = 'uint16') -> dict[str, Any
     """
     从映射表查找匹配规则，先匹配name关键字，再匹配unit。
     如果都没匹配到，根据data_type和unit智能推断一个合理的规则。
-    
+
     Args:
         name: 寄存器名称
         unit: 单位
@@ -202,19 +202,19 @@ def _infer_rule_from_type(name: str, unit: str, data_type: str) -> dict[str, Any
     """
     name_lower = name.lower() if name else ''
     unit_lower = unit.lower() if unit else ''
-    
+
     # 状态/枚举类型（通常是整数，值域小）
     status_keywords = ['status', 'state', 'mode', 'alarm', 'code', 'flag', 'error']
     for kw in status_keywords:
         if kw in name_lower:
             return {'kw': kw, 'base': 1, 'amp': 0, 'period': 0, 'noise': 0, 'shape': 'status'}
-    
+
     # 计数类型（单调递增）
     count_keywords = ['count', 'total', 'sum', 'quantity', 'number', 'num']
     for kw in count_keywords:
         if kw in name_lower:
             return {'kw': kw, 'unit_kw': unit, 'base': 500, 'amp': 0, 'period': 0, 'noise': 0, 'shape': 'ramp', 'rate': 0.1}
-    
+
     # 根据单位推断
     unit_infer_rules = {
         '°c': {'base': 50, 'amp': 20, 'period': 90, 'noise': 0.5},
@@ -260,11 +260,11 @@ def _infer_rule_from_type(name: str, unit: str, data_type: str) -> dict[str, Any
         't': {'base': 50, 'amp': 0, 'period': 0, 'noise': 0, 'shape': 'ramp', 'rate': 0.01},
         'm³': {'base': 500, 'amp': 0, 'period': 0, 'noise': 0, 'shape': 'ramp', 'rate': 0.01},
     }
-    
+
     if unit_lower in unit_infer_rules:
         params = unit_infer_rules[unit_lower]
         return {'kw': name_lower, 'unit_kw': unit, 'shape': 'sine', **params}
-    
+
     # 最终兜底：根据data_type生成
     if data_type == 'float32':
         return {'kw': name_lower, 'base': 50.0, 'amp': 20.0, 'period': 60, 'noise': 1.0, 'shape': 'sine'}
@@ -275,7 +275,14 @@ def _infer_rule_from_type(name: str, unit: str, data_type: str) -> dict[str, Any
 
 
 def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0) -> float:
-    """根据规则和时间生成模拟值"""
+    """根据规则和时间生成模拟值
+
+    增强版模拟：
+    - 正弦波叠加低频漂移
+    - 高斯噪声 + 偶发尖峰
+    - 日夜班次影响
+    - 设备老化趋势
+    """
     shape = rule.get('shape', 'sine')
     base = rule['base']
     amp = rule.get('amp', 0)
@@ -283,23 +290,53 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0) -
     noise = rule.get('noise', 0)
 
     if shape == 'sine' and period > 0:
+        # 主波形
         value = base + amp * math.sin(t / period + phase_offset)
+
+        # 低频漂移（模拟环境变化）
+        drift_period = period * 3.7
+        drift_amp = amp * 0.15
+        value += drift_amp * math.sin(t / drift_period + phase_offset * 0.5)
+
+        # 日夜班次影响（24小时周期）
+        hour_of_day = (t / 3600) % 24
+        # 白班(8-20)温度略高，夜班(20-8)略低
+        day_night_factor = 0.03 * math.sin((hour_of_day - 6) * math.pi / 12)
+        value *= (1 + day_night_factor)
+
+        # 噪声：高斯 + 偶发尖峰
         if noise > 0:
             value += random.gauss(0, noise)
+            # 2%概率出现尖峰（模拟干扰）
+            if random.random() < 0.02:
+                value += random.gauss(0, noise * 3)
+
     elif shape == 'ramp':
         rate = rule.get('rate', 0.01)
         value = base + t * rate
-    elif shape == 'status':
-        # 交替状态: 大部分时间运行(1), 偶尔故障(2)或停机(0)
-        cycle = int(t) % 60
-        if cycle < 55:
-            value = 1
-        elif cycle < 58:
-            value = 2
+        # 添加微小波动（模拟计量误差）
+        if noise > 0:
+            value += random.gauss(0, noise)
         else:
-            value = 0
+            value += random.gauss(0, abs(base) * 0.001)
+
+    elif shape == 'status':
+        # 更真实的设备状态：运行(90%) - 空闲(5%) - 故障(3%) - 维护(2%)
+        cycle = int(t) % 100
+        if cycle < 90:
+            value = 1  # 运行
+        elif cycle < 95:
+            value = 0  # 空闲/待机
+        elif cycle < 98:
+            value = 2  # 故障
+        else:
+            value = 3  # 维护中
+
     elif shape == 'constant':
         value = base
+        # 即使是常量也有微小波动
+        if noise > 0:
+            value += random.gauss(0, noise * 0.1)
     else:
         value = base
         if noise > 0:

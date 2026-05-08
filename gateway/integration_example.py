@@ -15,7 +15,6 @@
 - 协议无关：主系统不关心底层协议
 """
 
-from typing import Any
 import sys
 import logging
 from pathlib import Path
@@ -33,17 +32,17 @@ from gateway import (
 def create_integrated_system():
     """
     创建集成系统示例
-    
+
     展示如何将MQTT订阅集成到现有SCADA系统。
     """
-    
+
     # 配置日志
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger("IntegrationExample")
-    
+
     # 1. 创建MQTT订阅客户端
     logger.info("创建MQTT订阅客户端...")
     subscriber = MQTTSubscriber(
@@ -51,66 +50,66 @@ def create_integrated_system():
         broker_port=1883,
         client_id="scada_main_system"
     )
-    
+
     # 2. 创建数据分发器
     logger.info("创建数据分发器...")
     distributor = MQTTDataDistributor(subscriber)
-    
+
     # 3. 初始化业务模块（模拟）
     # 在实际系统中，这些是真实的业务模块
     class MockOEECalculator:
         def update_from_telemetry(self, telemetry: DeviceTelemetry):
             logger.info(f"OEE收到数据: {telemetry.DeviceID}")
             # 处理OEE计算...
-    
+
     class MockPredictiveMaintenance:
         def update_from_telemetry(self, telemetry: DeviceTelemetry):
             logger.info(f"预测性维护收到数据: {telemetry.DeviceID}")
             # 处理预测性维护...
-    
+
     class MockAlarmManager:
         def process_alarm(self, alarm: AlarmMessage):
             logger.info(f"报警管理器收到报警: {alarm.DeviceID} - {alarm.Message}")
             # 处理报警...
-    
+
     # 4. 注册业务模块
     logger.info("注册业务模块...")
     distributor.register_module('oee', MockOEECalculator())
     distributor.register_module('predictive', MockPredictiveMaintenance())
     distributor.register_module('alarm', MockAlarmManager())
-    
+
     # 5. 订阅所有主题
     logger.info("订阅MQTT主题...")
     subscriber.subscribe_all()
-    
+
     # 6. 启动订阅
     logger.info("启动MQTT订阅...")
     subscriber.start()
-    
+
     return subscriber, distributor
 
 
 def demonstrate_data_flow():
     """
     演示数据流
-    
+
     展示数据如何从网关流向主系统。
     """
     import time
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger("DataFlowDemo")
-    
+
     # 创建集成系统
     subscriber, distributor = create_integrated_system()
-    
+
     logger.info("=" * 50)
     logger.info("系统已启动，等待网关数据...")
     logger.info("=" * 50)
-    
+
     logger.info("\n数据流说明：")
     logger.info("1. 网关进程读取设备数据（Modbus/S7/OPC UA）")
     logger.info("2. 网关将数据转换为统一物模型（JSON）")
@@ -123,7 +122,7 @@ def demonstrate_data_flow():
     logger.info("- 网关崩溃不影响主系统")
     logger.info("- 可以水平扩展多个网关")
     logger.info("- 主系统不关心底层协议")
-    
+
     try:
         while True:
             time.sleep(5)
@@ -194,13 +193,13 @@ def show_architecture():
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='网关集成示例')
     parser.add_argument('--demo', action='store_true', help='运行数据流演示')
     parser.add_argument('--arch', action='store_true', help='显示架构图')
-    
+
     args = parser.parse_args()
-    
+
     if args.arch:
         show_architecture()
     elif args.demo:

@@ -18,13 +18,12 @@
 
 使用方式：
     from timeseries import TDengineClient
-    
+
     client = TDengineClient("localhost", 6041)
     client.write_telemetry(telemetry)
     data = client.query_telemetry("CNC_001", start_time, end_time)
 """
 
-from typing import Any
 from .tdengine_client import TDengineClient
 from .data_models import (
     TelemetryRecord,
@@ -41,16 +40,16 @@ __author__ = "Industrial SCADA Team"
 __all__ = [
     # 客户端
     'TDengineClient',
-    
+
     # 数据模型
     'TelemetryRecord',
     'AlarmRecord',
     'OEERecord',
     'EnergyRecord',
-    
+
     # 查询构建器
     'QueryBuilder',
-    
+
     # 数据迁移
     'SQLiteToTDengineMigrator',
 ]
