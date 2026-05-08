@@ -212,7 +212,7 @@
 
 {% block scripts %}
 <script>
-const API_BASE = '/api';
+const CHARTS_API = '/api';
 let token = localStorage.getItem('auth_token');
 let chart = null;
 let chartType = 'line';
@@ -231,7 +231,7 @@ function getHeaders() {
 // API请求封装
 async function apiGet(path) {
     try {
-        const resp = await fetch(`${API_BASE}${path}`, { headers: getHeaders() });
+        const resp = await fetch(`${CHARTS_API}${path}`, { headers: getHeaders() });
         if (resp.status === 401) {
             window.location.href = '/login';
             return null;
