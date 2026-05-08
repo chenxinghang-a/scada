@@ -16,7 +16,13 @@ from .spc_analyzer import SPCAnalyzer
 from .energy_manager import EnergyManager
 from .edge_decision import EdgeDecisionEngine
 from .device_control import DeviceControlSafety
-from .tsdb_adapter import TSDBAdapter, RealtimeDataBridge
+
+# TSDBAdapter依赖timeseries模块，可选导入
+try:
+    from .tsdb_adapter import TSDBAdapter, RealtimeDataBridge
+    _has_tsdb = True
+except ImportError:
+    _has_tsdb = False
 
 __all__ = [
     'PredictiveMaintenance',
@@ -25,6 +31,7 @@ __all__ = [
     'EnergyManager',
     'EdgeDecisionEngine',
     'DeviceControlSafety',
-    'TSDBAdapter',
-    'RealtimeDataBridge',
 ]
+
+if _has_tsdb:
+    __all__.extend(['TSDBAdapter', 'RealtimeDataBridge'])

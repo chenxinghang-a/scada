@@ -14,6 +14,11 @@ sys.path.insert(0, str(project_root))
 # 记录系统启动时间
 SYSTEM_START_TIME = datetime.now()
 
+# 确保日志目录存在
+(project_root / 'logs').mkdir(parents=True, exist_ok=True)
+(project_root / 'data').mkdir(parents=True, exist_ok=True)
+(project_root / 'exports').mkdir(parents=True, exist_ok=True)
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -41,7 +46,7 @@ def main():
 
         # 初始化数据库
         logger.info("初始化数据库...")
-        database = Database('data/scada.db')
+        database = Database(str(project_root / 'data' / 'scada.db'))
 
         # 判断是否使用模拟模式
         simulation_mode = '--real' not in sys.argv
@@ -233,14 +238,13 @@ def main():
         logger.info("=" * 50)
 
         # 注入WebSocket推送函数到报警管理器
-        from 展示层.websocket import socketio as ws_socketio, emit_alarm, emit_broadcast
+        from 展示层.websocket import socketio, emit_alarm, emit_broadcast
         alarm_manager.set_websocket_emit(emit_alarm)
 
         # 注入广播WebSocket推送（广播发生时实时通知前端）
         broadcast_system.add_callback(lambda msg: emit_broadcast(msg))
 
         # 使用routes.py中已创建的SocketIO实例（init_socketio在create_app中已调用）
-        from 展示层.websocket import socketio
         from config import WebConfig
         host = WebConfig.HOST
         port = WebConfig.PORT

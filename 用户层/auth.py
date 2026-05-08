@@ -35,8 +35,7 @@ ROLES = {
 }
 
 # JWT配置（从config.py统一读取）
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# run.py已将项目根目录加入sys.path，直接导入即可
 from config import AuthConfig
 
 JWT_SECRET = AuthConfig.JWT_SECRET
@@ -528,7 +527,7 @@ def jwt_required(f):
 
 def role_required(*required_roles):
     """
-    角色权限装饰器
+    角色权限装饰器（内置JWT认证）
     要求用户具有指定角色之一
 
     Usage:
@@ -539,10 +538,25 @@ def role_required(*required_roles):
     def decorator(f):
         @wraps(f)
         def decorated(*args, **kwargs):
-            user = getattr(request, 'current_user', None)
-            if not user:
-                return jsonify({'error': '未认证'}), 401
+            # 先执行JWT认证
+            token = None
+            auth_header = request.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                token = auth_header[7:]
+            if not token:
+                token = request.args.get('token')
+            if not token:
+                return jsonify({'error': '未提供认证令牌'}), 401
 
+            from flask import current_app
+            auth_manager = current_app.auth_manager
+            user = auth_manager.verify_token(token)
+            if not user:
+                return jsonify({'error': '令牌无效或已过期'}), 401
+
+            request.current_user = user
+
+            # 检查角色权限
             if user['role'] not in required_roles:
                 return jsonify({
                     'error': '权限不足',
