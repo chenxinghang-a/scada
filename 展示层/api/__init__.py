@@ -13,6 +13,7 @@ from .api_data import data_bp
 from .api_alarms import alarms_bp
 from .api_system import system_bp
 from .api_industry40 import industry40_bp
+from .api_health import health_bp
 
 # 统一注册的Blueprint列表
 ALL_BLUEPRINTS = [
@@ -23,6 +24,7 @@ ALL_BLUEPRINTS = [
     alarms_bp,
     system_bp,
     industry40_bp,
+    health_bp,
 ]
 
 

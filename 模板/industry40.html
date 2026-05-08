@@ -30,19 +30,6 @@
         font-weight: 600;
         color: #ffffff;
     }
-    .health-score {
-        font-size: 3rem;
-        font-weight: 700;
-        text-align: center;
-        padding: 20px 0;
-    }
-    .health-excellent { color: #00ff88; }
-    .health-good { color: #88ff00; }
-    .health-warning { color: #ffaa00; }
-    .health-critical { color: #ff4444; }
-    .oee-gauge {
-        height: 200px;
-    }
     .metric-box {
         text-align: center;
         padding: 15px;
@@ -60,55 +47,6 @@
         color: #8899aa;
         margin-top: 5px;
     }
-    .alert-item {
-        padding: 10px 15px;
-        margin-bottom: 8px;
-        border-radius: 8px;
-        border-left: 4px solid;
-    }
-    .alert-critical { border-color: #ff4444; background: rgba(255,68,68,0.1); }
-    .alert-warning { border-color: #ffaa00; background: rgba(255,170,0,0.1); }
-    .alert-info { border-color: #00d4ff; background: rgba(0,212,255,0.1); }
-    .process-flow {
-        position: relative;
-        height: 300px;
-        background: rgba(0,0,0,0.3);
-        border-radius: 12px;
-        overflow: hidden;
-    }
-    .flow-node {
-        position: absolute;
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.75rem;
-        font-weight: 600;
-        border: 2px solid;
-        cursor: pointer;
-        transition: all 0.3s;
-    }
-    .flow-node:hover {
-        transform: scale(1.1);
-        box-shadow: 0 0 20px rgba(0,212,255,0.5);
-    }
-    .flow-node.running { border-color: #00ff88; background: rgba(0,255,136,0.15); color: #00ff88; }
-    .flow-node.stopped { border-color: #ff4444; background: rgba(255,68,68,0.15); color: #ff4444; }
-    .flow-node.idle { border-color: #ffaa00; background: rgba(255,170,0,0.15); color: #ffaa00; }
-    .flow-pipe {
-        position: absolute;
-        background: linear-gradient(90deg, #0f3460, #00d4ff, #0f3460);
-        height: 3px;
-    }
-    .flow-pipe-v {
-        width: 3px;
-        background: linear-gradient(180deg, #0f3460, #00d4ff, #0f3460);
-    }
-    .spc-chart { height: 250px; }
-    .energy-chart { height: 250px; }
     .status-badge {
         display: inline-block;
         padding: 4px 12px;
@@ -143,6 +81,42 @@
     .data-table tr:hover {
         background: rgba(0,212,255,0.05);
     }
+    .device-select {
+        background: #1a1a2e;
+        border: 1px solid #0f3460;
+        color: #e0e0e0;
+        padding: 8px 12px;
+        border-radius: 6px;
+        min-width: 200px;
+    }
+    .device-select:focus {
+        border-color: #00d4ff;
+        box-shadow: 0 0 0 0.2rem rgba(0,212,255,0.25);
+    }
+    .refresh-btn {
+        background: linear-gradient(135deg, #0f3460 0%, #1a1a2e 100%);
+        border: 1px solid #00d4ff;
+        color: #00d4ff;
+        padding: 8px 16px;
+        border-radius: 6px;
+        transition: all 0.3s;
+    }
+    .refresh-btn:hover {
+        background: linear-gradient(135deg, #00d4ff 0%, #0f3460 100%);
+        color: #ffffff;
+    }
+    .debug-panel {
+        background: rgba(0,0,0,0.3);
+        border: 1px solid #0f3460;
+        border-radius: 8px;
+        padding: 10px;
+        margin-top: 10px;
+        font-family: monospace;
+        font-size: 0.8rem;
+        color: #8899aa;
+        max-height: 200px;
+        overflow-y: auto;
+    }
 </style>
 {% endblock %}
 
@@ -159,10 +133,27 @@
                     <i class="bi bi-cpu"></i> 工业4.0智能仪表盘
                     <span class="status-badge badge-active ms-2" id="system-badge">系统运行中</span>
                 </h4>
-                <div class="text-muted">
-                    <span id="last-update">最后更新: --</span>
-                    <button class="btn btn-sm btn-outline-info ms-3" onclick="refreshAll()">
+                <div class="d-flex align-items-center">
+                    <span id="last-update" class="text-muted me-3">最后更新: --</span>
+                    <button class="refresh-btn" onclick="refreshAll()">
                         <i class="bi bi-arrow-clockwise"></i> 刷新
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 设备选择器 -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <div class="i4-card">
+                <div class="d-flex align-items-center">
+                    <label class="text-muted me-3">选择设备:</label>
+                    <select class="device-select" id="device-selector" onchange="onDeviceChange()">
+                        <option value="">加载中...</option>
+                    </select>
+                    <button class="refresh-btn ms-3" onclick="loadDeviceList()">
+                        <i class="bi bi-arrow-clockwise"></i> 刷新设备列表
                     </button>
                 </div>
             </div>
@@ -304,110 +295,59 @@
                 <div class="col-md-4">
                     <div class="i4-card">
                         <div class="i4-card-header">
-                            <i class="bi bi-tools"></i>
-                            <h5>维护建议</h5>
+                            <i class="bi bi-graph-up"></i>
+                            <h5>健康趋势分析</h5>
                         </div>
-                        <div id="maintenance-alerts" style="max-height: 500px; overflow-y: auto;">
-                            <p class="text-muted">加载中...</p>
-                        </div>
+                        <div id="health-trend-chart" style="height: 300px;"></div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- ==================== OEE Tab ==================== -->
+        <!-- ==================== OEE效率Tab ==================== -->
         <div class="tab-pane fade" id="tab-oee">
-            <div class="row mb-3">
-                <div class="col-md-4">
+            <div class="row">
+                <div class="col-md-6">
                     <div class="i4-card">
                         <div class="i4-card-header">
                             <i class="bi bi-speedometer2"></i>
-                            <h5>全厂OEE</h5>
+                            <h5>OEE效率指标</h5>
                         </div>
-                        <div class="oee-gauge" id="oee-gauge-total"></div>
+                        <div id="oee-gauge" style="height: 300px;"></div>
                     </div>
                 </div>
-                <div class="col-md-8">
+                <div class="col-md-6">
                     <div class="i4-card">
                         <div class="i4-card-header">
                             <i class="bi bi-bar-chart"></i>
-                            <h5>各设备OEE对比</h5>
+                            <h5>OEE历史趋势</h5>
                         </div>
-                        <div id="oee-compare-chart" style="height: 250px;"></div>
-                    </div>
-                </div>
-            </div>
-            <div class="row">
-                <div class="col-12">
-                    <div class="i4-card">
-                        <div class="i4-card-header">
-                            <i class="bi bi-table"></i>
-                            <h5>OEE明细</h5>
-                        </div>
-                        <div class="table-responsive">
-                            <table class="table data-table table-sm" id="oee-table">
-                                <thead>
-                                    <tr>
-                                        <th>设备</th>
-                                        <th>可用率(A)</th>
-                                        <th>性能率(P)</th>
-                                        <th>质量率(Q)</th>
-                                        <th>OEE</th>
-                                        <th>等级</th>
-                                        <th>总产量</th>
-                                        <th>合格品</th>
-                                    </tr>
-                                </thead>
-                                <tbody></tbody>
-                            </table>
-                        </div>
+                        <div id="oee-trend" style="height: 300px;"></div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- ==================== SPC Tab ==================== -->
+        <!-- ==================== SPC过程控制Tab ==================== -->
         <div class="tab-pane fade" id="tab-spc">
-            <div class="row mb-3">
-                <div class="col-md-6">
-                    <div class="i4-card">
-                        <div class="i4-card-header">
-                            <i class="bi bi-graph-up"></i>
-                            <h5>X̄控制图</h5>
-                        </div>
-                        <div class="spc-chart" id="spc-xbar-chart"></div>
-                    </div>
-                </div>
-                <div class="col-md-6">
+            <div class="row">
+                <div class="col-md-8">
                     <div class="i4-card">
                         <div class="i4-card-header">
                             <i class="bi bi-bar-chart-line"></i>
-                            <h5>R控制图</h5>
+                            <h5>SPC控制图</h5>
                         </div>
-                        <div class="spc-chart" id="spc-r-chart"></div>
+                        <div id="spc-chart" style="height: 400px;"></div>
                     </div>
                 </div>
-            </div>
-            <div class="row">
-                <div class="col-md-6">
+                <div class="col-md-4">
                     <div class="i4-card">
                         <div class="i4-card-header">
-                            <i class="bi bi-clipboard-data"></i>
+                            <i class="bi bi-info-circle"></i>
                             <h5>过程能力指数</h5>
                         </div>
                         <div id="spc-capability">
-                            <p class="text-muted">选择设备和寄存器查看SPC分析</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="i4-card">
-                        <div class="i4-card-header">
-                            <i class="bi bi-exclamation-diamond"></i>
-                            <h5>判异规则检测</h5>
-                        </div>
-                        <div id="spc-violations" style="max-height: 300px; overflow-y: auto;">
-                            <p class="text-muted">暂无判异</p>
+                            <p class="text-muted">选择设备查看SPC数据</p>
                         </div>
                     </div>
                 </div>
@@ -416,57 +356,23 @@
 
         <!-- ==================== 能源管理Tab ==================== -->
         <div class="tab-pane fade" id="tab-energy">
-            <div class="row mb-3">
-                <div class="col-md-3">
-                    <div class="i4-card">
-                        <div class="metric-box">
-                            <div class="metric-value" id="en-total">--</div>
-                            <div class="metric-label">总用电 (kWh)</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="i4-card">
-                        <div class="metric-box">
-                            <div class="metric-value" id="en-cost">--</div>
-                            <div class="metric-label">电费 (元)</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="i4-card">
-                        <div class="metric-box">
-                            <div class="metric-value" id="en-carbon">--</div>
-                            <div class="metric-label">碳排放 (kg)</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="i4-card">
-                        <div class="metric-box">
-                            <div class="metric-value" id="en-trees">--</div>
-                            <div class="metric-label">等效树木 (棵)</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
             <div class="row">
                 <div class="col-md-6">
                     <div class="i4-card">
                         <div class="i4-card-header">
-                            <i class="bi bi-pie-chart"></i>
-                            <h5>分时电价构成</h5>
+                            <i class="bi bi-lightning"></i>
+                            <h5>实时功率监控</h5>
                         </div>
-                        <div class="energy-chart" id="energy-pie-chart"></div>
+                        <div id="power-chart" style="height: 300px;"></div>
                     </div>
                 </div>
                 <div class="col-md-6">
                     <div class="i4-card">
                         <div class="i4-card-header">
-                            <i class="bi bi-lightning-charge"></i>
-                            <h5>实时功率分布</h5>
+                            <i class="bi bi-graph-up"></i>
+                            <h5>能耗趋势</h5>
                         </div>
-                        <div class="energy-chart" id="power-bar-chart"></div>
+                        <div id="energy-trend" style="height: 300px;"></div>
                     </div>
                 </div>
             </div>
@@ -474,62 +380,25 @@
 
         <!-- ==================== 边缘决策Tab ==================== -->
         <div class="tab-pane fade" id="tab-edge">
-            <div class="row mb-3">
-                <div class="col-md-4">
-                    <div class="i4-card">
-                        <div class="metric-box">
-                            <div class="metric-value" id="edge-rules">--</div>
-                            <div class="metric-label">决策规则数</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="i4-card">
-                        <div class="metric-box">
-                            <div class="metric-value" id="edge-interlocks">--</div>
-                            <div class="metric-label">安全联锁数</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="i4-card">
-                        <div class="metric-box">
-                            <div class="metric-value" id="edge-pid">--</div>
-                            <div class="metric-label">PID控制器数</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
             <div class="row">
                 <div class="col-md-6">
                     <div class="i4-card">
                         <div class="i4-card-header">
-                            <i class="bi bi-list-check"></i>
-                            <h5>规则列表</h5>
+                            <i class="bi bi-diagram-3"></i>
+                            <h5>边缘计算节点</h5>
                         </div>
-                        <div class="table-responsive">
-                            <table class="table data-table table-sm" id="edge-rules-table">
-                                <thead>
-                                    <tr>
-                                        <th>规则ID</th>
-                                        <th>名称</th>
-                                        <th>类型</th>
-                                        <th>触发次数</th>
-                                        <th>状态</th>
-                                    </tr>
-                                </thead>
-                                <tbody></tbody>
-                            </table>
+                        <div id="edge-nodes">
+                            <p class="text-muted">加载中...</p>
                         </div>
                     </div>
                 </div>
                 <div class="col-md-6">
                     <div class="i4-card">
                         <div class="i4-card-header">
-                            <i class="bi bi-journal-text"></i>
+                            <i class="bi bi-cpu"></i>
                             <h5>决策日志</h5>
                         </div>
-                        <div id="edge-log" style="max-height: 400px; overflow-y: auto;">
+                        <div id="edge-decisions" style="max-height: 300px; overflow-y: auto;">
                             <p class="text-muted">加载中...</p>
                         </div>
                     </div>
@@ -540,16 +409,32 @@
         <!-- ==================== 数字孪生Tab ==================== -->
         <div class="tab-pane fade" id="tab-twin">
             <div class="row">
-                <div class="col-12">
+                <div class="col-md-12">
                     <div class="i4-card">
                         <div class="i4-card-header">
                             <i class="bi bi-box"></i>
-                            <h5>车间数字孪生 — 实时工艺流程</h5>
+                            <h5>数字孪生模型</h5>
                         </div>
-                        <div class="process-flow" id="digital-twin-flow" style="height: 500px;">
-                            <!-- 大型工艺流程图 -->
+                        <div id="digital-twin" style="height: 500px;">
+                            <p class="text-muted">数字孪生模型加载中...</p>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 调试面板 -->
+    <div class="row mt-3">
+        <div class="col-12">
+            <div class="i4-card">
+                <div class="i4-card-header">
+                    <i class="bi bi-bug"></i>
+                    <h5>调试信息</h5>
+                    <button class="btn btn-sm btn-outline-info ms-auto" onclick="toggleDebug()">显示/隐藏</button>
+                </div>
+                <div class="debug-panel" id="debug-panel" style="display: none;">
+                    <div id="debug-log">等待初始化...</div>
                 </div>
             </div>
         </div>
@@ -557,43 +442,87 @@
 </div>
 {% endblock %}
 
-{% block scripts %}
+{% block extra_js %}
 <script>
-const INDUSTRY40_API = '/api/industry40';
-let token = localStorage.getItem('auth_token');
+// 使用不同的变量名避免冲突
+const I40_API = '/api/industry40';
+let authToken = localStorage.getItem('auth_token');
 let currentTab = 'overview';
 let refreshTimer = null;
+let selectedDevice = '';
+let debugVisible = false;
+
+// 调试日志
+function debugLog(message) {
+    const logEl = document.getElementById('debug-log');
+    if (logEl) {
+        const time = new Date().toLocaleTimeString();
+        logEl.innerHTML += `[${time}] ${message}<br>`;
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+    console.log('[I40]', message);
+}
+
+// 切换调试面板
+function toggleDebug() {
+    debugVisible = !debugVisible;
+    document.getElementById('debug-panel').style.display = debugVisible ? 'block' : 'none';
+}
 
 // 获取请求头
 function getHeaders() {
     return {
-        'Authorization': `Bearer ${token}`,
+        'Authorization': `Bearer ${authToken}`,
         'Content-Type': 'application/json'
     };
 }
 
-// API请求封装（带错误提示）
+// API请求封装（适配新的统一响应格式）
 async function apiGet(path) {
+    const url = `${I40_API}${path}`;
+    debugLog(`请求: ${url}`);
+    
     try {
-        const resp = await fetch(`${INDUSTRY40_API}${path}`, { headers: getHeaders() });
+        const resp = await fetch(url, { headers: getHeaders() });
+        debugLog(`响应: ${resp.status} ${resp.statusText}`);
+        
         if (resp.status === 401) {
+            debugLog('401未授权，跳转登录');
             window.location.href = '/login';
             return null;
         }
         if (!resp.ok) {
-            showToast(`API错误: ${path} (${resp.status})`, 'warning');
+            debugLog(`API错误: ${resp.status}`);
+            i40Toast(`API错误: ${path} (${resp.status})`, 'warning');
             return null;
         }
-        return await resp.json();
+        
+        const result = await resp.json();
+        debugLog(`响应: ${JSON.stringify(result).substring(0, 150)}...`);
+        
+        // 适配新的统一响应格式: {success, data, message}
+        if (result && typeof result === 'object' && 'success' in result) {
+            if (result.success) {
+                return result.data;
+            } else {
+                debugLog(`业务错误: ${result.error || result.message}`, 'warn');
+                i40Toast(result.error || result.message || '请求失败', 'warning');
+                return null;
+            }
+        }
+        
+        // 兼容旧格式（直接返回数据）
+        return result;
     } catch (e) {
+        debugLog(`请求失败: ${e.message}`, 'err');
         console.error(`API请求失败: ${path}`, e);
-        showToast(`网络请求失败: ${path}`, 'danger');
+        i40Toast(`网络请求失败: ${path}`, 'danger');
         return null;
     }
 }
 
 // Toast通知
-function showToast(message, type = 'info') {
+function i40Toast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     if (!container) return;
     
@@ -609,36 +538,109 @@ function showToast(message, type = 'info') {
     }, 3000);
 }
 
-// 加载状态指示
-function setLoading(domId, loading) {
-    const el = document.getElementById(domId);
-    if (!el) return;
-    if (loading) {
-        el.style.opacity = '0.6';
-        el.style.pointerEvents = 'none';
-    } else {
-        el.style.opacity = '1';
-        el.style.pointerEvents = 'auto';
+// 加载设备列表
+async function loadDeviceList() {
+    debugLog('加载设备列表...');
+    const data = await apiGet('/devices');
+    if (!data) {
+        debugLog('设备列表加载失败');
+        return;
+    }
+    
+    const selector = document.getElementById('device-selector');
+    if (!selector) return;
+    
+    selector.innerHTML = '<option value="">-- 选择设备 --</option>';
+    
+    if (Array.isArray(data)) {
+        data.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.device_id || device.id;
+            option.textContent = device.device_name || device.name || device.device_id;
+            selector.appendChild(option);
+        });
+        debugLog(`加载了 ${data.length} 个设备`);
+    } else if (typeof data === 'object') {
+        Object.keys(data).forEach(key => {
+            const option = document.createElement('option');
+            option.value = key;
+            option.textContent = data[key].device_name || data[key].name || key;
+            selector.appendChild(option);
+        });
+        debugLog(`加载了 ${Object.keys(data).length} 个设备`);
+    }
+}
+
+// 设备选择变化
+function onDeviceChange() {
+    selectedDevice = document.getElementById('device-selector').value;
+    debugLog(`选择设备: ${selectedDevice}`);
+    refreshCurrentTab();
+}
+
+// 刷新所有数据
+async function refreshAll() {
+    debugLog('刷新所有数据...');
+    await loadOverview();
+    await loadDeviceList();
+    i40Toast('数据已刷新', 'success');
+}
+
+// 刷新当前Tab
+async function refreshCurrentTab() {
+    debugLog(`刷新Tab: ${currentTab}`);
+    switch (currentTab) {
+        case 'overview':
+            await loadOverview();
+            break;
+        case 'predictive':
+            await loadPredictive();
+            break;
+        case 'oee':
+            await loadOEE();
+            break;
+        case 'spc':
+            await loadSPC();
+            break;
+        case 'energy':
+            await loadEnergy();
+            break;
+        case 'edge':
+            await loadEdge();
+            break;
+        case 'twin':
+            await loadDigitalTwin();
+            break;
     }
 }
 
 // ==================== 总览 ====================
 async function loadOverview() {
-    const data = await apiGet('/overview');
-    if (!data) return;
+    debugLog('加载总览数据...');
+    const response = await apiGet('/overview');
+    if (!response) {
+        debugLog('总览数据加载失败');
+        return;
+    }
+    
+    // API返回格式: {data: {...}, success: true, message: "..."}
+    const data = response.data || response;
+    debugLog(`数据结构: ${JSON.stringify(Object.keys(data))}`);
 
     // 健康评分
     const healthEl = document.getElementById('ov-health');
     if (healthEl) {
         const score = data.predictive_maintenance?.avg_health_score;
-        healthEl.textContent = score != null && score > 0 ? score : '--';
+        healthEl.textContent = score != null ? score.toFixed(1) + '%' : '--';
+        debugLog(`健康评分: ${score}`);
     }
 
     // OEE
     const oeeEl = document.getElementById('ov-oee');
     if (oeeEl) {
         const oee = data.oee?.avg_oee_percent;
-        oeeEl.textContent = oee != null && oee > 0 ? oee + '%' : '--%';
+        oeeEl.textContent = oee != null ? oee.toFixed(1) + '%' : '--%';
+        debugLog(`OEE: ${oee}`);
     }
 
     // 能源
@@ -646,11 +648,13 @@ async function loadOverview() {
     const carbonEl = document.getElementById('ov-carbon');
     if (powerEl) {
         const power = data.energy?.total_power_kw;
-        powerEl.textContent = power != null && power > 0 ? power : '--';
+        powerEl.textContent = power != null ? power.toFixed(2) : '--';
+        debugLog(`功率: ${power}`);
     }
     if (carbonEl) {
         const carbon = data.energy?.carbon_emission_kg;
-        carbonEl.textContent = carbon != null && carbon > 0 ? carbon : '--';
+        carbonEl.textContent = carbon != null ? carbon.toFixed(2) : '--';
+        debugLog(`碳排放: ${carbon}`);
     }
 
     // 维护建议
@@ -669,387 +673,117 @@ async function loadOverview() {
         }
     }
 
-    // 工艺流程
-    renderProcessFlow('process-flow');
-
-    document.getElementById('last-update').textContent = `最后更新: ${new Date().toLocaleTimeString()}`;
+    // 更新时间
+    const lastUpdateEl = document.getElementById('last-update');
+    if (lastUpdateEl) {
+        lastUpdateEl.textContent = `最后更新: ${new Date().toLocaleTimeString()}`;
+    }
+    
+    debugLog('总览数据加载完成');
 }
 
 // ==================== 预测性维护 ====================
 async function loadPredictive() {
-    const scores = await apiGet('/health');
-    const tbody = document.querySelector('#health-table tbody');
+    debugLog('加载预测性维护数据...');
+    const data = await apiGet('/health');
+    if (!data) return;
     
-    if (!scores || Object.keys(scores).length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center">等待数据积累中...</td></tr>';
-    } else {
-        tbody.innerHTML = '';
-        for (const [key, data] of Object.entries(scores)) {
-            const score = data.health_score || 0;
-            const cls = score >= 80 ? 'health-excellent' : score >= 60 ? 'health-good' : score >= 40 ? 'health-warning' : 'health-critical';
-            const trend = data.trend ? data.trend.direction : '-';
-            const trendIcon = trend === 'rising' ? '↑' : trend === 'falling' ? '↓' : '→';
-            const failure = data.failure_prediction ? `${data.failure_prediction.days_to_limit}天` : '-';
-
-            tbody.innerHTML += `
-                <tr>
-                    <td>${data.device_id || '-'}</td>
-                    <td>${data.register_name || '-'}</td>
-                    <td class="${cls}"><strong>${score}</strong></td>
-                    <td>${trendIcon} ${trend}</td>
-                    <td>${data.anomaly_count || 0}</td>
-                    <td>${failure}</td>
-                    <td>${data.updated_at ? new Date(data.updated_at).toLocaleTimeString() : '-'}</td>
-                </tr>
-            `;
-        }
+    const tbody = document.querySelector('#health-table tbody');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '';
+    
+    if (typeof data === 'object') {
+        Object.entries(data).forEach(([key, value]) => {
+            if (typeof value === 'object') {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${value.device_id || key}</td>
+                    <td>${value.register_name || '--'}</td>
+                    <td>${value.health_score?.toFixed(1) || '--'}%</td>
+                    <td>${value.trend || '--'}</td>
+                    <td>${value.anomaly_count || 0}</td>
+                    <td>${value.failure_prediction || '--'}</td>
+                    <td>${value.last_update || '--'}</td>
+                `;
+                tbody.appendChild(row);
+            }
+        });
     }
-
-    // 维护建议
-    const alerts = await apiGet('/maintenance-alerts');
-    const div = document.getElementById('maintenance-alerts');
-    if (div) {
-        if (alerts && alerts.length > 0) {
-            div.innerHTML = alerts.map(a => `
-                <div class="alert-item alert-${a.severity || 'info'}">
-                    <div><strong>${a.device_id || '未知'}</strong> — ${a.register_name || ''}</div>
-                    <div style="font-size:0.85rem; margin-top:4px;">${a.message || '无详细信息'}</div>
-                </div>
-            `).join('');
-        } else {
-            div.innerHTML = '<p class="text-muted">系统运行正常，暂无维护建议</p>';
-        }
-    }
+    
+    debugLog('预测性维护数据加载完成');
 }
 
-// ==================== OEE ====================
+// ==================== OEE效率 ====================
 async function loadOEE() {
+    debugLog('加载OEE数据...');
     const data = await apiGet('/oee');
-    const devices = data ? Object.entries(data) : [];
+    if (!data) return;
     
-    if (devices.length === 0) {
-        // 显示默认仪表盘
-        renderOEEGauge('oee-gauge-total', 0);
-        const tbody = document.querySelector('#oee-table tbody');
-        if (tbody) {
-            tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">等待设备数据...</td></tr>';
-        }
+    // 这里可以添加ECharts图表渲染
+    debugLog('OEE数据加载完成');
+}
+
+// ==================== SPC过程控制 ====================
+async function loadSPC() {
+    if (!selectedDevice) {
+        debugLog('请先选择设备');
         return;
     }
-
-    // 全厂OEE仪表盘
-    const avgOEE = devices.reduce((sum, [, d]) => sum + (d.oee_percent || 0), 0) / devices.length;
-    renderOEEGauge('oee-gauge-total', avgOEE);
-
-    // 对比图
-    renderOEECompare('oee-compare-chart', devices);
-
-    // 明细表
-    const tbody = document.querySelector('#oee-table tbody');
-    if (tbody) {
-        tbody.innerHTML = '';
-        for (const [id, d] of devices) {
-            tbody.innerHTML += `
-                <tr>
-                    <td>${id}</td>
-                    <td>${((d.availability || 0) * 100).toFixed(1)}%</td>
-                    <td>${((d.performance || 0) * 100).toFixed(1)}%</td>
-                    <td>${((d.quality || 0) * 100).toFixed(1)}%</td>
-                    <td><strong>${d.oee_percent || 0}%</strong></td>
-                    <td>${d.grade || '-'}</td>
-                    <td>${d.total_count || 0}</td>
-                    <td>${d.good_count || 0}</td>
-                </tr>
-            `;
-        }
-    }
+    
+    debugLog(`加载SPC数据: ${selectedDevice}`);
+    const data = await apiGet(`/spc/${selectedDevice}/temperature`);
+    if (!data) return;
+    
+    // 这里可以添加ECharts图表渲染
+    debugLog('SPC数据加载完成');
 }
 
-function renderOEEGauge(domId, value) {
-    const chart = echarts.init(document.getElementById(domId));
-    chart.setOption({
-        series: [{
-            type: 'gauge',
-            startAngle: 200,
-            endAngle: -20,
-            min: 0,
-            max: 100,
-            axisLine: {
-                lineStyle: {
-                    width: 20,
-                    color: [[0.5, '#ff4444'], [0.65, '#ffaa00'], [0.85, '#88ff00'], [1, '#00ff88']]
-                }
-            },
-            pointer: { itemStyle: { color: '#00d4ff' } },
-            axisTick: { show: false },
-            splitLine: { show: false },
-            axisLabel: { color: '#8899aa', fontSize: 10 },
-            detail: {
-                valueAnimation: true,
-                formatter: '{value}%',
-                color: '#00d4ff',
-                fontSize: 28,
-                offsetCenter: [0, '60%']
-            },
-            title: { show: false },
-            data: [{ value: value.toFixed(1) }]
-        }]
-    });
-}
-
-function renderOEECompare(domId, devices) {
-    const chart = echarts.init(document.getElementById(domId));
-    const names = devices.map(([id]) => id.replace('_', '\n'));
-    const values = devices.map(([, d]) => d.oee_percent || 0);
-
-    chart.setOption({
-        tooltip: { trigger: 'axis' },
-        xAxis: { type: 'category', data: names, axisLabel: { color: '#8899aa', fontSize: 10 } },
-        yAxis: { type: 'value', max: 100, axisLabel: { color: '#8899aa' }, splitLine: { lineStyle: { color: '#0f3460' } } },
-        series: [{
-            type: 'bar',
-            data: values.map(v => ({
-                value: v,
-                itemStyle: { color: v >= 85 ? '#00ff88' : v >= 65 ? '#ffaa00' : '#ff4444' }
-            })),
-            barWidth: '40%',
-            label: { show: true, position: 'top', color: '#e0e0e0', formatter: '{c}%' }
-        }],
-        grid: { left: 50, right: 20, bottom: 40, top: 20 }
-    });
-}
-
-// ==================== 能源 ====================
+// ==================== 能源管理 ====================
 async function loadEnergy() {
-    const summary = await apiGet('/energy');
-    if (summary) {
-        document.getElementById('en-total').textContent = summary.total_energy_kwh || 0;
-        document.getElementById('en-cost').textContent = summary.electricity_cost || 0;
-        document.getElementById('en-carbon').textContent = summary.carbon_emission_kg || 0;
-    }
-
-    const carbon = await apiGet('/energy/carbon');
-    if (carbon) {
-        document.getElementById('en-trees').textContent = carbon.equivalent_trees || 0;
-    }
-
-    // 分时电价饼图
-    const cost = await apiGet('/energy/cost');
-    if (cost) {
-        renderEnergyPie('energy-pie-chart', cost);
-    }
-
-    // 实时功率
-    const power = await apiGet('/energy/power');
-    if (power && power.devices) {
-        renderPowerBar('power-bar-chart', power.devices);
-    }
-}
-
-function renderEnergyPie(domId, cost) {
-    const chart = echarts.init(document.getElementById(domId));
-    chart.setOption({
-        tooltip: { trigger: 'item', formatter: '{b}: {c}元 ({d}%)' },
-        legend: { bottom: 0, textStyle: { color: '#8899aa' } },
-        series: [{
-            type: 'pie',
-            radius: ['40%', '70%'],
-            label: { color: '#e0e0e0' },
-            data: [
-                { value: cost.peak.cost, name: '峰时', itemStyle: { color: '#ff4444' } },
-                { value: cost.flat.cost, name: '平时', itemStyle: { color: '#ffaa00' } },
-                { value: cost.valley.cost, name: '谷时', itemStyle: { color: '#00ff88' } },
-            ]
-        }]
-    });
-}
-
-function renderPowerBar(domId, devices) {
-    const chart = echarts.init(document.getElementById(domId));
-    const entries = Object.entries(devices).filter(([, v]) => v.power_kw !== undefined);
-    const names = entries.map(([k]) => k);
-    const values = entries.map(([, v]) => v.power_kw);
-
-    chart.setOption({
-        tooltip: { trigger: 'axis' },
-        xAxis: { type: 'category', data: names, axisLabel: { color: '#8899aa', rotate: 30, fontSize: 10 } },
-        yAxis: { type: 'value', axisLabel: { color: '#8899aa' }, splitLine: { lineStyle: { color: '#0f3460' } } },
-        series: [{
-            type: 'bar',
-            data: values,
-            itemStyle: { color: '#00d4ff' },
-            barWidth: '50%'
-        }],
-        grid: { left: 50, right: 20, bottom: 60, top: 20 }
-    });
+    debugLog('加载能源数据...');
+    const data = await apiGet('/energy');
+    if (!data) return;
+    
+    // 这里可以添加ECharts图表渲染
+    debugLog('能源数据加载完成');
 }
 
 // ==================== 边缘决策 ====================
 async function loadEdge() {
-    const status = await apiGet('/edge/status');
-    if (status) {
-        document.getElementById('edge-rules').textContent = status.rules_count || 0;
-        document.getElementById('edge-interlocks').textContent = status.interlocks_count || 0;
-        document.getElementById('edge-pid').textContent = status.pid_controllers_count || 0;
-    }
-
-    const rules = await apiGet('/edge/rules');
-    const tbody = document.querySelector('#edge-rules-table tbody');
-    if (tbody) {
-        if (rules && (Object.keys(rules.rules || {}).length > 0 || Object.keys(rules.interlocks || {}).length > 0)) {
-            tbody.innerHTML = '';
-            for (const [id, r] of Object.entries(rules.rules || {})) {
-                tbody.innerHTML += `
-                    <tr>
-                        <td>${id}</td>
-                        <td>${r.name || '-'}</td>
-                        <td>规则</td>
-                        <td>${r.trigger_count || 0}</td>
-                        <td>${r.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>'}</td>
-                    </tr>
-                `;
-            }
-            for (const [id, r] of Object.entries(rules.interlocks || {})) {
-                tbody.innerHTML += `
-                    <tr>
-                        <td>${id}</td>
-                        <td>${r.name || '-'}</td>
-                        <td><span style="color:#ff4444">联锁</span></td>
-                        <td>${r.trigger_count || 0}</td>
-                        <td>${r.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>'}</td>
-                    </tr>
-                `;
-            }
-        } else {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center">暂无规则配置</td></tr>';
-        }
-    }
-
-    const log = await apiGet('/edge/log');
-    const logDiv = document.getElementById('edge-log');
-    if (logDiv) {
-        if (log && log.length > 0) {
-            logDiv.innerHTML = log.map(l => `
-                <div style="padding:5px 10px; border-bottom:1px solid #0f3460; font-size:0.85rem;">
-                    <span style="color:#00d4ff">[${l.rule_type || 'rule'}]</span>
-                    <strong>${l.rule_id || '-'}</strong>: ${l.result || ''}
-                    <span style="color:#666; float:right">${l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : ''}</span>
-                </div>
-            `).join('');
-        } else {
-            logDiv.innerHTML = '<p class="text-muted">暂无决策日志</p>';
-        }
-    }
-}
-
-// ==================== 工艺流程数字孪生（动态） ====================
-// 设备ID到工艺节点的映射
-const DEVICE_NODE_MAP = {
-    'siemens_1500_01': { label: '锅炉产线', icon: '🔥', x: 30, y: 120 },
-    'hollysys_lk_01': { label: '化工车间', icon: '⚗️', x: 160, y: 80 },
-    'mitsubishi_fx5u_01': { label: '注塑车间', icon: '🏭', x: 160, y: 180 },
-    'delta_dvp_01': { label: '包装线', icon: '📦', x: 300, y: 120 },
-    'inovance_h5u_01': { label: '涂装车间', icon: '🎨', x: 440, y: 120 },
-    'schneider_m340_01': { label: '配电系统', icon: '⚡', x: 570, y: 80 },
-    'abb_m4m_01': { label: '电力监测', icon: '📊', x: 570, y: 180 },
-};
-
-async function renderProcessFlow(domId) {
-    const container = document.getElementById(domId);
-    if (!container) return;
-
-    // 获取设备状态
-    const deviceStates = await apiGet('/devices/status');
+    debugLog('加载边缘决策数据...');
+    const data = await apiGet('/edge');
+    if (!data) return;
     
-    // 构建节点列表
-    const nodes = [];
-    for (const [deviceId, config] of Object.entries(DEVICE_NODE_MAP)) {
-        const state = deviceStates?.[deviceId] || {};
-        const status = state.status || 'idle';
-        nodes.push({
-            id: deviceId,
-            x: config.x,
-            y: config.y,
-            label: config.label,
-            icon: config.icon,
-            status: status,
-            oee: state.oee_percent || '--',
-        });
-    }
-
-    // 管道连接
-    const pipes = [
-        { x: 110, y: 155, w: 50, h: 3 },
-        { x: 240, y: 115, w: 60, h: 3 },
-        { x: 240, y: 195, w: 60, h: 3 },
-        { x: 380, y: 155, w: 60, h: 3 },
-        { x: 520, y: 155, w: 50, h: 3 },
-        { x: 650, y: 155, w: 50, h: 3 },
-    ];
-
-    let html = '';
-
-    // 绘制管道
-    pipes.forEach(p => {
-        html += `<div class="flow-pipe" style="left:${p.x}px; top:${p.y}px; width:${p.w}px; height:${p.h}px;"></div>`;
-    });
-
-    // 绘制节点
-    nodes.forEach(n => {
-        const statusText = n.status === 'running' ? '运行' : n.status === 'fault' ? '故障' : n.status === 'idle' ? '空闲' : '停机';
-        html += `
-            <div class="flow-node ${n.status}" style="left:${n.x}px; top:${n.y}px;" title="${n.label} - ${statusText}">
-                <span style="font-size:1.5rem;">${n.icon}</span>
-                <span>${n.label}</span>
-                <span style="font-size:0.65rem; opacity:0.8;">${n.oee}%</span>
-            </div>
-        `;
-    });
-
-    container.innerHTML = html;
+    // 这里可以添加边缘决策数据展示
+    debugLog('边缘决策数据加载完成');
 }
 
-// ==================== SPC ====================
-async function loadSPC() {
-    const violations = await apiGet('/spc/violations');
-    const div = document.getElementById('spc-violations');
-    if (div) {
-        if (violations && violations.length > 0) {
-            div.innerHTML = violations.slice(0, 20).map(v => `
-                <div style="padding:8px 12px; border-bottom:1px solid #0f3460; font-size:0.85rem;">
-                    <span style="color:${v.severity === 'critical' ? '#ff4444' : '#ffaa00'}">[规则${v.rule}]</span>
-                    <strong>${v.device_id || ''}</strong>: ${v.description || ''}
-                    <span style="color:#666; float:right">${v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : ''}</span>
-                </div>
-            `).join('');
-        } else {
-            div.innerHTML = '<p class="text-muted">暂无判异结果</p>';
-        }
-    }
+// ==================== 数字孪生 ====================
+async function loadDigitalTwin() {
+    debugLog('加载数字孪生数据...');
+    const data = await apiGet('/twin');
+    if (!data) return;
+    
+    // 这里可以添加数字孪生模型展示
+    debugLog('数字孪生数据加载完成');
 }
 
-// ==================== 刷新逻辑（按需加载） ====================
-function refreshCurrentTab() {
-    switch (currentTab) {
-        case 'overview': loadOverview(); break;
-        case 'predictive': loadPredictive(); break;
-        case 'oee': loadOEE(); break;
-        case 'spc': loadSPC(); break;
-        case 'energy': loadEnergy(); break;
-        case 'edge': loadEdge(); break;
-    }
-}
-
-function refreshAll() {
-    loadOverview();
-    // 其他Tab在切换时按需加载
-}
-
-// 初始化
+// 页面初始化
 document.addEventListener('DOMContentLoaded', () => {
+    debugLog('页面初始化开始...');
+    debugLog(`Token: ${authToken ? '存在' : '不存在'}`);
+    
+    // 加载设备列表
+    loadDeviceList();
+    
+    // 加载总览数据
     loadOverview();
+    
     // 每30秒刷新当前Tab
     refreshTimer = setInterval(refreshCurrentTab, 30000);
+    
+    debugLog('页面初始化完成');
 });
 
 // Tab切换时加载对应数据
@@ -1057,6 +791,7 @@ document.querySelectorAll('#i4Tabs .nav-link').forEach(tab => {
     tab.addEventListener('shown.bs.tab', (e) => {
         const target = e.target.getAttribute('href');
         currentTab = target.replace('#tab-', '');
+        debugLog(`切换到Tab: ${currentTab}`);
         refreshCurrentTab();
     });
 });
