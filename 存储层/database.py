@@ -210,6 +210,19 @@ class Database:
                 VALUES (?, ?, ?, ?, ?)
             ''', (device_id, register_name, value, unit, timestamp))
 
+    def delete_device_data(self, device_id: str):
+        """
+        删除指定设备的所有数据（实时数据 + 历史数据）
+        
+        Args:
+            device_id: 设备ID
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM realtime_data WHERE device_id = ?', (device_id,))
+            cursor.execute('DELETE FROM history_data WHERE device_id = ?', (device_id,))
+            logger.info(f"已清除设备 {device_id} 的数据库数据")
+
     def get_realtime_data(self, device_id: str | None = None, 
                           limit: int = 100) -> list[dict[str, Any]]:
         """
@@ -308,7 +321,7 @@ class Database:
             ''', (device_id,))
             return [row['register_name'] for row in cursor.fetchall()]
 
-    def get_history_data(self, device_id: str, register_name: str,
+    def get_history_data(self, device_id: str, register_name: str | None,
                          start_time: datetime, end_time: datetime,
                          interval: str = '1min') -> list[dict[str, Any]]:
         """
@@ -316,7 +329,7 @@ class Database:
 
         Args:
             device_id: 设备ID
-            register_name: 寄存器名称
+            register_name: 寄存器名称（None 表示查询全部）
             start_time: 开始时间
             end_time: 结束时间
             interval: 时间间隔（1min, 5min, 1hour, 1day）
@@ -327,25 +340,31 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
+            # 构造动态 WHERE：register_name 为 None 时不限制
+            base_where = 'WHERE device_id = ? AND timestamp BETWEEN ? AND ?'
+            params = [device_id, start_time, end_time]
+            if register_name is not None:
+                base_where += ' AND register_name = ?'
+                params.insert(2, register_name)
+
             # 根据时间间隔进行数据聚合
             if interval == '1min':
                 group_format = '%Y-%m-%d %H:%M:00'
             elif interval == '5min':
                 # 5分钟聚合：将分钟数除以5取整
-                cursor.execute('''
+                cursor.execute(f'''
                     SELECT 
-                        strftime('%Y-%m-%d %H:', timestamp) || 
-                        printf('%02d', (CAST(strftime('%M', timestamp) AS INTEGER) / 5) * 5) || ':00' as time_bucket,
+                        strftime('%%Y-%%m-%%d %%H:', timestamp) || 
+                        printf('%%02d', (CAST(strftime('%%M', timestamp) AS INTEGER) / 5) * 5) || ':00' as time_bucket,
                         AVG(value) as avg_value,
                         MIN(value) as min_value,
                         MAX(value) as max_value,
                         COUNT(*) as sample_count
                     FROM history_data
-                    WHERE device_id = ? AND register_name = ?
-                        AND timestamp BETWEEN ? AND ?
+                    {base_where}
                     GROUP BY time_bucket
                     ORDER BY time_bucket
-                ''', (device_id, register_name, start_time, end_time))
+                ''', params)
                 return [dict(row) for row in cursor.fetchall()]
             elif interval == '1hour':
                 group_format = '%Y-%m-%d %H:00:00'
@@ -354,7 +373,8 @@ class Database:
             else:
                 group_format = '%Y-%m-%d %H:%M:%S'
 
-            cursor.execute('''
+            params.insert(0, group_format)
+            cursor.execute(f'''
                 SELECT 
                     strftime(?, timestamp) as time_bucket,
                     AVG(value) as avg_value,
@@ -362,11 +382,10 @@ class Database:
                     MAX(value) as max_value,
                     COUNT(*) as sample_count
                 FROM history_data
-                WHERE device_id = ? AND register_name = ?
-                    AND timestamp BETWEEN ? AND ?
+                {base_where}
                 GROUP BY time_bucket
                 ORDER BY time_bucket
-            ''', (group_format, device_id, register_name, start_time, end_time))
+            ''', params)
 
             return [dict(row) for row in cursor.fetchall()]
 

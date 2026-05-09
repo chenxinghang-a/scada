@@ -46,6 +46,10 @@ def get_history_data(device_id, register_name):
     start_time = datetime.fromisoformat(start_time) if start_time else datetime.now() - timedelta(hours=1)
     end_time = datetime.fromisoformat(end_time) if end_time else datetime.now()
 
+    # 前端传入 '*' 表示查询全部寄存器
+    if register_name == '*':
+        register_name = None
+
     data = current_app.database.get_history_data(
         device_id=device_id, register_name=register_name,
         start_time=start_time, end_time=end_time, interval=interval)

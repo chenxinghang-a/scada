@@ -1,4 +1,316 @@
 devices:
+- collection_interval: 2
+  description: 主产线控制PLC — 锅炉/换热器/反应釜群
+  device_model: S7-1516-3 PN/DP
+  enabled: true
+  host: 192.168.1.53
+  id: siemens_1500_01
+  name: 西门子S7-1500 PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 锅炉出口温度
+    length: 2
+    name: boiler_temperature
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 锅炉压力
+    length: 2
+    name: boiler_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 4
+    data_type: float32
+    description: 换热器出口温度
+    length: 2
+    name: heat_exchanger_temperature
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 蒸汽流量
+    length: 2
+    name: steam_flow
+    scale: 1.0
+    unit: t/h
+  - address: 8
+    data_type: float32
+    description: 给水液位
+    length: 2
+    name: feed_water_level
+    scale: 1.0
+    unit: mm
+  - address: 10
+    data_type: float32
+    description: 排烟温度
+    length: 2
+    name: flue_gas_temperature
+    scale: 1.0
+    unit: °C
+  - address: 12
+    data_type: float32
+    description: 烟气含氧量
+    length: 2
+    name: oxygen_content
+    scale: 1.0
+    unit: '%'
+  - address: 14
+    data_type: uint16
+    description: 锅炉状态 0=停炉/1=运行/2=故障
+    length: 1
+    name: boiler_status
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 西门子
+- collection_interval: 3
+  description: 化工车间控制 — 蒸馏/干燥/包装
+  device_model: LK210
+  enabled: true
+  host: 192.168.1.55
+  id: hollysys_lk_01
+  name: 和利时LK PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 蒸馏塔顶温度
+    length: 2
+    name: distill_temperature
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 蒸馏塔压力
+    length: 2
+    name: distill_pressure
+    scale: 1.0
+    unit: kPa
+  - address: 4
+    data_type: float32
+    description: 干燥机温度
+    length: 2
+    name: dryer_temperature
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 干燥机湿度
+    length: 2
+    name: dryer_humidity
+    scale: 1.0
+    unit: '%'
+  - address: 8
+    data_type: float32
+    description: 回流比
+    length: 2
+    name: reflux_ratio
+    scale: 1.0
+    unit: ''
+  - address: 10
+    data_type: float32
+    description: 产品流量
+    length: 2
+    name: product_flow
+    scale: 1.0
+    unit: L/min
+  - address: 12
+    data_type: uint16
+    description: 包装线速度
+    length: 1
+    name: packaging_speed
+    scale: 1
+    unit: 个
+  - address: 13
+    data_type: uint16
+    description: 批次计数
+    length: 1
+    name: batch_count
+    scale: 1
+    unit: 个
+  slave_id: 1
+  vendor: 和利时
+- collection_interval: 2
+  description: 注塑车间控制 — 注塑机/模具/脱模
+  device_model: FX5U-64M
+  enabled: true
+  host: 192.168.1.56
+  id: mitsubishi_fx5u_01
+  name: 三菱FX5U PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 模具温度
+    length: 2
+    name: mold_temperature
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 注射压力
+    length: 2
+    name: injection_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 4
+    data_type: float32
+    description: 注射速度
+    length: 2
+    name: injection_speed
+    scale: 1.0
+    unit: mm/s
+  - address: 6
+    data_type: float32
+    description: 保压位置
+    length: 2
+    name: cushion_position
+    scale: 1.0
+    unit: mm
+  - address: 8
+    data_type: float32
+    description: 成型周期
+    length: 2
+    name: cycle_time
+    scale: 1.0
+    unit: s
+  - address: 10
+    data_type: uint16
+    description: 注射计数
+    length: 1
+    name: shot_count
+    scale: 1
+    unit: 个
+  - address: 11
+    data_type: float32
+    description: 锁模力
+    length: 2
+    name: clamping_force
+    scale: 1.0
+    unit: kN
+  - address: 13
+    data_type: float32
+    description: 料筒温度
+    length: 2
+    name: barrel_temperature
+    scale: 1.0
+    unit: °C
+  slave_id: 1
+  vendor: 三菱电机
+- collection_interval: 5
+  description: 包装线控制 — 封箱/贴标/码垛
+  device_model: DVP32EH00T3
+  enabled: true
+  host: 192.168.1.57
+  id: delta_dvp_01
+  name: 台达DVP PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: uint16
+    description: 输送带速度
+    length: 1
+    name: conveyor_speed
+    scale: 0.1
+    unit: m/min
+  - address: 1
+    data_type: uint16
+    description: 封箱温度
+    length: 1
+    name: sealing_temperature
+    scale: 0.1
+    unit: °C
+  - address: 2
+    data_type: uint16
+    description: 贴标计数
+    length: 1
+    name: label_count
+    scale: 1
+    unit: 个
+  - address: 3
+    data_type: uint16
+    description: 码垛计数
+    length: 1
+    name: palletizing_count
+    scale: 1
+    unit: 个
+  - address: 4
+    data_type: uint16
+    description: 剔除计数
+    length: 1
+    name: reject_count
+    scale: 1
+    unit: 个
+  - address: 5
+    data_type: uint16
+    description: 包装线状态 0=停机/1=运行/2=换料/3=故障
+    length: 1
+    name: packing_status
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 台达电子
+- collection_interval: 3
+  description: 涂装车间控制 — 喷涂/烘干/输送
+  device_model: H5U-3232MT
+  enabled: true
+  host: 192.168.1.58
+  id: inovance_h5u_01
+  name: 汇川H5U PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 喷涂压力
+    length: 2
+    name: spray_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: 烘干炉温度
+    length: 2
+    name: oven_temperature
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 喷涂速度
+    length: 2
+    name: spray_speed
+    scale: 1.0
+    unit: m/min
+  - address: 6
+    data_type: float32
+    description: 涂层厚度
+    length: 2
+    name: coating_thickness
+    scale: 1.0
+    unit: μm
+  - address: 8
+    data_type: float32
+    description: 输送链速度
+    length: 2
+    name: conveyor_speed
+    scale: 1.0
+    unit: m/min
+  - address: 10
+    data_type: uint16
+    description: 喷涂计数
+    length: 1
+    name: painted_count
+    scale: 1
+    unit: 个
+  slave_id: 1
+  vendor: 汇川技术
 - collection_interval: 5
   description: 水处理车间控制 — 进水/加药/沉淀
   device_model: BMX P34 2020
@@ -203,114 +515,6 @@ devices:
     unit: Pa
   slave_id: 1
   vendor: 图尔克
-- collection_interval: 5
-  description: 包装线控制 — 封箱/贴标/码垛
-  device_model: DVP32EH00T3
-  enabled: true
-  host: 192.168.1.57
-  id: delta_dvp_01
-  name: 台达DVP PLC
-  port: 502
-  protocol: modbus_tcp
-  registers:
-  - address: 0
-    data_type: uint16
-    description: 输送带速度
-    length: 1
-    name: conveyor_speed
-    scale: 0.1
-    unit: m/min
-  - address: 1
-    data_type: uint16
-    description: 封箱温度
-    length: 1
-    name: sealing_temperature
-    scale: 0.1
-    unit: °C
-  - address: 2
-    data_type: uint16
-    description: 贴标计数
-    length: 1
-    name: label_count
-    scale: 1
-    unit: 个
-  - address: 3
-    data_type: uint16
-    description: 码垛计数
-    length: 1
-    name: palletizing_count
-    scale: 1
-    unit: 个
-  - address: 4
-    data_type: uint16
-    description: 剔除计数
-    length: 1
-    name: reject_count
-    scale: 1
-    unit: 个
-  - address: 5
-    data_type: uint16
-    description: 包装线状态 0=停机/1=运行/2=换料/3=故障
-    length: 1
-    name: packing_status
-    scale: 1
-    unit: ''
-  slave_id: 1
-  vendor: 台达电子
-- collection_interval: 3
-  description: 涂装车间控制 — 喷涂/烘干/输送
-  device_model: H5U-3232MT
-  enabled: true
-  host: 192.168.1.58
-  id: inovance_h5u_01
-  name: 汇川H5U PLC
-  port: 502
-  protocol: modbus_tcp
-  registers:
-  - address: 0
-    data_type: float32
-    description: 喷涂压力
-    length: 2
-    name: spray_pressure
-    scale: 1.0
-    unit: MPa
-  - address: 2
-    data_type: float32
-    description: 烘干炉温度
-    length: 2
-    name: oven_temperature
-    scale: 1.0
-    unit: °C
-  - address: 4
-    data_type: float32
-    description: 喷涂速度
-    length: 2
-    name: spray_speed
-    scale: 1.0
-    unit: m/min
-  - address: 6
-    data_type: float32
-    description: 涂层厚度
-    length: 2
-    name: coating_thickness
-    scale: 1.0
-    unit: μm
-  - address: 8
-    data_type: float32
-    description: 输送链速度
-    length: 2
-    name: conveyor_speed
-    scale: 1.0
-    unit: m/min
-  - address: 10
-    data_type: uint16
-    description: 喷涂计数
-    length: 1
-    name: painted_count
-    scale: 1
-    unit: 个
-  slave_id: 1
-  vendor: 汇川技术
 - collection_interval: 10
   description: 旋转设备振动监测 — 电机/泵/风机
   device_model: IoT-VIB-100 + LoRa GW
@@ -593,207 +797,3 @@ devices:
     unit: ''
   protocol: opcua
   security_mode: None
-- collection_interval: 2
-  description: 主产线控制PLC — 锅炉/换热器/反应釜群
-  device_model: S7-1516-3 PN/DP
-  enabled: true
-  host: 192.168.1.53
-  id: siemens_1500_01
-  name: 西门子S7-1500 PLC
-  port: 502
-  protocol: modbus_tcp
-  registers:
-  - address: 0
-    data_type: float32
-    description: 锅炉出口温度
-    length: 2
-    name: boiler_temperature
-    scale: 1.0
-    unit: °C
-  - address: 2
-    data_type: float32
-    description: 锅炉压力
-    length: 2
-    name: boiler_pressure
-    scale: 1.0
-    unit: MPa
-  - address: 4
-    data_type: float32
-    description: 换热器出口温度
-    length: 2
-    name: heat_exchanger_temperature
-    scale: 1.0
-    unit: °C
-  - address: 6
-    data_type: float32
-    description: 蒸汽流量
-    length: 2
-    name: steam_flow
-    scale: 1.0
-    unit: t/h
-  - address: 8
-    data_type: float32
-    description: 给水液位
-    length: 2
-    name: feed_water_level
-    scale: 1.0
-    unit: mm
-  - address: 10
-    data_type: float32
-    description: 排烟温度
-    length: 2
-    name: flue_gas_temperature
-    scale: 1.0
-    unit: °C
-  - address: 12
-    data_type: float32
-    description: 烟气含氧量
-    length: 2
-    name: oxygen_content
-    scale: 1.0
-    unit: '%'
-  - address: 14
-    data_type: uint16
-    description: 锅炉状态 0=停炉/1=运行/2=故障
-    length: 1
-    name: boiler_status
-    scale: 1
-    unit: ''
-  slave_id: 1
-  vendor: 西门子
-- collection_interval: 3
-  description: 化工车间控制 — 蒸馏/干燥/包装
-  device_model: LK210
-  enabled: true
-  host: 192.168.1.55
-  id: hollysys_lk_01
-  name: 和利时LK PLC
-  port: 502
-  protocol: modbus_tcp
-  registers:
-  - address: 0
-    data_type: float32
-    description: 蒸馏塔顶温度
-    length: 2
-    name: distill_temperature
-    scale: 1.0
-    unit: °C
-  - address: 2
-    data_type: float32
-    description: 蒸馏塔压力
-    length: 2
-    name: distill_pressure
-    scale: 1.0
-    unit: kPa
-  - address: 4
-    data_type: float32
-    description: 干燥机温度
-    length: 2
-    name: dryer_temperature
-    scale: 1.0
-    unit: °C
-  - address: 6
-    data_type: float32
-    description: 干燥机湿度
-    length: 2
-    name: dryer_humidity
-    scale: 1.0
-    unit: '%'
-  - address: 8
-    data_type: float32
-    description: 回流比
-    length: 2
-    name: reflux_ratio
-    scale: 1.0
-    unit: ''
-  - address: 10
-    data_type: float32
-    description: 产品流量
-    length: 2
-    name: product_flow
-    scale: 1.0
-    unit: L/min
-  - address: 12
-    data_type: uint16
-    description: 包装线速度
-    length: 1
-    name: packaging_speed
-    scale: 1
-    unit: 个
-  - address: 13
-    data_type: uint16
-    description: 批次计数
-    length: 1
-    name: batch_count
-    scale: 1
-    unit: 个
-  slave_id: 1
-  vendor: 和利时
-- collection_interval: 2
-  description: 注塑车间控制 — 注塑机/模具/脱模
-  device_model: FX5U-64M
-  enabled: true
-  host: 192.168.1.56
-  id: mitsubishi_fx5u_01
-  name: 三菱FX5U PLC
-  port: 502
-  protocol: modbus_tcp
-  registers:
-  - address: 0
-    data_type: float32
-    description: 模具温度
-    length: 2
-    name: mold_temperature
-    scale: 1.0
-    unit: °C
-  - address: 2
-    data_type: float32
-    description: 注射压力
-    length: 2
-    name: injection_pressure
-    scale: 1.0
-    unit: MPa
-  - address: 4
-    data_type: float32
-    description: 注射速度
-    length: 2
-    name: injection_speed
-    scale: 1.0
-    unit: mm/s
-  - address: 6
-    data_type: float32
-    description: 保压位置
-    length: 2
-    name: cushion_position
-    scale: 1.0
-    unit: mm
-  - address: 8
-    data_type: float32
-    description: 成型周期
-    length: 2
-    name: cycle_time
-    scale: 1.0
-    unit: s
-  - address: 10
-    data_type: uint16
-    description: 注射计数
-    length: 1
-    name: shot_count
-    scale: 1
-    unit: 个
-  - address: 11
-    data_type: float32
-    description: 锁模力
-    length: 2
-    name: clamping_force
-    scale: 1.0
-    unit: kN
-  - address: 13
-    data_type: float32
-    description: 料筒温度
-    length: 2
-    name: barrel_temperature
-    scale: 1.0
-    unit: °C
-  slave_id: 1
-  vendor: 三菱电机

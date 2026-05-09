@@ -115,3 +115,59 @@ class IDeviceManager(ABC):
     def get_protocol_summary(self) -> dict[str, int]:
         """获取协议统计"""
         pass
+
+    def set_estop_override(self, active: bool):
+        """
+        设置紧急停机覆盖状态（可选实现）
+        
+        模拟模式下，E-STOP 激活时停止仪表数据生成，保留安全类（灯/蜂鸣器/继电器）输出。
+        真实模式下可以忽略此方法。
+        """
+        pass
+
+    def stop_device(self, device_id: str) -> bool:
+        """
+        停止指定设备（仅 mechanical 类型有实际效果）
+        模拟模式：停止数据生成，所有寄存器归零
+        真实模式：向设备发送停止信号
+        """
+        return False
+
+    def start_device(self, device_id: str) -> bool:
+        """
+        启动指定设备（恢复数据生成）
+        """
+        return False
+
+    @staticmethod
+    def get_device_category(device_config: dict) -> str:
+        """
+        根据配置推断设备类别
+        - mechanical: 含速度/力/位置/计数等机械寄存器 → 可启停
+        - instrument: 纯传感器/仪表 → 不可启停
+        - safety: 灯/蜂鸣器/继电器 → 不可启停
+        """
+        # 优先使用显式声明
+        category = device_config.get('device_category', '').lower()
+        if category in ('mechanical', 'instrument', 'safety'):
+            return category
+
+        # 按设备名/寄存器名推断
+        name = (device_config.get('name', '') or '').lower()
+        desc = (device_config.get('description', '') or '').lower()
+
+        # 安全设备
+        safety_keywords = ['signal_tower', '信号灯塔', 'relay', '继电器',
+                          'alarm', '报警', 'buzzer', '蜂鸣器', '警灯', '灯塔']
+        for kw in safety_keywords:
+            if kw in name or kw in desc:
+                return 'safety'
+
+        # 机械类：检查寄存器名
+        from .simulated_client import _is_machinery
+        for reg in device_config.get('registers', []):
+            if _is_machinery(reg.get('name', '')):
+                return 'mechanical'
+
+        # 默认：仪表
+        return 'instrument'

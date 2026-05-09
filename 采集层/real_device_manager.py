@@ -5,6 +5,7 @@
 
 import logging
 import yaml
+import time
 from typing import Any
 from pathlib import Path
 
@@ -30,6 +31,11 @@ class RealDeviceManager(IDeviceManager):
 
     SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest']
 
+    # 连接失败重试策略
+    MAX_RETRY_COUNT = 3       # 最大重试次数后进入退避
+    RETRY_BACKOFF_BASE = 30   # 退避基数（秒）
+    MAX_RETRY_INTERVAL = 300  # 最大退避间隔（5分钟）
+
     def __init__(self, config_path: str | None = None):
         """
         初始化真实设备管理器
@@ -41,6 +47,10 @@ class RealDeviceManager(IDeviceManager):
         self.simulation_mode = False  # 真实设备管理器始终为真实模式
         self.devices: dict[str, dict[str, Any]] = {}
         self.clients: dict[str, IDeviceClient] = {}
+        self._stopped_devices: set[str] = set()  # 单独停止的设备
+        
+        # 连接失败跟踪：device_id -> {'retry_count': int, 'last_retry': timestamp}
+        self._connection_failures: dict[str, dict[str, Any]] = {}
         
         # 加载设备配置
         self.load_config()
@@ -118,27 +128,121 @@ class RealDeviceManager(IDeviceManager):
 
         return self.clients[device_id]
 
+    def _should_skip_connect(self, device_id: str) -> bool:
+        """检查设备是否在退避期内，应该跳过重试"""
+        failure = self._connection_failures.get(device_id)
+        if not failure:
+            return False
+        retry_count = failure.get('retry_count', 0)
+        if retry_count < self.MAX_RETRY_COUNT:
+            return False
+        # 指数退避计算
+        wait = min(
+            self.RETRY_BACKOFF_BASE * (2 ** (retry_count - self.MAX_RETRY_COUNT)),
+            self.MAX_RETRY_INTERVAL
+        )
+        elapsed = time.time() - failure.get('last_retry', 0)
+        return elapsed < wait
+
+    def _record_connection_failure(self, device_id: str):
+        """记录连接失败（计数+1）"""
+        failure = self._connection_failures.setdefault(device_id, {'retry_count': 0, 'last_retry': 0})
+        failure['retry_count'] += 1
+        failure['last_retry'] = time.time()
+        cnt = failure['retry_count']
+        if cnt >= self.MAX_RETRY_COUNT:
+            wait = min(self.RETRY_BACKOFF_BASE * (2 ** (cnt - self.MAX_RETRY_COUNT)), self.MAX_RETRY_INTERVAL)
+            logger.warning(f"[真实] 设备 {device_id} 已连续 {cnt} 次连接失败，暂停重试 {wait:.0f} 秒")
+        else:
+            logger.warning(f"[真实] 设备 {device_id} 第 {cnt} 次连接失败")
+
+    def _record_connection_success(self, device_id: str):
+        """连接成功，重置失败计数"""
+        self._connection_failures.pop(device_id, None)
+
+    def set_estop_override(self, active: bool):
+        """设置紧急停机覆盖（真实设备通过写操作控制，此处仅记录）"""
+        self._estop_active = active
+        if active:
+            logger.info("[真实] 紧急停机已激活")
+
+    def stop_device(self, device_id: str) -> bool:
+        """停止指定设备（发送停机信号）"""
+        self._stopped_devices.add(device_id)
+        client = self.get_client(device_id)
+        if client:
+            # 优先线圈写入：coil 0 = False 表示停止
+            if hasattr(client, 'write_single_coil') and callable(client.write_single_coil):
+                client.write_single_coil(0, False)
+            # 降级：寄存器写入 0
+            elif hasattr(client, 'write_single_register') and callable(client.write_single_register):
+                client.write_single_register(100, 0)
+            logger.info(f"[真实] 已向 {device_id} 发送停止信号")
+        return True
+
+    def start_device(self, device_id: str) -> bool:
+        """启动指定设备（发送启动信号）"""
+        self._stopped_devices.discard(device_id)
+        client = self.get_client(device_id)
+        if client:
+            # 线圈 True = 启动
+            if hasattr(client, 'write_single_coil') and callable(client.write_single_coil):
+                client.write_single_coil(0, True)
+            # 降级：寄存器写入 1
+            elif hasattr(client, 'write_single_register') and callable(client.write_single_register):
+                client.write_single_register(100, 1)
+            logger.info(f"[真实] 已向 {device_id} 发送启动信号")
+        return True
+
     def connect_device(self, device_id: str) -> bool:
-        """连接设备"""
+        """连接设备（含退避逻辑）"""
+        if self._should_skip_connect(device_id):
+            logger.debug(f"[真实] 跳过设备 {device_id} 连接（退避中）")
+            return False
+
         client = self.get_client(device_id)
         if not client:
             return False
-        return client.connect()
+
+        success = client.connect()
+        if success:
+            self._record_connection_success(device_id)
+        else:
+            self._record_connection_failure(device_id)
+        return success
 
     def disconnect_device(self, device_id: str):
-        """断开设备连接"""
+        """断开设备连接（重置失败计数）"""
         client = self.clients.get(device_id)
         if client:
             client.disconnect()
+        self._connection_failures.pop(device_id, None)
 
-    def connect_all(self) -> dict[str, bool]:
-        """连接所有设备"""
+    def connect_all(self, timeout: float = 20.0) -> dict[str, bool]:
+        """
+        连接所有设备
+        
+        Args:
+            timeout: 总超时（秒），避免阻塞启动太久，默认20秒
+        """
         results = {}
+        start = time.time()
         for device_id in self.devices:
-            if self.devices[device_id].get('enabled', True):
-                results[device_id] = self.connect_device(device_id)
-            else:
-                results[device_id] = None  # 跳过禁用设备
+            if not self.devices[device_id].get('enabled', True):
+                results[device_id] = None
+                continue
+
+            if time.time() - start > timeout:
+                logger.warning(f"[真实] connect_all 已达超时 {timeout}s，剩余 {len(self.devices) - len(results)} 个设备跳过")
+                for rid in list(self.devices.keys())[len(results):]:
+                    if self.devices[rid].get('enabled', True):
+                        results[rid] = False
+                    else:
+                        results[rid] = None
+                break
+
+            results[device_id] = self.connect_device(device_id)
+
         return results
 
     def disconnect_all(self):
@@ -163,6 +267,8 @@ class RealDeviceManager(IDeviceManager):
             'port': device_config.get('port'),
             'enabled': device_config.get('enabled', True),
             'connected': False,
+            'stopped': device_id in self._stopped_devices or self._estop_active,
+            'device_category': IDeviceManager.get_device_category(device_config),
             'registers': device_config.get('registers', []),
             'nodes': device_config.get('nodes', []),
             'topics': device_config.get('topics', []),

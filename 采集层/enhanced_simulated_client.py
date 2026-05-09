@@ -106,6 +106,11 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         if not self.connected:
             return None
         
+        # ===== 停机设备不返回数据 =====
+        with self._data_lock:
+            if self._latest_data.get('_stopped'):
+                return None
+        
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
         self.stats['last_read_time'] = time.time()
@@ -239,6 +244,9 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
     def get_latest_data(self) -> Dict[str, Any]:
         """获取最新数据"""
         with self._data_lock:
+            # 停机设备返回空数据
+            if self._latest_data.get('_stopped'):
+                return {}
             return dict(self._latest_data)
     
     def inject_fault(self, fault_type: FaultType, severity: float = 0.5):
@@ -334,6 +342,10 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
         # 更新行为模拟器
         data = self.behavior_simulator.update(2.0)
         
+        # ===== 停机设备不产生数据 =====
+        if data.get('_stopped'):
+            return
+        
         # 更新节点数据
         for i, node_cfg in enumerate(self.node_configs):
             name = node_cfg.get('name', node_cfg.get('node_id', 'unknown'))
@@ -363,6 +375,9 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
         """获取最新数据"""
         if self.connected:
             self._generate_data()
+        # 停机设备返回空数据
+        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator._is_monitoring_device:
+            return {}
         return dict(self.latest_data)
     
     def get_stats(self) -> Dict[str, Any]:
@@ -481,6 +496,10 @@ class EnhancedSimulatedMQTTClient(PushClientInterface):
         # 更新行为模拟器
         data = self.behavior_simulator.update(3.0)
         
+        # ===== 停机设备不产生数据 =====
+        if data.get('_stopped'):
+            return
+        
         # 更新主题数据
         for i, topic_cfg in enumerate(self.topics_config):
             name = topic_cfg.get('name', 'unknown')
@@ -510,6 +529,9 @@ class EnhancedSimulatedMQTTClient(PushClientInterface):
     
     def get_latest_data(self) -> Dict[str, Dict[str, Any]]:
         """获取最新数据"""
+        # 停机设备返回空数据
+        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator._is_monitoring_device:
+            return {}
         return dict(self.latest_data)
     
     def get_stats(self) -> Dict[str, Any]:
@@ -597,6 +619,9 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
         """获取最新数据"""
         if self.connected:
             self._generate_data()
+        # 停机设备返回空数据
+        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator._is_monitoring_device:
+            return {}
         return dict(self.latest_data)
     
     def read_endpoint(self, endpoint_config: Dict[str, Any]) -> Any:
@@ -624,6 +649,10 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
         """生成数据"""
         # 更新行为模拟器
         data = self.behavior_simulator.update(1.0)
+        
+        # ===== 停机设备不产生数据 =====
+        if data.get('_stopped'):
+            return
         
         # 更新端点数据
         for i, ep in enumerate(self.endpoints):

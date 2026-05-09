@@ -136,6 +136,10 @@ class DeviceBehaviorSimulator:
         self._last_update = time.time()
         self._running = True
         
+        # ===== 设备角色：监测设备 vs 工作设备 =====
+        # 监测设备（传感器/分析仪）不受停机命令影响，始终运行
+        self._is_monitoring_device = self._detect_monitoring_device()
+        
         # 数据回调
         self._data_callbacks: List[Callable] = []
         
@@ -163,7 +167,8 @@ class DeviceBehaviorSimulator:
         # 从预设simulation_params注入参数
         self._apply_simulation_params()
         
-        logger.info(f"[行为模拟] 设备 {self.device_name} 初始化完成, 参数: {len(self._device_param_names)} 个")
+        device_role = "监测" if self._is_monitoring_device else "工作"
+        logger.info(f"[行为模拟] 设备 {self.device_name} 初始化完成, 角色: {device_role}, 参数: {len(self._device_param_names)} 个")
     
     def _configure_process_model(self):
         """根据设备类型配置过程模型"""
@@ -273,6 +278,24 @@ class DeviceBehaviorSimulator:
                 self.process_model.base_level = level_pct
                 self._current_level = level_pct
     
+    def _detect_monitoring_device(self) -> bool:
+        """检测设备是否为监测/检测设备（不受停机命令影响）"""
+        desc = self.device_config.get('description', '').lower()
+        name = self.device_config.get('name', '').lower()
+        device_id = self.device_config.get('id', '').lower()
+        
+        monitoring_keywords = [
+            '监测', '监控', '传感器', '分析仪', '检测', '仪表',
+            'sensor', 'monitor', 'analyzer', 'meter', 'gauge',
+            '振动', 'vibration', '水质', 'water_quality',
+            '电力分析', 'power_analy', 'iolink', 'io-link',
+            '信号灯', 'signal_tower', '继电器', 'relay',
+            '指示灯', 'alarm', '报警'
+        ]
+        
+        combined = f"{desc} {name} {device_id}"
+        return any(kw in combined for kw in monitoring_keywords)
+    
     def inject_simulation_params(self, sim_params: Dict[str, Any]):
         """外部注入模拟参数（由SimulationInitializer调用）"""
         self.device_config['_simulation_params'] = sim_params
@@ -297,6 +320,11 @@ class DeviceBehaviorSimulator:
         # ===== 控制命令识别 =====
         # 通用约定：地址100 = 启动/停止控制
         if address == 100:
+            # 监测设备不受停机命令影响
+            if self._is_monitoring_device and value == 0:
+                logger.info(f"[行为模拟] 监测设备 {self.device_name} 忽略停机命令")
+                return
+            
             if value == 1:
                 # 启动命令
                 if self.state in (DeviceState.STOPPED, DeviceState.IDLE):
@@ -381,6 +409,11 @@ class DeviceBehaviorSimulator:
         
         # 通用约定：线圈0 = 启动/停止
         if address == 0:
+            # 监测设备不受停机命令影响
+            if self._is_monitoring_device and not value:
+                logger.info(f"[行为模拟] 监测设备 {self.device_name} 忽略线圈停机命令")
+                return
+            
             if value:
                 if self.state in (DeviceState.STOPPED, DeviceState.IDLE):
                     self._change_state(DeviceState.RUNNING)
@@ -678,18 +711,29 @@ class DeviceBehaviorSimulator:
         
         优化：只生成该设备拥有的参数，避免不相关的数据污染
         例如：锅炉设备不会生成振动数据，水质设备不会生成注射压力
+        
+        重要：STOPPED状态的工作设备不产生数据（已关闭）
         """
+        # ===== 停机设备不产生数据 =====
+        if self.state == DeviceState.STOPPED and not self._is_monitoring_device:
+            # 只返回元数据，不返回实际数据值
+            return {
+                '_device_state': self.state.name,
+                '_health_score': round(self.health.overall_score, 1),
+                '_active_fault': self.active_fault.value,
+                '_fault_severity': round(self.fault_severity, 2),
+                '_operating_hours': round(self.health.operating_hours, 2),
+                '_timestamp': datetime.now().isoformat(),
+                '_stopped': True  # 标记设备已停机
+            }
+        
         t = time.time() - self.start_time
         
-        # 状态影响因子：停止状态下降温降压
+        # 状态影响因子
         state_temp_factor = 1.0
         state_pressure_factor = 1.0
         state_flow_factor = 1.0
-        if self.state == DeviceState.STOPPED:
-            state_temp_factor = 0.3  # 停机后温度快速下降
-            state_pressure_factor = 0.1
-            state_flow_factor = 0.0
-        elif self.state == DeviceState.IDLE:
+        if self.state == DeviceState.IDLE:
             state_temp_factor = 0.6
             state_pressure_factor = 0.5
             state_flow_factor = 0.1

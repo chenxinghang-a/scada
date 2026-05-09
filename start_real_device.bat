@@ -51,13 +51,13 @@ if %errorlevel% neq 0 (
 if not exist "logs" mkdir logs
 if not exist "data" mkdir data
 
-:: 延迟3秒后打开浏览器
-start "" /b cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:5000"
+:: 延迟3秒后打开浏览器（真实模式端口 5001）
+start "" /b cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:5001"
 
 echo.
 echo [2/3] 启动系统 (真实设备模式)...
 echo.
-echo   访问地址: http://localhost:5000
+echo   访问地址: http://localhost:5001
 echo   默认账号: admin / admin123
 echo   设备配置: 配置/devices_real.yaml
 echo   数据库  : data/scada_real.db

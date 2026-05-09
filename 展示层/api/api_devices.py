@@ -65,6 +65,10 @@ def add_device():
     if success:
         get_auth_manager().log_operation(
             request.current_user['username'], 'add_device', f"添加设备: {data['id']}")
+        # 设备存在 → 启动采集任务 → 数据开始入库
+        data_collector = getattr(current_app, 'data_collector', None)
+        if data_collector:
+            data_collector.start_device_task(data['id'], device_config)
         # 获取设备状态（包含连接状态）
         device_status = current_app.device_manager.get_device_status(data['id'])
         return jsonify({
@@ -110,7 +114,12 @@ def update_device(device_id):
 @_require_engineer
 def delete_device(device_id):
     """删除设备"""
-    # 优先通过 simulation_initializer 删除（会清理模拟参数）
+    # 第一步：停止采集（先停数据，再删配置）
+    data_collector = getattr(current_app, 'data_collector', None)
+    if data_collector:
+        data_collector.remove_device_task(device_id)
+
+    # 第二步：删除设备配置
     initializer = _get_simulation_initializer()
     if initializer is not None:
         result = initializer.remove_device(device_id)
@@ -118,7 +127,7 @@ def delete_device(device_id):
             get_auth_manager().log_operation(
                 request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
             return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
-        # 如果simulation_initializer删除失败，尝试直接通过device_manager删除
+        # simulation_initializer 失败，回退到 device_manager 直接删除
         success = current_app.device_manager.remove_device(device_id)
         if success:
             get_auth_manager().log_operation(
@@ -126,13 +135,62 @@ def delete_device(device_id):
             return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
         return jsonify(result), 400
     else:
-        # 没有simulation_initializer，直接通过device_manager删除
         success = current_app.device_manager.remove_device(device_id)
         if success:
             get_auth_manager().log_operation(
                 request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
             return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
         return jsonify({'success': False, 'message': f'删除设备 {device_id} 失败'}), 400
+
+
+@devices_bp.route('/devices/<device_id>/stop', methods=['POST'])
+@_require_engineer
+def stop_device(device_id):
+    """停止设备（仅 mechanical 类型有效）"""
+    device_manager = current_app.device_manager
+    config = device_manager.devices.get(device_id)
+    if not config:
+        return jsonify({'error': f'设备 {device_id} 不存在'}), 404
+
+    from 采集层.interfaces import IDeviceManager
+    category = IDeviceManager.get_device_category(config)
+    if category != 'mechanical':
+        return jsonify({'success': False, 'message': f'{category} 类型设备不支持启停操作'}), 400
+
+    result = device_manager.stop_device(device_id)
+    if result:
+        get_auth_manager().log_operation(request.current_user.get('username', 'system'), 'stop_device', device_id, f'设备停止: {device_id}')
+    return jsonify({'success': result, 'message': f'设备 {device_id} 已停止'})
+
+
+@devices_bp.route('/devices/<device_id>/start', methods=['POST'])
+@_require_engineer
+def start_device(device_id):
+    """启动设备"""
+    device_manager = current_app.device_manager
+    config = device_manager.devices.get(device_id)
+    if not config:
+        return jsonify({'error': f'设备 {device_id} 不存在'}), 404
+
+    from 采集层.interfaces import IDeviceManager
+    category = IDeviceManager.get_device_category(config)
+    if category != 'mechanical':
+        return jsonify({'success': False, 'message': f'{category} 类型设备不支持启停操作'}), 400
+
+    result = device_manager.start_device(device_id)
+    if result:
+        get_auth_manager().log_operation(request.current_user.get('username', 'system'), 'start_device', device_id, f'设备启动: {device_id}')
+    return jsonify({'success': result, 'message': f'设备 {device_id} 已启动'})
+
+
+def _start_device_collection(device_id: str):
+    """为已添加的设备启动采集任务"""
+    data_collector = getattr(current_app, 'data_collector', None)
+    if not data_collector:
+        return
+    device_config = current_app.device_manager.get_all_devices().get(device_id)
+    if device_config:
+        data_collector.start_device_task(device_id, device_config)
 
 
 @devices_bp.route('/devices/<device_id>/test', methods=['POST'])
@@ -523,6 +581,7 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         'name': data['name'],
         'description': data.get('description', ''),
         'protocol': protocol,
+        'device_category': data.get('device_category', 'instrument'),
         'enabled': data.get('enabled', True),
         'collection_interval': int(data.get('collection_interval', 5))
     }
@@ -643,6 +702,8 @@ def add_preset_device():
         get_auth_manager().log_operation(
             request.current_user['username'], 'add_preset',
             f"添加预设设备: {preset_id} -> {result.get('device_id', '')}")
+        # 启动采集
+        _start_device_collection(result.get('device_id', ''))
     return jsonify(result)
 
 
@@ -667,6 +728,10 @@ def batch_add_presets():
         get_auth_manager().log_operation(
             request.current_user['username'], 'batch_add_presets',
             f"批量添加预设: {preset_ids}")
+        # 启动所有成功添加的设备的采集
+        for r in result.get('results', []):
+            if r.get('success') and r.get('device_id'):
+                _start_device_collection(r['device_id'])
     return jsonify(result)
 
 
@@ -688,4 +753,7 @@ def add_all_presets():
         get_auth_manager().log_operation(
             request.current_user['username'], 'add_all_presets',
             f"添加全部预设: {result['message']}")
+        for r in result.get('results', []):
+            if r.get('success') and r.get('device_id'):
+                _start_device_collection(r['device_id'])
     return jsonify(result)

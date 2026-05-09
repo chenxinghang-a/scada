@@ -4,7 +4,9 @@
 
 import sys
 import math
+import time
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -210,25 +212,52 @@ def main():
         # 将启动时间传递给app
         app.system_start_time = SYSTEM_START_TIME
 
-        # 连接所有设备
-        logger.info("连接设备...")
-        connection_results = device_manager.connect_all()
-        for device_id, success in connection_results.items():
-            status = "成功" if success else "失败"
-            logger.info(f"  设备 {device_id}: {status}")
+        # ---- 后台连接设备 + 启动采集（不阻塞Web服务启动） ----
+        def _background_start():
+            """后台线程：连接设备 → 启动采集"""
+            # 连接所有设备（带20s超时，避免阻塞太久）
+            logger.info("后台连接设备...")
+            connection_results = device_manager.connect_all(timeout=20)
+            for device_id, success in connection_results.items():
+                status = "成功" if success else "失败"
+                logger.info(f"  设备 {device_id}: {status}")
 
-        # 启动数据采集
-        logger.info("启动数据采集...")
-        data_collector.start()
+            # 启动数据采集
+            logger.info("启动数据采集...")
+            data_collector.start()
 
-        # 启动智能层模块
-        logger.info("启动智能层模块...")
-        predictive_maintenance.start()
-        oee_calculator.start()
-        energy_manager.start()
-        edge_decision.start()
+            # 启动智能层模块
+            logger.info("启动智能层模块...")
+            predictive_maintenance.start()
+            oee_calculator.start()
+            energy_manager.start()
+            edge_decision.start()
 
-        # 为模拟模式预填充所有工业4.0模块数据
+            # 启动TDengine适配器（如果可用）
+            if realtime_bridge:
+                realtime_bridge.start()
+                logger.info("TDengine实时数据桥接器已启动")
+            if tsdb_adapter:
+                devices = device_manager.get_all_devices()
+                for dev_id, dev_config in devices.items():
+                    registers = dev_config.get('registers', [])
+                    if registers:
+                        tsdb_adapter.register_device(dev_id, registers)
+                tsdb_adapter.start()
+                logger.info("TDengine智能层适配器已启动")
+
+            # 注入WebSocket推送函数到报警管理器
+            from 展示层.websocket import emit_alarm, emit_broadcast
+            alarm_manager.set_websocket_emit(emit_alarm)
+            broadcast_system.add_callback(lambda msg: emit_broadcast(msg))
+
+            logger.info("后台采集服务已就绪")
+
+        bg_thread = threading.Thread(target=_background_start, daemon=True, name="bg_device_connect")
+        bg_thread.start()
+
+        # ---- 模拟模式初始化器（主线程创建，不依赖后台连接） ----
+        simulation_initializer = None
         if simulation_mode:
             logger.info("模拟模式：初始化工业4.0模块数据...")
             from core.simulation_initializer import initialize_simulation_data
@@ -236,22 +265,9 @@ def main():
                 device_manager, oee_calculator, predictive_maintenance,
                 spc_analyzer, energy_manager
             )
-            # 挂载到app供API使用
             app.simulation_initializer = simulation_initializer
 
-        # 启动TDengine适配器（如果可用）
-        if realtime_bridge:
-            realtime_bridge.start()
-            logger.info("TDengine实时数据桥接器已启动")
-        if tsdb_adapter:
-            # 注册设备到适配器
-            devices = device_manager.get_all_devices()
-            for device_id, device_config in devices.items():
-                registers = device_config.get('registers', [])
-                if registers:
-                    tsdb_adapter.register_device(device_id, registers)
-            tsdb_adapter.start()
-            logger.info("TDengine智能层适配器已启动")
+        # 立即启动Web服务（不等待设备连接）
 
         # 启动Web服务
         mode_str = "真实设备模式" if not simulation_mode else "模拟模式：使用仿真数据"
@@ -262,17 +278,11 @@ def main():
         logger.info(f"（{mode_str}）")
         logger.info("=" * 50)
 
-        # 注入WebSocket推送函数到报警管理器
-        from 展示层.websocket import socketio, emit_alarm, emit_broadcast
-        alarm_manager.set_websocket_emit(emit_alarm)
-
-        # 注入广播WebSocket推送（广播发生时实时通知前端）
-        broadcast_system.add_callback(lambda msg: emit_broadcast(msg))
-
         # 使用routes.py中已创建的SocketIO实例（init_socketio在create_app中已调用）
+        from 展示层.websocket import socketio
         from config import WebConfig
         host = WebConfig.HOST
-        port = WebConfig.PORT
+        port = WebConfig.REAL_PORT if not simulation_mode else WebConfig.PORT
         if socketio is None:
             logger.warning("SocketIO未初始化，使用普通Flask服务器")
             app.run(host=host, port=port, debug=False)

@@ -374,7 +374,7 @@ class SCADASystem:
         
         app = self.components['app']
         host = WebConfig.HOST
-        port = WebConfig.PORT
+        port = getattr(WebConfig, 'REAL_PORT', WebConfig.PORT) if '--real' in sys.argv else WebConfig.PORT
         
         logger.info("=" * 60)
         logger.info("工业数据采集与监控系统已启动")

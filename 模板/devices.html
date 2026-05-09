@@ -123,6 +123,19 @@
                         </div>
                     </div>
 
+                    <!-- 设备分类 -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">设备分类</label>
+                            <select class="form-select" id="device_category" name="device_category">
+                                <option value="instrument">仪表/传感器（无启停）</option>
+                                <option value="mechanical">机械类（可停止/启动）</option>
+                                <option value="safety">安全设备（灯/蜂鸣器/继电器）</option>
+                            </select>
+                            <div class="form-text">机械类设备在设备管理中显示停止/启动按钮，E-STOP 时机械数据归零</div>
+                        </div>
+                    </div>
+
                     <!-- 通用字段：采集间隔 + 启用状态 -->
                     <div class="row mb-3">
                         <div class="col-md-6">
@@ -508,8 +521,8 @@ function renderDevicesTable(devices) {
     
     tbody.innerHTML = devices.map(device => {
         const protocol = device.protocol || 'modbus_tcp';
-        const statusClass = device.connected ? 'online' : (device.enabled === false ? 'offline' : 'warning');
-        const statusText = device.connected ? '在线' : (device.enabled === false ? '已禁用' : '离线');
+const statusClass = device.stopped ? 'stopped' : (device.connected ? 'online' : (device.enabled === false ? 'offline' : 'warning'));
+const statusText = device.stopped ? '已停止' : (device.connected ? '在线' : (device.enabled === false ? '已禁用' : '离线'));
         
         return `
         <tr>
@@ -527,7 +540,7 @@ function renderDevicesTable(devices) {
             <td><small class="text-muted">${getDeviceAddress(device)}</small></td>
             <td>
                 <span class="device-status-badge ${statusClass}">
-                    <i class="bi bi-${device.connected ? 'check-circle' : 'x-circle'} me-1"></i>
+                    <i class="bi bi-${device.stopped ? 'stop-circle' : (device.connected ? 'check-circle' : 'x-circle')} me-1"></i>
                     ${statusText}
                 </span>
             </td>
@@ -546,6 +559,14 @@ function renderDevicesTable(devices) {
                     <button class="btn btn-outline-danger btn-sm" onclick="deleteDevice('${device.device_id}')" title="删除">
                         <i class="bi bi-trash"></i>
                     </button>
+                    ${device.device_category === 'mechanical' && !device.stopped ?
+                    `<button class="btn btn-outline-warning btn-sm" onclick="stopDevice('${device.device_id}')" title="停止">
+                        <i class="bi bi-stop-circle"></i>
+                    </button>` : ''}
+                    ${device.device_category === 'mechanical' && device.stopped ?
+                    `<button class="btn btn-outline-success btn-sm" onclick="startDevice('${device.device_id}')" title="启动">
+                        <i class="bi bi-play-circle"></i>
+                    </button>` : ''}
                 </div>
             </td>
         </tr>
@@ -1016,6 +1037,27 @@ async function deleteDevice(deviceId) {
         showAlert('删除失败: ' + error.message, 'danger');
     }
 }
+
+
+async function stopDevice(deviceId) {
+    if (!confirm(`确定停止设备 "${deviceId}" 吗？`)) return;
+    try {
+        const r = await fetch(`/api/devices/${deviceId}/stop`, { method: 'POST', headers: getAuthHeaders() });
+        const d = await r.json();
+        showAlert(d.message || '已停止', 'warning');
+        loadDevices();
+    } catch(e) { showAlert('停止失败: ' + e.message, 'danger'); }
+}
+
+async function startDevice(deviceId) {
+    try {
+        const r = await fetch(`/api/devices/${deviceId}/start`, { method: 'POST', headers: getAuthHeaders() });
+        const d = await r.json();
+        showAlert(d.message || '已启动', 'success');
+        loadDevices();
+    } catch(e) { showAlert('启动失败: ' + e.message, 'danger'); }
+}
+
 
 async function testDevice(deviceId) {
     showAlert('正在测试连接...', 'info');

@@ -390,6 +390,9 @@ class DeviceControlSafety:
                         success = client.write_single_coil(0, False)
                     elif hasattr(client, 'write_single_register'):
                         success = client.write_single_register(100, 0)
+                    # 同步 device_manager 状态
+                    if self.device_manager:
+                        self.device_manager.stop_device(device_id)
                 elif action == 'reset':
                     if hasattr(client, 'write_single_register'):
                         success = client.write_single_register(100, 0)
@@ -693,6 +696,10 @@ class DeviceControlSafety:
 
         logger.critical(f"紧急停机触发: {reason}")
 
+        # 通知设备管理器（模拟层停止机械类数据，真实层记录状态）
+        if self.device_manager:
+            self.device_manager.set_estop_override(True)
+
         # 向可控设备发送停机命令
         stopped_devices = []
         if self.device_manager:
@@ -773,6 +780,10 @@ class DeviceControlSafety:
         self._estop_active = False
         self._estop_time = None
         self._estop_reason = ''
+
+        # 通知设备管理器恢复（模拟层恢复机械类数据输出）
+        if self.device_manager:
+            self.device_manager.set_estop_override(False)
 
         # 复位声光报警
         if self.alarm_manager:

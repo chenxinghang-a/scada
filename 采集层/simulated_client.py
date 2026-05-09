@@ -22,6 +22,72 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
+# 紧急停机 - 机械类寄存器检测
+# E-STOP 激活时，机械类寄存器归零/冻结，仪表传感器继续输出
+# ============================================================
+
+_MACHINERY_KEYWORDS = {
+    'speed',            # 马达/泵/传送带转速
+    'force', 'clamping', # 锁模力、夹紧力
+    'cushion',          # 注塑保压位置
+    'position',         # 执行位置
+    'reflux',           # 阀门回流比
+    'packaging',        # 包装机械
+    'conveyor',         # 传送带
+    'sealing',          # 封箱
+    'spray',            # 喷涂机械
+    'shot_count', 'painted_count', 'label_count',
+    'palletizing_count', 'reject_count', 'batch_count',
+    'cycle_time',       # 机械周期
+}
+
+_ESTOP_ACTIVE = False
+_ESTOP_FROZEN_VALUES: dict[str, float] = {}  # name -> frozen_value
+
+# 设备级停止（个体停机，区别于全局 E-STOP）
+_DEVICE_STOPPED: set[str] = set()  # device_id 集合
+
+
+def set_device_stopped(device_id: str, stopped: bool):
+    """设置单个设备停止/启动状态"""
+    if stopped:
+        _DEVICE_STOPPED.add(device_id)
+    else:
+        _DEVICE_STOPPED.discard(device_id)
+
+
+def is_device_stopped(device_id: str) -> bool:
+    """检查设备是否被单独停止"""
+    return device_id in _DEVICE_STOPPED
+
+
+def _is_machinery(name: str) -> bool:
+    """判断寄存器名称是否属于机械类"""
+    name_lower = name.lower()
+    for kw in _MACHINERY_KEYWORDS:
+        if kw in name_lower:
+            return True
+    return False
+
+
+def set_estop_state(active: bool):
+    """设置紧急停机状态（由 device_manager 触发）"""
+    global _ESTOP_ACTIVE
+    _ESTOP_ACTIVE = active
+    if not active:
+        _ESTOP_FROZEN_VALUES.clear()
+    logger.info(f"[模拟] E-STOP 状态: {'激活' if active else '已解除'}")
+
+
+def _estop_override(name: str, value: float) -> float:
+    """E-STOP 激活时，机械类寄存器值归零"""
+    if _ESTOP_ACTIVE and _is_machinery(name):
+        _ESTOP_FROZEN_VALUES[name] = 0.0
+        return 0.0
+    return value
+
+
+# ============================================================
 # 关键字→数据范围映射表（全局配置，一劳永逸）
 # 每条规则: keyword → (base, amplitude, period, noise, unit_pattern)
 # ============================================================
@@ -362,6 +428,7 @@ class SimulatedModbusClient(ModbusClientInterface):
         # 预缓存每个寄存器的模拟规则（只算一次）
         self._rules_cache = {}
         self._register_types = {}  # address -> data_type, scale
+        self._machinery_addresses: set[int] = set()  # E-STOP 停机的机械类地址
         for reg in config.get('registers', []):
             data_type = reg.get('data_type', 'uint16')
             self._rules_cache[reg['address']] = _find_rule(
@@ -371,6 +438,8 @@ class SimulatedModbusClient(ModbusClientInterface):
                 'data_type': data_type,
                 'scale': reg.get('scale', 1.0)
             }
+            if _is_machinery(reg.get('name', '')):
+                self._machinery_addresses.add(reg['address'])
 
         # ===== 写操作反馈：存储写入值，支持回读验证 =====
         self._written_values: dict[int, Any] = {}  # address -> value
@@ -398,6 +467,32 @@ class SimulatedModbusClient(ModbusClientInterface):
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
         self.stats['last_read_time'] = time.time()
+
+        # ===== 设备级停止：所有寄存器归零（维护停机） =====
+        if is_device_stopped(self.device_id):
+            return [0] * count
+
+        # ===== E-STOP 处理：机械类寄存器返回 0 =====
+        if _ESTOP_ACTIVE:
+            # 检查当前地址是否属于机械类
+            is_machinery = any(
+                addr in self._machinery_addresses
+                for addr in range(address, address + count)
+            )
+            if is_machinery:
+                # 冻结或归零
+                for addr in range(address, address + count):
+                    if addr in self._machinery_addresses:
+                        if addr not in _ESTOP_FROZEN_VALUES:
+                            _ESTOP_FROZEN_VALUES[addr] = 0.0
+                # 返回全零
+                if count == 1:
+                    return [0]
+                elif count == 2:
+                    return [0, 0]
+                elif count == 4:
+                    return [0, 0, 0, 0]
+                return [0] * count
 
         # 检查是否有写入的值（用于回读验证）
         written_value = self._written_values.get(address)
@@ -578,18 +673,25 @@ class SimulatedOPCUAClient(PushClientInterface):
 
     def _generate_data(self):
         t = time.time() - self.start_time
+        device_stopped = is_device_stopped(self.device_id)
 
         for i, node_cfg in enumerate(self.node_configs):
             name = node_cfg.get('name', node_cfg.get('node_id', 'unknown'))
             unit = node_cfg.get('unit', '')
 
-            rule = self._rules_cache.get(name)
-            if rule:
-                value = _generate_value(rule, t, i * 0.5)
+            if device_stopped:
+                value = 0.0  # 设备级停止，全部归零
             else:
-                value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
+                rule = self._rules_cache.get(name)
+                if rule:
+                    value = _generate_value(rule, t, i * 0.5)
+                else:
+                    value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
 
             value = round(value, 2)
+            # E-STOP：机械类值归零
+            if not device_stopped:
+                value = _estop_override(name, value)
             self.latest_data[name] = {
                 'value': value, 'unit': unit,
                 'timestamp': datetime.now().isoformat(),
@@ -703,18 +805,25 @@ class SimulatedMQTTClient(PushClientInterface):
 
     def _generate_data(self):
         t = time.time() - self.start_time
+        device_stopped = is_device_stopped(self.device_id)
 
         for i, topic_cfg in enumerate(self.topics_config):
             name = topic_cfg.get('name', 'unknown')
             unit = topic_cfg.get('unit', '')
 
-            rule = self._rules_cache.get(name)
-            if rule:
-                value = _generate_value(rule, t, i * 0.7)
+            if device_stopped:
+                value = 0.0
             else:
-                value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
+                rule = self._rules_cache.get(name)
+                if rule:
+                    value = _generate_value(rule, t, i * 0.7)
+                else:
+                    value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
 
             value = round(value, 2)
+            # E-STOP：机械类值归零
+            if not device_stopped:
+                value = _estop_override(name, value)
             self.stats['messages_received'] += 1
             self.stats['messages_parsed'] += 1
             self.stats['last_message_time'] = datetime.now().isoformat()
@@ -805,18 +914,25 @@ class SimulatedRESTClient(PushClientInterface):
 
     def _generate_data(self):
         t = time.time() - self.start_time
+        device_stopped = is_device_stopped(self.device_id)
 
         for i, ep in enumerate(self.endpoints):
             name = ep.get('name', 'unknown')
             unit = ep.get('unit', '')
 
-            rule = self._rules_cache.get(name)
-            if rule:
-                value = _generate_value(rule, t, i * 0.4)
+            if device_stopped:
+                value = 0.0
             else:
-                value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
+                rule = self._rules_cache.get(name)
+                if rule:
+                    value = _generate_value(rule, t, i * 0.4)
+                else:
+                    value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
 
             value = round(value, 2)
+            # E-STOP：机械类值归零
+            if not device_stopped:
+                value = _estop_override(name, value)
             self.latest_data[name] = {
                 'value': value, 'unit': unit,
                 'timestamp': datetime.now().isoformat(),

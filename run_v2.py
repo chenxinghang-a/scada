@@ -264,7 +264,7 @@ def main():
         # 使用routes.py中已创建的SocketIO实例（init_socketio在create_app中已调用）
         from config import WebConfig
         host = WebConfig.HOST
-        port = WebConfig.PORT
+        port = getattr(WebConfig, 'REAL_PORT', WebConfig.PORT) if '--real' in sys.argv else WebConfig.PORT
         if socketio is None:
             logger.warning("SocketIO未初始化，使用普通Flask服务器")
             app.run(host=host, port=port, debug=False)

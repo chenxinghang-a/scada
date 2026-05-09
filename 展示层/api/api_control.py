@@ -106,7 +106,11 @@ def get_control_logs():
     """获取控制操作日志（含安全审计）"""
     limit = request.args.get('limit', 50, type=int)
     logs = get_auth_manager().get_operation_logs(limit=limit)
-    control_logs = [log for log in logs if log.get('action') in ('write_register', 'write_coil')]
+    control_logs = [log for log in logs if log.get('action') in (
+        'write_register', 'write_coil', 'stop_device', 'start_device',
+        'batch_stop', 'batch_start', 'batch_reset',
+        'emergency_stop', 'estop_reset',
+    )]
 
     # 合并安全审计日志
     device_control = getattr(current_app, 'device_control', None)

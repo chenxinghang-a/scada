@@ -109,6 +109,41 @@ class DataCollector:
         self.device_manager.disconnect_all()
         logger.info("数据采集器已停止")
 
+    def start_device_task(self, device_id: str, device_config: dict[str, Any]):
+        """为指定设备启动采集任务（运行时添加设备时调用）
+
+        设备存在 ⟹ 有采集任务 ⟹ 有数据
+        设备不存在 ⟹ 无采集任务 ⟹ 无数据
+        """
+        if not self.running:
+            logger.warning(f"数据采集器未运行，跳过设备 {device_id} 的采集启动")
+            return
+
+        if not device_config.get('enabled', True):
+            logger.info(f"设备 {device_id} 已禁用，跳过采集启动")
+            return
+
+        if device_id in self.tasks:
+            logger.debug(f"设备 {device_id} 已有采集任务，跳过")
+            return
+
+        protocol = device_config.get('protocol', 'modbus_tcp')
+        if protocol in ('opcua', 'mqtt'):
+            self._setup_push_device(device_id, device_config)
+        else:
+            self._start_device_collection(device_id, device_config)
+        logger.info(f"已启动设备 {device_id} [{protocol}] 的采集任务")
+
+    def remove_device_task(self, device_id: str):
+        """删除设备的采集任务（设备被删除时调用）
+
+        取消定时器，不再采集该设备数据。历史数据保留。
+        """
+        timer = self.tasks.pop(device_id, None)
+        if timer:
+            timer.cancel()
+            logger.info(f"已停止设备 {device_id} 的采集任务")
+
     def _setup_push_device(self, device_id: str, device_config: dict[str, Any]):
         """设置推送型设备（OPC UA / MQTT）"""
         protocol = device_config.get('protocol', 'modbus_tcp')
@@ -166,13 +201,14 @@ class DataCollector:
         try:
             client = self.device_manager.get_client(device_id)
             if not client:
-                logger.error(f"设备 {device_id} 客户端不存在")
+                # 设备已被删除，静默跳过（定时器会在 remove_device_task 中被取消）
+                logger.debug(f"设备 {device_id} 客户端不存在，跳过采集")
                 self._inc_stat('failed_collections')
                 return
 
             if not getattr(client, 'connected', False):
-                if not client.connect():
-                    logger.error(f"设备 {device_id} 连接失败")
+                # 使用 device_manager.connect_device() 以便退避逻辑生效
+                if not self.device_manager.connect_device(device_id):
                     self._inc_stat('failed_collections')
                     return
 
@@ -211,6 +247,10 @@ class DataCollector:
 
     def _collect_from_cache(self, client, device_id: str, timestamp):
         """通用方法：从客户端缓存采集数据（适用于REST/OPC UA/MQTT）"""
+        # 设备已断开时不去读取缓存（避免读取到断开前的旧数据）
+        if not getattr(client, 'connected', False):
+            logger.debug(f"设备 {device_id} 已断开，跳过缓存采集")
+            return
         latest = client.get_latest_data()
         for name, data in latest.items():
             value = data.get('value')
@@ -369,8 +409,8 @@ class DataCollector:
                     # 设备运行状态（兼容多种寄存器名称）
                     status_keywords = ['status', 'state', 'running', 'line_status', 'boiler_status', 'packing_status']
                     if any(kw in register_name.lower() for kw in status_keywords):
-                        status_map = {0: 'stopped', 1: 'running', 2: 'fault', 3: 'idle'}
-                        status = status_map.get(int(value), 'running')
+                        status_map = {0: 'stopped', 1: 'idle', 2: 'running', 3: 'fault', 4: 'maintenance', 5: 'setup'}
+                        status = status_map.get(int(value), 'stopped')
                         self.oee_calculator.update_device_state(device_id, status)
                     
                     # 产品计数（兼容多种寄存器名称）

@@ -9,6 +9,7 @@ from typing import Any
 from pathlib import Path
 
 from .interfaces import IDeviceManager, IDeviceClient
+from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
 from .simulated_client import (
     SimulatedModbusClient,
     SimulatedOPCUAClient,
@@ -127,13 +128,33 @@ class SimulatedDeviceManager(IDeviceManager):
             return False
         return client.connect()
 
+    def set_estop_override(self, active: bool):
+        """设置紧急停机覆盖（模拟客户端停止机械类数据）"""
+        from .simulated_client import set_estop_state
+        set_estop_state(active)
+        logger.info(f"[模拟] E-STOP override: {'激活' if active else '已解除'}")
+
+    def stop_device(self, device_id: str) -> bool:
+        """停止指定设备（所有寄存器归零）"""
+        from .simulated_client import set_device_stopped
+        set_device_stopped(device_id, True)
+        logger.info(f"[模拟] 设备 {device_id} 已停止")
+        return True
+
+    def start_device(self, device_id: str) -> bool:
+        """启动指定设备"""
+        from .simulated_client import set_device_stopped
+        set_device_stopped(device_id, False)
+        logger.info(f"[模拟] 设备 {device_id} 已启动")
+        return True
+
     def disconnect_device(self, device_id: str):
         """断开设备连接"""
         client = self.clients.get(device_id)
         if client:
             client.disconnect()
 
-    def connect_all(self) -> dict[str, bool]:
+    def connect_all(self, **kwargs) -> dict[str, bool]:
         """连接所有设备"""
         results = {}
         for device_id in self.devices:
@@ -165,12 +186,14 @@ class SimulatedDeviceManager(IDeviceManager):
             'port': device_config.get('port'),
             'enabled': device_config.get('enabled', True),
             'connected': False,
+            'stopped': is_device_stopped(device_id) or _ESTOP_ACTIVE,
+            'device_category': IDeviceManager.get_device_category(device_config),
             'registers': device_config.get('registers', []),
             'nodes': device_config.get('nodes', []),
             'topics': device_config.get('topics', []),
             'endpoints': device_config.get('endpoints', []),
             'stats': {},
-            'mode': 'simulated'  # 标记为模拟模式
+            'mode': 'simulated'
         }
 
         if client:
