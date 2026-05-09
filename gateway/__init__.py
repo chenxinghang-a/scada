@@ -33,7 +33,7 @@ from .base_gateway import BaseGateway
 from .modbus_gateway import ModbusGateway
 from .mqtt_subscriber import MQTTSubscriber, MQTTDataDistributor
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __author__ = "Industrial SCADA Team"
 
 __all__ = [

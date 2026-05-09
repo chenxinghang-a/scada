@@ -50,7 +50,7 @@ system:
   description: 基于Python的工业数据采集与监控系统（四层漏斗架构）
   name: 工业数据采集与监控系统
   simulation_mode: false
-  version: 2.0.0
+  version: 2.1.0
 web:
   cors:
     enabled: true

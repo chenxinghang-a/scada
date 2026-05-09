@@ -14,7 +14,7 @@ if not exist "%PYTHON%" (
 )
 
 echo ========================================
-echo   工业数据采集与监控系统 v2.0
+echo   工业数据采集与监控系统 v2.1
 echo   Industrial SCADA System
 echo ========================================
 echo.

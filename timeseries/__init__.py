@@ -34,7 +34,7 @@ from .data_models import (
 from .query_builder import QueryBuilder
 from .migration import SQLiteToTDengineMigrator
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __author__ = "Industrial SCADA Team"
 
 __all__ = [

@@ -114,15 +114,17 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         """报警输出与广播控制页面"""
         return render_template('alarm_output.html')
 
-    @app.route('/industry40')
-    def industry40_page():
-        """工业4.0智能仪表盘"""
-        return render_template('industry40.html')
+    # 隐藏工业4.0路由
+    # @app.route('/industry40')
+    # def industry40_page():
+    #     """工业4.0智能仪表盘"""
+    #     return render_template('industry40.html')
 
-    @app.route('/charts')
-    def charts_page():
-        """图表自选页面"""
-        return render_template('charts.html')
+    # 隐藏图表分析路由
+    # @app.route('/charts')
+    # def charts_page():
+    #     """图表自选页面"""
+    #     return render_template('charts.html')
 
     # 错误处理
     @app.errorhandler(404)
