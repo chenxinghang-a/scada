@@ -385,6 +385,8 @@ class DeviceControlSafety:
                         success = client.write_single_coil(0, True)
                     elif hasattr(client, 'write_single_register'):
                         success = client.write_single_register(100, 1)
+                    if self.device_manager:
+                        self.device_manager.start_device(device_id)
                 elif action == 'stop':
                     if hasattr(client, 'write_single_coil'):
                         success = client.write_single_coil(0, False)
