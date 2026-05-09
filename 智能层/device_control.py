@@ -326,6 +326,19 @@ class DeviceControlSafety:
                 'results': {}
             }
 
+        # 启动操作前检查联锁阻止条件
+        if action == 'start':
+            for rule_id, rule in self._interlock_rules.items():
+                if rule_id in self._interlock_bypass:
+                    continue
+                if rule.get('action', {}).get('type') == 'block_start':
+                    if self._interlock_states.get(rule_id, False):
+                        return {
+                            'success': False,
+                            'message': f'联锁 {rule_id} ({rule.get("name")}) 阻止设备启动',
+                            'results': {}
+                        }
+
         results = {}
         controllable = self._get_controllable_devices()
 
@@ -334,12 +347,37 @@ class DeviceControlSafety:
             if self.device_manager:
                 controllable = list(self.device_manager.get_all_devices().keys())
 
+        if not controllable:
+            return {
+                'success': False,
+                'message': '没有可控制的设备',
+                'results': {},
+                'success_count': 0,
+                'total': 0
+            }
+
         for device_id in controllable:
             try:
                 client = self.device_manager.get_client(device_id) if self.device_manager else None
                 if not client:
                     results[device_id] = {'success': False, 'message': '设备客户端不存在'}
                     continue
+
+                # 确保设备已连接
+                if not getattr(client, 'connected', False):
+                    try:
+                        client.connect()
+                    except Exception:
+                        pass
+                    # 模拟模式下强制标记连接
+                    if not getattr(client, 'connected', False):
+                        if self.device_manager and getattr(self.device_manager, 'simulation_mode', False):
+                            client.connected = True
+                        else:
+                            results[device_id] = {'success': False, 'message': '设备未连接'}
+                            self._audit(f'batch_{action}', operator,
+                                        f'批量{action}设备 {device_id}: 设备未连接')
+                            continue
 
                 success = False
                 if action == 'start':
@@ -658,16 +696,33 @@ class DeviceControlSafety:
         # 向可控设备发送停机命令
         stopped_devices = []
         if self.device_manager:
-            for device_id in self._get_controllable_devices():
+            # 紧急停机：优先操作可控设备，如果没有则操作所有设备
+            controllable = self._get_controllable_devices()
+            if not controllable:
+                controllable = list(self.device_manager.get_all_devices().keys())
+                logger.warning(f"紧急停机: 无标准可控设备，将尝试操作所有 {len(controllable)} 个设备")
+            for device_id in controllable:
                 try:
                     client = self.device_manager.get_client(device_id)
-                    if client and hasattr(client, 'write_single_register'):
-                        # 尝试写入地址100=1作为紧急停机命令（通用约定）
-                        client.write_single_register(100, 1)
-                        stopped_devices.append(device_id)
-                    elif client and hasattr(client, 'write_single_coil'):
-                        client.write_single_coil(0, False)
-                        stopped_devices.append(device_id)
+                    if not client:
+                        logger.warning(f"紧急停机: 设备 {device_id} 客户端不存在")
+                        continue
+                    # 优先使用线圈写入（coil address 0 = False 表示停止）
+                    if hasattr(client, 'write_single_coil'):
+                        success = client.write_single_coil(0, False)
+                        if success:
+                            stopped_devices.append(device_id)
+                        else:
+                            logger.error(f"紧急停机: 线圈写入失败 {device_id}")
+                    # 降级：使用寄存器写入（address 100 = 0 表示停止）
+                    elif hasattr(client, 'write_single_register'):
+                        success = client.write_single_register(100, 0)
+                        if success:
+                            stopped_devices.append(device_id)
+                        else:
+                            logger.error(f"紧急停机: 寄存器写入失败 {device_id}")
+                    else:
+                        logger.warning(f"紧急停机: 设备 {device_id} 不支持写操作")
                 except Exception as e:
                     logger.error(f"紧急停机命令发送失败 {device_id}: {e}", exc_info=True)
 

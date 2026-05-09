@@ -217,13 +217,68 @@ def batch_control():
     operator = request.current_user['username']
 
     device_control = getattr(current_app, 'device_control', None)
-    if not device_control:
-        return jsonify({'error': '设备控制安全模块未启用'}), 503
+    if device_control:
+        result = device_control.batch_control(action, operator)
+        get_auth_manager().log_operation(
+            operator, f'batch_{action}', f'批量{action}所有设备')
+        return jsonify(result)
 
-    result = device_control.batch_control(action, operator)
+    # 降级：无安全模块时直接操作所有设备
+    device_manager = current_app.device_manager
+    results = {}
+    for device_id, config in device_manager.devices.items():
+        if not config.get('enabled', True):
+            continue
+        try:
+            client = device_manager.get_client(device_id)
+            if not client:
+                results[device_id] = {'success': False, 'message': '设备客户端不存在'}
+                continue
+
+            # 确保设备已连接
+            if not getattr(client, 'connected', False):
+                try:
+                    client.connect()
+                except Exception:
+                    pass
+
+            success = False
+            if action == 'start':
+                if hasattr(client, 'write_single_coil'):
+                    success = client.write_single_coil(0, True)
+                elif hasattr(client, 'write_single_register'):
+                    success = client.write_single_register(100, 1)
+            elif action == 'stop':
+                if hasattr(client, 'write_single_coil'):
+                    success = client.write_single_coil(0, False)
+                elif hasattr(client, 'write_single_register'):
+                    success = client.write_single_register(100, 0)
+            elif action == 'reset':
+                if hasattr(client, 'write_single_register'):
+                    success = client.write_single_register(100, 0)
+                elif hasattr(client, 'write_single_coil'):
+                    success = client.write_single_coil(0, False)
+
+            results[device_id] = {
+                'success': success,
+                'message': f'{action}操作{"成功" if success else "失败"}'
+            }
+        except Exception as e:
+            results[device_id] = {'success': False, 'message': str(e)}
+            logger.error(f"批量控制设备 {device_id} 失败: {e}")
+
+    success_count = sum(1 for r in results.values() if r.get('success'))
+    total = len(results)
+
     get_auth_manager().log_operation(
-        operator, f'batch_{action}', f'批量{action}所有设备')
-    return jsonify(result)
+        operator, f'batch_{action}', f'批量{action}所有设备: {success_count}/{total} 成功')
+    return jsonify({
+        'success': success_count > 0,
+        'message': f'批量{action}完成: {success_count}/{total} 成功',
+        'results': results,
+        'success_count': success_count,
+        'total': total
+    })
 
 
 @control_bp.route('/control/audit', methods=['GET'])

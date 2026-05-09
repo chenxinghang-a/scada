@@ -163,7 +163,10 @@ class RealDeviceManager(IDeviceManager):
             'port': device_config.get('port'),
             'enabled': device_config.get('enabled', True),
             'connected': False,
-            'registers': device_config.get('registers', device_config.get('nodes', [])),
+            'registers': device_config.get('registers', []),
+            'nodes': device_config.get('nodes', []),
+            'topics': device_config.get('topics', []),
+            'endpoints': device_config.get('endpoints', []),
             'stats': {},
             'mode': 'real'  # 标记为真实模式
         }

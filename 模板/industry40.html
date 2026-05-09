@@ -956,7 +956,7 @@
         };
     }
 
-    // ===== API请求封装（适配新的统一响应格式）=====
+    // ===== API请求封装（适配统一响应格式 {success, data, message}）=====
     function i40Fetch(path) {
         var url = I40_API + path;
         debugLog('GET ' + path);
@@ -974,29 +974,22 @@
                 return resp.json();
             })
             .then(function(json) {
-                // 解包 {success: true, data: ...} 格式
-                if (json && typeof json === 'object' && json.hasOwnProperty('data')) {
-                    return json.data;
-                }
-                return json;
-            })
-            .then(function(result) {
-                if (!result) return null;
-                debugLog('响应: ' + JSON.stringify(result).substring(0, 150) + '...');
-                
-                // 适配新的统一响应格式: {success, data, message}
-                if (result && typeof result === 'object' && 'success' in result) {
-                    if (result.success) {
-                        return result.data;
+                if (!json) return null;
+                debugLog('响应: ' + JSON.stringify(json).substring(0, 150) + '...');
+
+                // 统一响应格式: {success, data, message/error}
+                if (typeof json === 'object' && 'success' in json) {
+                    if (json.success) {
+                        return json.data !== undefined ? json.data : json;
                     } else {
-                        debugLog('业务错误: ' + (result.error || result.message), 'warn');
-                        i40Toast(result.error || result.message || '请求失败', 'warning');
+                        debugLog('业务错误: ' + (json.error || json.message), 'warn');
+                        i40Toast(json.error || json.message || '请求失败', 'warning');
                         return null;
                     }
                 }
-                
+
                 // 兼容旧格式（直接返回数据）
-                return result;
+                return json;
             })
             .catch(function(e) {
                 debugLog('网络请求失败: ' + path + ' - ' + e.message, 'err');

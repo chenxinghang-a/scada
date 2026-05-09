@@ -139,6 +139,9 @@ class SimulationInitializer:
         # 保存模拟参数
         self.device_sim_params[device_id] = sim_params
 
+        # 注入模拟参数到客户端的行为模拟器（优化：让预设参数驱动模拟）
+        self._inject_sim_params_to_client(device_id, sim_params)
+
         # 为新设备初始化智能层数据（错误不影响设备添加）
         try:
             self._init_device_data(device_id, device_config, sim_params)
@@ -174,6 +177,8 @@ class SimulationInitializer:
         # 保存模拟参数
         if sim_params:
             self.device_sim_params[device_id] = sim_params
+            # 注入到行为模拟器
+            self._inject_sim_params_to_client(device_id, sim_params)
 
         # 初始化智能层数据（错误不影响设备添加）
         try:
@@ -192,6 +197,32 @@ class SimulationInitializer:
             logger.info(f"已删除设备: {device_id}")
             return {'success': True, 'message': f'设备 {device_id} 已删除'}
         return {'success': False, 'message': f'删除设备 {device_id} 失败'}
+
+    def _inject_sim_params_to_client(self, device_id: str, sim_params: dict):
+        """
+        将预设模拟参数注入到设备客户端的行为模拟器
+        
+        这确保了：
+        1. 预设的base_values驱动行为模拟器的物理模型
+        2. 预设的noise_levels影响数据波动
+        3. 设备参数之间有关联性（温度→压力→流量）
+        """
+        if not sim_params:
+            return
+        
+        try:
+            client = self.device_manager.get_client(device_id)
+            if client and hasattr(client, 'inject_simulation_params'):
+                client.inject_simulation_params(sim_params)
+                logger.info(f"  ✓ {device_id} 模拟参数已注入到行为模拟器")
+            elif client and hasattr(client, 'behavior_simulator'):
+                # 直接访问行为模拟器
+                client.behavior_simulator.inject_simulation_params(sim_params)
+                logger.info(f"  ✓ {device_id} 模拟参数已注入到行为模拟器（直接）")
+            else:
+                logger.debug(f"  {device_id} 客户端不支持参数注入（可能是基础模拟客户端）")
+        except Exception as e:
+            logger.warning(f"  {device_id} 模拟参数注入失败: {e}")
 
     def add_preset_batch(self, preset_ids: list[str]) -> dict:
         """批量添加预设设备"""

@@ -102,13 +102,18 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
     
     def read_holding_registers(self, address: int, count: int,
                                slave_id: Optional[int] = None) -> Optional[List[int]]:
-        """读取保持寄存器"""
+        """读取保持寄存器 — 支持写入值回读"""
         if not self.connected:
             return None
         
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
         self.stats['last_read_time'] = time.time()
+        
+        # 检查是否有写入的值（用于回读验证）
+        written_value = self.behavior_simulator.get_written_register_value(address)
+        if written_value is not None and count == 1:
+            return [written_value & 0xFFFF]
         
         # 获取寄存器配置
         reg_config = self._register_map.get(address)
@@ -169,20 +174,24 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
     
     def write_single_register(self, address: int, value: int,
                               slave_id: Optional[int] = None) -> bool:
-        """写入单个寄存器"""
+        """写入单个寄存器 — 转发到行为模拟器影响模拟状态"""
         if not self.connected:
             return False
         
         logger.info(f"[增强模拟] 设备 {self.device_name} 写入寄存器: address={address}, value={value}")
+        # 转发到行为模拟器，影响设备状态和物理参数
+        self.behavior_simulator.handle_write_register(address, value)
         return True
     
     def write_single_coil(self, address: int, value: bool,
                           slave_id: Optional[int] = None) -> bool:
-        """写入单个线圈"""
+        """写入单个线圈 — 转发到行为模拟器影响模拟状态"""
         if not self.connected:
             return False
         
         logger.info(f"[增强模拟] 设备 {self.device_name} 写入线圈: address={address}, value={value}")
+        # 转发到行为模拟器，影响设备状态
+        self.behavior_simulator.handle_write_coil(address, value)
         return True
     
     def decode_float32(self, registers: List[int]) -> float:
@@ -239,6 +248,10 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
     def force_state(self, state: DeviceState):
         """强制设置状态"""
         self.behavior_simulator.force_state(state)
+    
+    def inject_simulation_params(self, sim_params: dict):
+        """注入模拟参数（由SimulationInitializer调用）"""
+        self.behavior_simulator.inject_simulation_params(sim_params)
 
 
 class EnhancedSimulatedOPCUAClient(PushClientInterface):

@@ -372,6 +372,10 @@ class SimulatedModbusClient(ModbusClientInterface):
                 'scale': reg.get('scale', 1.0)
             }
 
+        # ===== 写操作反馈：存储写入值，支持回读验证 =====
+        self._written_values: dict[int, Any] = {}  # address -> value
+        self._written_coils: dict[int, bool] = {}  # address -> bool
+
         self.stats: dict[str, Any] = {
             'total_reads': 0, 'successful_reads': 0, 'failed_reads': 0,
             'last_read_time': None, 'last_error': None
@@ -394,6 +398,11 @@ class SimulatedModbusClient(ModbusClientInterface):
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
         self.stats['last_read_time'] = time.time()
+
+        # 检查是否有写入的值（用于回读验证）
+        written_value = self._written_values.get(address)
+        if written_value is not None and count == 1:
+            return [written_value & 0xFFFF]
 
         t = time.time() - self.start_time
 
@@ -466,12 +475,16 @@ class SimulatedModbusClient(ModbusClientInterface):
     def write_single_register(self, address: int, value: int, slave_id: int | None = None) -> bool:
         if not self.connected:
             return False
+        # 存储写入值，支持回读验证
+        self._written_values[address] = value
         logger.info(f"[模拟] 设备 {self.device_name} 写入寄存器: address={address}, value={value}")
         return True
 
     def write_single_coil(self, address: int, value: bool, slave_id: int | None = None) -> bool:
         if not self.connected:
             return False
+        # 存储写入值
+        self._written_coils[address] = value
         logger.info(f"[模拟] 设备 {self.device_name} 写入线圈: address={address}, value={value}")
         return True
 

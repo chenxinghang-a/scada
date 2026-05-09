@@ -93,6 +93,8 @@ class DeviceBehaviorSimulator:
     - 状态转换
     - 故障注入
     - 班次影响
+    - 写操作反馈（写入影响读取）
+    - 设备特定输出（只生成该设备有的参数）
     """
     
     def __init__(self, device_id: str, device_config: Dict[str, Any]):
@@ -137,6 +139,15 @@ class DeviceBehaviorSimulator:
         # 数据回调
         self._data_callbacks: List[Callable] = []
         
+        # ===== 写操作反馈：存储写入值，影响后续读取 =====
+        self._written_values: Dict[int, Any] = {}  # address -> value
+        self._written_coils: Dict[int, bool] = {}  # address -> bool
+        
+        # ===== 设备特定参数名集合（用于过滤输出） =====
+        self._device_param_names: set = set()
+        self._register_address_map: Dict[int, Dict[str, Any]] = {}  # address -> {name, data_type, scale}
+        self._build_param_names()
+        
         # 统计
         self.stats = {
             'total_cycles': 0,
@@ -149,7 +160,10 @@ class DeviceBehaviorSimulator:
         # 根据设备类型配置过程模型
         self._configure_process_model()
         
-        logger.info(f"[行为模拟] 设备 {self.device_name} 初始化完成")
+        # 从预设simulation_params注入参数
+        self._apply_simulation_params()
+        
+        logger.info(f"[行为模拟] 设备 {self.device_name} 初始化完成, 参数: {len(self._device_param_names)} 个")
     
     def _configure_process_model(self):
         """根据设备类型配置过程模型"""
@@ -175,6 +189,222 @@ class DeviceBehaviorSimulator:
         # 电力分析仪
         elif '电力' in device_type or 'power' in device_type:
             self.process_model.base_temperature = 35.0
+        
+        # 化工/蒸馏
+        elif '化工' in device_type or '蒸馏' in device_type or 'distill' in device_type:
+            self.process_model.base_temperature = 78.0
+            self.process_model.base_pressure = 0.1  # kPa级别
+            
+        # 涂装/喷涂
+        elif '涂装' in device_type or '喷涂' in device_type or 'spray' in device_type:
+            self.process_model.base_temperature = 160.0
+            self.process_model.base_pressure = 0.4
+            
+        # 振动监测
+        elif '振动' in device_type or 'vibration' in device_type:
+            self.process_model.base_temperature = 45.0
+            
+        # 水质监测
+        elif '水质' in device_type or 'quality' in device_type:
+            self.process_model.base_temperature = 22.0
+            self.process_model.base_flow = 48.0
+    
+    def _build_param_names(self):
+        """从设备配置中提取该设备拥有的参数名集合"""
+        # Modbus寄存器
+        for reg in self.device_config.get('registers', []):
+            name = reg.get('name', '')
+            if name:
+                self._device_param_names.add(name)
+                addr = reg.get('address')
+                if addr is not None:
+                    self._register_address_map[addr] = {
+                        'name': name,
+                        'data_type': reg.get('data_type', 'uint16'),
+                        'scale': reg.get('scale', 1.0),
+                    }
+        
+        # OPC UA节点
+        for node in self.device_config.get('nodes', []):
+            name = node.get('name', '')
+            if name:
+                self._device_param_names.add(name)
+        
+        # MQTT主题
+        for topic in self.device_config.get('topics', []):
+            name = topic.get('name', '')
+            if name:
+                self._device_param_names.add(name)
+        
+        # REST端点
+        for ep in self.device_config.get('endpoints', []):
+            name = ep.get('name', '')
+            if name:
+                self._device_param_names.add(name)
+    
+    def _apply_simulation_params(self):
+        """从设备配置中的simulation_params注入参数到过程模型"""
+        # simulation_params通常在SimulationInitializer中设置，
+        # 但也可以从device_config中直接读取
+        sim_params = self.device_config.get('_simulation_params', {})
+        if not sim_params:
+            return
+        
+        base_values = sim_params.get('base_values', {})
+        
+        # 用base_values配置过程模型的基础参数
+        for name, value in base_values.items():
+            name_lower = name.lower()
+            if 'temperature' in name_lower or 'temp' in name_lower:
+                # 取第一个温度参数作为基础温度
+                if abs(value - self.process_model.base_temperature) > 20:
+                    self.process_model.base_temperature = float(value)
+                    self._current_temp = float(value)
+            elif 'pressure' in name_lower and 'spray' not in name_lower:
+                if abs(value - self.process_model.base_pressure) > 0.1:
+                    self.process_model.base_pressure = float(value)
+                    self._current_pressure = float(value)
+            elif 'flow' in name_lower:
+                if abs(value - self.process_model.base_flow) > 2:
+                    self.process_model.base_flow = float(value)
+                    self._current_flow = float(value)
+            elif 'level' in name_lower:
+                level_pct = float(value) / 300 * 100 if float(value) > 100 else float(value)
+                self.process_model.base_level = level_pct
+                self._current_level = level_pct
+    
+    def inject_simulation_params(self, sim_params: Dict[str, Any]):
+        """外部注入模拟参数（由SimulationInitializer调用）"""
+        self.device_config['_simulation_params'] = sim_params
+        self._apply_simulation_params()
+        logger.info(f"[行为模拟] 设备 {self.device_name} 已注入模拟参数")
+    
+    def handle_write_register(self, address: int, value: int):
+        """
+        处理写寄存器命令 — 写操作影响后续读取
+        
+        核心逻辑：
+        1. 存储写入值（回读验证用）
+        2. 识别控制命令（启动/停止/复位）
+        3. 影响设备状态和物理参数
+        """
+        self._written_values[address] = value
+        
+        # 查找该地址对应的寄存器名
+        reg_info = self._register_address_map.get(address)
+        reg_name = reg_info['name'] if reg_info else ''
+        
+        # ===== 控制命令识别 =====
+        # 通用约定：地址100 = 启动/停止控制
+        if address == 100:
+            if value == 1:
+                # 启动命令
+                if self.state in (DeviceState.STOPPED, DeviceState.IDLE):
+                    self._change_state(DeviceState.RUNNING)
+                    logger.info(f"[行为模拟] 设备 {self.device_name} 收到启动命令，状态→RUNNING")
+            elif value == 0:
+                # 停止命令
+                if self.state in (DeviceState.RUNNING, DeviceState.FAULT):
+                    self._change_state(DeviceState.STOPPED)
+                    logger.info(f"[行为模拟] 设备 {self.device_name} 收到停止命令，状态→STOPPED")
+            return
+        
+        # 通用约定：地址101 = 复位命令
+        if address == 101:
+            if value == 1:
+                self.active_fault = FaultType.NONE
+                self.fault_severity = 0
+                self._change_state(DeviceState.IDLE)
+                logger.info(f"[行为模拟] 设备 {self.device_name} 收到复位命令，状态→IDLE")
+            return
+        
+        # ===== 按寄存器名影响物理参数 =====
+        if reg_name:
+            name_lower = reg_name.lower()
+            
+            # 温度设定点
+            if 'setpoint' in name_lower and 'temp' in name_lower:
+                self.process_model.base_temperature = float(value)
+                logger.info(f"[行为模拟] 设备 {self.device_name} 温度设定→{value}°C")
+            
+            # 压力设定点
+            elif 'setpoint' in name_lower and 'pressure' in name_lower:
+                self.process_model.base_pressure = float(value)
+                logger.info(f"[行为模拟] 设备 {self.device_name} 压力设定→{value}")
+            
+            # 流量设定点
+            elif 'setpoint' in name_lower and 'flow' in name_lower:
+                self.process_model.base_flow = float(value)
+                logger.info(f"[行为模拟] 设备 {self.device_name} 流量设定→{value}")
+            
+            # 加热器开关
+            elif 'heater' in name_lower and ('enable' in name_lower or 'switch' in name_lower):
+                if value == 0:
+                    # 关闭加热→温度下降
+                    self.process_model.base_temperature = max(20, self.process_model.base_temperature - 30)
+                    logger.info(f"[行为模拟] 设备 {self.device_name} 加热关闭")
+            
+            # 泵开关
+            elif 'pump' in name_lower and ('enable' in name_lower or 'switch' in name_lower):
+                if value == 0:
+                    # 关闭泵→流量归零
+                    self.process_model.base_flow = 0
+                    logger.info(f"[行为模拟] 设备 {self.device_name} 泵关闭")
+                else:
+                    self.process_model.base_flow = 15.0  # 恢复默认流量
+            
+            # 阀门开度
+            elif 'valve' in name_lower:
+                # 阀门开度影响流量
+                self.process_model.base_flow = 15.0 * (float(value) / 100)
+                logger.info(f"[行为模拟] 设备 {self.device_name} 阀门开度→{value}%")
+            
+            # 继电器写入
+            elif 'relay' in name_lower:
+                # 继电器状态直接存储，不影响物理参数
+                pass
+            
+            # 信号灯写入
+            elif 'light' in name_lower or 'buzzer' in name_lower:
+                # 信号灯直接存储
+                pass
+    
+    def handle_write_coil(self, address: int, value: bool):
+        """
+        处理写线圈命令 — 线圈通常是开关量
+        
+        通用约定：
+        - address 0 = 启动/停止（True=启动, False=停止）
+        - address 1 = 复位
+        """
+        self._written_coils[address] = value
+        
+        # 通用约定：线圈0 = 启动/停止
+        if address == 0:
+            if value:
+                if self.state in (DeviceState.STOPPED, DeviceState.IDLE):
+                    self._change_state(DeviceState.RUNNING)
+                    logger.info(f"[行为模拟] 设备 {self.device_name} 线圈启动，状态→RUNNING")
+            else:
+                if self.state in (DeviceState.RUNNING, DeviceState.FAULT):
+                    self._change_state(DeviceState.STOPPED)
+                    logger.info(f"[行为模拟] 设备 {self.device_name} 线圈停止，状态→STOPPED")
+            return
+        
+        # 线圈1 = 复位
+        if address == 1 and value:
+            self.active_fault = FaultType.NONE
+            self.fault_severity = 0
+            self._change_state(DeviceState.IDLE)
+            logger.info(f"[行为模拟] 设备 {self.device_name} 线圈复位，状态→IDLE")
+    
+    def get_written_register_value(self, address: int) -> Optional[int]:
+        """获取写入的寄存器值（用于回读验证）"""
+        return self._written_values.get(address)
+    
+    def get_written_coil_value(self, address: int) -> Optional[bool]:
+        """获取写入的线圈值"""
+        return self._written_coils.get(address)
     
     def add_data_callback(self, callback: Callable):
         """添加数据回调"""
@@ -362,27 +592,40 @@ class DeviceBehaviorSimulator:
             self._current_temp += 5 * self.fault_severity * math.sin(t / 10)
     
     def _update_state_machine(self, dt: float):
-        """更新状态机"""
+        """更新状态机
+        
+        优化：状态转换更合理
+        - RUNNING: 正常运行，健康度过低→维护
+        - IDLE: 待机，可被启动命令唤醒
+        - STOPPED: 停机（由写操作触发），只能被启动命令唤醒
+        - FAULT: 故障，超时后自动恢复或进入维护
+        - MAINTENANCE: 维护，完成后恢复
+        """
         state_duration = time.time() - self.state_start_time
         
         if self.state == DeviceState.RUNNING:
-            # 运行一段时间后可能转为空闲
-            if state_duration > 3600 and random.random() < 0.001:  # 1小时后0.1%概率
-                self._change_state(DeviceState.IDLE)
-            
-            # 健康度过低转为维护
+            # 运行时健康度过低→维护
             if self.health.overall_score < 20:
                 self._change_state(DeviceState.MAINTENANCE)
+            
+            # 运行很长时间后小概率转为空闲（模拟间歇性停机）
+            elif state_duration > 1800 and random.random() < 0.002:  # 30分钟后0.2%概率
+                self._change_state(DeviceState.IDLE)
         
         elif self.state == DeviceState.IDLE:
-            # 空闲一段时间后恢复运行
-            if state_duration > 300 and random.random() < 0.01:  # 5分钟后1%概率
+            # 空闲一段时间后自动恢复运行（模拟自动调度）
+            if state_duration > 120 and random.random() < 0.02:  # 2分钟后2%概率
                 self._change_state(DeviceState.RUNNING)
+        
+        elif self.state == DeviceState.STOPPED:
+            # STOPPED状态只能由外部启动命令唤醒，不自动恢复
+            # 这确保了写操作的确定性
+            pass
         
         elif self.state == DeviceState.FAULT:
             # 故障一段时间后尝试恢复或进入维护
-            if state_duration > 600:  # 10分钟后
-                if random.random() < 0.3:  # 30%概率自动恢复
+            if state_duration > 300:  # 5分钟后（原10分钟，更快速）
+                if random.random() < 0.4:  # 40%概率自动恢复（原30%）
                     self.active_fault = FaultType.NONE
                     self.fault_severity = 0
                     self._change_state(DeviceState.RUNNING)
@@ -391,9 +634,13 @@ class DeviceBehaviorSimulator:
         
         elif self.state == DeviceState.MAINTENANCE:
             # 维护完成后恢复
-            if state_duration > 1800:  # 30分钟维护时间
+            if state_duration > 600:  # 10分钟维护时间（原30分钟）
                 self.health.overall_score = 90  # 维护后恢复到90%
-                self._change_state(DeviceState.RUNNING)
+                self.health.mechanical_health = 95
+                self.health.electrical_health = 95
+                self.health.thermal_health = 95
+                self.health.vibration_health = 95
+                self._change_state(DeviceState.IDLE)  # 维护后先进入待机
     
     def _change_state(self, new_state: DeviceState):
         """改变设备状态"""
@@ -426,11 +673,31 @@ class DeviceBehaviorSimulator:
             self.stats['total_cycles'] += 1
     
     def _generate_output_data(self) -> Dict[str, Any]:
-        """生成输出数据"""
+        """
+        生成输出数据
+        
+        优化：只生成该设备拥有的参数，避免不相关的数据污染
+        例如：锅炉设备不会生成振动数据，水质设备不会生成注射压力
+        """
         t = time.time() - self.start_time
         
-        # 基础数据
-        data = {
+        # 状态影响因子：停止状态下降温降压
+        state_temp_factor = 1.0
+        state_pressure_factor = 1.0
+        state_flow_factor = 1.0
+        if self.state == DeviceState.STOPPED:
+            state_temp_factor = 0.3  # 停机后温度快速下降
+            state_pressure_factor = 0.1
+            state_flow_factor = 0.0
+        elif self.state == DeviceState.IDLE:
+            state_temp_factor = 0.6
+            state_pressure_factor = 0.5
+            state_flow_factor = 0.1
+        elif self.state == DeviceState.FAULT:
+            state_flow_factor = 0.3
+        
+        # 生成所有可能的参数值
+        all_params = {
             # 温度相关
             'temperature': round(self._current_temp, 2),
             'boiler_temperature': round(self._current_temp, 2),
@@ -545,13 +812,13 @@ class DeviceBehaviorSimulator:
             'white_light': 1 if self.state == DeviceState.MAINTENANCE else 0,
             'buzzer': 1 if self.state == DeviceState.FAULT else 0,
             
-            # 继电器状态
-            'relay_1': 1 if self.state == DeviceState.FAULT else 0,
-            'relay_2': 1 if self.state == DeviceState.FAULT else 0,
-            'relay_3': 0,
-            'relay_4': 0,
-            'relay_5': 0,
-            'relay_6': 0,
+            # 继电器状态（尊重写入值）
+            'relay_1': self._written_coils.get(0, 1 if self.state == DeviceState.FAULT else 0),
+            'relay_2': self._written_coils.get(1, 1 if self.state == DeviceState.FAULT else 0),
+            'relay_3': self._written_coils.get(2, 0),
+            'relay_4': self._written_coils.get(3, 0),
+            'relay_5': self._written_coils.get(4, 0),
+            'relay_6': self._written_coils.get(5, 0),
             
             # 数字输入
             'di_1': 0,  # 急停按钮
@@ -577,7 +844,19 @@ class DeviceBehaviorSimulator:
             '_timestamp': datetime.now().isoformat()
         }
         
-        return data
+        # ===== 过滤：只返回该设备拥有的参数 + 元数据 =====
+        if self._device_param_names:
+            filtered = {}
+            for key, value in all_params.items():
+                # 元数据始终保留
+                if key.startswith('_'):
+                    filtered[key] = value
+                # 只保留该设备配置中声明的参数
+                elif key in self._device_param_names:
+                    filtered[key] = value
+            return filtered
+        
+        return all_params
     
     def get_status(self) -> Dict[str, Any]:
         """获取设备状态"""
