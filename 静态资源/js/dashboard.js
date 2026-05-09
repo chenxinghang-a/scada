@@ -78,8 +78,7 @@ function initCharts() {
  */
 async function loadRealtimeData() {
     try {
-        const response = await fetch('/api/data/realtime?limit=20');
-        const data = await response.json();
+        const data = await apiRequest('/data/realtime?limit=20');
         
         if (data.data && data.data.length > 0) {
             updateRealtimeTable(data.data);
@@ -108,8 +107,7 @@ async function loadRealtimeData() {
         }
         
         // 更新系统统计
-        const statusResponse = await fetch('/api/system/status');
-        const statusData = await statusResponse.json();
+        const statusData = await apiRequest('/system/status');
         updateDashboardStats(statusData);
         
         // 更新设备热力图
@@ -356,8 +354,7 @@ function updateDeviceStatusList(devices) {
  */
 async function loadLatestAlarms() {
     try {
-        const response = await fetch('/api/alarms?limit=5');
-        const data = await response.json();
+        const data = await apiRequest('/alarms?limit=5');
         const container = document.getElementById('latest-alarms');
         if (!container) return;
         

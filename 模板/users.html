@@ -280,7 +280,7 @@
         });
 
         function getToken() {
-            return localStorage.getItem('scada_token');
+            return localStorage.getItem('auth_token');
         }
 
         function checkAuth() {
@@ -559,7 +559,7 @@
         }
 
         function logout() {
-            localStorage.removeItem('scada_token');
+            localStorage.removeItem('auth_token');
             localStorage.removeItem('scada_user');
             localStorage.removeItem('scada_refresh_token');
             window.location.href = '/login';

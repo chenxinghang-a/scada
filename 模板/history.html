@@ -113,7 +113,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     // 加载设备列表
-    fetch('/api/devices')
+    fetch('/api/devices', { headers: getAuthHeaders() })
         .then(r => r.json())
         .then(data => {
             const select = document.getElementById('device-select');
@@ -132,7 +132,7 @@ document.addEventListener('DOMContentLoaded', function() {
         registerSelect.innerHTML = '<option value="">全部参数</option>';
         
         if (deviceId) {
-            fetch(`/api/devices/${deviceId}`)
+            fetch(`/api/devices/${deviceId}`, { headers: getAuthHeaders() })
                 .then(r => r.json())
                 .then(data => {
                     if (data.registers) {
@@ -180,7 +180,7 @@ async function queryHistoryData() {
     params.append('interval', interval);
     
     try {
-        const response = await fetch(`${url}?${params}`);
+        const response = await fetch(`${url}?${params}`, { headers: getAuthHeaders() });
         const data = await response.json();
         
         if (data.data) {
@@ -296,7 +296,7 @@ async function exportData() {
     try {
         const response = await fetch(`/api/export/device/${deviceId}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({
                 start_time: startTime || new Date(Date.now() - 3600000).toISOString(),
                 end_time: endTime || new Date().toISOString(),
