@@ -48,6 +48,16 @@ class DataCollector:
         # 数据队列
         self.data_queue = Queue(maxsize=10000)
 
+        # 动态采集频率配置
+        self._dynamic_interval_config = {
+            'fault': 1,        # 故障状态：1秒
+            'warning': 2,      # 警告状态：2秒
+            'running': 5,      # 正常运行：5秒
+            'idle': 10,        # 空闲状态：10秒
+            'stopped': 30,     # 停机状态：30秒
+        }
+        self._device_intervals = {}  # device_id -> 当前采集间隔
+
         # 统计信息（用锁保护，多线程安全）
         self._stats_lock = threading.Lock()
         self.stats: dict[str, Any] = {
@@ -177,7 +187,7 @@ class DataCollector:
 
     def _start_device_collection(self, device_id: str, device_config: dict[str, Any]):
         """启动单个设备的轮询采集任务（Modbus / REST）"""
-        interval = device_config.get('collection_interval', 5)
+        base_interval = device_config.get('collection_interval', 5)
         protocol = device_config.get('protocol', 'modbus_tcp')
 
         def collect_task():
@@ -187,12 +197,63 @@ class DataCollector:
             self._collect_device_data(device_id, device_config, protocol)
 
             if self.running:
+                # 动态计算采集间隔
+                interval = self._get_dynamic_interval(device_id, base_interval)
                 timer = threading.Timer(interval, collect_task)
                 timer.daemon = True
                 timer.start()
                 self.tasks[device_id] = timer
 
         collect_task()
+
+    def _get_dynamic_interval(self, device_id: str, base_interval: float) -> float:
+        """
+        根据设备状态动态计算采集间隔
+
+        Args:
+            device_id: 设备ID
+            base_interval: 基础采集间隔
+
+        Returns:
+            动态采集间隔（秒）
+        """
+        try:
+            # 获取设备状态
+            status = self.device_manager.get_device_status(device_id)
+
+            # 检查是否在故障状态
+            if status.get('stopped') or status.get('error'):
+                return self._dynamic_interval_config.get('fault', 1)
+
+            # 检查健康评分（如果预测性维护模块可用）
+            if self.predictive_maintenance:
+                health_scores = self.predictive_maintenance.get_health_scores()
+                device_health = [
+                    s for s in health_scores.values()
+                    if s.get('device_id') == device_id
+                ]
+                if device_health:
+                    avg_health = sum(s.get('health_score', 100) for s in device_health) / len(device_health)
+                    if avg_health < 40:
+                        return self._dynamic_interval_config.get('fault', 1)
+                    elif avg_health < 60:
+                        return self._dynamic_interval_config.get('warning', 2)
+
+            # 检查设备运行状态
+            stats = status.get('stats', {})
+            if hasattr(stats, 'get'):
+                state = stats.get('state', 'idle')
+            else:
+                state = 'idle'
+
+            # 根据状态返回对应的采集间隔
+            interval = self._dynamic_interval_config.get(state, base_interval)
+            self._device_intervals[device_id] = interval
+            return interval
+
+        except Exception as e:
+            logger.debug(f"计算动态采集间隔失败 {device_id}: {e}")
+            return base_interval
 
     def _collect_device_data(self, device_id: str, device_config: dict[str, Any], protocol: str):
         """采集单个轮询型设备的数据"""
