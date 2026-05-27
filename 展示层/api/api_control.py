@@ -100,6 +100,55 @@ def write_coil(device_id):
     return jsonify({'success': False, 'message': '写入失败，请检查设备连接和线圈地址'}), 400
 
 
+@control_bp.route('/devices/<device_id>/write-endpoint', methods=['POST'])
+@_require_engineer
+def write_endpoint(device_id):
+    """写入REST端点（支持POST/PUT方法）"""
+    data = request.get_json() or {}
+    endpoint_name = data.get('endpoint')
+    value = data.get('value')
+    method = data.get('method', 'PUT').upper()
+
+    if not endpoint_name:
+        return jsonify({'error': '请指定端点名称'}), 400
+
+    if method not in ('POST', 'PUT'):
+        return jsonify({'error': '不支持的HTTP方法，仅支持POST/PUT'}), 400
+
+    operator = request.current_user['username']
+
+    device_manager = current_app.device_manager
+    client = device_manager.get_client(device_id)
+    if not client:
+        return jsonify({'error': f'设备 {device_id} 不存在'}), 404
+
+    # 查找端点配置
+    device_config = device_manager.devices.get(device_id, {})
+    endpoints = device_config.get('endpoints', [])
+    endpoint_config = next((ep for ep in endpoints if ep.get('name') == endpoint_name), None)
+
+    if not endpoint_config:
+        return jsonify({'error': f'端点 {endpoint_name} 不存在'}), 404
+
+    # 执行写入
+    success = False
+    if method == 'PUT' and hasattr(client, 'put_endpoint'):
+        result = client.put_endpoint(endpoint_config, {'value': value})
+        success = result.get('success', False)
+    elif method == 'POST' and hasattr(client, 'post_endpoint'):
+        result = client.post_endpoint(endpoint_config, {'value': value})
+        success = result.get('success', False)
+    elif hasattr(client, 'write_endpoint'):
+        success = client.write_endpoint(endpoint_config, value, method=method)
+
+    if success:
+        get_auth_manager().log_operation(
+            operator, f'write_endpoint_{method.lower()}',
+            f'设备 {device_id} {method}端点 {endpoint_name}={value}')
+        return jsonify({'success': True, 'message': f'{method}写入成功: {endpoint_name}={value}'})
+    return jsonify({'success': False, 'message': f'{method}写入失败，请检查设备连接'}), 400
+
+
 @control_bp.route('/control/logs', methods=['GET'])
 @_require_auth
 def get_control_logs():

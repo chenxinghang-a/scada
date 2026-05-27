@@ -679,11 +679,163 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
         
         return round(float(value), 2)
     
-    def write_endpoint(self, endpoint_config: Dict[str, Any], value: Any) -> bool:
-        """写入端点"""
-        logger.info(f"[增强模拟] REST写入: {endpoint_config.get('name')} = {value}")
-        return True
-    
+    def write_endpoint(self, endpoint_config: Dict[str, Any], value: Any, method: str = 'PUT') -> bool:
+        """
+        写入端点（支持POST/PUT方法）
+
+        Args:
+            endpoint_config: 端点配置
+            value: 写入值
+            method: HTTP方法 (POST/PUT)
+
+        Returns:
+            是否写入成功
+        """
+        name = endpoint_config.get('name', 'unknown')
+        path = endpoint_config.get('path', '/')
+
+        # 模拟写入延迟
+        time.sleep(0.05)
+
+        # 模拟写入成功/失败（95%成功率）
+        success = random.random() < 0.95
+
+        if success:
+            # 更新本地缓存
+            self.latest_data[name] = {
+                'value': value,
+                'unit': endpoint_config.get('unit', ''),
+                'timestamp': datetime.now().isoformat(),
+                'quality': 'good',
+                'endpoint': path,
+                'device_id': self.device_id,
+                'method': method
+            }
+
+            # 更新行为模拟器的内部状态
+            if hasattr(self.behavior_simulator, '_current_values'):
+                self.behavior_simulator._current_values[name] = value
+
+            logger.info(f"[增强模拟] REST {method}写入成功: {path} -> {name} = {value}")
+        else:
+            logger.warning(f"[增强模拟] REST {method}写入失败: {path} -> {name} = {value}")
+
+        self.stats['total_requests'] += 1
+        if success:
+            self.stats['successful_requests'] += 1
+        else:
+            self.stats['failed_requests'] += 1
+
+        return success
+
+    def post_endpoint(self, endpoint_config: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        POST请求到端点（创建/提交操作）
+
+        Args:
+            endpoint_config: 端点配置
+            data: POST数据
+
+        Returns:
+            响应数据
+        """
+        name = endpoint_config.get('name', 'unknown')
+        path = endpoint_config.get('path', '/')
+
+        # 模拟POST处理延迟
+        time.sleep(0.1)
+
+        # 模拟POST成功/失败（90%成功率）
+        success = random.random() < 0.90
+
+        if success:
+            # 生成响应数据
+            response = {
+                'success': True,
+                'message': f'{name} 操作成功',
+                'data': data,
+                'timestamp': datetime.now().isoformat(),
+                'request_id': f'req_{int(time.time() * 1000)}'
+            }
+
+            logger.info(f"[增强模拟] REST POST成功: {path} -> {name}")
+        else:
+            response = {
+                'success': False,
+                'message': f'{name} 操作失败',
+                'error': 'SERVICE_UNAVAILABLE',
+                'timestamp': datetime.now().isoformat()
+            }
+
+            logger.warning(f"[增强模拟] REST POST失败: {path} -> {name}")
+
+        self.stats['total_requests'] += 1
+        if success:
+            self.stats['successful_requests'] += 1
+        else:
+            self.stats['failed_requests'] += 1
+
+        return response
+
+    def put_endpoint(self, endpoint_config: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        PUT请求到端点（更新操作）
+
+        Args:
+            endpoint_config: 端点配置
+            data: PUT数据
+
+        Returns:
+            响应数据
+        """
+        name = endpoint_config.get('name', 'unknown')
+        path = endpoint_config.get('path', '/')
+
+        # 模拟PUT处理延迟
+        time.sleep(0.08)
+
+        # 模拟PUT成功/失败（95%成功率）
+        success = random.random() < 0.95
+
+        if success:
+            # 更新本地缓存
+            if 'value' in data:
+                self.latest_data[name] = {
+                    'value': data['value'],
+                    'unit': endpoint_config.get('unit', ''),
+                    'timestamp': datetime.now().isoformat(),
+                    'quality': 'good',
+                    'endpoint': path,
+                    'device_id': self.device_id,
+                    'method': 'PUT'
+                }
+
+            response = {
+                'success': True,
+                'message': f'{name} 更新成功',
+                'data': data,
+                'timestamp': datetime.now().isoformat()
+            }
+
+            logger.info(f"[增强模拟] REST PUT成功: {path} -> {name}")
+        else:
+            response = {
+                'success': False,
+                'message': f'{name} 更新失败',
+                'error': 'CONFLICT',
+                'timestamp': datetime.now().isoformat()
+            }
+
+            logger.warning(f"[增强模拟] REST PUT失败: {path} -> {name}")
+
+        self.stats['total_requests'] += 1
+        if success:
+            self.stats['successful_requests'] += 1
+        else:
+            self.stats['failed_requests'] += 1
+
+        return response
+
     def _generate_data(self):
         """生成数据"""
         # 更新行为模拟器
