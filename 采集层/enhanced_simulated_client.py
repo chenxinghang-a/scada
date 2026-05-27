@@ -13,6 +13,7 @@
 
 import time
 import struct
+import random
 import logging
 import threading
 from datetime import datetime
@@ -34,13 +35,13 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.connected = False
-        
+
         # 创建设备行为模拟器
         self.behavior_simulator = DeviceBehaviorSimulator(
             device_id=config.get('id', 'unknown'),
             device_config=config
         )
-        
+
         # 寄存器映射
         self._register_map = {}
         for reg in config.get('registers', []):
@@ -50,31 +51,48 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                 'scale': reg.get('scale', 1.0),
                 'offset': reg.get('offset', 0)
             }
-        
+
         # 缓存最新数据
         self._latest_data: Dict[str, Any] = {}
         self._data_lock = threading.Lock()
-        
+
+        # 通信故障模拟参数
+        comm_cfg = config.get('communication', {})
+        self._conn_fail_rate = comm_cfg.get('connect_fail_rate', 0.05)  # 5%连接失败
+        self._latency_ms = comm_cfg.get('latency_ms', 0)  # 通信延迟
+        self._packet_loss_rate = comm_cfg.get('packet_loss_rate', 0.01)  # 1%丢包
+        self._random_disconnect_rate = comm_cfg.get('random_disconnect_rate', 0.001)  # 0.1%随机断线
+        self._consecutive_failures = 0
+
         # 统计
         self.stats = {
             'total_reads': 0,
             'successful_reads': 0,
             'failed_reads': 0,
             'last_read_time': None,
-            'last_error': None
+            'last_error': None,
+            'comm_failures': 0,
+            'reconnects': 0
         }
-        
+
         logger.info(f"[增强模拟] Modbus客户端初始化: {config.get('name', 'unknown')}")
     
     def connect(self) -> bool:
-        """连接设备"""
+        """连接设备（支持连接失败模拟）"""
+        # 模拟连接失败
+        if random.random() < self._conn_fail_rate:
+            self.stats['comm_failures'] += 1
+            logger.warning(f"[增强模拟] 设备 {self.device_name} 连接失败（模拟通信故障）")
+            return False
+
         self.connected = True
+        self._consecutive_failures = 0
         self.behavior_simulator.start()
-        
+
         # 启动数据更新线程
         self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
         self._update_thread.start()
-        
+
         logger.info(f"[增强模拟] 设备 {self.device_name} 连接成功")
         return True
     
@@ -102,18 +120,39 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
     
     def read_holding_registers(self, address: int, count: int,
                                slave_id: Optional[int] = None) -> Optional[List[int]]:
-        """读取保持寄存器 — 支持写入值回读"""
+        """读取保持寄存器 — 支持写入值回读和通信故障模拟"""
         if not self.connected:
             return None
-        
-        # ===== 停机设备不返回数据 =====
+
+        # 停机设备不返回数据
         with self._data_lock:
             if self._latest_data.get('_stopped'):
                 return None
-        
+
+        # 模拟通信延迟
+        if self._latency_ms > 0:
+            time.sleep(self._latency_ms / 1000.0)
+
+        # 模拟丢包
+        if random.random() < self._packet_loss_rate:
+            self.stats['total_reads'] += 1
+            self.stats['failed_reads'] += 1
+            self.stats['comm_failures'] += 1
+            self._consecutive_failures += 1
+            return None
+
+        # 模拟随机断线（连续失败时概率上升）
+        disconnect_prob = self._random_disconnect_rate * (1 + self._consecutive_failures)
+        if random.random() < disconnect_prob:
+            self.connected = False
+            self.stats['comm_failures'] += 1
+            logger.warning(f"[增强模拟] 设备 {self.device_name} 随机断线")
+            return None
+
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
         self.stats['last_read_time'] = time.time()
+        self._consecutive_failures = 0
         
         # 检查是否有写入的值（用于回读验证）
         written_value = self.behavior_simulator.get_written_register_value(address)
