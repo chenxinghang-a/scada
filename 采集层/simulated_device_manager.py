@@ -10,11 +10,12 @@ from pathlib import Path
 
 from .interfaces import IDeviceManager, IDeviceClient
 from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
-from .simulated_client import (
-    SimulatedModbusClient,
-    SimulatedOPCUAClient,
-    SimulatedMQTTClient,
-    SimulatedRESTClient
+from .simulated_client import set_estop_state, set_device_stopped
+from .enhanced_simulated_client import (
+    EnhancedSimulatedModbusClient,
+    EnhancedSimulatedOPCUAClient,
+    EnhancedSimulatedMQTTClient,
+    EnhancedSimulatedRESTClient
 )
 
 logger = logging.getLogger(__name__)
@@ -94,13 +95,13 @@ class SimulatedDeviceManager(IDeviceManager):
         protocol = config.get('protocol', 'modbus_tcp')
 
         if protocol in ('modbus_tcp', 'modbus_rtu'):
-            return SimulatedModbusClient(config)
+            return EnhancedSimulatedModbusClient(config)
         elif protocol == 'opcua':
-            return SimulatedOPCUAClient(config)
+            return EnhancedSimulatedOPCUAClient(config)
         elif protocol == 'mqtt':
-            return SimulatedMQTTClient(config)
+            return EnhancedSimulatedMQTTClient(config)
         elif protocol == 'rest':
-            return SimulatedRESTClient(config)
+            return EnhancedSimulatedRESTClient(config)
         else:
             logger.error(f"不支持的协议类型: {protocol}")
             return None
@@ -130,20 +131,17 @@ class SimulatedDeviceManager(IDeviceManager):
 
     def set_estop_override(self, active: bool):
         """设置紧急停机覆盖（模拟客户端停止机械类数据）"""
-        from .simulated_client import set_estop_state
         set_estop_state(active)
         logger.info(f"[模拟] E-STOP override: {'激活' if active else '已解除'}")
 
     def stop_device(self, device_id: str) -> bool:
         """停止指定设备（所有寄存器归零）"""
-        from .simulated_client import set_device_stopped
         set_device_stopped(device_id, True)
         logger.info(f"[模拟] 设备 {device_id} 已停止")
         return True
 
     def start_device(self, device_id: str) -> bool:
         """启动指定设备"""
-        from .simulated_client import set_device_stopped
         set_device_stopped(device_id, False)
         logger.info(f"[模拟] 设备 {device_id} 已启动")
         return True
@@ -198,7 +196,10 @@ class SimulatedDeviceManager(IDeviceManager):
 
         if client:
             status['connected'] = getattr(client, 'connected', False)
-            status['stats'] = getattr(client, 'stats', {})
+            if hasattr(client, 'get_stats'):
+                status['stats'] = client.get_stats()
+            else:
+                status['stats'] = getattr(client, 'stats', {})
 
         return status
 
