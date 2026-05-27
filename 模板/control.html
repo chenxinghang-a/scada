@@ -164,12 +164,24 @@
                 <form id="register-form">
                     <div class="mb-3">
                         <label class="form-label">寄存器地址</label>
-                        <input type="number" class="form-control" id="register-address" 
-                               min="0" max="65535" placeholder="0-65535" required>
+                        <div class="input-group">
+                            <input type="number" class="form-control" id="register-address"
+                                   min="0" max="65535" placeholder="0-65535" required>
+                            <button type="button" class="btn btn-outline-info" id="btn-read-register" title="读取当前值">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mb-3" id="register-current-box" style="display:none;">
+                        <label class="form-label">当前值</label>
+                        <div class="input-group">
+                            <span class="form-control bg-dark text-info" id="register-current-value">--</span>
+                            <span class="input-group-text bg-dark text-muted" id="register-current-raw">原始: --</span>
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">写入值</label>
-                        <input type="number" class="form-control" id="register-value" 
+                        <input type="number" class="form-control" id="register-value"
                                min="0" max="65535" placeholder="0-65535" required>
                     </div>
                     <div class="mb-3">
@@ -338,15 +350,6 @@ document.addEventListener('DOMContentLoaded', function() {
         loadDeviceInfo(this.value);
     });
     
-    // 寄存器预设
-    document.getElementById('register-preset').addEventListener('change', function() {
-        if (this.value) {
-            const [addr, val] = this.value.split('|');
-            document.getElementById('register-address').value = addr;
-            document.getElementById('register-value').value = val;
-        }
-    });
-    
     // 线圈预设
     document.getElementById('coil-preset').addEventListener('change', function() {
         if (this.value) {
@@ -362,16 +365,54 @@ document.addEventListener('DOMContentLoaded', function() {
         const deviceId = document.getElementById('device-select').value;
         const address = document.getElementById('register-address').value;
         const value = document.getElementById('register-value').value;
-        
+
         if (!deviceId) {
             showAlert('请先选择设备', 'warning');
             return;
         }
-        
+
         showConfirm(
             `确定要向设备 <strong>${deviceId}</strong> 的寄存器地址 <strong>${address}</strong> 写入值 <strong>${value}</strong> 吗？`,
             () => writeRegister(deviceId, address, value)
         );
+    });
+
+    // 读取寄存器当前值
+    document.getElementById('btn-read-register').addEventListener('click', function() {
+        const deviceId = document.getElementById('device-select').value;
+        const address = document.getElementById('register-address').value;
+
+        if (!deviceId) {
+            showAlert('请先选择设备', 'warning');
+            return;
+        }
+        if (!address && address !== '0') {
+            showAlert('请先输入寄存器地址', 'warning');
+            return;
+        }
+        readRegisterValue(deviceId, address);
+    });
+
+    // 寄存器地址变化时自动读取
+    document.getElementById('register-address').addEventListener('change', function() {
+        const deviceId = document.getElementById('device-select').value;
+        const address = this.value;
+        if (deviceId && (address || address === '0')) {
+            readRegisterValue(deviceId, address);
+        }
+    });
+
+    // 预设选择时自动读取当前值
+    document.getElementById('register-preset').addEventListener('change', function() {
+        if (this.value) {
+            const [addr, val] = this.value.split('|');
+            document.getElementById('register-address').value = addr;
+            document.getElementById('register-value').value = val;
+            const deviceId = document.getElementById('device-select').value;
+            if (deviceId) {
+                readRegisterValue(deviceId, addr);
+            }
+        }
     });
     
     // 线圈写入表单
@@ -510,6 +551,56 @@ function updateCoilPresets(coils) {
     });
 }
 
+// 读取寄存器当前值
+async function readRegisterValue(deviceId, address) {
+    const box = document.getElementById('register-current-box');
+    const valueSpan = document.getElementById('register-current-value');
+    const rawSpan = document.getElementById('register-current-raw');
+
+    try {
+        valueSpan.textContent = '读取中...';
+        rawSpan.textContent = '原始: --';
+        box.style.display = 'block';
+
+        const response = await fetch(`/api/data/latest/${deviceId}`, {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+
+        if (data && data.registers) {
+            // 查找匹配地址的寄存器
+            const addr = parseInt(address);
+            const reg = data.registers.find(r => r.address === addr);
+            if (reg) {
+                valueSpan.textContent = reg.value != null ? reg.value : '--';
+                rawSpan.textContent = `原始: ${reg.raw_value != null ? reg.raw_value : '--'}`;
+            } else {
+                // 尝试通过名称匹配（预设选择时）
+                const presetSelect = document.getElementById('register-preset');
+                const selectedOption = presetSelect.options[presetSelect.selectedIndex];
+                if (selectedOption && selectedOption.dataset.address) {
+                    const presetAddr = parseInt(selectedOption.dataset.address);
+                    const presetReg = data.registers.find(r => r.address === presetAddr);
+                    if (presetReg) {
+                        valueSpan.textContent = presetReg.value != null ? presetReg.value : '--';
+                        rawSpan.textContent = `原始: ${presetReg.raw_value != null ? presetReg.raw_value : '--'}`;
+                        return;
+                    }
+                }
+                valueSpan.textContent = '未找到';
+                rawSpan.textContent = '原始: --';
+            }
+        } else {
+            valueSpan.textContent = '无数据';
+            rawSpan.textContent = '原始: --';
+        }
+    } catch (error) {
+        console.error('读取寄存器失败:', error);
+        valueSpan.textContent = '读取失败';
+        rawSpan.textContent = '原始: --';
+    }
+}
+
 // 写入寄存器
 async function writeRegister(deviceId, address, value) {
     try {
@@ -526,10 +617,12 @@ async function writeRegister(deviceId, address, value) {
         });
         
         const result = await response.json();
-        
+
         if (result.success) {
             showAlert(result.message, 'success');
             loadControlLogs();
+            // 写入成功后自动回读
+            setTimeout(() => readRegisterValue(deviceId, address), 500);
         } else {
             showAlert(result.message || '写入失败', 'danger');
         }
