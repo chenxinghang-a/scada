@@ -143,6 +143,35 @@ def delete_device(device_id):
         return jsonify({'success': False, 'message': f'删除设备 {device_id} 失败'}), 400
 
 
+@devices_bp.route('/devices/<device_id>/connect', methods=['POST'])
+def connect_device(device_id):
+    """连接设备"""
+    device_manager = current_app.device_manager
+    config = device_manager.devices.get(device_id)
+    if not config:
+        return jsonify({'success': False, 'message': f'设备 {device_id} 不存在'}), 404
+
+    result = device_manager.connect_device(device_id)
+    if result:
+        username = getattr(request, 'current_user', {}).get('username', 'system')
+        get_auth_manager().log_operation(username, 'connect_device', f'连接设备: {device_id}')
+    return jsonify({'success': result, 'message': f'设备 {device_id} 连接{"成功" if result else "失败"}'})
+
+
+@devices_bp.route('/devices/<device_id>/disconnect', methods=['POST'])
+def disconnect_device(device_id):
+    """断开设备连接"""
+    device_manager = current_app.device_manager
+    config = device_manager.devices.get(device_id)
+    if not config:
+        return jsonify({'success': False, 'message': f'设备 {device_id} 不存在'}), 404
+
+    device_manager.disconnect_device(device_id)
+    username = getattr(request, 'current_user', {}).get('username', 'system')
+    get_auth_manager().log_operation(username, 'disconnect_device', f'断开设备: {device_id}')
+    return jsonify({'success': True, 'message': f'设备 {device_id} 已断开'})
+
+
 @devices_bp.route('/devices/<device_id>/stop', methods=['POST'])
 @_require_engineer
 def stop_device(device_id):

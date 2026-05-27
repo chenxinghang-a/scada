@@ -167,17 +167,23 @@ class DataExport:
         # 先获取设备的所有寄存器名称
         registers = database.get_device_registers(device_id)
         if not registers:
-            # 如果没有寄存器信息，尝试获取所有数据
-            registers = ['*']
-
-        for register_name in registers:
+            # 没有寄存器信息时，用 None 查询全部数据
             register_data = database.get_history_data(
                 device_id=device_id,
-                register_name=register_name,
+                register_name=None,
                 start_time=start_time,
                 end_time=end_time
             )
             data.extend(register_data)
+        else:
+            for register_name in registers:
+                register_data = database.get_history_data(
+                    device_id=device_id,
+                    register_name=register_name,
+                    start_time=start_time,
+                    end_time=end_time
+                )
+                data.extend(register_data)
 
         if not data:
             logger.warning(f"设备 {device_id} 在指定时间范围内没有数据")

@@ -345,7 +345,7 @@ class Database:
             params = [device_id, start_time, end_time]
             if register_name is not None:
                 base_where += ' AND register_name = ?'
-                params.insert(2, register_name)
+                params.append(register_name)
 
             # 根据时间间隔进行数据聚合
             if interval == '1min':
@@ -464,24 +464,37 @@ class Database:
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
-    def acknowledge_alarm(self, alarm_id: str, acknowledged_by: str) -> bool:
+    def acknowledge_alarm(self, alarm_id: str, acknowledged_by: str,
+                          device_id: str | None = None, register_name: str | None = None) -> bool:
         """
         确认报警
 
         Args:
             alarm_id: 报警ID
             acknowledged_by: 确认人
+            device_id: 设备ID（可选，用于精确定位）
+            register_name: 寄存器名称（可选，用于精确定位）
 
         Returns:
             bool: 确认是否成功
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE alarm_records 
-                SET acknowledged = 1, acknowledged_at = ?, acknowledged_by = ?
-                WHERE alarm_id = ? AND acknowledged = 0
-            ''', (datetime.now(), acknowledged_by, alarm_id))
+
+            # 如果提供了device_id和register_name，使用更精确的查询
+            if device_id and register_name:
+                cursor.execute('''
+                    UPDATE alarm_records
+                    SET acknowledged = 1, acknowledged_at = ?, acknowledged_by = ?
+                    WHERE alarm_id = ? AND device_id = ? AND register_name = ? AND acknowledged = 0
+                ''', (datetime.now(), acknowledged_by, alarm_id, device_id, register_name))
+            else:
+                # 否则只使用alarm_id（向后兼容）
+                cursor.execute('''
+                    UPDATE alarm_records
+                    SET acknowledged = 1, acknowledged_at = ?, acknowledged_by = ?
+                    WHERE alarm_id = ? AND acknowledged = 0
+                ''', (datetime.now(), acknowledged_by, alarm_id))
 
             return cursor.rowcount > 0
 
