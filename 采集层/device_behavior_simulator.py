@@ -539,19 +539,25 @@ class DeviceBehaviorSimulator:
     
     def _check_fault_triggers(self):
         """检查是否触发故障"""
-        # 健康度过低触发故障
-        if self.health.overall_score < 30 and self.active_fault == FaultType.NONE:
+        health = self.health.overall_score
+
+        # 健康度过低直接触发故障
+        if health < 30 and self.active_fault == FaultType.NONE:
             self._trigger_fault(FaultType.MOTOR_WEAR, severity=0.8)
-        
-        # 温度过高触发过热故障
+
+        # 温度过高触发过热故障（概率随健康度下降而上升）
         if self._current_temp > 150 and self.active_fault == FaultType.NONE:
-            if random.random() < 0.01:  # 1%概率
+            temp_prob = 0.01 * math.exp((100 - health) / 30)
+            if random.random() < temp_prob:
                 self._trigger_fault(FaultType.OVERHEATING, severity=0.6)
-        
-        # 随机故障（模拟真实环境）
-        if self.active_fault == FaultType.NONE and random.random() < 0.0001:
-            fault_types = [FaultType.SENSOR_DRIFT, FaultType.COMMUNICATION, FaultType.POWER_FLUCTUATION]
-            self._trigger_fault(random.choice(fault_types), severity=0.3)
+
+        # 随机故障：概率与健康度挂钩，健康越差越容易触发
+        if self.active_fault == FaultType.NONE:
+            base_prob = 0.0001
+            fault_prob = base_prob * math.exp((100 - health) / 20)
+            if random.random() < fault_prob:
+                fault_types = [FaultType.SENSOR_DRIFT, FaultType.COMMUNICATION, FaultType.POWER_FLUCTUATION]
+                self._trigger_fault(random.choice(fault_types), severity=0.3)
     
     def _trigger_fault(self, fault_type: FaultType, severity: float = 0.5):
         """触发故障"""
