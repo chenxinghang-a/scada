@@ -176,10 +176,6 @@
                         <label class="form-label">常用寄存器</label>
                         <select id="register-preset" class="form-select">
                             <option value="">自定义</option>
-                            <option value="0|100">温度设定值 (地址0, 值100=10.0°C)</option>
-                            <option value="1|500">压力设定值 (地址1, 值500=5.00MPa)</option>
-                            <option value="100|1">启动设备 (地址100, 值1)</option>
-                            <option value="100|0">停止设备 (地址100, 值0)</option>
                         </select>
                     </div>
                     <button type="submit" class="btn btn-primary w-100" id="btn-write-register">
@@ -220,12 +216,6 @@
                         <label class="form-label">常用控制</label>
                         <select id="coil-preset" class="form-select">
                             <option value="">自定义</option>
-                            <option value="0|true">启动设备 (地址0, ON)</option>
-                            <option value="0|false">停止设备 (地址0, OFF)</option>
-                            <option value="1|true">开启阀门 (地址1, ON)</option>
-                            <option value="1|false">关闭阀门 (地址1, OFF)</option>
-                            <option value="2|true">启动电机 (地址2, ON)</option>
-                            <option value="2|false">停止电机 (地址2, OFF)</option>
                         </select>
                     </div>
                     <button type="submit" class="btn btn-warning w-100" id="btn-write-coil">
@@ -453,23 +443,71 @@ async function loadDeviceInfo(deviceId) {
         document.getElementById('device-info').style.display = 'none';
         return;
     }
-    
+
     try {
         const response = await fetch(`/api/devices/${deviceId}`, {
             headers: getAuthHeaders()
         });
         const data = await response.json();
-        
+
         document.getElementById('info-device-id').textContent = data.device_id;
         document.getElementById('info-device-name').textContent = data.name;
-        document.getElementById('info-connection').innerHTML = data.connected ? 
-            '<span class="badge bg-success">已连接</span>' : 
+        document.getElementById('info-connection').innerHTML = data.connected ?
+            '<span class="badge bg-success">已连接</span>' :
             '<span class="badge bg-danger">未连接</span>';
         document.getElementById('info-host').textContent = `${data.host}:${data.port}`;
         document.getElementById('device-info').style.display = 'block';
+
+        // 动态加载寄存器预设
+        updateRegisterPresets(data.registers || []);
+        updateCoilPresets(data.coils || []);
     } catch (error) {
         console.error('加载设备信息失败:', error);
     }
+}
+
+// 更新寄存器预设下拉框
+function updateRegisterPresets(registers) {
+    const select = document.getElementById('register-preset');
+    select.innerHTML = '<option value="">自定义</option>';
+
+    registers.forEach(reg => {
+        const addr = reg.address;
+        const name = reg.name || reg.description || `地址${addr}`;
+        const unit = reg.unit || '';
+        const dataType = reg.data_type || 'uint16';
+        const opt = document.createElement('option');
+
+        // 根据数据类型设置合理的默认写入值
+        let defaultVal = 0;
+        if (dataType === 'float32' || dataType === 'float') {
+            defaultVal = 0.0;
+        } else if (dataType === 'bool' || dataType === 'coil') {
+            defaultVal = 1;
+        }
+
+        opt.value = `${addr}|${defaultVal}`;
+        opt.textContent = `${name} (地址${addr}, ${dataType}${unit ? ', ' + unit : ''})`;
+        opt.dataset.address = addr;
+        opt.dataset.dataType = dataType;
+        opt.dataset.unit = unit;
+        select.appendChild(opt);
+    });
+}
+
+// 更新线圈预设下拉框
+function updateCoilPresets(coils) {
+    const select = document.getElementById('coil-preset');
+    select.innerHTML = '<option value="">自定义</option>';
+
+    coils.forEach(coil => {
+        const addr = coil.address;
+        const name = coil.name || coil.description || `线圈${addr}`;
+        const opt = document.createElement('option');
+        opt.value = `${addr}|true`;
+        opt.textContent = `${name} (地址${addr})`;
+        select.appendChild(opt);
+    });
 }
 
 // 写入寄存器
