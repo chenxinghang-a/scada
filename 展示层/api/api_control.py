@@ -212,9 +212,11 @@ def get_device_health():
 @control_bp.route('/control/batch', methods=['POST'])
 @_require_engineer
 def batch_control():
-    """批量控制所有设备（启动/停止/复位）"""
+    """批量控制设备（启动/停止/复位），支持按设备ID列表过滤"""
     data = request.get_json() or {}
     action = data.get('action')
+    device_ids = data.get('device_ids')  # 可选：指定设备ID列表
+
     if action not in ('start', 'stop', 'reset'):
         return jsonify({'error': '无效的操作类型，支持: start, stop, reset'}), 400
 
@@ -222,15 +224,22 @@ def batch_control():
 
     device_control = getattr(current_app, 'device_control', None)
     if device_control:
-        result = device_control.batch_control(action, operator)
+        result = device_control.batch_control(action, operator, device_ids=device_ids)
+        target_desc = f'{len(device_ids)}台设备' if device_ids else '所有设备'
         get_auth_manager().log_operation(
-            operator, f'batch_{action}', f'批量{action}所有设备')
+            operator, f'batch_{action}', f'批量{action}{target_desc}')
         return jsonify(result)
 
-    # 降级：无安全模块时直接操作所有设备
+    # 降级：无安全模块时直接操作设备
     device_manager = current_app.device_manager
     results = {}
-    for device_id, config in device_manager.devices.items():
+
+    # 确定要操作的设备列表
+    target_devices = device_manager.devices.items()
+    if device_ids:
+        target_devices = [(did, cfg) for did, cfg in target_devices if did in device_ids]
+
+    for device_id, config in target_devices:
         if not config.get('enabled', True):
             continue
         try:

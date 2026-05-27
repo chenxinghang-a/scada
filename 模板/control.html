@@ -247,7 +247,26 @@
                 <h5 class="card-title mb-0"><i class="bi bi-list-check me-2"></i>批量控制</h5>
             </div>
             <div class="card-body">
-                <div class="row">
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <h6>按分组操作</h6>
+                        <div class="mb-3">
+                            <select id="batch-group-select" class="form-select">
+                                <option value="all">所有设备</option>
+                            </select>
+                        </div>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button class="btn btn-success" onclick="batchControlByGroup('start')">
+                                <i class="bi bi-play-circle me-1"></i>启动分组设备
+                            </button>
+                            <button class="btn btn-danger" onclick="batchControlByGroup('stop')">
+                                <i class="bi bi-stop-circle me-1"></i>停止分组设备
+                            </button>
+                            <button class="btn btn-info" onclick="batchControlByGroup('reset')">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i>复位分组设备
+                            </button>
+                        </div>
+                    </div>
                     <div class="col-md-6">
                         <h6>快速操作</h6>
                         <div class="d-flex gap-2 flex-wrap">
@@ -262,7 +281,9 @@
                             </button>
                         </div>
                     </div>
-                    <div class="col-md-6">
+                </div>
+                <div class="row">
+                    <div class="col-12">
                         <h6>操作说明</h6>
                         <ul class="list-unstyled text-muted">
                             <li><i class="bi bi-info-circle me-1"></i> 所有控制操作需要二次确认</li>
@@ -338,13 +359,16 @@ let pendingAction = null;
 document.addEventListener('DOMContentLoaded', function() {
     // 检查权限
     checkPermission();
-    
+
     // 加载设备列表
     loadDevices();
-    
+
+    // 加载设备分组
+    loadDeviceGroups();
+
     // 加载操作日志
     loadControlLogs();
-    
+
     // 设备选择变化
     document.getElementById('device-select').addEventListener('change', function() {
         loadDeviceInfo(this.value);
@@ -667,7 +691,7 @@ async function batchControl(action) {
         case 'stop': actionText = '停止所有设备'; break;
         case 'reset': actionText = '复位所有设备'; break;
     }
-    
+
     showConfirm(
         `确定要<strong>${actionText}</strong>吗？<br><small class="text-muted">此操作将对所有已连接设备执行。</small>`,
         async () => {
@@ -680,15 +704,15 @@ async function batchControl(action) {
                     },
                     body: JSON.stringify({ action })
                 });
-                
+
                 const result = await response.json();
-                
+
                 if (result.success) {
                     showAlert(`${actionText}完成: ${result.success_count}/${result.total} 成功`, 'success');
                 } else {
                     showAlert(result.message || `${actionText}失败`, 'danger');
                 }
-                
+
                 // 显示详细结果
                 if (result.results) {
                     const details = Object.entries(result.results)
@@ -696,7 +720,7 @@ async function batchControl(action) {
                         .join(', ');
                     console.log(`批量控制详情: ${details}`);
                 }
-                
+
                 loadControlLogs();
                 loadControlSafetyStatus();
             } catch (error) {
@@ -704,6 +728,102 @@ async function batchControl(action) {
             }
         }
     );
+}
+
+// 按分组批量控制
+async function batchControlByGroup(action) {
+    const groupSelect = document.getElementById('batch-group-select');
+    const selectedGroup = groupSelect.value;
+
+    let actionText = '';
+    switch (action) {
+        case 'start': actionText = '启动'; break;
+        case 'stop': actionText = '停止'; break;
+        case 'reset': actionText = '复位'; break;
+    }
+
+    const groupName = selectedGroup === 'all' ? '所有设备' : `分组"${groupSelect.options[groupSelect.selectedIndex].text}"`;
+
+    showConfirm(
+        `确定要${actionText}<strong>${groupName}</strong>吗？`,
+        async () => {
+            try {
+                const body = { action };
+                if (selectedGroup !== 'all') {
+                    body.device_ids = getDevicesInGroup(selectedGroup);
+                }
+
+                const response = await fetch('/api/control/batch', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...getAuthHeaders()
+                    },
+                    body: JSON.stringify(body)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showAlert(`${actionText}${groupName}完成: ${result.success_count}/${result.total} 成功`, 'success');
+                } else {
+                    showAlert(result.message || `${actionText}${groupName}失败`, 'danger');
+                }
+
+                loadControlLogs();
+                loadControlSafetyStatus();
+            } catch (error) {
+                showAlert(`${actionText}${groupName}失败: ${error.message}`, 'danger');
+            }
+        }
+    );
+}
+
+// 获取分组内的设备ID列表
+function getDevicesInGroup(groupKey) {
+    if (!window._deviceGroups || !window._deviceGroups[groupKey]) {
+        return [];
+    }
+    return window._deviceGroups[groupKey];
+}
+
+// 加载设备分组选项
+async function loadDeviceGroups() {
+    try {
+        const response = await fetch('/api/devices', {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+
+        if (!data || !data.devices) return;
+
+        const groups = {};
+        data.devices.forEach(d => {
+            // 从描述中提取分组（取"—"前面的部分）
+            const desc = d.description || '';
+            const match = desc.match(/^(.+?)(?:\s*—|$)/);
+            const group = match ? match[1].trim() : '其他';
+
+            if (!groups[group]) {
+                groups[group] = [];
+            }
+            groups[group].push(d.device_id);
+        });
+
+        window._deviceGroups = groups;
+
+        const select = document.getElementById('batch-group-select');
+        select.innerHTML = '<option value="all">所有设备</option>';
+
+        Object.keys(groups).sort().forEach(group => {
+            const opt = document.createElement('option');
+            opt.value = group;
+            opt.textContent = `${group} (${groups[group].length}台)`;
+            select.appendChild(opt);
+        });
+    } catch (error) {
+        console.error('加载设备分组失败:', error);
+    }
 }
 
 // 加载操作日志

@@ -308,13 +308,14 @@ class DeviceControlSafety:
         except Exception as e:
             logger.error(f"刷新设备健康数据失败: {e}")
 
-    def batch_control(self, action: str, operator: str = 'system') -> dict[str, Any]:
+    def batch_control(self, action: str, operator: str = 'system', device_ids: list[str] | None = None) -> dict[str, Any]:
         """
-        批量控制所有设备
+        批量控制设备
 
         Args:
             action: 'start' | 'stop' | 'reset'
             operator: 操作者
+            device_ids: 可选，指定设备ID列表。为None时操作所有设备。
 
         Returns:
             操作结果
@@ -346,6 +347,10 @@ class DeviceControlSafety:
             # 如果没有可识别的可控设备，尝试操作所有设备
             if self.device_manager:
                 controllable = list(self.device_manager.get_all_devices().keys())
+
+        # 如果指定了设备ID列表，过滤可控设备
+        if device_ids and controllable:
+            controllable = [did for did in controllable if did in device_ids]
 
         if not controllable:
             return {
