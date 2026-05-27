@@ -174,10 +174,10 @@ class DeviceBehaviorSimulator:
         """根据设备类型配置过程模型"""
         device_type = self.device_config.get('description', '').lower()
         
-        # 锅炉类设备
+        # 锅炉类设备（base调高使running时偶尔触碰报警阈值180°C/1.2MPa）
         if '锅炉' in device_type or 'boiler' in device_type:
-            self.process_model.base_temperature = 85.0
-            self.process_model.base_pressure = 0.6
+            self.process_model.base_temperature = 155.0
+            self.process_model.base_pressure = 1.0
             self.process_model.thermal_time_constant = 180.0
             
         # 水处理设备
@@ -195,10 +195,10 @@ class DeviceBehaviorSimulator:
         elif '电力' in device_type or 'power' in device_type:
             self.process_model.base_temperature = 35.0
         
-        # 化工/蒸馏
+        # 化工/蒸馏（base调高使running时偶尔触碰报警阈值120°C）
         elif '化工' in device_type or '蒸馏' in device_type or 'distill' in device_type:
-            self.process_model.base_temperature = 78.0
-            self.process_model.base_pressure = 0.1  # kPa级别
+            self.process_model.base_temperature = 95.0
+            self.process_model.base_pressure = 0.1
             
         # 涂装/喷涂
         elif '涂装' in device_type or '喷涂' in device_type or 'spray' in device_type:
@@ -591,9 +591,15 @@ class DeviceBehaviorSimulator:
         # 一阶惯性
         alpha_temp = 1 - math.exp(-dt / self.process_model.thermal_time_constant)
         self._current_temp += (target_temp - self._current_temp) * alpha_temp
-        
+
         # 添加噪声
         self._current_temp += random.gauss(0, 0.5)
+
+        # 偶发过程扰动（约每20分钟一次短暂尖峰，模拟真实工况）
+        if random.random() < 0.001 and self.state == DeviceState.RUNNING:
+            spike = random.uniform(10, 30)
+            self._current_temp += spike
+            logger.debug(f"[扰动] {self.device_name} 温度尖峰 +{spike:.1f}°C")
         
         # 压力更新（与温度关联）
         temp_effect = (self._current_temp - self.process_model.base_temperature) * self.process_model.temp_pressure_coeff
@@ -789,7 +795,7 @@ class DeviceBehaviorSimulator:
             'feed_water_level': round(self._current_level * 30, 2),  # mm
             
             # 电气参数
-            'voltage_a': round(220 + 10 * math.sin(t / 120) + random.gauss(0, 2), 2),
+            'voltage_a': round(220 + 15 * math.sin(t / 120) + random.gauss(0, 3) + (random.uniform(10, 25) if random.random() < 0.002 else 0), 2),
             'voltage_b': round(220 + 10 * math.sin(t / 120 + 2.094) + random.gauss(0, 2), 2),
             'voltage_c': round(220 + 10 * math.sin(t / 120 + 4.189) + random.gauss(0, 2), 2),
             'current_a': round(30 + 15 * math.sin(t / 60) + random.gauss(0, 1), 2),
