@@ -1110,4 +1110,65 @@ devices:
     scale: 1.0
     unit: ''
   slave_id: 2
+- baudrate: 9600
+  collection_interval: 3
+  description: RS-485温度传感器 — 多点温度监测
+  device_model: PT100-RTU-8CH
+  enabled: true
+  id: temp_sensor_rtu_01
+  name: 温度传感器RTU
+  parity: N
+  protocol: modbus_rtu
+  serial_port: COM3
+  slave_id: 1
+  stopbits: 1
+  registers:
+  - address: 0
+    data_type: float32
+    description: 通道1温度
+    length: 2
+    name: temp_ch1
+    offset: 0
+    scale: 0.1
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 通道2温度
+    length: 2
+    name: temp_ch2
+    offset: 0
+    scale: 0.1
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 通道3温度
+    length: 2
+    name: temp_ch3
+    offset: 0
+    scale: 0.1
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 通道4温度
+    length: 2
+    name: temp_ch4
+    offset: 0
+    scale: 0.1
+    unit: °C
+  - address: 8
+    data_type: uint16
+    description: 设备状态
+    length: 1
+    name: device_status
+    offset: 0
+    scale: 1
+    unit: ''
+  - address: 9
+    data_type: uint16
+    description: 通信计数
+    length: 1
+    name: comm_count
+    offset: 0
+    scale: 1
+    unit: 次
   vendor: 微雪电子 (Waveshare)
