@@ -1719,12 +1719,18 @@
         var container = document.getElementById(domId);
         if (!container) return;
 
-        i40Fetch('/devices/status').then(function(deviceStates) {
+        Promise.all([
+            i40Fetch('/devices/status'),
+            i40Fetch('/oee')
+        ]).then(function(results) {
+            var deviceStates = results[0] || {};
+            var oeeData = results[1] || {};
             var nodes = [];
             for (var deviceId in DEVICE_NODE_MAP) {
                 if (!DEVICE_NODE_MAP.hasOwnProperty(deviceId)) continue;
                 var config = DEVICE_NODE_MAP[deviceId];
                 var state = (deviceStates && deviceStates[deviceId]) || {};
+                var oee = (oeeData && oeeData[deviceId]) || {};
                 var status = state.status || 'idle';
                 nodes.push({
                     id: deviceId,
@@ -1733,7 +1739,7 @@
                     label: config.label,
                     icon: config.icon,
                     status: status,
-                    oee: state.oee_percent || '--'
+                    oee: oee.oee_percent != null ? oee.oee_percent.toFixed(1) : '--'
                 });
             }
 
