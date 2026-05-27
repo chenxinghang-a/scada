@@ -499,7 +499,7 @@ def get_device_templates():
              {'name': 'outlet_flow', 'description': '出水流量', 'address': 2, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'm³/h'},
              {'name': 'water_level', 'description': '沉淀池液位', 'address': 4, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'm'},
              {'name': 'ph_value', 'description': '出水pH值', 'address': 6, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': ''},
-             {'name': 'turbidity', 'description': '出水浊度', 'address': 8, 'length': 2, 'data_type': 'float33', 'scale': 1.0, 'unit': 'NTU'}
+             {'name': 'turbidity', 'description': '出水浊度', 'address': 8, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'NTU'}
          ]},
         {'id': 'omron_nj', 'name': '欧姆龙NJ系列PLC', 'description': '机器自动化控制器，支持EtherCAT', 'protocol': 'modbus_tcp', 'port': 502,
          'vendor': '欧姆龙', 'device_model': 'NJ501-1300',
