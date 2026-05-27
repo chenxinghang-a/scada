@@ -567,6 +567,9 @@ const statusText = device.stopped ? '已停止' : (device.connected ? '在线' :
                     `<button class="btn btn-outline-success btn-sm" onclick="startDevice('${device.device_id}')" title="启动">
                         <i class="bi bi-play-circle"></i>
                     </button>` : ''}
+                    <button class="btn btn-outline-warning btn-sm" onclick="showFaultInjectionModal('${device.device_id}')" title="故障注入">
+                        <i class="bi bi-exclamation-triangle"></i>
+                    </button>
                 </div>
             </td>
         </tr>
@@ -1392,6 +1395,116 @@ function showAlert(message, type = 'info') {
             alert.remove();
         }
     }, 3000);
+}
+
+// ==================== 故障注入 ====================
+
+// 显示故障注入模态框
+function showFaultInjectionModal(deviceId) {
+    // 创建模态框（如果不存在）
+    let modal = document.getElementById('faultInjectionModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.className = 'modal fade';
+        modal.id = 'faultInjectionModal';
+        modal.tabIndex = -1;
+        modal.innerHTML = `
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header bg-warning text-dark">
+                        <h5 class="modal-title"><i class="bi bi-exclamation-triangle me-2"></i>故障注入测试</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="alert alert-warning">
+                            <i class="bi bi-info-circle me-1"></i>
+                            <strong>警告：</strong>此功能仅用于测试目的，会模拟设备故障状态。
+                        </div>
+                        <form id="faultInjectionForm">
+                            <input type="hidden" id="fault-device-id">
+                            <div class="mb-3">
+                                <label class="form-label">设备</label>
+                                <input type="text" class="form-control" id="fault-device-name" readonly>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">故障类型</label>
+                                <select class="form-select" id="fault-type">
+                                    <option value="sensor_drift">传感器漂移</option>
+                                    <option value="overheating">过热故障</option>
+                                    <option value="pressure_leak">压力泄漏</option>
+                                    <option value="motor_wear">电机磨损</option>
+                                    <option value="communication">通信故障</option>
+                                    <option value="power_fluctuation">电源波动</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">严重程度: <span id="severity-value">0.5</span></label>
+                                <input type="range" class="form-range" id="fault-severity" min="0.1" max="1.0" step="0.1" value="0.5"
+                                       oninput="document.getElementById('severity-value').textContent = this.value">
+                                <div class="d-flex justify-content-between">
+                                    <small class="text-muted">轻微 (0.1)</small>
+                                    <small class="text-muted">严重 (1.0)</small>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-warning" onclick="injectFault()">
+                            <i class="bi bi-exclamation-triangle me-1"></i>注入故障
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    // 设置设备信息
+    document.getElementById('fault-device-id').value = deviceId;
+    document.getElementById('fault-device-name').value = deviceId;
+
+    // 显示模态框
+    const bsModal = new bootstrap.Modal(modal);
+    bsModal.show();
+}
+
+// 执行故障注入
+async function injectFault() {
+    const deviceId = document.getElementById('fault-device-id').value;
+    const faultType = document.getElementById('fault-type').value;
+    const severity = parseFloat(document.getElementById('fault-severity').value);
+
+    try {
+        const response = await fetch(`/api/devices/${deviceId}/inject-fault`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...getAuthHeaders()
+            },
+            body: JSON.stringify({
+                fault_type: faultType,
+                severity: severity
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showAlert(`故障注入成功: ${faultType} (严重度: ${severity})`, 'warning');
+
+            // 关闭模态框
+            const modal = bootstrap.Modal.getInstance(document.getElementById('faultInjectionModal'));
+            modal.hide();
+
+            // 刷新设备列表
+            loadDevices();
+        } else {
+            showAlert(result.error || '故障注入失败', 'danger');
+        }
+    } catch (error) {
+        showAlert('故障注入失败: ' + error.message, 'danger');
+    }
 }
 </script>
 
