@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>工业SCADA系统 - 数据大屏</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/screen.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.0/dist/echarts.min.js"></script>
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- 顶部标题 -->
+    <header class="screen-header">
+        <div class="header-left">
+            <span class="header-time" id="header-time">--:--:--</span>
+            <span class="header-date" id="header-date">----/--/--</span>
+        </div>
+        <h1 class="header-title">工业数据采集与监控系统</h1>
+        <div class="header-right">
+            <span class="header-status" id="header-status">
+                <span class="status-dot online"></span> 系统运行中
+            </span>
+            <a href="/dashboard" class="header-link">管理后台</a>
+        </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <div class="screen-body">
+        <!-- 左列 -->
+        <div class="screen-col screen-col-left">
+            <!-- 设备状态概览 -->
+            <div class="xpanel" style="height: 30%">
+                <div class="xpanel-title">设备状态概览</div>
+                <div class="kpi-row" id="device-kpi">
+                    <div class="kpi-item">
+                        <div class="kpi-value text-blue" id="kpi-total">0</div>
+                        <div class="kpi-label">设备总数</div>
+                    </div>
+                    <div class="kpi-item">
+                        <div class="kpi-value text-green" id="kpi-online">0</div>
+                        <div class="kpi-label">在线</div>
+                    </div>
+                    <div class="kpi-item">
+                        <div class="kpi-value text-red" id="kpi-offline">0</div>
+                        <div class="kpi-label">离线</div>
+                    </div>
+                    <div class="kpi-item">
+                        <div class="kpi-value text-yellow" id="kpi-alarm">0</div>
+                        <div class="kpi-label">报警</div>
+                    </div>
+                </div>
+                <div id="device-status-chart" style="height: calc(100% - 90px)"></div>
+            </div>
+
+            <!-- OEE 综合效率 -->
+            <div class="xpanel" style="height: 35%">
+                <div class="xpanel-title">OEE 综合效率</div>
+                <div id="oee-chart" style="height: calc(100% - 40px)"></div>
+            </div>
+
+            <!-- 能源消耗 -->
+            <div class="xpanel" style="height: 35%">
+                <div class="xpanel-title">能源消耗趋势</div>
+                <div id="energy-chart" style="height: calc(100% - 40px)"></div>
+            </div>
+        </div>
+
+        <!-- 中列 -->
+        <div class="screen-col screen-col-center">
+            <!-- 顶部 KPI 卡片 -->
+            <div class="kpi-cards">
+                <div class="kpi-card">
+                    <div class="kpi-card-icon"><i class="icon-db"></i></div>
+                    <div class="kpi-card-body">
+                        <div class="kpi-card-value" id="kpi-collections">0</div>
+                        <div class="kpi-card-label">今日采集 (条)</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-card-icon"><i class="icon-speed"></i></div>
+                    <div class="kpi-card-body">
+                        <div class="kpi-card-value" id="kpi-rate">0</div>
+                        <div class="kpi-card-label">采集频率 (条/分)</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-card-icon"><i class="icon-check"></i></div>
+                    <div class="kpi-card-body">
+                        <div class="kpi-card-value" id="kpi-uptime">-</div>
+                        <div class="kpi-card-label">运行时间</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-card-icon"><i class="icon-quality"></i></div>
+                    <div class="kpi-card-body">
+                        <div class="kpi-card-value" id="kpi-quality">-</div>
+                        <div class="kpi-card-label">数据质量</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 主趋势图 -->
+            <div class="xpanel" style="height: calc(100% - 120px)">
+                <div class="xpanel-title">
+                    实时数据趋势
+                    <select id="trend-device-select" class="screen-select"></select>
+                </div>
+                <div id="trend-chart" style="height: calc(100% - 40px)"></div>
+            </div>
+        </div>
+
+        <!-- 右列 -->
+        <div class="screen-col screen-col-right">
+            <!-- 报警滚动 -->
+            <div class="xpanel" style="height: 40%">
+                <div class="xpanel-title">
+                    实时报警
+                    <span class="alarm-count" id="alarm-count-badge">0</span>
+                </div>
+                <div class="alarm-list" id="alarm-list">
+                    <div class="alarm-empty">暂无报警</div>
+                </div>
+            </div>
+
+            <!-- SPC 控制图 -->
+            <div class="xpanel" style="height: 30%">
+                <div class="xpanel-title">SPC 质量监控</div>
+                <div id="spc-chart" style="height: calc(100% - 40px)"></div>
+            </div>
+
+            <!-- 预测性维护 -->
+            <div class="xpanel" style="height: 30%">
+                <div class="xpanel-title">设备健康度</div>
+                <div id="health-chart" style="height: calc(100% - 40px)"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/screen.js') }}"></script>
+</body>
+</html>

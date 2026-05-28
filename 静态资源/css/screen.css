@@ -1,0 +1,302 @@
+/* 数据大屏样式 — iDataV 工业风格 */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+    width: 100%; height: 100%;
+    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    background: #0a0e27;
+    color: #c0c8d8;
+    overflow: hidden;
+}
+
+/* ========== 顶部标题栏 ========== */
+.screen-header {
+    height: 60px;
+    background: linear-gradient(180deg, rgba(6,30,65,0.95) 0%, rgba(6,30,65,0.6) 100%);
+    border-bottom: 1px solid rgba(0,180,255,0.3);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 30px;
+    position: relative;
+}
+
+.screen-header::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 10%;
+    right: 10%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #00b4ff, transparent);
+}
+
+.header-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #5dc2fe;
+    letter-spacing: 4px;
+    text-shadow: 0 0 20px rgba(93,194,254,0.5);
+}
+
+.header-left, .header-right {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    font-size: 13px;
+}
+
+.header-time {
+    font-family: 'Consolas', monospace;
+    font-size: 18px;
+    color: #5dc2fe;
+}
+
+.header-date { color: #6b8aa8; }
+
+.header-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #2fb344;
+}
+
+.header-link {
+    color: #5dc2fe;
+    text-decoration: none;
+    padding: 4px 12px;
+    border: 1px solid rgba(93,194,254,0.3);
+    border-radius: 4px;
+    font-size: 12px;
+    transition: all 0.2s;
+}
+
+.header-link:hover {
+    background: rgba(93,194,254,0.15);
+    color: #fff;
+}
+
+/* ========== 主内容区 ========== */
+.screen-body {
+    position: absolute;
+    top: 60px; bottom: 0; left: 0; right: 0;
+    display: flex;
+    padding: 10px;
+    gap: 10px;
+}
+
+.screen-col {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.screen-col-left  { width: 25%; }
+.screen-col-center { width: 50%; }
+.screen-col-right { width: 25%; }
+
+/* ========== 面板 ========== */
+.xpanel {
+    background: rgba(6,30,65,0.7);
+    border: 1px solid rgba(0,180,255,0.2);
+    border-radius: 4px;
+    padding: 12px;
+    position: relative;
+    overflow: hidden;
+}
+
+.xpanel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 20px; height: 20px;
+    border-top: 2px solid #00b4ff;
+    border-left: 2px solid #00b4ff;
+}
+
+.xpanel::after {
+    content: '';
+    position: absolute;
+    top: 0; right: 0;
+    width: 20px; height: 20px;
+    border-top: 2px solid #00b4ff;
+    border-right: 2px solid #00b4ff;
+}
+
+.xpanel-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #5dc2fe;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(0,180,255,0.15);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+/* ========== KPI 卡片 ========== */
+.kpi-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.kpi-item {
+    flex: 1;
+    text-align: center;
+    padding: 8px;
+    background: rgba(0,180,255,0.05);
+    border-radius: 4px;
+    border: 1px solid rgba(0,180,255,0.1);
+}
+
+.kpi-value {
+    font-family: 'Consolas', monospace;
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.kpi-label {
+    font-size: 11px;
+    color: #6b8aa8;
+    margin-top: 4px;
+}
+
+.text-blue   { color: #5dc2fe; }
+.text-green  { color: #2fb344; }
+.text-red    { color: #d63939; }
+.text-yellow { color: #f59f00; }
+
+/* 中列 KPI 卡片 */
+.kpi-cards {
+    display: flex;
+    gap: 10px;
+    height: 100px;
+}
+
+.kpi-card {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: linear-gradient(135deg, rgba(0,180,255,0.08) 0%, rgba(6,30,65,0.8) 100%);
+    border: 1px solid rgba(0,180,255,0.15);
+    border-radius: 4px;
+}
+
+.kpi-card-icon {
+    width: 40px; height: 40px;
+    border-radius: 8px;
+    background: rgba(0,180,255,0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+}
+
+.kpi-card-value {
+    font-family: 'Consolas', monospace;
+    font-size: 22px;
+    font-weight: 700;
+    color: #5dc2fe;
+    line-height: 1;
+}
+
+.kpi-card-label {
+    font-size: 11px;
+    color: #6b8aa8;
+    margin-top: 2px;
+}
+
+/* ========== 报警列表 ========== */
+.alarm-list {
+    height: calc(100% - 40px);
+    overflow-y: auto;
+}
+
+.alarm-list::-webkit-scrollbar { width: 4px; }
+.alarm-list::-webkit-scrollbar-thumb { background: rgba(0,180,255,0.3); border-radius: 2px; }
+
+.alarm-item {
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    border-left: 3px solid;
+    border-radius: 0 4px 4px 0;
+    background: rgba(0,0,0,0.2);
+    font-size: 12px;
+    animation: alarmIn 0.3s ease;
+}
+
+.alarm-item.critical { border-color: #d63939; }
+.alarm-item.warning  { border-color: #f59f00; }
+.alarm-item.info     { border-color: #4299e1; }
+
+.alarm-item .alarm-time {
+    font-family: 'Consolas', monospace;
+    color: #6b8aa8;
+    font-size: 11px;
+}
+
+.alarm-item .alarm-msg {
+    color: #e0e6ed;
+    margin-top: 2px;
+}
+
+.alarm-empty {
+    text-align: center;
+    color: #3a5068;
+    padding: 40px 0;
+    font-size: 14px;
+}
+
+.alarm-count {
+    background: #d63939;
+    color: #fff;
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+}
+
+@keyframes alarmIn {
+    from { opacity: 0; transform: translateX(20px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ========== 下拉框 ========== */
+.screen-select {
+    background: rgba(0,180,255,0.1);
+    border: 1px solid rgba(0,180,255,0.3);
+    color: #c0c8d8;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    outline: none;
+}
+
+.screen-select option {
+    background: #0a0e27;
+    color: #c0c8d8;
+}
+
+/* ========== 状态点 ========== */
+.status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 4px;
+}
+
+.status-dot.online  { background: #2fb344; box-shadow: 0 0 6px #2fb344; }
+.status-dot.offline { background: #d63939; box-shadow: 0 0 6px #d63939; }
+.status-dot.warning { background: #f59f00; box-shadow: 0 0 6px #f59f00; }
+
+/* ========== 图标占位 ========== */
+.icon-db::before     { content: '📊'; }
+.icon-speed::before  { content: '⚡'; }
+.icon-check::before  { content: '⏱'; }
+.icon-quality::before { content: '✅'; }

@@ -75,6 +75,11 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         """仪表盘页面"""
         return render_template('dashboard.html')
 
+    @app.route('/screen')
+    def big_screen():
+        """数据大屏（全屏工业可视化）"""
+        return render_template('screen.html')
+
     @app.route('/history')
     def history():
         """历史数据页面"""
