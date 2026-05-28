@@ -1,0 +1,614 @@
+# Modbus 模拟器专用配置
+# 所有设备指向 localhost:5020，用不同 slave_id 区分
+# 启动方式：python tools/modbus_simulator.py --port 5020
+
+devices:
+- collection_interval: 2
+  description: 主产线控制PLC — 锅炉/换热器/反应釜群
+  device_model: S7-1516-3 PN/DP
+  enabled: true
+  host: 127.0.0.1
+  id: siemens_1500_01
+  name: 西门子S7-1500 PLC
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 锅炉出口温度
+    length: 2
+    name: boiler_temperature
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 锅炉压力
+    length: 2
+    name: boiler_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 4
+    data_type: float32
+    description: 换热器出口温度
+    length: 2
+    name: heat_exchanger_temperature
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 蒸汽流量
+    length: 2
+    name: steam_flow
+    scale: 1.0
+    unit: t/h
+  - address: 8
+    data_type: float32
+    description: 给水液位
+    length: 2
+    name: feed_water_level
+    scale: 1.0
+    unit: mm
+  - address: 10
+    data_type: float32
+    description: 排烟温度
+    length: 2
+    name: flue_gas_temperature
+    scale: 1.0
+    unit: °C
+  - address: 12
+    data_type: float32
+    description: 烟气含氧量
+    length: 2
+    name: oxygen_content
+    scale: 1.0
+    unit: '%'
+  - address: 14
+    data_type: uint16
+    description: 锅炉状态 0=停炉/1=运行/2=故障
+    length: 1
+    name: boiler_status
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 西门子
+- collection_interval: 2
+  description: 注塑车间控制 — 注塑机/模具/脱模
+  device_model: FX5U-64M
+  enabled: true
+  host: 127.0.0.1
+  id: mitsubishi_fx5u_01
+  name: 三菱FX5U PLC
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 模具温度
+    length: 2
+    name: mold_temperature
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 注射压力
+    length: 2
+    name: injection_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 4
+    data_type: float32
+    description: 注射速度
+    length: 2
+    name: injection_speed
+    scale: 1.0
+    unit: mm/s
+  - address: 6
+    data_type: float32
+    description: 保压位置
+    length: 2
+    name: cushion_position
+    scale: 1.0
+    unit: mm
+  - address: 8
+    data_type: float32
+    description: 成型周期
+    length: 2
+    name: cycle_time
+    scale: 1.0
+    unit: s
+  - address: 10
+    data_type: uint16
+    description: 注射计数
+    length: 1
+    name: shot_count
+    scale: 1
+    unit: 个
+  - address: 11
+    data_type: float32
+    description: 锁模力
+    length: 2
+    name: clamping_force
+    scale: 1.0
+    unit: kN
+  - address: 13
+    data_type: float32
+    description: 料筒温度
+    length: 2
+    name: barrel_temperature
+    scale: 1.0
+    unit: °C
+  slave_id: 2
+  vendor: 三菱电机
+- collection_interval: 5
+  description: 包装线控制 — 封箱/贴标/码垛
+  device_model: DVP32EH00T3
+  enabled: true
+  host: 127.0.0.1
+  id: delta_dvp_01
+  name: 台达DVP PLC
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: uint16
+    description: 输送带速度
+    length: 1
+    name: conveyor_speed
+    scale: 0.1
+    unit: m/min
+  - address: 1
+    data_type: uint16
+    description: 封箱温度
+    length: 1
+    name: sealing_temperature
+    scale: 0.1
+    unit: °C
+  - address: 2
+    data_type: uint16
+    description: 贴标计数
+    length: 1
+    name: label_count
+    scale: 1
+    unit: 个
+  - address: 3
+    data_type: uint16
+    description: 码垛计数
+    length: 1
+    name: palletizing_count
+    scale: 1
+    unit: 个
+  - address: 4
+    data_type: uint16
+    description: 剔除计数
+    length: 1
+    name: reject_count
+    scale: 1
+    unit: 个
+  - address: 5
+    data_type: uint16
+    description: 包装线状态 0=停机/1=运行/2=换料/3=故障
+    length: 1
+    name: packing_status
+    scale: 1
+    unit: ''
+  slave_id: 3
+  vendor: 台达电子
+- collection_interval: 3
+  description: 涂装车间控制 — 喷涂/烘干/输送
+  device_model: H5U-3232MT
+  enabled: true
+  host: 127.0.0.1
+  id: inovance_h5u_01
+  name: 汇川H5U PLC
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 喷涂压力
+    length: 2
+    name: spray_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: 烘干炉温度
+    length: 2
+    name: oven_temperature
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 喷涂速度
+    length: 2
+    name: spray_speed
+    scale: 1.0
+    unit: m/min
+  - address: 6
+    data_type: float32
+    description: 涂层厚度
+    length: 2
+    name: coating_thickness
+    scale: 1.0
+    unit: μm
+  - address: 8
+    data_type: float32
+    description: 输送链速度
+    length: 2
+    name: conveyor_speed
+    scale: 1.0
+    unit: m/min
+  - address: 10
+    data_type: uint16
+    description: 喷涂计数
+    length: 1
+    name: painted_count
+    scale: 1
+    unit: 个
+  slave_id: 4
+  vendor: 汇川技术
+- collection_interval: 5
+  description: 水处理车间控制 — 进水/加药/沉淀
+  device_model: BMX P34 2020
+  enabled: true
+  host: 127.0.0.1
+  id: schneider_m340_01
+  name: 施耐德M340 PLC
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 进水流量
+    length: 2
+    name: inlet_flow
+    scale: 1.0
+    unit: m³/h
+  - address: 2
+    data_type: float32
+    description: 出水流量
+    length: 2
+    name: outlet_flow
+    scale: 1.0
+    unit: m³/h
+  - address: 4
+    data_type: float32
+    description: 沉淀池液位
+    length: 2
+    name: water_level
+    scale: 1.0
+    unit: m
+  - address: 6
+    data_type: float32
+    description: 出水pH值
+    length: 2
+    name: ph_value
+    scale: 1.0
+    unit: ''
+  - address: 8
+    data_type: float32
+    description: 出水浊度
+    length: 2
+    name: turbidity
+    scale: 1.0
+    unit: NTU
+  - address: 10
+    data_type: float32
+    description: 溶解氧
+    length: 2
+    name: dissolved_oxygen
+    scale: 1.0
+    unit: mg/L
+  - address: 12
+    data_type: float32
+    description: 电导率
+    length: 2
+    name: conductivity
+    scale: 1.0
+    unit: μS/cm
+  - address: 14
+    data_type: uint16
+    description: 进水泵转速
+    length: 1
+    name: pump_speed
+    scale: 1
+    unit: RPM
+  slave_id: 5
+  vendor: 施耐德电气
+- collection_interval: 5
+  description: 车间配电柜 — 电力质量监测
+  device_model: M4M 20
+  enabled: true
+  host: 127.0.0.1
+  id: abb_m4m_01
+  name: ABB M4M电力分析仪
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: A相电压
+    length: 2
+    name: voltage_a
+    scale: 1.0
+    unit: V
+  - address: 2
+    data_type: float32
+    description: B相电压
+    length: 2
+    name: voltage_b
+    scale: 1.0
+    unit: V
+  - address: 4
+    data_type: float32
+    description: C相电压
+    length: 2
+    name: voltage_c
+    scale: 1.0
+    unit: V
+  - address: 6
+    data_type: float32
+    description: A相电流
+    length: 2
+    name: current_a
+    scale: 1.0
+    unit: A
+  - address: 8
+    data_type: float32
+    description: B相电流
+    length: 2
+    name: current_b
+    scale: 1.0
+    unit: A
+  - address: 10
+    data_type: float32
+    description: C相电流
+    length: 2
+    name: current_c
+    scale: 1.0
+    unit: A
+  - address: 12
+    data_type: float32
+    description: 总有功功率
+    length: 2
+    name: active_power
+    scale: 1.0
+    unit: kW
+  - address: 14
+    data_type: float32
+    description: 电网频率
+    length: 2
+    name: frequency
+    scale: 1.0
+    unit: Hz
+  - address: 16
+    data_type: float32
+    description: 电压总谐波畸变率
+    length: 2
+    name: thd_voltage
+    scale: 1.0
+    unit: '%'
+  - address: 18
+    data_type: float32
+    description: 功率因数
+    length: 2
+    name: power_factor
+    scale: 1.0
+    unit: ''
+  slave_id: 6
+  vendor: ABB
+- collection_interval: 2
+  description: 现场IO-Link传感器集成 — 压力/流量/温度/距离
+  device_model: TBEN-L4-8IOL
+  enabled: true
+  host: 127.0.0.1
+  id: turck_iolink_01
+  name: 图尔克IO-Link主站
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: IO-Link压力传感器1
+    length: 2
+    name: iol_pressure_1
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: IO-Link流量传感器1
+    length: 2
+    name: iol_flow_1
+    scale: 1.0
+    unit: L/min
+  - address: 4
+    data_type: float32
+    description: IO-Link温度传感器1
+    length: 2
+    name: iol_temperature_1
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: IO-Link距离传感器1
+    length: 2
+    name: iol_distance_1
+    scale: 1.0
+    unit: mm
+  - address: 8
+    data_type: float32
+    description: IO-Link压力传感器2
+    length: 2
+    name: iol_pressure_2
+    scale: 1.0
+    unit: MPa
+  - address: 10
+    data_type: float32
+    description: IO-Link真空传感器
+    length: 2
+    name: iol_vacuum
+    scale: 1.0
+    unit: Pa
+  slave_id: 7
+  vendor: 图尔克
+- collection_interval: 1
+  description: 产线1号设备状态指示灯塔 — 红黄绿蓝白+蜂鸣器
+  device_model: LR7-302NWFB
+  enabled: true
+  host: 127.0.0.1
+  id: signal_tower_01
+  name: Patlite LR7信号灯塔 — 1号线
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: uint16
+    description: 红色灯
+    length: 1
+    name: red_light
+    scale: 1
+    unit: ''
+  - address: 1
+    data_type: uint16
+    description: 黄色灯
+    length: 1
+    name: yellow_light
+    scale: 1
+    unit: ''
+  - address: 2
+    data_type: uint16
+    description: 绿色灯
+    length: 1
+    name: green_light
+    scale: 1
+    unit: ''
+  - address: 3
+    data_type: uint16
+    description: 蓝色灯
+    length: 1
+    name: blue_light
+    scale: 1
+    unit: ''
+  - address: 4
+    data_type: uint16
+    description: 白色灯
+    length: 1
+    name: white_light
+    scale: 1
+    unit: ''
+  - address: 5
+    data_type: uint16
+    description: 蜂鸣器
+    length: 1
+    name: buzzer
+    scale: 1
+    unit: ''
+  slave_id: 8
+  vendor: Patlite (日本帕特莱)
+- collection_interval: 1
+  description: 报警输出控制 — 外部警灯/蜂鸣器/电磁阀
+  device_model: ADAM-6060-AE
+  enabled: true
+  host: 127.0.0.1
+  id: relay_output_01
+  name: 研华ADAM-6060继电器模块
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - access: rw
+    address: 0
+    data_type: uint16
+    description: 继电器1
+    length: 1
+    name: relay_1
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 1
+    data_type: uint16
+    description: 继电器2
+    length: 1
+    name: relay_2
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 2
+    data_type: uint16
+    description: 继电器3
+    length: 1
+    name: relay_3
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 3
+    data_type: uint16
+    description: 继电器4
+    length: 1
+    name: relay_4
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 4
+    data_type: uint16
+    description: 继电器5
+    length: 1
+    name: relay_5
+    scale: 1
+    unit: ''
+  - access: rw
+    address: 5
+    data_type: uint16
+    description: 继电器6
+    length: 1
+    name: relay_6
+    scale: 1
+    unit: ''
+  slave_id: 9
+  vendor: 研华科技 (Advantech)
+- collection_interval: 3
+  description: 化工车间控制 — 蒸馏/干燥/包装
+  device_model: LK210
+  enabled: true
+  host: 127.0.0.1
+  id: hollysys_lk_01
+  name: 和利时LK PLC
+  port: 5020
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 蒸馏塔顶温度
+    length: 2
+    name: distill_temperature
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 蒸馏塔压力
+    length: 2
+    name: distill_pressure
+    scale: 1.0
+    unit: kPa
+  - address: 4
+    data_type: float32
+    description: 干燥机温度
+    length: 2
+    name: dryer_temperature
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 干燥机湿度
+    length: 2
+    name: dryer_humidity
+    scale: 1.0
+    unit: '%'
+  - address: 8
+    data_type: float32
+    description: 回流比
+    length: 2
+    name: reflux_ratio
+    scale: 1.0
+    unit: ''
+  slave_id: 10
+  vendor: 和利时

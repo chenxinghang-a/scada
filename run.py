@@ -49,18 +49,23 @@ def main():
         from 采集层.data_collector import DataCollector
         from 展示层.routes import create_app
 
-        # 判断是否使用模拟模式
-        simulation_mode = '--real' not in sys.argv
-
-        # 根据模式选择配置文件和数据库
-        if simulation_mode:
-            config_path = '配置/devices_simulated.yaml'
-            db_path = 'data/scada_simulated.db'
-            logger.info("模拟模式：使用模拟设备配置")
-        else:
+        # 判断运行模式
+        if '--simulator' in sys.argv:
+            # 连接外部 Modbus 模拟器（真实协议通信）
+            simulation_mode = False
+            config_path = '配置/devices_modbus_sim.yaml'
+            db_path = 'data/scada_simulator.db'
+            logger.info("模拟器模式：连接外部 Modbus TCP 模拟器（真实协议）")
+        elif '--real' in sys.argv:
+            simulation_mode = False
             config_path = '配置/devices_real.yaml'
             db_path = 'data/scada_real.db'
             logger.info("真实设备模式：使用真实设备配置")
+        else:
+            simulation_mode = True
+            config_path = '配置/devices_simulated.yaml'
+            db_path = 'data/scada_simulated.db'
+            logger.info("模拟模式：使用模拟设备配置")
 
         # 初始化数据库
         logger.info("初始化数据库...")
