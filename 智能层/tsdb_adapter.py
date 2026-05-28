@@ -396,14 +396,16 @@ class RealtimeDataBridge:
     解决采集层只写SQLite的问题。
     """
 
-    def __init__(self, tdengine: TDengineClient):
+    def __init__(self, tdengine: TDengineClient, offline_buffer=None):
         """
         初始化桥接器
 
         Args:
             tdengine: TDengine客户端
+            offline_buffer: 断线缓存实例（可选）
         """
         self.tdengine = tdengine
+        self.offline_buffer = offline_buffer
         self.logger = logging.getLogger("RealtimeDataBridge")
 
         # 批量写入缓冲
@@ -522,9 +524,28 @@ class RealtimeDataBridge:
             self.logger.error(f"写入TDengine失败: {e}")
             self.stats['errors'] += 1
 
-            # 将失败的数据放回缓冲区
-            with self._buffer_lock:
-                self._buffer.extend(records)
+            # 优先写入离线缓存，否则放回内存缓冲
+            if self.offline_buffer:
+                try:
+                    serialized = [{
+                        'device_id': r.device_id,
+                        'register_name': r.register_name,
+                        'timestamp': r.timestamp.isoformat(),
+                        'value': r.value,
+                        'quality': r.quality,
+                        'unit': r.unit,
+                        'protocol': r.protocol,
+                        'gateway_id': r.gateway_id,
+                    } for r in records]
+                    self.offline_buffer.buffer_records('telemetry', serialized)
+                    self.logger.info(f"已转入离线缓存 {len(records)} 条")
+                except Exception as be:
+                    self.logger.error(f"离线缓存写入失败: {be}")
+                    with self._buffer_lock:
+                        self._buffer.extend(records)
+            else:
+                with self._buffer_lock:
+                    self._buffer.extend(records)
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
