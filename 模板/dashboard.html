@@ -104,29 +104,29 @@
 <!-- 顶部统计卡片 -->
 <div class="row mb-4">
     <div class="col-md-3">
-        <div class="card bg-primary text-white mb-3" style="border-radius: 12px;">
+        <div class="card stat-card-primary mb-3">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h5 class="card-title mb-1"><i class="bi bi-hdd-rack"></i> 设备总数</h5>
-                        <h2 class="card-text mb-0" id="device-count">0</h2>
+                        <div class="stat-label"><i class="bi bi-hdd-rack"></i> 设备总数</div>
+                        <div class="stat-value" id="device-count">0</div>
                     </div>
                     <div class="text-end">
-                        <small>在线: <span id="device-online" class="fw-bold">0</span></small><br>
-                        <small>离线: <span id="device-offline" class="fw-bold">0</span></small>
+                        <small>在线: <span id="device-online" class="fw-bold" style="color:var(--accent-green)">0</span></small><br>
+                        <small>离线: <span id="device-offline" class="fw-bold" style="color:var(--accent-red)">0</span></small>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    
+
     <div class="col-md-3">
-        <div class="card bg-success text-white mb-3" style="border-radius: 12px;">
+        <div class="card stat-card-success mb-3">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h5 class="card-title mb-1"><i class="bi bi-database"></i> 数据采集</h5>
-                        <h2 class="card-text mb-0" id="data-count">0</h2>
+                        <div class="stat-label"><i class="bi bi-database"></i> 数据采集</div>
+                        <div class="stat-value" id="data-count">0</div>
                     </div>
                     <div class="text-end">
                         <small>今日: <span id="data-today" class="fw-bold">0</span> 条</small>
@@ -135,34 +135,34 @@
             </div>
         </div>
     </div>
-    
+
     <div class="col-md-3">
-        <div class="card bg-warning text-dark mb-3" style="border-radius: 12px;">
+        <div class="card stat-card-warning mb-3">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h5 class="card-title mb-1"><i class="bi bi-bell"></i> 活动报警</h5>
-                        <h2 class="card-text mb-0" id="alarm-count-card">0</h2>
+                        <div class="stat-label"><i class="bi bi-bell"></i> 活动报警</div>
+                        <div class="stat-value" id="alarm-count-card">0</div>
                     </div>
                     <div class="text-end">
-                        <small>严重: <span id="alarm-critical" class="fw-bold">0</span></small><br>
-                        <small>警告: <span id="alarm-warning" class="fw-bold">0</span></small>
+                        <small>严重: <span id="alarm-critical" class="fw-bold" style="color:var(--accent-red)">0</span></small><br>
+                        <small>警告: <span id="alarm-warning" class="fw-bold" style="color:var(--accent-yellow)">0</span></small>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    
+
     <div class="col-md-3">
-        <div class="card bg-info text-white mb-3" style="border-radius: 12px;">
+        <div class="card stat-card-info mb-3">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h5 class="card-title mb-1"><i class="bi bi-clock"></i> 运行时间</h5>
-                        <h2 class="card-text mb-0" id="uptime">-</h2>
+                        <div class="stat-label"><i class="bi bi-clock"></i> 运行时间</div>
+                        <div class="stat-value" id="uptime">-</div>
                     </div>
                     <div class="text-end">
-                        <small>模式: <span id="run-mode" class="badge bg-light text-dark">-</span></small>
+                        <small>模式: <span id="run-mode" class="badge bg-info">-</span></small>
                     </div>
                 </div>
             </div>
@@ -287,7 +287,9 @@
             <div class="card-header">
                 <div class="d-flex justify-content-between align-items-center">
                     <h5 class="card-title mb-0"><i class="bi bi-graph-up"></i> 实时趋势</h5>
-                    <small class="text-muted">自动追踪所有采集变量</small>
+                    <select class="form-select form-select-sm" style="width: auto;" id="trend-device-select">
+                        <option>加载中...</option>
+                    </select>
                 </div>
             </div>
             <div class="card-body">

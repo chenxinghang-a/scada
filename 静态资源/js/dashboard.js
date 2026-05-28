@@ -1,6 +1,6 @@
 /**
  * 仪表盘页面JavaScript — 重写版
- * 动态图表、真实数据、时间范围筛选
+ * 动态图表、真实数据、设备选择
  */
 
 // 图表实例
@@ -13,6 +13,9 @@ const MAX_DATA_POINTS = 120;
 
 // 设备名缓存（从API动态获取）
 let deviceNameCache = {};
+
+// 当前选中的设备（趋势图只显示该设备的变量）
+let selectedDeviceId = null;
 
 /**
  * 初始化
@@ -31,19 +34,55 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 /**
- * 从API加载设备名映射
+ * 从API加载设备名映射，填充设备选择器
  */
 async function loadDeviceNames() {
     try {
         const resp = await apiRequest('/devices');
         if (resp && resp.devices) {
+            const deviceIds = [];
             resp.devices.forEach(d => {
-                deviceNameCache[d.device_id || d.id] = d.name || d.device_id || d.id;
+                const id = d.device_id || d.id;
+                deviceNameCache[id] = d.name || id;
+                deviceIds.push(id);
             });
+
+            // 默认选中第一个设备
+            if (!selectedDeviceId && deviceIds.length > 0) {
+                selectedDeviceId = deviceIds[0];
+            }
+
+            // 填充设备选择下拉框
+            populateDeviceSelector(deviceIds);
         }
     } catch (e) {
         console.warn('加载设备名失败，使用默认');
     }
+}
+
+/**
+ * 填充设备选择下拉框
+ */
+function populateDeviceSelector(deviceIds) {
+    const select = document.getElementById('trend-device-select');
+    if (!select) return;
+
+    select.innerHTML = deviceIds.map(id =>
+        `<option value="${id}" ${id === selectedDeviceId ? 'selected' : ''}>${deviceNameCache[id] || id}</option>`
+    ).join('');
+
+    select.addEventListener('change', function() {
+        selectedDeviceId = this.value;
+        // 清空缓存，重新开始收集该设备的数据
+        Object.keys(dataBuffers).forEach(key => {
+            if (!key.startsWith(selectedDeviceId + ':')) {
+                delete dataBuffers[key];
+            }
+        });
+        if (trendChart) {
+            trendChart.setOption({ series: [], legend: { data: [] } });
+        }
+    });
 }
 
 /**
@@ -192,47 +231,52 @@ async function loadRealtimeData() {
 }
 
 /**
- * 更新趋势图 — 动态变量、多系列
+ * 更新趋势图 — 只显示选中设备的变量
  */
 function updateTrendChart(data) {
-    if (!trendChart) return;
+    if (!trendChart || !selectedDeviceId) return;
 
     const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    // 按变量分组缓存
+    // 只缓存选中设备的数据
     data.forEach(item => {
+        if (item.device_id !== selectedDeviceId) return;
         const key = `${item.device_id}:${item.register_name}`;
         if (!dataBuffers[key]) dataBuffers[key] = [];
         dataBuffers[key].push({ time: now, value: item.value });
         if (dataBuffers[key].length > MAX_DATA_POINTS) dataBuffers[key].shift();
     });
 
-    // 构建 ECharts series
-    const keys = Object.keys(dataBuffers);
+    // 只取当前设备的变量
+    const prefix = selectedDeviceId + ':';
+    const keys = Object.keys(dataBuffers).filter(k => k.startsWith(prefix));
+    if (keys.length === 0) return;
+
     const timeSet = new Set();
     keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.time)));
     const times = Array.from(timeSet).sort();
 
     const series = keys.map(key => {
-        const [deviceId, regName] = key.split(':');
-        const deviceLabel = getDeviceName(deviceId);
+        const regName = key.split(':')[1];
         const regLabel = getRegisterLabel(regName);
+        const unit = getRegisterUnit(regName);
         const buffer = dataBuffers[key];
         const timeToValue = {};
         buffer.forEach(d => { timeToValue[d.time] = d.value; });
 
         return {
-            name: `${deviceLabel} - ${regLabel}`,
+            name: `${regLabel} (${unit})`,
             type: 'line',
             smooth: true,
             symbol: 'none',
-            lineStyle: { width: 1.5 },
-            areaStyle: { opacity: 0.05 },
+            lineStyle: { width: 2 },
+            areaStyle: { opacity: 0.08 },
             data: times.map(t => timeToValue[t] ?? null),
         };
     });
 
     trendChart.setOption({
+        legend: { data: series.map(s => s.name) },
         xAxis: { data: times },
         series: series,
     });
