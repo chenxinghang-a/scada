@@ -220,12 +220,7 @@ function updateTrendChart(data) {
         matched++;
     });
 
-    // 调试：第一次打印匹配情况
-    if (!updateTrendChart._logged) {
-        console.log(`趋势图: selectedDeviceId=${selectedDeviceId}, 数据${data.length}条, 匹配${matched}条`);
-        console.log('数据中的 device_id 样本:', [...new Set(data.map(d => d.device_id))].slice(0, 5));
-        updateTrendChart._logged = true;
-    }
+    if (matched === 0) return;
 
     const keys = Object.keys(dataBuffers);
     if (keys.length === 0) return;
