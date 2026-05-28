@@ -3,13 +3,17 @@
 """
 
 import os
-from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 项目根目录
-BASE_DIR = Path(__file__).parent
+# 项目根目录（通过 paths 模块统一管理）
+try:
+    import paths
+    BASE_DIR = paths.PROJECT_ROOT
+except ImportError:
+    from pathlib import Path
+    BASE_DIR = Path(__file__).resolve().parent
 
 # Flask配置
 class FlaskConfig:

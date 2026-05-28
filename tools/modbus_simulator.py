@@ -29,8 +29,10 @@ from pymodbus.server import StartTcpServer
 from pymodbus.simulator import SimDevice, SimData
 from pymodbus.simulator.simdata import DataType
 
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+# 项目路径
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import paths
+PROJECT_ROOT = paths.PROJECT_ROOT
 
 logging.basicConfig(
     level=logging.INFO,
@@ -175,7 +177,7 @@ def main():
     parser = argparse.ArgumentParser(description='Modbus TCP 模拟器')
     parser.add_argument('--host', default='0.0.0.0')
     parser.add_argument('--port', type=int, default=5020)
-    parser.add_argument('--config', default=str(PROJECT_ROOT / '配置' / 'devices_simulated.yaml'))
+    parser.add_argument('--config', default=paths.get_config_path('devices_simulated.yaml'))
     parser.add_argument('--devices', nargs='*', help='只模拟指定设备ID（模糊匹配）')
     parser.add_argument('--interval', type=float, default=1.0, help='更新间隔(秒)')
     args = parser.parse_args()

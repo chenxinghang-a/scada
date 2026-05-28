@@ -3,24 +3,15 @@
 """
 
 import sys
-import math
-import time
 import logging
 import threading
-from pathlib import Path
 from datetime import datetime
 
-# 添加项目根目录到Python路径
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+# 初始化项目路径（必须在所有 import 之前）
+import paths
+paths.setup()
 
-# 记录系统启动时间
 SYSTEM_START_TIME = datetime.now()
-
-# 确保日志目录存在
-(project_root / 'logs').mkdir(parents=True, exist_ok=True)
-(project_root / 'data').mkdir(parents=True, exist_ok=True)
-(project_root / 'exports').mkdir(parents=True, exist_ok=True)
 
 # 配置日志
 logging.basicConfig(
@@ -28,7 +19,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('logs/scada.log', encoding='utf-8')
+        logging.FileHandler(str(paths.LOG_DIR / 'scada.log'), encoding='utf-8')
     ]
 )
 
@@ -40,9 +31,7 @@ def main():
     try:
         logger.info("正在启动工业数据采集与监控系统...")
 
-        # 导入模块
         from 存储层.database import Database
-        from 采集层.device_manager import DeviceManager
         from 采集层.real_device_manager import RealDeviceManager
         from 采集层.simulated_device_manager import SimulatedDeviceManager
         from 报警层.alarm_manager import AlarmManager
@@ -51,25 +40,24 @@ def main():
 
         # 判断运行模式
         if '--simulator' in sys.argv:
-            # 连接外部 Modbus 模拟器（真实协议通信）
             simulation_mode = False
-            config_path = '配置/devices_modbus_sim.yaml'
-            db_path = 'data/scada_simulator.db'
+            config_path = paths.get_config_path('devices_modbus_sim.yaml')
+            db_path = paths.get_db_path('simulator')
             logger.info("模拟器模式：连接外部 Modbus TCP 模拟器（真实协议）")
         elif '--real' in sys.argv:
             simulation_mode = False
-            config_path = '配置/devices_real.yaml'
-            db_path = 'data/scada_real.db'
+            config_path = paths.get_config_path('devices_real.yaml')
+            db_path = paths.get_db_path('real')
             logger.info("真实设备模式：使用真实设备配置")
         else:
             simulation_mode = True
-            config_path = '配置/devices_simulated.yaml'
-            db_path = 'data/scada_simulated.db'
+            config_path = paths.get_config_path('devices_simulated.yaml')
+            db_path = paths.get_db_path('simulated')
             logger.info("模拟模式：使用模拟设备配置")
 
         # 初始化数据库
         logger.info("初始化数据库...")
-        database = Database(str(project_root / db_path))
+        database = Database(db_path)
 
         # 初始化设备管理器（根据模式选择不同的管理器）
         logger.info("加载设备配置...")
