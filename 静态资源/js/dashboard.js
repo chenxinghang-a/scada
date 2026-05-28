@@ -143,14 +143,7 @@ function initTrendChart() {
     if (!dom) return;
 
     trendChart = echarts.init(dom);
-    trendChart.setOption({
-        tooltip: { trigger: 'axis' },
-        legend: { top: 4, type: 'scroll' },
-        grid: { left: 60, right: 20, top: 40, bottom: 30 },
-        xAxis: { type: 'category', data: [], boundaryGap: false },
-        yAxis: { type: 'value' },
-        series: [],
-    });
+    // 注意：后续 setOption 用 merge 模式，不要用 notMerge
 }
 
 /**
@@ -259,10 +252,13 @@ function updateTrendChart(data) {
     });
 
     trendChart.setOption({
-        legend: { data: series.map(s => s.name) },
-        xAxis: { data: times },
+        tooltip: { trigger: 'axis' },
+        legend: { data: series.map(s => s.name), top: 4, type: 'scroll' },
+        grid: { left: 60, right: 20, top: 40, bottom: 30 },
+        xAxis: { type: 'category', data: times, boundaryGap: false },
+        yAxis: { type: 'value' },
         series: series,
-    }, true);  // true = notMerge，清除旧数据
+    });
 }
 
 /**
