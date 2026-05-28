@@ -37,7 +37,8 @@ def create_app(database, device_manager, alarm_manager, data_collector,
                 template_folder='../模板',
                 static_folder='../静态资源')
 
-    app.config['SECRET_KEY'] = 'industrial-scada-secret-key'
+    from config import FlaskConfig
+    app.config['SECRET_KEY'] = FlaskConfig.SECRET_KEY
 
     # 初始化认证管理器
     auth_manager = AuthManager(database)

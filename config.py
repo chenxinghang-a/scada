@@ -4,6 +4,9 @@
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 项目根目录
 BASE_DIR = Path(__file__).parent
