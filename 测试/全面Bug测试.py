@@ -42,19 +42,22 @@ class BugTester:
         print("【API端点测试】")
         print("="*60)
 
+        # 使用配置文件中存在的设备ID
+        valid_device_id = 'siemens_1500_01'
+
         endpoints = [
             ('GET', '/api/devices'),
-            ('GET', '/api/devices/temp_sensor_01'),
+            ('GET', f'/api/devices/{valid_device_id}'),
             ('GET', '/api/devices/nonexistent_device'),
             ('GET', '/api/data/realtime'),
             ('GET', '/api/data/realtime?limit=10'),
-            ('GET', '/api/data/realtime?device_id=temp_sensor_01'),
-            ('GET', '/api/data/latest/temp_sensor_01'),
+            ('GET', f'/api/data/realtime?device_id={valid_device_id}'),
+            ('GET', f'/api/data/latest/{valid_device_id}'),
             ('GET', '/api/data/latest/nonexistent'),
-            ('GET', '/api/data/history/temp_sensor_01/temperature'),
+            ('GET', f'/api/data/history/{valid_device_id}/boiler_temperature'),
             ('GET', '/api/alarms'),
             ('GET', '/api/alarms?limit=5'),
-            ('GET', '/api/alarms?device_id=temp_sensor_01'),
+            ('GET', f'/api/alarms?device_id={valid_device_id}'),
             ('GET', '/api/alarms?alarm_level=critical'),
             ('GET', '/api/alarms/active'),
             ('GET', '/api/alarms/statistics'),
@@ -74,6 +77,9 @@ class BugTester:
         print("【设备操作测试】")
         print("="*60)
 
+        # 使用配置文件中存在的设备ID
+        valid_device_id = 'siemens_1500_01'
+
         # 获取设备列表
         def test_get_devices():
             r = requests.get(f'{BASE_URL}/api/devices', timeout=5)
@@ -83,7 +89,7 @@ class BugTester:
 
         # 获取单个设备
         def test_get_device():
-            r = requests.get(f'{BASE_URL}/api/devices/temp_sensor_01', timeout=5)
+            r = requests.get(f'{BASE_URL}/api/devices/{valid_device_id}', timeout=5)
             data = r.json()
             return 'device_id' in data
         self.test("获取单个设备", test_get_device)
@@ -96,14 +102,14 @@ class BugTester:
 
         # 断开设备
         def test_disconnect():
-            r = requests.post(f'{BASE_URL}/api/devices/temp_sensor_01/disconnect', timeout=5)
+            r = requests.post(f'{BASE_URL}/api/devices/{valid_device_id}/disconnect', timeout=5)
             data = r.json()
             return data.get('success') == True
         self.test("断开设备", test_disconnect)
 
         # 连接设备
         def test_connect():
-            r = requests.post(f'{BASE_URL}/api/devices/temp_sensor_01/connect', timeout=5)
+            r = requests.post(f'{BASE_URL}/api/devices/{valid_device_id}/connect', timeout=5)
             data = r.json()
             return data.get('success') == True
         self.test("连接设备", test_connect)
@@ -114,6 +120,10 @@ class BugTester:
         print("【数据查询测试】")
         print("="*60)
 
+        # 使用配置文件中存在的设备ID
+        valid_device_id = 'siemens_1500_01'
+        valid_register = 'boiler_temperature'
+
         # 实时数据
         def test_realtime():
             r = requests.get(f'{BASE_URL}/api/data/realtime?limit=10', timeout=5)
@@ -123,14 +133,14 @@ class BugTester:
 
         # 最新数据
         def test_latest():
-            r = requests.get(f'{BASE_URL}/api/data/latest/temp_sensor_01', timeout=5)
+            r = requests.get(f'{BASE_URL}/api/data/latest/{valid_device_id}', timeout=5)
             data = r.json()
-            return 'temperature' in data or 'error' in data
+            return valid_register in data or 'error' in data
         self.test("获取最新数据", test_latest)
 
         # 历史数据
         def test_history():
-            r = requests.get(f'{BASE_URL}/api/data/history/temp_sensor_01/temperature?interval=1min', timeout=5)
+            r = requests.get(f'{BASE_URL}/api/data/history/{valid_device_id}/{valid_register}?interval=1min', timeout=5)
             data = r.json()
             return 'data' in data
         self.test("获取历史数据", test_history)
@@ -139,7 +149,7 @@ class BugTester:
         def test_history_range():
             end = datetime.now().isoformat()
             start = (datetime.now() - timedelta(hours=1)).isoformat()
-            r = requests.get(f'{BASE_URL}/api/data/history/temp_sensor_01/temperature?start_time={start}&end_time={end}', timeout=5)
+            r = requests.get(f'{BASE_URL}/api/data/history/{valid_device_id}/{valid_register}?start_time={start}&end_time={end}', timeout=5)
             data = r.json()
             return 'data' in data
         self.test("带时间范围的历史数据", test_history_range)
@@ -190,12 +200,15 @@ class BugTester:
         print("【导出功能测试】")
         print("="*60)
 
+        # 使用配置文件中存在的设备ID
+        valid_device_id = 'siemens_1500_01'
+
         end = datetime.now().isoformat()
         start = (datetime.now() - timedelta(hours=1)).isoformat()
 
         # 设备数据导出
         def test_device_export():
-            r = requests.post(f'{BASE_URL}/api/export/device/temp_sensor_01', 
+            r = requests.post(f'{BASE_URL}/api/export/device/{valid_device_id}',
                 json={'start_time': start, 'end_time': end, 'format': 'csv'},
                 timeout=10)
             return r.json().get('success') == True
@@ -203,7 +216,7 @@ class BugTester:
 
         # 报警数据导出
         def test_alarm_export():
-            r = requests.post(f'{BASE_URL}/api/export/alarms', 
+            r = requests.post(f'{BASE_URL}/api/export/alarms',
                 json={'format': 'csv'},
                 timeout=10)
             return r.json().get('success') == True
@@ -273,7 +286,7 @@ class BugTester:
 
         # 不存在的寄存器
         def test_nonexistent_register():
-            r = requests.get(f'{BASE_URL}/api/data/history/temp_sensor_01/nonexistent', timeout=5)
+            r = requests.get(f'{BASE_URL}/api/data/history/siemens_1500_01/nonexistent', timeout=5)
             return r.status_code in [200, 404]
         self.test("不存在的寄存器", test_nonexistent_register)
 

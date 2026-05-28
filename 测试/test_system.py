@@ -84,9 +84,9 @@ def test_alarm_manager():
     # 测试报警检查
     from datetime import datetime
     am.check_alarm(
-        device_id='temp_sensor_01',
-        register_name='temperature',
-        value=55.0,  # 超过阈值50
+        device_id='siemens_1500_01',
+        register_name='boiler_temperature',
+        value=200.0,  # 超过阈值180
         timestamp=datetime.now()
     )
 

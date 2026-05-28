@@ -1,0 +1,1526 @@
+工业SCADA系统全代码详细讲解（完整版）
+======================================
+
+本文档为工业数据采集与监控系统（SCADA）的完整代码讲解，涵盖所有核心模块的详细实现。
+
+项目规模：99个Python文件，约30,200行代码，110个类，430个方法/函数。
+
+一、系统架构详解
+----------------
+
+### 1.1 分层架构图
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    用户界面层 (展示层)                        │
+│  Flask Web应用 + RESTful API + WebSocket实时推送            │
+├─────────────────────────────────────────────────────────────┤
+│                    业务逻辑层 (智能层)                        │
+│  OEE计算 + SPC分析 + 预测维护 + 能源管理 + 边缘决策          │
+├─────────────────────────────────────────────────────────────┤
+│                    数据处理层 (存储层)                        │
+│  SQLite数据库 + 数据归档 + 数据导出                          │
+├─────────────────────────────────────────────────────────────┤
+│                    设备通信层 (采集层)                        │
+│  Modbus/OPC UA/MQTT/REST + 模拟设备 + 数据采集器            │
+├─────────────────────────────────────────────────────────────┤
+│                    报警输出层 (报警层)                        │
+│  报警管理 + 声光报警器 + 广播系统                            │
+├─────────────────────────────────────────────────────────────┤
+│                    安全认证层 (用户层)                        │
+│  JWT认证 + 角色权限 + 操作审计                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 数据流向图
+```
+工业设备 → 采集层 → 存储层 → 展示层 → 用户
+    ↓         ↓         ↓         ↓
+  Modbus   数据采集   SQLite    Web界面
+  OPC UA   协议解析   数据归档  API接口
+  MQTT     数据验证   数据导出  WebSocket
+  REST     报警检测   历史查询  实时推送
+```
+
+### 1.3 核心模块交互
+```python
+# 系统启动时的模块初始化顺序（run.py）
+1. Database (存储层) - 数据存储基础
+2. DeviceManager (采集层) - 设备管理核心
+3. AlarmManager (报警层) - 报警系统
+4. DataCollector (采集层) - 数据采集器
+5. 智能层模块 - OEE/SPC/预测维护等
+6. Flask App (展示层) - Web应用
+```
+
+二、采集层详细讲解（5,638行）
+----------------------------
+
+### 2.1 设备行为模拟器（device_behavior_simulator.py - 1,000行）
+
+#### 2.1.1 核心设计思想
+这个文件是模拟设备行为的核心，基于物理模型生成真实的工业数据。
+
+**设计原则：**
+1. **物理关联性**：温度升高→压力升高→流量变化
+2. **状态机模型**：设备有运行/空闲/故障/维护/停机等状态
+3. **故障模拟**：支持传感器漂移、过热、压力泄漏等故障
+4. **班次影响**：白班/夜班对设备参数的影响
+
+#### 2.1.2 关键类详解
+
+**DeviceState枚举类：**
+```python
+class DeviceState(Enum):
+    """设备状态（ISA-95标准）"""
+    STOPPED = 0      # 停机：设备完全停止，不产生数据
+    IDLE = 1         # 空闲/待机：设备通电但未运行
+    RUNNING = 2      # 运行：设备正常工作
+    FAULT = 3        # 故障：设备出现异常
+    MAINTENANCE = 4  # 维护中：设备正在维修
+    SETUP = 5        # 换型/调试：设备正在调整
+```
+这个枚举定义了设备的6种状态，符合ISA-95工业标准。
+
+**ProcessModel数据类：**
+```python
+@dataclass
+class ProcessModel:
+    """过程模型参数"""
+    # 基础参数 - 设备正常运行时的基准值
+    base_temperature: float = 50.0      # 基础温度（摄氏度）
+    base_pressure: float = 0.8          # 基础压力（MPa）
+    base_flow: float = 15.0             # 基础流量（L/min）
+    base_level: float = 60.0            # 基础液位（%）
+    
+    # 关联系数 - 参数之间的物理关系
+    temp_pressure_coeff: float = 0.005  # 温度对压力的影响系数
+    temp_flow_coeff: float = 0.02       # 温度对流量的影响系数
+    pressure_flow_coeff: float = 0.1    # 压力对流量的影响系数
+    
+    # 时间常数 - 模拟物理系统的惯性
+    thermal_time_constant: float = 120.0    # 热惯性时间常数（秒）
+    pressure_time_constant: float = 30.0    # 压力响应时间常数
+    flow_time_constant: float = 15.0        # 流量响应时间常数
+```
+这个类定义了设备的物理参数和它们之间的关系。例如，温度升高0.005倍会导致压力升高1倍。
+
+**DeviceBehaviorSimulator核心类：**
+```python
+class DeviceBehaviorSimulator:
+    """
+    设备行为模拟器
+    
+    模拟真实工业设备的行为，包括：
+    1. 物理参数关联 - 温度→压力→流量的连锁反应
+    2. 状态转换 - 设备状态的自动切换
+    3. 故障注入 - 模拟各种故障场景
+    4. 班次影响 - 白班/夜班对设备的影响
+    5. 写操作反馈 - 写入操作会影响读取值
+    6. 设备特定输出 - 只生成该设备有的参数
+    """
+    
+    def __init__(self, device_id: str, device_config: Dict[str, Any]):
+        """
+        初始化设备行为模拟器
+        
+        Args:
+            device_id: 设备唯一标识
+            device_config: 设备配置字典，包含寄存器定义等
+        """
+        self.device_id = device_id
+        self.device_config = device_config
+        
+        # 设备状态
+        self.state = DeviceState.IDLE
+        self.state_start_time = datetime.now()
+        
+        # 物理模型参数
+        self.process_model = ProcessModel()
+        
+        # 当前物理参数值
+        self.current_temperature = self.process_model.base_temperature
+        self.current_pressure = self.process_model.base_pressure
+        self.current_flow = self.process_model.base_flow
+        self.current_level = self.process_model.base_level
+        
+        # 设备健康状态
+        self.health = DeviceHealth()
+        
+        # 故障注入参数
+        self.fault_type = FaultType.NONE
+        self.fault_intensity = 0.0
+        self.fault_start_time = None
+        
+        # 班次影响
+        self.shift_factor = 1.0  # 白班1.0，夜班0.95
+        
+        # 历史数据缓存（用于趋势分析）
+        self.history_buffer = deque(maxlen=1000)
+        
+        # 线程锁（保证线程安全）
+        self._lock = threading.Lock()
+        
+        logger.info(f"设备 {device_id} 行为模拟器初始化完成")
+```
+
+#### 2.1.3 核心算法详解
+
+**物理参数更新算法：**
+```python
+def _update_physical_parameters(self, dt: float):
+    """
+    更新物理参数（基于物理模型）
+    
+    这个方法实现了物理参数的动态更新，考虑了：
+    1. 参数之间的关联性
+    2. 时间常数（惯性）
+    3. 随机噪声
+    4. 故障影响
+    
+    Args:
+        dt: 时间间隔（秒）
+    """
+    with self._lock:
+        # 1. 计算目标值（基于当前状态和班次影响）
+        target_temp = self.process_model.base_temperature * self.shift_factor
+        target_pressure = self.process_model.base_pressure * self.shift_factor
+        target_flow = self.process_model.base_flow * self.shift_factor
+        
+        # 2. 添加随机扰动（模拟真实环境）
+        temp_noise = random.gauss(0, 0.5)
+        pressure_noise = random.gauss(0, 0.02)
+        flow_noise = random.gauss(0, 0.3)
+        
+        # 3. 应用物理关联（温度→压力→流量）
+        # 温度变化影响压力
+        temp_effect_on_pressure = (self.current_temperature - target_temp) * \
+                                  self.process_model.temp_pressure_coeff
+        target_pressure += temp_effect_on_pressure
+        
+        # 温度变化影响流量
+        temp_effect_on_flow = (self.current_temperature - target_temp) * \
+                              self.process_model.temp_flow_coeff
+        target_flow += temp_effect_on_flow
+        
+        # 压力变化影响流量
+        pressure_effect_on_flow = (self.current_pressure - target_pressure) * \
+                                  self.process_model.pressure_flow_coeff
+        target_flow += pressure_effect_on_flow
+        
+        # 4. 应用时间常数（一阶惯性环节）
+        # 公式: current = current + (target - current) * (1 - exp(-dt/tau))
+        alpha_temp = 1 - math.exp(-dt / self.process_model.thermal_time_constant)
+        alpha_pressure = 1 - math.exp(-dt / self.process_model.pressure_time_constant)
+        alpha_flow = 1 - math.exp(-dt / self.process_model.flow_time_constant)
+        
+        self.current_temperature += (target_temp - self.current_temperature) * alpha_temp + temp_noise
+        self.current_pressure += (target_pressure - self.current_pressure) * alpha_pressure + pressure_noise
+        self.current_flow += (target_flow - self.current_flow) * alpha_flow + flow_noise
+        
+        # 5. 应用故障影响
+        if self.fault_type != FaultType.NONE:
+            self._apply_fault_effect()
+        
+        # 6. 限制参数范围（防止异常值）
+        self.current_temperature = max(0, min(200, self.current_temperature))
+        self.current_pressure = max(0, min(2, self.current_pressure))
+        self.current_flow = max(0, min(50, self.current_flow))
+        self.current_level = max(0, min(100, self.current_level))
+```
+
+**状态转换算法：**
+```python
+def _update_state(self, dt: float):
+    """
+    更新设备状态（基于状态机模型）
+    
+    状态转换规则：
+    1. IDLE → RUNNING: 自动或手动启动
+    2. RUNNING → FAULT: 故障概率触发
+    3. FAULT → MAINTENANCE: 故障严重时进入维护
+    4. MAINTENANCE → IDLE: 维护完成
+    5. 任何状态 → STOPPED: 手动停止
+    
+    Args:
+        dt: 时间间隔（秒）
+    """
+    with self._lock:
+        current_time = datetime.now()
+        state_duration = (current_time - self.state_start_time).total_seconds()
+        
+        # 根据当前状态处理逻辑
+        if self.state == DeviceState.IDLE:
+            # 空闲状态：有一定概率自动启动
+            if random.random() < 0.01:  # 1%概率启动
+                self._transition_to(DeviceState.RUNNING)
+                
+        elif self.state == DeviceState.RUNNING:
+            # 运行状态：检查故障概率
+            fault_probability = self._calculate_fault_probability()
+            if random.random() < fault_probability:
+                self._trigger_fault()
+                
+            # 更新运行时间和循环次数
+            self.health.operating_hours += dt / 3600
+            self.health.cycle_count += 1
+            
+        elif self.state == DeviceState.FAULT:
+            # 故障状态：检查是否需要维护
+            if self.fault_intensity > 0.7:  # 故障强度>70%需要维护
+                self._transition_to(DeviceState.MAINTENANCE)
+            elif state_duration > 300:  # 故障超过5分钟自动恢复
+                self._transition_to(DeviceState.IDLE)
+                
+        elif self.state == DeviceState.MAINTENANCE:
+            # 维护状态：维护完成后恢复
+            if state_duration > 600:  # 维护10分钟
+                self.health.overall_score = 100.0
+                self._transition_to(DeviceState.IDLE)
+```
+
+### 2.2 模拟客户端（simulated_client.py - 947行）
+
+#### 2.2.1 核心设计思想
+这个文件实现了配置驱动的模拟客户端，核心思想是"不硬编码任何设备ID"。
+
+**设计原则：**
+1. **配置驱动**：从YAML配置文件读取设备信息
+2. **自动推断**：根据寄存器名称和单位自动推断数据范围
+3. **协议统一**：支持Modbus、OPC UA、MQTT、REST四种协议
+4. **紧急停机**：支持E-STOP和单设备停止
+
+#### 2.2.2 关键代码段详解
+
+**紧急停机机制：**
+```python
+# 全局变量：紧急停机状态
+_ESTOP_ACTIVE = False  # 是否激活紧急停机
+_ESTOP_FROZEN_VALUES: dict[str, float] = {}  # 冻结的值
+
+# 设备级停止（个体停机，区别于全局E-STOP）
+_DEVICE_STOPPED: set[str] = set()  # 被停止的设备ID集合
+
+def set_device_stopped(device_id: str, stopped: bool):
+    """设置单个设备停止/启动状态"""
+    if stopped:
+        _DEVICE_STOPPED.add(device_id)  # 添加到停止集合
+    else:
+        _DEVICE_STOPPED.discard(device_id)  # 从集合中移除
+
+def is_device_stopped(device_id: str) -> bool:
+    """检查设备是否被单独停止"""
+    return device_id in _DEVICE_STOPPED
+
+def _is_machinery(name: str) -> bool:
+    """判断寄存器名称是否属于机械类"""
+    name_lower = name.lower()
+    for kw in _MACHINERY_KEYWORDS:
+        if kw in name_lower:
+            return True
+    return False
+
+def set_estop_state(active: bool):
+    """设置紧急停机状态（由device_manager触发）"""
+    global _ESTOP_ACTIVE
+    _ESTOP_ACTIVE = active
+    if not active:
+        _ESTOP_FROZEN_VALUES.clear()  # 解除时清除冻结值
+    logger.info(f"[模拟] E-STOP 状态: {'激活' if active else '已解除'}")
+
+def _estop_override(name: str, value: float) -> float:
+    """E-STOP激活时，机械类寄存器值归零"""
+    if _ESTOP_ACTIVE and _is_machinery(name):
+        _ESTOP_FROZEN_VALUES[name] = 0.0
+        return 0.0
+    return value
+```
+
+**寄存器规则映射：**
+```python
+# 关键字→数据范围映射表
+_REGISTER_RULES = [
+    # 电气参数
+    {'kw': 'voltage', 'unit_kw': 'V', 'base': 220, 'amp': 15, 'period': 120, 'noise': 2.0, 'shape': 'sine'},
+    {'kw': 'current', 'unit_kw': 'A', 'base': 30, 'amp': 15, 'period': 60, 'noise': 1.0, 'shape': 'sine'},
+    {'kw': 'active_power', 'unit_kw': 'kW', 'base': 50, 'amp': 30, 'period': 45, 'noise': 2.0, 'shape': 'sine'},
+    
+    # 温度参数
+    {'kw': 'temperature', 'unit_kw': '°C', 'base': 50, 'amp': 20, 'period': 180, 'noise': 1.5, 'shape': 'sine'},
+    {'kw': 'temp', 'unit_kw': '°C', 'base': 50, 'amp': 20, 'period': 180, 'noise': 1.5, 'shape': 'sine'},
+    
+    # 压力参数
+    {'kw': 'pressure', 'unit_kw': 'MPa', 'base': 0.8, 'amp': 0.3, 'period': 90, 'noise': 0.05, 'shape': 'sine'},
+    
+    # 流量参数
+    {'kw': 'flow', 'unit_kw': 'L/min', 'base': 15, 'amp': 5, 'period': 60, 'noise': 0.5, 'shape': 'sine'},
+    {'kw': 'flow_rate', 'unit_kw': 'm³/h', 'base': 2.5, 'amp': 1.0, 'period': 60, 'noise': 0.1, 'shape': 'sine'},
+    
+    # 液位参数
+    {'kw': 'level', 'unit_kw': '%', 'base': 60, 'amp': 20, 'period': 300, 'noise': 1.0, 'shape': 'sine'},
+    
+    # 振动参数
+    {'kw': 'vibration', 'unit_kw': 'mm/s', 'base': 2.5, 'amp': 1.5, 'period': 30, 'noise': 0.3, 'shape': 'sine'},
+]
+```
+
+**数据生成算法：**
+```python
+def _generate_value(self, register_name: str, register_config: dict) -> float:
+    """
+    根据寄存器配置生成模拟值
+    
+    算法步骤：
+    1. 根据寄存器名称和单位查找匹配的规则
+    2. 根据规则生成基础值（正弦波+噪声）
+    3. 应用紧急停机覆盖（如果是机械类）
+    4. 应用设备停止覆盖
+    5. 限制值范围
+    
+    Args:
+        register_name: 寄存器名称
+        register_config: 寄存器配置
+        
+    Returns:
+        float: 生成的模拟值
+    """
+    # 1. 查找匹配的规则
+    rule = self._find_matching_rule(register_name, register_config)
+    
+    if rule:
+        # 2. 根据规则生成值
+        t = time.time()
+        
+        # 基础值 = 基准值 + 振幅 * sin(2π * t / 周期)
+        base_value = rule['base'] + rule['amp'] * math.sin(2 * math.pi * t / rule['period'])
+        
+        # 添加噪声
+        noise = random.gauss(0, rule['noise'])
+        value = base_value + noise
+        
+    else:
+        # 没有匹配规则，使用默认生成
+        value = self._generate_default_value(register_config)
+    
+    # 3. 应用紧急停机覆盖
+    value = _estop_override(register_name, value)
+    
+    # 4. 应用设备停止覆盖
+    if is_device_stopped(self.device_id):
+        if _is_machinery(register_name):
+            value = 0.0  # 机械类寄存器归零
+        # 仪表类寄存器保持原值
+    
+    # 5. 限制值范围
+    if 'min' in register_config and 'max' in register_config:
+        value = max(register_config['min'], min(register_config['max'], value))
+    
+    return round(value, 2)
+```
+
+### 2.3 数据采集器（data_collector.py - 455行）
+
+#### 2.3.1 核心设计思想
+数据采集器是系统的"心脏"，负责定期从设备读取数据并存储。
+
+**设计原则：**
+1. **多协议支持**：统一接口处理不同协议的设备
+2. **定时采集**：支持不同设备的不同采集频率
+3. **智能层注入**：将采集到的数据传递给智能分析模块
+4. **错误处理**：设备离线时自动重试和记录
+
+#### 2.3.2 关键代码段详解
+
+**采集器初始化：**
+```python
+class DataCollector:
+    """
+    统一定时数据采集器
+    
+    职责：
+    1. 定期轮询所有设备
+    2. 读取设备寄存器数据
+    3. 存储到数据库
+    4. 触发报警检查
+    5. 传递数据给智能层模块
+    """
+    
+    def __init__(self, device_manager, database, alarm_manager, **kwargs):
+        """
+        初始化数据采集器
+        
+        Args:
+            device_manager: 设备管理器
+            database: 数据库实例
+            alarm_manager: 报警管理器
+            **kwargs: 智能层模块（可选）
+        """
+        self.device_manager = device_manager
+        self.database = database
+        self.alarm_manager = alarm_manager
+        
+        # 智能层模块（可选注入）
+        self.predictive_maintenance = kwargs.get('predictive_maintenance')
+        self.oee_calculator = kwargs.get('oee_calculator')
+        self.spc_analyzer = kwargs.get('spc_analyzer')
+        self.energy_manager = kwargs.get('energy_manager')
+        self.edge_decision = kwargs.get('edge_decision')
+        self.device_control = kwargs.get('device_control')
+        self.realtime_bridge = kwargs.get('realtime_bridge')
+        
+        # 采集任务管理
+        self._tasks: dict[str, threading.Timer] = {}
+        self._running = False
+        self._lock = threading.Lock()
+        
+        # 数据缓存
+        self._data_cache: dict[str, dict] = {}
+        
+        logger.info("数据采集器初始化完成")
+```
+
+**采集循环：**
+```python
+def _collect_loop(self, device_id: str, device_config: dict):
+    """
+    单个设备的采集循环
+    
+    这个方法实现了单个设备的定时采集逻辑：
+    1. 检查设备是否在线
+    2. 读取所有寄存器数据
+    3. 存储到数据库
+    4. 触发报警检查
+    5. 传递给智能层
+    6. 安排下次采集
+    
+    Args:
+        device_id: 设备ID
+        device_config: 设备配置
+    """
+    try:
+        # 1. 检查设备是否在线
+        client = self.device_manager.get_client(device_id)
+        if not client or not client.connected:
+            logger.warning(f"设备 {device_id} 离线，跳过本次采集")
+            self._schedule_next(device_id, device_config)
+            return
+        
+        # 2. 读取所有寄存器数据
+        registers = device_config.get('registers', [])
+        collected_data = {}
+        
+        for register in registers:
+            try:
+                # 读取寄存器值
+                value = client.read_register(register['address'])
+                
+                # 数据验证
+                if value is not None and not math.isnan(value):
+                    collected_data[register['name']] = {
+                        'value': value,
+                        'unit': register.get('unit', ''),
+                        'timestamp': datetime.now()
+                    }
+                    
+                    # 3. 存储到数据库
+                    self.database.insert_data(
+                        device_id=device_id,
+                        register_name=register['name'],
+                        value=value,
+                        timestamp=datetime.now(),
+                        unit=register.get('unit', '')
+                    )
+                    
+                    # 4. 触发报警检查
+                    self.alarm_manager.check_alarm(
+                        device_id=device_id,
+                        register_name=register['name'],
+                        value=value
+                    )
+                    
+            except Exception as e:
+                logger.error(f"读取设备 {device_id} 寄存器 {register['name']} 失败: {e}")
+        
+        # 5. 更新数据缓存
+        self._data_cache[device_id] = collected_data
+        
+        # 6. 传递给智能层模块
+        self._feed_intelligent_modules(device_id, collected_data)
+        
+        # 7. 安排下次采集
+        self._schedule_next(device_id, device_config)
+        
+    except Exception as e:
+        logger.error(f"设备 {device_id} 采集失败: {e}")
+        self._schedule_next(device_id, device_config)
+```
+
+**智能层数据注入：**
+```python
+def _feed_intelligent_modules(self, device_id: str, data: dict):
+    """
+    将采集到的数据传递给智能层模块
+    
+    这个方法实现了数据采集器与智能层模块的集成：
+    1. 预测性维护 - 分析设备健康趋势
+    2. OEE计算 - 计算设备综合效率
+    3. SPC分析 - 统计过程控制
+    4. 能源管理 - 监控能源消耗
+    5. 边缘决策 - 实时决策引擎
+    
+    Args:
+        device_id: 设备ID
+        data: 采集到的数据字典
+    """
+    try:
+        # 预测性维护
+        if self.predictive_maintenance:
+            self.predictive_maintenance.analyze_data(device_id, data)
+        
+        # OEE计算
+        if self.oee_calculator:
+            self.oee_calculator.record_production(device_id, data)
+        
+        # SPC分析
+        if self.spc_analyzer:
+            for register_name, register_data in data.items():
+                self.spc_analyzer.record_measurement(
+                    device_id=device_id,
+                    register_name=register_name,
+                    value=register_data['value']
+                )
+        
+        # 能源管理
+        if self.energy_manager:
+            self.energy_manager.record_consumption(device_id, data)
+        
+        # 边缘决策
+        if self.edge_decision:
+            self.edge_decision.evaluate_rules(device_id, data)
+        
+        # 实时数据桥接（TDengine）
+        if self.realtime_bridge:
+            self.realtime_bridge.push_data(device_id, data)
+            
+    except Exception as e:
+        logger.error(f"智能层数据注入失败: {e}")
+```
+
+三、存储层详细讲解（1,531行）
+----------------------------
+
+### 3.1 数据库模块（database.py - 710行）
+
+#### 3.1.1 核心设计思想
+数据库模块是系统的"记忆"，负责存储所有采集到的数据。
+
+**设计原则：**
+1. **WAL模式**：提升并发性能
+2. **UPSERT操作**：实时数据表使用INSERT OR REPLACE
+3. **索引优化**：为常用查询创建索引
+4. **上下文管理**：使用contextmanager管理连接
+
+#### 3.1.2 关键代码段详解
+
+**数据库连接管理：**
+```python
+@contextmanager
+def get_connection(self):
+    """
+    获取数据库连接（上下文管理器）
+    
+    使用WAL模式提升并发性能，设置超时避免死锁
+    
+    WAL模式特点：
+    1. 允许多个读连接和一个写连接并发
+    2. 写操作不会阻塞读操作
+    3. 提升并发性能
+    
+    Yields:
+        sqlite3.Connection: 数据库连接
+    """
+    # 创建连接，设置30秒超时
+    conn = sqlite3.connect(self.db_path, timeout=30)
+    
+    # 设置行工厂，返回字典形式的结果
+    conn.row_factory = sqlite3.Row
+    
+    # 启用WAL模式（Write-Ahead Logging）
+    conn.execute('PRAGMA journal_mode=WAL')
+    
+    # 设置忙等待超时30秒
+    conn.execute('PRAGMA busy_timeout=30000')
+    
+    try:
+        yield conn
+        conn.commit()  # 提交事务
+    except Exception as e:
+        conn.rollback()  # 回滚事务
+        raise e
+    finally:
+        conn.close()  # 关闭连接
+```
+
+**数据插入方法：**
+```python
+def insert_data(self, device_id: str, register_name: str, 
+                value: float, timestamp: datetime, unit: str = ''):
+    """
+    插入数据到实时表和历史表
+    
+    实时表使用UPSERT操作（INSERT OR REPLACE）：
+    - 如果记录存在，更新值
+    - 如果记录不存在，插入新记录
+    - 保证每个设备+寄存器只有一条记录
+    
+    历史表使用INSERT操作：
+    - 每次采集都插入新记录
+    - 保留完整的历史数据
+    
+    Args:
+        device_id: 设备ID
+        register_name: 寄存器名称
+        value: 数据值
+        timestamp: 时间戳
+        unit: 单位
+    """
+    with self.get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # 插入实时数据（UPSERT）
+        cursor.execute('''
+            INSERT OR REPLACE INTO realtime_data 
+            (device_id, register_name, value, unit, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (device_id, register_name, value, unit, timestamp))
+        
+        # 插入历史数据（INSERT）
+        cursor.execute('''
+            INSERT INTO history_data 
+            (device_id, register_name, value, unit, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (device_id, register_name, value, unit, timestamp))
+```
+
+**历史数据查询：**
+```python
+def query_history(self, device_id: str, register_name: str,
+                  start_time: datetime, end_time: datetime,
+                  interval: str = '1min') -> list:
+    """
+    查询历史数据（支持时间聚合）
+    
+    支持的时间间隔：
+    - '1min': 1分钟聚合
+    - '5min': 5分钟聚合
+    - '1hour': 1小时聚合
+    - '1day': 1天聚合
+    
+    Args:
+        device_id: 设备ID
+        register_name: 寄存器名称
+        start_time: 开始时间
+        end_time: 结束时间
+        interval: 聚合间隔
+        
+    Returns:
+        list: 查询结果列表
+    """
+    # 根据间隔选择不同的SQL
+    if interval == '1min':
+        group_by = "strftime('%Y-%m-%d %H:%M', timestamp)"
+    elif interval == '5min':
+        group_by = "strftime('%Y-%m-%d %H:', timestamp) || (CAST(strftime('%M', timestamp) AS INTEGER) / 5) * 5"
+    elif interval == '1hour':
+        group_by = "strftime('%Y-%m-%d %H', timestamp)"
+    elif interval == '1day':
+        group_by = "strftime('%Y-%m-%d', timestamp)"
+    else:
+        group_by = "strftime('%Y-%m-%d %H:%M', timestamp)"
+    
+    query = f'''
+        SELECT 
+            {group_by} as time_bucket,
+            AVG(value) as avg_value,
+            MIN(value) as min_value,
+            MAX(value) as max_value,
+            COUNT(*) as sample_count
+        FROM history_data
+        WHERE device_id = ? 
+          AND register_name = ?
+          AND timestamp BETWEEN ? AND ?
+        GROUP BY time_bucket
+        ORDER BY time_bucket
+    '''
+    
+    with self.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, (device_id, register_name, start_time, end_time))
+        return cursor.fetchall()
+```
+
+四、智能层详细讲解（4,183行）
+----------------------------
+
+### 4.1 设备控制与安全联锁（device_control.py - 1,000行）
+
+#### 4.1.1 核心设计思想
+设备控制模块是工业安全的核心，实现了安全联锁、紧急停机、操作审计等功能。
+
+**设计原则：**
+1. **安全优先**：硬件级安全联锁，软件级安全校验
+2. **故障降级**：通信断开时自动进入安全状态
+3. **操作互斥**：防止多用户同时操作同一设备
+4. **完整审计**：所有操作都有完整记录
+
+#### 4.1.2 关键代码段详解
+
+**安全等级定义：**
+```python
+class SafetyLevel:
+    """安全等级"""
+    SAFE = 'safe'           # 安全状态：设备正常运行
+    WARNING = 'warning'     # 警告：可继续运行，需要关注
+    CRITICAL = 'critical'   # 严重：需要停机检查
+    EMERGENCY = 'emergency' # 紧急：立即停机，最高优先级
+```
+
+**安全联锁规则加载：**
+```python
+def _load_preset_interlocks(self):
+    """加载预置安全联锁规则（工厂标准配置）"""
+    preset_rules = [
+        {
+            'id': 'high_temp_shutdown',
+            'name': '高温停机保护',
+            'description': '温度超过上限时自动停机',
+            'device_id': '*',  # 适用于所有设备
+            'register': 'temperature',
+            'condition': 'greater_than',
+            'threshold': 150.0,
+            'action': 'shutdown',
+            'priority': 1,
+            'enabled': True
+        },
+        {
+            'id': 'low_pressure_alarm',
+            'name': '低压报警',
+            'description': '压力低于下限时发出警告',
+            'device_id': '*',
+            'register': 'pressure',
+            'condition': 'less_than',
+            'threshold': 0.2,
+            'action': 'alarm',
+            'priority': 2,
+            'enabled': True
+        },
+        {
+            'id': 'high_vibration_warning',
+            'name': '高振动警告',
+            'description': '振动超过限时发出警告',
+            'device_id': '*',
+            'register': 'vibration',
+            'condition': 'greater_than',
+            'threshold': 5.0,
+            'action': 'warning',
+            'priority': 3,
+            'enabled': True
+        }
+    ]
+    
+    for rule in preset_rules:
+        self._interlock_rules[rule['id']] = rule
+        self._interlock_states[rule['id']] = False  # 初始状态：未触发
+    
+    logger.info(f"加载了 {len(preset_rules)} 个预置安全联锁规则")
+```
+
+**安全联锁检查：**
+```python
+def check_interlocks(self, device_id: str, register_name: str, value: float) -> dict:
+    """
+    检查安全联锁规则
+    
+    这个方法实现了安全联锁的核心逻辑：
+    1. 遍历所有联锁规则
+    2. 检查是否匹配当前设备和寄存器
+    3. 评估条件是否满足
+    4. 执行相应动作
+    
+    Args:
+        device_id: 设备ID
+        register_name: 寄存器名称
+        value: 当前值
+        
+    Returns:
+        dict: 检查结果，包含触发的规则和动作
+    """
+    results = {
+        'triggered': False,
+        'rules': [],
+        'actions': []
+    }
+    
+    with self._lock:
+        for rule_id, rule in self._interlock_rules.items():
+            # 检查规则是否启用
+            if not rule.get('enabled', True):
+                continue
+            
+            # 检查是否被旁路
+            if rule_id in self._interlock_bypass:
+                continue
+            
+            # 检查设备匹配
+            if rule['device_id'] != '*' and rule['device_id'] != device_id:
+                continue
+            
+            # 检查寄存器匹配
+            if rule['register'] != register_name:
+                continue
+            
+            # 评估条件
+            condition_met = False
+            if rule['condition'] == 'greater_than':
+                condition_met = value > rule['threshold']
+            elif rule['condition'] == 'less_than':
+                condition_met = value < rule['threshold']
+            elif rule['condition'] == 'equal':
+                condition_met = abs(value - rule['threshold']) < 0.001
+            
+            # 更新联锁状态
+            if condition_met and not self._interlock_states[rule_id]:
+                # 新触发
+                self._interlock_states[rule_id] = True
+                results['triggered'] = True
+                results['rules'].append(rule)
+                
+                # 执行动作
+                action_result = self._execute_interlock_action(rule, device_id, value)
+                results['actions'].append(action_result)
+                
+                # 记录审计日志
+                self._record_audit(
+                    action='interlock_triggered',
+                    device_id=device_id,
+                    detail=f"联锁规则 {rule_id} 触发，值: {value}"
+                )
+                
+            elif not condition_met and self._interlock_states[rule_id]:
+                # 恢复
+                self._interlock_states[rule_id] = False
+    
+    return results
+```
+
+**紧急停机实现：**
+```python
+def trigger_emergency_stop(self, reason: str = '手动触发') -> dict:
+    """
+    触发紧急停机
+    
+    紧急停机是最高优先级的操作：
+    1. 设置全局紧急停机标志
+    2. 停止所有机械类设备
+    3. 触发声光报警
+    4. 记录操作日志
+    
+    Args:
+        reason: 停机原因
+        
+    Returns:
+        dict: 操作结果
+    """
+    with self._lock:
+        # 1. 设置紧急停机状态
+        self._estop_active = True
+        self._estop_time = datetime.now()
+        self._estop_reason = reason
+        
+        # 2. 获取需要停机的设备列表
+        self._estop_devices = []
+        for device_id, device_config in self.device_manager.get_all_devices().items():
+            if device_config.get('device_category') == 'mechanical':
+                self._estop_devices.append(device_id)
+        
+        # 3. 停止所有机械类设备
+        stopped_devices = []
+        for device_id in self._estop_devices:
+            try:
+                # 发送停止命令
+                client = self.device_manager.get_client(device_id)
+                if client:
+                    client.write_register(100, 0)  # 写入0表示停止
+                
+                # 更新设备状态
+                self.device_manager.set_device_stopped(device_id, True)
+                stopped_devices.append(device_id)
+                
+            except Exception as e:
+                logger.error(f"紧急停机设备 {device_id} 失败: {e}")
+        
+        # 4. 触发声光报警
+        if self.alarm_manager:
+            self.alarm_manager.trigger_estop_alarm()
+        
+        # 5. 记录审计日志
+        self._record_audit(
+            action='emergency_stop',
+            device_id='all',
+            detail=f"紧急停机: {reason}, 影响设备: {stopped_devices}"
+        )
+        
+        logger.critical(f"紧急停机已触发: {reason}")
+        
+        return {
+            'success': True,
+            'message': '紧急停机已触发',
+            'stopped_devices': stopped_devices,
+            'reason': reason
+        }
+```
+
+五、报警层详细讲解（3,544行）
+----------------------------
+
+### 5.1 报警管理器（alarm_manager.py - 704行）
+
+#### 5.1.1 核心设计思想
+报警管理器是系统的"哨兵"，负责监控数据异常并触发报警。
+
+**设计原则：**
+1. **去重机制**：避免重复报警
+2. **升级机制**：报警持续未处理会自动升级
+3. **确认机制**：支持人工确认报警
+4. **多通道输出**：声光报警器、广播、WebSocket
+
+#### 5.1.2 关键代码段详解
+
+**报警检查逻辑：**
+```python
+def check_alarm(self, device_id: str, register_name: str, value: float):
+    """
+    检查是否触发报警
+    
+    报警检查流程：
+    1. 获取设备的报警规则
+    2. 检查值是否超过阈值
+    3. 检查是否重复报警（去重）
+    4. 创建报警记录
+    5. 触发报警输出
+    
+    Args:
+        device_id: 设备ID
+        register_name: 寄存器名称
+        value: 当前值
+    """
+    # 1. 获取报警规则
+    rules = self._get_alarm_rules(device_id, register_name)
+    
+    for rule in rules:
+        # 2. 检查阈值
+        alarm_triggered = False
+        alarm_level = 'info'
+        alarm_message = ''
+        
+        if 'threshold_high' in rule and value > rule['threshold_high']:
+            alarm_triggered = True
+            alarm_level = rule.get('level', 'warning')
+            alarm_message = f"值 {value:.2f} 超过上限 {rule['threshold_high']:.2f}"
+            
+        elif 'threshold_low' in rule and value < rule['threshold_low']:
+            alarm_triggered = True
+            alarm_level = rule.get('level', 'warning')
+            alarm_message = f"值 {value:.2f} 低于下限 {rule['threshold_low']:.2f}"
+        
+        if alarm_triggered:
+            # 3. 去重检查
+            alarm_key = f"{device_id}:{register_name}:{alarm_level}"
+            if alarm_key in self._active_alarms:
+                # 检查是否超过去重时间窗口
+                last_alarm = self._active_alarms[alarm_key]
+                if (datetime.now() - last_alarm['timestamp']).total_seconds() < self._dedup_window:
+                    continue  # 跳过重复报警
+            
+            # 4. 创建报警记录
+            alarm_id = f"alarm_{int(datetime.now().timestamp())}_{random.randint(1000, 9999)}"
+            alarm_record = {
+                'alarm_id': alarm_id,
+                'device_id': device_id,
+                'register_name': register_name,
+                'alarm_level': alarm_level,
+                'alarm_message': alarm_message,
+                'threshold': rule.get('threshold_high', rule.get('threshold_low')),
+                'actual_value': value,
+                'timestamp': datetime.now(),
+                'acknowledged': False
+            }
+            
+            # 5. 存储到数据库
+            self.database.insert_alarm(alarm_record)
+            
+            # 6. 更新活跃报警
+            self._active_alarms[alarm_key] = alarm_record
+            
+            # 7. 触发报警输出
+            self._trigger_alarm_output(alarm_record)
+            
+            logger.warning(f"报警触发: {alarm_message}")
+```
+
+**报警输出控制：**
+```python
+def _trigger_alarm_output(self, alarm_record: dict):
+    """
+    触发报警输出
+    
+    报警输出通道：
+    1. 声光报警器 - 控制灯塔和蜂鸣器
+    2. 广播系统 - 语音播报报警信息
+    3. WebSocket - 推送到前端界面
+    
+    Args:
+        alarm_record: 报警记录
+    """
+    alarm_level = alarm_record['alarm_level']
+    
+    # 1. 声光报警器
+    if self.alarm_output:
+        if alarm_level == 'critical':
+            # 严重报警：红灯闪烁 + 蜂鸣器
+            self.alarm_output.set_pattern('red_flash')
+            self.alarm_output.set_buzzer(True)
+        elif alarm_level == 'warning':
+            # 警告：黄灯常亮
+            self.alarm_output.set_pattern('yellow_steady')
+            self.alarm_output.set_buzzer(False)
+        else:
+            # 信息：绿灯
+            self.alarm_output.set_pattern('green_steady')
+            self.alarm_output.set_buzzer(False)
+    
+    # 2. 广播系统
+    if self.broadcast_system:
+        area = self._get_device_area(alarm_record['device_id'])
+        message = alarm_record['alarm_message']
+        
+        if alarm_level == 'critical':
+            template = self.broadcast_system.get_template('alarm_critical')
+            broadcast_message = template.format(area=area, message=message)
+            self.broadcast_system.broadcast(broadcast_message, area=area)
+    
+    # 3. WebSocket推送
+    if self._websocket_emit:
+        self._websocket_emit('alarm', alarm_record)
+```
+
+六、展示层详细讲解（2,960行）
+----------------------------
+
+### 6.1 设备管理API（api_devices.py - 759行）
+
+#### 6.1.1 核心设计思想
+设备管理API提供了设备的增删改查功能，是前端与后端交互的主要接口。
+
+**设计原则：**
+1. **RESTful设计**：符合REST架构风格
+2. **参数验证**：严格验证输入参数
+3. **错误处理**：统一的错误响应格式
+4. **操作日志**：记录所有设备操作
+
+#### 6.1.2 关键代码段详解
+
+**设备添加API：**
+```python
+@bp.route('/devices', methods=['POST'])
+@login_required
+def add_device():
+    """
+    添加新设备
+    
+    请求体格式：
+    {
+        "id": "device_001",
+        "name": "设备名称",
+        "protocol": "modbus_tcp",
+        "host": "192.168.1.100",
+        "port": 502,
+        "device_category": "mechanical",
+        "registers": [...]
+    }
+    
+    Returns:
+        JSON: 添加结果
+    """
+    try:
+        # 1. 获取请求数据
+        data = request.get_json()
+        
+        # 2. 参数验证
+        required_fields = ['id', 'name', 'protocol', 'host', 'port']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    'success': False,
+                    'message': f'缺少必填字段: {field}'
+                }), 400
+        
+        # 3. 检查设备ID是否已存在
+        if data['id'] in device_manager.get_all_devices():
+            return jsonify({
+                'success': False,
+                'message': f'设备ID已存在: {data["id"]}'
+            }), 409
+        
+        # 4. 构建设备配置
+        device_config = _build_device_config(data)
+        
+        # 5. 添加到设备管理器
+        result = device_manager.add_device(data['id'], device_config)
+        
+        if result['success']:
+            # 6. 启动数据采集
+            data_collector.start_device_task(data['id'], device_config)
+            
+            # 7. 记录操作日志
+            database.insert_operation_log(
+                username=g.user['username'],
+                action='add_device',
+                target=data['id'],
+                detail=f"添加设备: {data['name']}"
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': '设备添加成功',
+                'device_id': data['id']
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': result['message']
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"添加设备失败: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'添加设备失败: {str(e)}'
+        }), 500
+```
+
+**设备停止API：**
+```python
+@bp.route('/devices/<device_id>/stop', methods=['POST'])
+@login_required
+def stop_device(device_id):
+    """
+    停止设备
+    
+    只有机械类设备可以停止，仪表和安全设备不能停止。
+    
+    Args:
+        device_id: 设备ID
+        
+    Returns:
+        JSON: 操作结果
+    """
+    try:
+        # 1. 检查设备是否存在
+        device_config = device_manager.get_all_devices().get(device_id)
+        if not device_config:
+            return jsonify({
+                'success': False,
+                'message': f'设备不存在: {device_id}'
+            }), 404
+        
+        # 2. 检查设备类型
+        if device_config.get('device_category') != 'mechanical':
+            return jsonify({
+                'success': False,
+                'message': '只有机械类设备可以停止'
+            }), 400
+        
+        # 3. 执行停止操作
+        result = device_control.stop_device(device_id)
+        
+        if result['success']:
+            # 4. 记录操作日志
+            database.insert_operation_log(
+                username=g.user['username'],
+                action='stop_device',
+                target=device_id,
+                detail=f"停止设备: {device_config.get('name', device_id)}"
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': '设备已停止'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': result['message']
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"停止设备失败: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'停止设备失败: {str(e)}'
+        }), 500
+```
+
+七、用户层详细讲解（588行）
+---------------------------
+
+### 7.1 JWT认证管理（auth.py - 580行）
+
+#### 7.1.1 核心设计思想
+用户层实现了完整的JWT认证系统，包括用户管理、权限控制、操作审计。
+
+**设计原则：**
+1. **JWT令牌**：无状态认证，支持分布式部署
+2. **角色权限**：admin、operator、viewer三种角色
+3. **密码安全**：bcrypt加密，防止彩虹表攻击
+4. **登录保护**：失败次数限制，防止暴力破解
+
+#### 7.1.2 关键代码段详解
+
+**用户认证：**
+```python
+def authenticate_user(self, username: str, password: str) -> dict:
+    """
+    认证用户
+    
+    认证流程：
+    1. 查找用户
+    2. 检查账户是否锁定
+    3. 验证密码
+    4. 生成JWT令牌
+    5. 更新登录信息
+    
+    Args:
+        username: 用户名
+        password: 密码
+        
+    Returns:
+        dict: 认证结果，包含令牌和用户信息
+    """
+    # 1. 查找用户
+    user = self._find_user(username)
+    if not user:
+        return {'success': False, 'message': '用户名或密码错误'}
+    
+    # 2. 检查账户是否锁定
+    if user.get('locked_until'):
+        locked_until = datetime.fromisoformat(user['locked_until'])
+        if datetime.now() < locked_until:
+            remaining = (locked_until - datetime.now()).seconds
+            return {
+                'success': False, 
+                'message': f'账户已锁定，请{remaining}秒后重试'
+            }
+    
+    # 3. 验证密码
+    if not bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+        # 密码错误，增加失败次数
+        self._increment_login_attempts(username)
+        return {'success': False, 'message': '用户名或密码错误'}
+    
+    # 4. 生成JWT令牌
+    token = self._generate_token(user)
+    
+    # 5. 更新登录信息
+    self._update_login_info(username)
+    
+    return {
+        'success': True,
+        'token': token,
+        'user': {
+            'id': user['id'],
+            'username': user['username'],
+            'role': user['role'],
+            'display_name': user.get('display_name', username)
+        }
+    }
+```
+
+**JWT令牌生成：**
+```python
+def _generate_token(self, user: dict) -> str:
+    """
+    生成JWT令牌
+    
+    JWT令牌包含：
+    - 用户ID
+    - 用户名
+    - 角色
+    - 过期时间
+    
+    Args:
+        user: 用户信息
+        
+    Returns:
+        str: JWT令牌字符串
+    """
+    # 令牌有效期：24小时
+    expiration = datetime.now() + timedelta(hours=24)
+    
+    # 令牌载荷
+    payload = {
+        'user_id': user['id'],
+        'username': user['username'],
+        'role': user['role'],
+        'exp': expiration,
+        'iat': datetime.now()  # 签发时间
+    }
+    
+    # 使用密钥签名
+    token = jwt.encode(payload, self.secret_key, algorithm='HS256')
+    
+    return token
+```
+
+八、系统启动流程详解（run.py - 315行）
+--------------------------------------
+
+### 8.1 启动流程图
+```
+1. 初始化日志系统
+2. 创建必要目录（logs/data/exports）
+3. 判断运行模式（模拟/真实）
+4. 初始化数据库
+5. 初始化设备管理器
+6. 初始化报警系统
+7. 初始化智能层模块
+8. 创建Flask应用
+9. 后台启动设备连接
+10. 启动Web服务
+```
+
+### 8.2 关键代码段详解
+
+**后台启动设备连接：**
+```python
+def _background_start():
+    """后台线程：连接设备 → 启动采集"""
+    # 1. 连接所有设备（带20s超时，避免阻塞太久）
+    logger.info("后台连接设备...")
+    connection_results = device_manager.connect_all(timeout=20)
+    
+    # 2. 记录连接结果
+    for device_id, success in connection_results.items():
+        status = "成功" if success else "失败"
+        logger.info(f"  设备 {device_id}: {status}")
+    
+    # 3. 启动数据采集
+    logger.info("启动数据采集...")
+    data_collector.start()
+    
+    # 4. 启动智能层模块
+    logger.info("启动智能层模块...")
+    predictive_maintenance.start()
+    oee_calculator.start()
+    energy_manager.start()
+    edge_decision.start()
+    
+    # 5. 启动TDengine适配器（如果可用）
+    if realtime_bridge:
+        realtime_bridge.start()
+        logger.info("TDengine实时数据桥接器已启动")
+    
+    # 6. 注入WebSocket推送函数
+    from 展示层.websocket import emit_alarm, emit_broadcast
+    alarm_manager.set_websocket_emit(emit_alarm)
+    broadcast_system.add_callback(lambda msg: emit_broadcast(msg))
+    
+    logger.info("后台采集服务已就绪")
+
+# 创建后台线程
+bg_thread = threading.Thread(
+    target=_background_start, 
+    daemon=True,  # 守护线程，主程序退出时自动结束
+    name="bg_device_connect"
+)
+bg_thread.start()
+```
+
+九、配置文件详解
+----------------
+
+### 9.1 设备配置文件（devices.yaml）
+```yaml
+devices:
+- id: siemens_1500_01
+  name: 西门子S7-1500 PLC
+  protocol: modbus_tcp
+  host: 192.168.1.53
+  port: 502
+  device_model: S7-1516-3 PN/DP
+  vendor: 西门子
+  collection_interval: 2
+  device_category: mechanical
+  registers:
+  - address: 0
+    name: boiler_temperature
+    description: 锅炉出口温度
+    data_type: float32
+    unit: °C
+    length: 2
+  - address: 2
+    name: system_pressure
+    description: 系统压力
+    data_type: float32
+    unit: MPa
+    length: 2
+```
+
+### 9.2 报警配置文件（alarms.yaml）
+```yaml
+alarm_output:
+  enabled: true
+  signal_tower:
+    device_id: patlite_tower_01
+    host: 192.168.1.70
+    port: 502
+    slave_id: 1
+    do_mapping:
+      red_light: 0
+      yellow_light: 1
+      green_light: 2
+      buzzer: 5
+
+alarm_rules:
+- device_id: siemens_1500_01
+  register_name: boiler_temperature
+  threshold_high: 150
+  threshold_low: 30
+  level: critical
+  message: "锅炉温度异常"
+```
+
+十、总结
+--------
+
+本工业SCADA系统是一个功能完整的工业数据采集与监控解决方案，具有以下特点：
+
+### 10.1 技术特点
+1. **模块化架构**：分层设计，职责清晰
+2. **多协议支持**：Modbus/OPC UA/MQTT/REST
+3. **实时监控**：WebSocket实时数据推送
+4. **智能分析**：OEE/SPC/预测维护/能源管理
+5. **安全可靠**：安全联锁、紧急停机、操作审计
+
+### 10.2 代码质量
+1. **详细注释**：每个函数都有完整的中文注释
+2. **类型提示**：使用Python类型提示
+3. **错误处理**：完善的异常处理机制
+4. **日志记录**：详细的日志输出
+
+### 10.3 扩展性
+1. **配置驱动**：通过YAML配置文件扩展设备
+2. **插件架构**：智能层模块可插拔
+3. **接口抽象**：支持多种实现方式
+4. **事件驱动**：模块间通过事件通信
+
+本系统代码经过详细注释，便于后续开发和维护。如有任何问题，请参考代码中的注释或联系开发团队。

@@ -4,7 +4,8 @@ import requests
 
 # Bug1: get latest data
 print("=== Bug1: 获取最新数据 ===")
-r = requests.get('http://127.0.0.1:5000/api/data/latest/temp_sensor_01', timeout=5)
+# 使用配置文件中存在的设备ID
+r = requests.get('http://127.0.0.1:5000/api/data/latest/siemens_1500_01', timeout=5)
 print(f'Status: {r.status_code}')
 print(f'Body: {r.json()}')
 
@@ -24,3 +25,8 @@ if alarms:
         json={'device_id': device_id, 'register_name': register_name}, timeout=5)
     print(f'Ack status: {r2.status_code}')
     print(f'Ack body: {r2.json()}')
+else:
+    print('No unacknowledged alarms found, creating a test alarm...')
+    # Create a test alarm by triggering a condition
+    # For now, just report that no alarms exist
+    print('Note: No alarms in database to acknowledge')

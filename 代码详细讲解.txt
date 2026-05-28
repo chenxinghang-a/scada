@@ -1,0 +1,540 @@
+工业SCADA系统代码详细讲解
+==========================
+
+本文档为工业数据采集与监控系统（SCADA）的代码详细讲解，旨在让非技术人员也能理解系统的工作原理。
+
+一、系统概述
+-----------
+
+本系统是一个工业数据采集与监控系统，主要功能包括：
+1. 实时采集工业设备的数据（温度、压力、流量等）
+2. 监控设备状态，支持远程控制
+3. 报警管理，当数据异常时发出警报
+4. 数据存储与分析，支持历史查询
+5. 提供Web界面，方便用户操作
+
+系统采用Python语言开发，使用Flask框架构建Web服务，SQLite数据库存储数据。
+
+二、系统启动流程（run.py文件讲解）
+---------------------------------
+
+run.py是系统的启动入口文件，就像汽车的钥匙一样，负责启动整个系统。
+
+### 2.1 启动准备
+```python
+# 添加项目根目录到Python路径
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+```
+这行代码的作用是告诉Python去哪里找系统需要的其他文件。就像告诉快递员你的家庭地址一样。
+
+### 2.2 创建必要的目录
+```python
+(project_root / 'logs').mkdir(parents=True, exist_ok=True)
+(project_root / 'data').mkdir(parents=True, exist_ok=True)
+```
+系统需要三个文件夹：
+- logs：存放日志文件，记录系统运行情况
+- data：存放数据库文件
+- exports：存放导出的数据文件
+
+### 2.3 配置日志系统
+```python
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('logs/scada.log', encoding='utf-8')
+    ]
+)
+```
+日志系统就像飞机的黑匣子，记录系统运行的所有重要信息。配置包括：
+- 日志级别：INFO（一般信息）
+- 日志格式：时间 - 模块名 - 级别 - 消息
+- 输出位置：同时显示在屏幕和保存到文件
+
+### 2.4 判断运行模式
+```python
+simulation_mode = '--real' not in sys.argv
+```
+系统有两种运行模式：
+- 模拟模式：使用虚拟设备，适合测试和演示
+- 真实模式：连接真实工业设备，用于实际生产
+
+如果启动命令中没有`--real`参数，就使用模拟模式。
+
+### 2.5 初始化数据库
+```python
+database = Database(str(project_root / db_path))
+```
+数据库就像系统的记忆，存储所有采集到的数据。根据模式选择不同的数据库文件：
+- 模拟模式：data/scada_simulated.db
+- 真实模式：data/scada_real.db
+
+### 2.6 初始化设备管理器
+```python
+if simulation_mode:
+    device_manager = SimulatedDeviceManager(config_path)
+else:
+    device_manager = RealDeviceManager(config_path)
+```
+设备管理器就像设备的管家，负责：
+- 读取设备配置文件
+- 管理设备的连接和断开
+- 采集设备数据
+
+### 2.7 初始化报警系统
+```python
+alarm_output = AlarmOutput(alarm_output_cfg)
+broadcast_system = BroadcastSystem({...})
+alarm_manager = AlarmManager(database, '配置/alarms.yaml',
+                             alarm_output=alarm_output,
+                             broadcast_system=broadcast_system)
+```
+报警系统包括三个部分：
+1. 报警输出（AlarmOutput）：控制声光报警器
+2. 广播系统（BroadcastSystem）：语音广播报警信息
+3. 报警管理器（AlarmManager）：协调报警逻辑
+
+### 2.8 初始化智能层模块
+```python
+predictive_maintenance = PredictiveMaintenance(database)
+oee_calculator = OEECalculator(database)
+spc_analyzer = SPCAnalyzer(database)
+energy_manager = EnergyManager(database)
+edge_decision = EdgeDecisionEngine(database)
+device_control = DeviceControlSafety(database, device_manager, alarm_manager)
+```
+智能层就像系统的"大脑"，包含多个分析模块：
+- 预测性维护（PredictiveMaintenance）：预测设备何时需要维护
+- OEE计算器（OEECalculator）：计算设备综合效率
+- SPC分析器（SPCAnalyzer）：统计过程控制，分析数据稳定性
+- 能源管理（EnergyManager）：监控能源消耗
+- 边缘决策（EdgeDecisionEngine）：实时决策引擎
+- 设备控制（DeviceControlSafety）：安全控制设备
+
+### 2.9 后台启动设备连接
+```python
+def _background_start():
+    """后台线程：连接设备 → 启动采集"""
+    logger.info("后台连接设备...")
+    connection_results = device_manager.connect_all(timeout=20)
+    # ... 启动数据采集和智能层模块
+
+bg_thread = threading.Thread(target=_background_start, daemon=True, name="bg_device_connect")
+bg_thread.start()
+```
+这里使用了"后台线程"技术，就像雇了一个助手在后台工作。这样Web服务可以立即启动，不用等待设备连接完成。
+
+### 2.10 启动Web服务
+```python
+if socketio is None:
+    app.run(host=host, port=port, debug=False)
+else:
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+```
+最后启动Web服务，就像开店营业一样。用户可以通过浏览器访问 http://localhost:5000 来使用系统。
+
+三、设备管理模块（采集层/device_manager.py）
+-------------------------------------------
+
+设备管理器是系统的核心，负责管理所有工业设备。
+
+### 3.1 设备配置文件
+设备信息存储在YAML配置文件中，例如：
+```yaml
+devices:
+- id: siemens_1500_01
+  name: 西门子S7-1500 PLC
+  protocol: modbus_tcp
+  host: 192.168.1.53
+  port: 502
+  device_model: S7-1516-3 PN/DP
+  vendor: 西门子
+  collection_interval: 2
+  device_category: mechanical
+```
+每个设备有多个属性：
+- id：设备唯一标识，就像身份证号
+- name：设备名称，方便人类识别
+- protocol：通信协议，设备使用的"语言"
+- host/port：设备的网络地址
+- device_category：设备分类（mechanical/instrument/safety）
+
+### 3.2 设备分类
+系统将设备分为三类：
+1. **机械类（mechanical）**：可以启动/停止的设备，如电机、泵
+2. **仪表类（instrument）**：始终运行的测量设备，如温度计、压力表
+3. **安全类（safety）**：始终运行的安全设备，如灯、蜂鸣器
+
+### 3.3 设备连接管理
+设备管理器负责建立和维护与设备的连接：
+```python
+def connect_all(self, timeout=30):
+    """连接所有设备"""
+    results = {}
+    for device_id, device_config in self.devices.items():
+        try:
+            # 创建设备客户端
+            client = self._create_client(device_config)
+            # 尝试连接
+            if client.connect():
+                self.clients[device_id] = client
+                results[device_id] = True
+            else:
+                results[device_id] = False
+        except Exception as e:
+            results[device_id] = False
+    return results
+```
+
+### 3.4 设备状态监控
+系统实时监控每个设备的状态：
+- online：设备在线，正常工作
+- offline：设备离线，无法通信
+- error：设备错误，需要检查
+- stopped：设备停止，人为控制
+
+四、数据采集模块（采集层/data_collector.py）
+-------------------------------------------
+
+数据采集器负责定期从设备读取数据，就像定时抄表一样。
+
+### 4.1 采集流程
+```python
+def _collect_device_data(self, device_id, device_config):
+    """采集单个设备的数据"""
+    # 1. 获取设备客户端
+    client = self.device_manager.get_client(device_id)
+    
+    # 2. 读取设备寄存器
+    registers = device_config.get('registers', [])
+    for register in registers:
+        # 读取寄存器值
+        value = client.read_register(register['address'])
+        
+        # 3. 存储到数据库
+        self.database.insert_data(
+            device_id=device_id,
+            register_name=register['name'],
+            value=value,
+            timestamp=datetime.now()
+        )
+        
+        # 4. 检查是否触发报警
+        self.alarm_manager.check_alarm(
+            device_id=device_id,
+            register_name=register['name'],
+            value=value
+        )
+```
+
+### 4.2 采集频率控制
+每个设备有不同的采集频率，通过配置文件中的`collection_interval`控制：
+- 模拟模式：通常2-5秒采集一次
+- 真实模式：根据设备响应速度调整
+
+### 4.3 数据缓存机制
+为了提高效率，系统使用缓存机制：
+```python
+def _collect_from_cache(self, device_id):
+    """从缓存读取数据"""
+    if device_id in self._data_cache:
+        return self._data_cache[device_id]
+    return None
+```
+缓存就像临时记事本，避免频繁访问数据库。
+
+五、数据库模块（存储层/database.py）
+-----------------------------------
+
+数据库是系统的记忆，存储所有采集到的数据。
+
+### 5.1 数据库表结构
+系统使用SQLite数据库，包含以下主要表：
+
+1. **realtime_data**（实时数据表）
+   - 存储设备最新的数据值
+   - 每个设备+寄存器只保留一条记录
+   - 使用UPSERT操作（有则更新，无则插入）
+
+2. **history_data**（历史数据表）
+   - 存储所有历史数据记录
+   - 用于数据分析和查询
+   - 数据量会随时间增长
+
+3. **alarm_records**（报警记录表）
+   - 存储所有报警信息
+   - 包含报警级别、阈值、实际值等
+   - 支持报警确认功能
+
+4. **device_status**（设备状态表）
+   - 记录设备状态变化
+   - 用于设备状态历史查询
+
+5. **history_archive**（历史归档表）
+   - 存储聚合后的历史数据
+   - 按天归档，优化长期存储
+
+6. **users**（用户表）
+   - 存储系统用户信息
+   - 支持不同角色权限
+
+7. **operation_logs**（操作日志表）
+   - 记录用户操作
+   - 用于审计和追踪
+
+### 5.2 数据插入示例
+```python
+def insert_data(self, device_id, register_name, value, timestamp, unit=''):
+    """插入数据到实时表和历史表"""
+    with self.get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # 插入实时数据（UPSERT）
+        cursor.execute('''
+            INSERT OR REPLACE INTO realtime_data 
+            (device_id, register_name, value, unit, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (device_id, register_name, value, unit, timestamp))
+        
+        # 插入历史数据（INSERT）
+        cursor.execute('''
+            INSERT INTO history_data 
+            (device_id, register_name, value, unit, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (device_id, register_name, value, unit, timestamp))
+```
+
+六、Web展示模块（展示层/routes.py）
+----------------------------------
+
+Web模块提供用户界面，让用户可以通过浏览器操作系统。
+
+### 6.1 主要页面
+1. **仪表盘（dashboard）**：显示系统概览
+2. **设备管理（devices）**：管理设备列表
+3. **实时数据（realtime）**：查看实时数据
+4. **历史数据（history）**：查询历史数据
+5. **报警管理（alarms）**：查看和处理报警
+6. **设备控制（control）**：控制设备启停
+
+### 6.2 API接口
+系统提供RESTful API接口，供前端调用：
+```python
+@app.route('/api/devices', methods=['GET'])
+def get_devices():
+    """获取设备列表API"""
+    devices = device_manager.get_all_devices()
+    return jsonify({'success': True, 'data': devices})
+
+@app.route('/api/devices/<device_id>/stop', methods=['POST'])
+def stop_device(device_id):
+    """停止设备API"""
+    # 检查权限
+    # 执行停止操作
+    # 记录操作日志
+    return jsonify({'success': True, 'message': '设备已停止'})
+```
+
+### 6.3 WebSocket实时推送
+系统使用WebSocket技术实现实时数据推送：
+```python
+from flask_socketio import SocketIO, emit
+
+socketio = SocketIO(app)
+
+@socketio.on('connect')
+def handle_connect():
+    """客户端连接时触发"""
+    emit('message', {'data': '连接成功'})
+
+def emit_alarm(alarm_data):
+    """推送报警信息到所有客户端"""
+    socketio.emit('alarm', alarm_data)
+```
+
+七、报警管理模块（报警层/alarm_manager.py）
+-----------------------------------------
+
+报警管理器负责监控数据异常并触发报警。
+
+### 7.1 报警规则配置
+报警规则存储在配置文件中：
+```yaml
+alarms:
+- device_id: siemens_1500_01
+  register_name: boiler_temperature
+  alarm_level: critical
+  threshold_high: 200
+  threshold_low: 50
+  message: "锅炉温度异常"
+```
+
+### 7.2 报警检查逻辑
+```python
+def check_alarm(self, device_id, register_name, value):
+    """检查是否触发报警"""
+    # 获取报警规则
+    rule = self.get_alarm_rule(device_id, register_name)
+    
+    if rule:
+        # 检查是否超过阈值
+        if value > rule['threshold_high']:
+            self.trigger_alarm(
+                device_id=device_id,
+                register_name=register_name,
+                alarm_level='critical',
+                message=f"值 {value} 超过上限 {rule['threshold_high']}"
+            )
+        elif value < rule['threshold_low']:
+            self.trigger_alarm(
+                device_id=device_id,
+                register_name=register_name,
+                alarm_level='warning',
+                message=f"值 {value} 低于下限 {rule['threshold_low']}"
+            )
+```
+
+### 7.3 报警输出
+当触发报警时，系统会：
+1. 记录到数据库
+2. 控制声光报警器（红灯闪烁、蜂鸣器响）
+3. 语音广播报警信息
+4. 通过WebSocket推送到前端
+
+八、设备控制模块（智能层/device_control.py）
+-------------------------------------------
+
+设备控制模块负责安全地控制设备启停。
+
+### 8.1 设备启停控制
+```python
+def stop_device(self, device_id):
+    """停止设备"""
+    # 1. 检查设备是否可以停止
+    device_config = self.device_manager.get_device(device_id)
+    if device_config.get('device_category') != 'mechanical':
+        return {'success': False, 'message': '只有机械类设备可以停止'}
+    
+    # 2. 发送停止命令
+    client = self.device_manager.get_client(device_id)
+    client.write_register(100, 0)  # 写入0表示停止
+    
+    # 3. 更新设备状态
+    self.device_manager.set_device_stopped(device_id, True)
+    
+    # 4. 记录操作日志
+    self.database.insert_operation_log(
+        username='system',
+        action='stop_device',
+        target=device_id,
+        detail='设备停止'
+    )
+    
+    return {'success': True, 'message': '设备已停止'}
+```
+
+### 8.2 紧急停止（E-STOP）
+紧急停止功能会停止所有机械类设备：
+```python
+def trigger_emergency_stop(self):
+    """触发紧急停止"""
+    # 1. 设置全局紧急停止标志
+    self.device_manager.set_estop_override(True)
+    
+    # 2. 遍历所有机械类设备
+    for device_id, device_config in self.device_manager.get_all_devices().items():
+        if device_config.get('device_category') == 'mechanical':
+            # 发送停止命令
+            client = self.device_manager.get_client(device_id)
+            client.write_register(100, 0)
+    
+    # 3. 触发声光报警
+    self.alarm_manager.trigger_estop_alarm()
+    
+    # 4. 记录操作日志
+    self.database.insert_operation_log(
+        username='system',
+        action='trigger_estop',
+        target='all',
+        detail='紧急停止'
+    )
+```
+
+九、系统架构总结
+----------------
+
+本系统采用分层架构，每层职责明确：
+
+1. **采集层**：负责与设备通信，采集数据
+2. **存储层**：负责数据存储和查询
+3. **展示层**：负责用户界面和API
+4. **报警层**：负责异常检测和报警
+5. **智能层**：负责数据分析和决策
+6. **用户层**：负责用户管理和权限控制
+
+这种分层设计使得系统易于维护和扩展，每层都可以独立修改而不影响其他层。
+
+十、常见问题解答
+----------------
+
+**Q1: 系统支持哪些设备？**
+A: 支持Modbus TCP、OPC UA、MQTT、REST等多种协议的工业设备。
+
+**Q2: 系统可以同时监控多少设备？**
+A: 理论上没有限制，取决于服务器性能和网络带宽。
+
+**Q3: 数据会保留多久？**
+A: 实时数据只保留最新值，历史数据默认保留30天，归档数据保留更久。
+
+**Q4: 系统安全性如何？**
+A: 支持用户认证、操作日志、权限控制等安全机制。
+
+**Q5: 如何添加新设备？**
+A: 在配置文件中添加设备信息，或通过Web界面的"添加设备"功能。
+
+十一、技术栈说明
+----------------
+
+- **编程语言**：Python 3.8+
+- **Web框架**：Flask + Flask-SocketIO
+- **数据库**：SQLite（主存储）+ TDengine（时序数据，可选）
+- **前端技术**：HTML5 + CSS3 + JavaScript + Bootstrap 5
+- **通信协议**：Modbus TCP、OPC UA、MQTT、REST
+- **实时通信**：WebSocket
+- **日志系统**：Python logging模块
+- **配置管理**：YAML格式配置文件
+
+十二、部署说明
+--------------
+
+### 12.1 环境要求
+- Python 3.8或更高版本
+- 操作系统：Windows/Linux/macOS
+- 网络：能够访问工业设备
+
+### 12.2 安装步骤
+1. 解压系统文件
+2. 安装Python依赖：`pip install -r requirements.txt`
+3. 配置设备信息：编辑`配置/devices.yaml`
+4. 启动系统：`python run.py`（模拟模式）或 `python run.py --real`（真实模式）
+
+### 12.3 访问系统
+打开浏览器，访问 http://localhost:5000
+默认用户名：admin，默认密码：admin123
+
+十三、总结
+----------
+
+本工业SCADA系统是一个功能完整的工业数据采集与监控解决方案，具有以下特点：
+
+1. **模块化设计**：各层职责清晰，易于维护
+2. **多协议支持**：兼容主流工业通信协议
+3. **实时监控**：WebSocket实时数据推送
+4. **智能分析**：内置多种工业分析算法
+5. **安全可靠**：完善的权限控制和操作日志
+6. **易于扩展**：支持自定义设备和协议
+
+系统代码经过详细注释，便于后续开发和维护。如有任何问题，请参考代码中的注释或联系开发团队。

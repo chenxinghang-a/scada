@@ -293,17 +293,14 @@ class DeviceManager:
         # 使用 get_client() 实现懒创建，确保客户端存在
         client = self.get_client(device_id)
         if client:
-            # 模拟模式下，确保设备始终处于连接状态
+            # 模拟模式下，尝试连接但不强制标记为已连接
             if self.simulation_mode:
                 if not getattr(client, 'connected', False):
                     if device_config.get('enabled', True):
                         try:
                             client.connect()
-                        except Exception:
-                            pass
-                    # 模拟模式最终保障：即使connect()失败也强制标记为已连接
-                    if not getattr(client, 'connected', False) and device_config.get('enabled', True):
-                        client.connected = True
+                        except Exception as e:
+                            logger.debug(f"模拟设备 {device_id} 连接失败: {e}")
             else:
                 # 真实模式下，尝试自动重连
                 if not getattr(client, 'connected', False):
