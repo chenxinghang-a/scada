@@ -20,9 +20,10 @@ _require_auth = jwt_required
 
 @data_bp.route('/data/realtime', methods=['GET'])
 def get_realtime_data():
-    """获取实时数据"""
+    """获取实时数据（realtime_data 是 UPSERT 表，每设备每寄存器只有一行）"""
     device_id = request.args.get('device_id')
-    limit = request.args.get('limit', 100, type=int)
+    # 不限制：realtime_data 数据量 = 设备数 × 寄存器数，通常 < 500
+    limit = request.args.get('limit', 10000, type=int)
     return jsonify({'data': current_app.database.get_realtime_data(device_id=device_id, limit=limit)})
 
 

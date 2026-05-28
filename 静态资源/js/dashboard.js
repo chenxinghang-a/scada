@@ -140,7 +140,7 @@ function getRegisterUnit(name) {
 }
 
 /**
- * 初始化趋势图（多变量叠加）
+ * 初始化趋势图
  */
 function initTrendChart() {
     const dom = document.getElementById('trend-chart');
@@ -148,39 +148,12 @@ function initTrendChart() {
 
     trendChart = echarts.init(dom);
     trendChart.setOption({
-        backgroundColor: 'transparent',
-        tooltip: {
-            trigger: 'axis',
-            backgroundColor: 'rgba(26,38,51,0.95)',
-            borderColor: '#2a3f52',
-            textStyle: { color: '#e0e6ed', fontSize: 12 },
-        },
-        legend: {
-            top: 4,
-            textStyle: { color: '#8899aa', fontSize: 11 },
-            type: 'scroll',
-            pageTextStyle: { color: '#8899aa' },
-        },
-        grid: { left: 50, right: 20, top: 40, bottom: 30 },
-        xAxis: {
-            type: 'category',
-            data: [],
-            axisLine: { lineStyle: { color: '#2a3f52' } },
-            axisLabel: { color: '#8899aa', fontSize: 10 },
-            splitLine: { show: false },
-        },
-        yAxis: {
-            type: 'value',
-            axisLine: { show: false },
-            axisLabel: { color: '#8899aa', fontSize: 10 },
-            splitLine: { lineStyle: { color: 'rgba(42,63,82,0.4)' } },
-        },
+        tooltip: { trigger: 'axis' },
+        legend: { top: 4, type: 'scroll' },
+        grid: { left: 60, right: 20, top: 40, bottom: 30 },
+        xAxis: { type: 'category', data: [], boundaryGap: false },
+        yAxis: { type: 'value' },
         series: [],
-        dataZoom: [{
-            type: 'inside',
-            start: 0,
-            end: 100,
-        }],
     });
 }
 
@@ -189,7 +162,7 @@ function initTrendChart() {
  */
 async function loadRealtimeData() {
     try {
-        const data = await apiRequest('/data/realtime?limit=50');
+        const data = await apiRequest('/data/realtime?limit=5000');
 
         if (data.data && data.data.length > 0) {
             updateRealtimeTable(data.data);
@@ -231,47 +204,45 @@ async function loadRealtimeData() {
 }
 
 /**
- * 更新趋势图 — 只显示选中设备的变量
+ * 更新趋势图 — 只显示选中设备的变量，最多 MAX_DATA_POINTS 个点
  */
 function updateTrendChart(data) {
     if (!trendChart || !selectedDeviceId) return;
 
-    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const now = new Date();
+    const timeLabel = now.toTimeString().slice(0, 8);  // HH:MM:SS
 
     // 只缓存选中设备的数据
     data.forEach(item => {
         if (item.device_id !== selectedDeviceId) return;
-        const key = `${item.device_id}:${item.register_name}`;
+        if (item.value === null || item.value === undefined) return;
+        const key = item.register_name;
         if (!dataBuffers[key]) dataBuffers[key] = [];
-        dataBuffers[key].push({ time: now, value: item.value });
+        dataBuffers[key].push({ time: timeLabel, value: parseFloat(item.value) });
         if (dataBuffers[key].length > MAX_DATA_POINTS) dataBuffers[key].shift();
     });
 
-    // 只取当前设备的变量
-    const prefix = selectedDeviceId + ':';
-    const keys = Object.keys(dataBuffers).filter(k => k.startsWith(prefix));
+    const keys = Object.keys(dataBuffers);
     if (keys.length === 0) return;
 
+    // 统一时间轴：取所有变量的时间并集
     const timeSet = new Set();
     keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.time)));
-    const times = Array.from(timeSet).sort();
+    const times = Array.from(timeSet).sort().slice(-MAX_DATA_POINTS);
 
     const series = keys.map(key => {
-        const regName = key.split(':')[1];
-        const regLabel = getRegisterLabel(regName);
-        const unit = getRegisterUnit(regName);
-        const buffer = dataBuffers[key];
-        const timeToValue = {};
-        buffer.forEach(d => { timeToValue[d.time] = d.value; });
+        const label = getRegisterLabel(key);
+        const unit = getRegisterUnit(key);
+        const map = {};
+        dataBuffers[key].forEach(d => { map[d.time] = d.value; });
 
         return {
-            name: `${regLabel} (${unit})`,
+            name: unit ? `${label} (${unit})` : label,
             type: 'line',
             smooth: true,
             symbol: 'none',
             lineStyle: { width: 2 },
-            areaStyle: { opacity: 0.08 },
-            data: times.map(t => timeToValue[t] ?? null),
+            data: times.map(t => map[t] ?? null),
         };
     });
 
@@ -279,7 +250,7 @@ function updateTrendChart(data) {
         legend: { data: series.map(s => s.name) },
         xAxis: { data: times },
         series: series,
-    });
+    }, true);  // true = notMerge，清除旧数据
 }
 
 /**
