@@ -5,6 +5,7 @@
 import sys
 import logging
 import threading
+from pathlib import Path
 from datetime import datetime
 
 # 初始化项目路径（必须在所有 import 之前）
