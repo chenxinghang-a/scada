@@ -178,6 +178,9 @@ class AlarmManager:
         # ISA-18.2: 死区配置 (rule_id -> deadband_value)
         self._deadbands: dict[str, float] = {}
 
+        # ISA-18.2: 报警统计分析器（延迟初始化）
+        self._alarm_statistics = None
+
         # 去重状态：记录每个报警的最后推送时间
         # key: (alarm_id, device_id, register_name) -> last_emit_timestamp
         self._emit_history: dict[tuple, float] = {}
@@ -195,6 +198,10 @@ class AlarmManager:
     def set_websocket_emit(self, emit_func: Callable[..., Any]):
         """注入WebSocket emit函数（由run.py启动时调用）"""
         self._websocket_emit = emit_func
+
+    def set_alarm_statistics(self, alarm_statistics):
+        """注入报警统计分析器"""
+        self._alarm_statistics = alarm_statistics
 
     def load_config(self):
         """加载报警配置文件"""
@@ -457,6 +464,10 @@ class AlarmManager:
         )
 
         logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")
+
+        # 记录到统计分析器
+        if self._alarm_statistics:
+            self._alarm_statistics.record_alarm_trigger(rule_id, device_id, register_name, timestamp)
 
         # 2. 声光报警器输出（Modbus DO -> 灯塔+蜂鸣器）
         if self.alarm_output and self.alarm_output.enabled:
