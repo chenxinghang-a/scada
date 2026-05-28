@@ -1,0 +1,35 @@
+[Unit]
+Description=Industrial SCADA System
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=scada
+Group=scada
+WorkingDirectory=/opt/scada
+EnvironmentFile=/opt/scada/.env
+ExecStart=/opt/scada/venv/bin/python run.py
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# 安全加固
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/scada/data /opt/scada/logs /opt/scada/exports
+PrivateTmp=yes
+
+# 资源限制
+MemoryMax=1G
+CPUQuota=80%
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=scada
+
+[Install]
+WantedBy=multi-user.target
