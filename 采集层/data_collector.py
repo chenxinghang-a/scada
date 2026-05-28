@@ -41,9 +41,13 @@ class DataCollector:
         # TDengine实时数据桥接器（可选）
         self.realtime_bridge = realtime_bridge
 
-        # 采集任务
+        # 采集任务（线程安全）
+        self._tasks_lock = threading.Lock()
         self.tasks = {}  # device_id -> threading.Timer
         self.running = False
+
+        # 失败计数器（用于退避）
+        self._failure_counts = {}  # device_id -> consecutive_failures
 
         # 数据队列
         self.data_queue = Queue(maxsize=10000)
@@ -109,12 +113,25 @@ class DataCollector:
         logger.info(f"数据采集器已启动，共 {len(devices)} 个设备 ({summary})")
 
     def stop(self):
-        """停止数据采集"""
+        """停止数据采集（安全排空队列）"""
         self.running = False
 
-        for device_id, timer in self.tasks.items():
-            timer.cancel()
-        self.tasks.clear()
+        # 线程安全地取消所有定时器
+        with self._tasks_lock:
+            for device_id, timer in self.tasks.items():
+                timer.cancel()
+            self.tasks.clear()
+
+        # 排空数据队列
+        drained = 0
+        while not self.data_queue.empty():
+            try:
+                self.data_queue.get_nowait()
+                drained += 1
+            except queue.Empty:
+                break
+        if drained > 0:
+            logger.info(f"排空数据队列: {drained} 条数据已丢弃")
 
         self.device_manager.disconnect_all()
         logger.info("数据采集器已停止")
@@ -145,11 +162,9 @@ class DataCollector:
         logger.info(f"已启动设备 {device_id} [{protocol}] 的采集任务")
 
     def remove_device_task(self, device_id: str):
-        """删除设备的采集任务（设备被删除时调用）
-
-        取消定时器，不再采集该设备数据。历史数据保留。
-        """
-        timer = self.tasks.pop(device_id, None)
+        """删除设备的采集任务（设备被删除时调用）"""
+        with self._tasks_lock:
+            timer = self.tasks.pop(device_id, None)
         if timer:
             timer.cancel()
             logger.info(f"已停止设备 {device_id} 的采集任务")
@@ -163,19 +178,22 @@ class DataCollector:
             return
 
         def on_data(device_id, name, value, unit):
-            # 队列满时丢弃最旧数据，避免阻塞
+            # 队列满时丢弃最旧数据，绝不阻塞回调线程
             if self.data_queue.full():
                 try:
                     self.data_queue.get_nowait()
                 except queue.Empty:
                     pass
-            self.data_queue.put({
-                'device_id': device_id,
-                'register_name': name,
-                'value': value,
-                'timestamp': datetime.now(),
-                'unit': unit
-            })
+            try:
+                self.data_queue.put_nowait({
+                    'device_id': device_id,
+                    'register_name': name,
+                    'value': value,
+                    'timestamp': datetime.now(),
+                    'unit': unit
+                })
+            except queue.Full:
+                logger.warning(f"数据队列已满，丢弃 {device_id}/{name}")
 
         if hasattr(client, 'add_data_callback'):
             client.add_data_callback(on_data)
@@ -186,7 +204,7 @@ class DataCollector:
             logger.error(f"[{protocol.upper()}] 设备 {device_id} 连接失败")
 
     def _start_device_collection(self, device_id: str, device_config: dict[str, Any]):
-        """启动单个设备的轮询采集任务（Modbus / REST）"""
+        """启动单个设备的轮询采集任务（Modbus / REST），含失败退避"""
         base_interval = device_config.get('collection_interval', 5)
         protocol = device_config.get('protocol', 'modbus_tcp')
 
@@ -194,17 +212,32 @@ class DataCollector:
             if not self.running:
                 return
 
-            self._collect_device_data(device_id, device_config, protocol)
+            success = self._collect_device_data(device_id, device_config, protocol)
 
-            if self.running:
-                # 动态计算采集间隔
+            if not self.running:
+                return
+
+            # 失败退避：连续失败越多，间隔越长（1s→2s→4s→8s→...→60s）
+            if success:
+                self._failure_counts[device_id] = 0
                 interval = self._get_dynamic_interval(device_id, base_interval)
-                timer = threading.Timer(interval, collect_task)
-                timer.daemon = True
-                timer.start()
-                self.tasks[device_id] = timer
+            else:
+                failures = self._failure_counts.get(device_id, 0) + 1
+                self._failure_counts[device_id] = failures
+                interval = min(2 ** failures, 60)
+                logger.debug(f"设备 {device_id} 连续失败 {failures} 次，{interval}s 后重试")
 
-        collect_task()
+            with self._tasks_lock:
+                if self.running:
+                    timer = threading.Timer(interval, collect_task)
+                    timer.daemon = True
+                    timer.start()
+                    self.tasks[device_id] = timer
+
+        with self._tasks_lock:
+            self.tasks[device_id] = threading.Timer(0.1, collect_task)
+            self.tasks[device_id].daemon = True
+            self.tasks[device_id].start()
 
     def _get_dynamic_interval(self, device_id: str, base_interval: float) -> float:
         """
@@ -255,23 +288,21 @@ class DataCollector:
             logger.debug(f"计算动态采集间隔失败 {device_id}: {e}")
             return base_interval
 
-    def _collect_device_data(self, device_id: str, device_config: dict[str, Any], protocol: str):
-        """采集单个轮询型设备的数据"""
+    def _collect_device_data(self, device_id: str, device_config: dict[str, Any], protocol: str) -> bool:
+        """采集单个轮询型设备的数据，返回是否成功"""
         self._inc_stat('total_collections')
 
         try:
             client = self.device_manager.get_client(device_id)
             if not client:
-                # 设备已被删除，静默跳过（定时器会在 remove_device_task 中被取消）
                 logger.debug(f"设备 {device_id} 客户端不存在，跳过采集")
                 self._inc_stat('failed_collections')
-                return
+                return False
 
             if not getattr(client, 'connected', False):
-                # 使用 device_manager.connect_device() 以便退避逻辑生效
                 if not self.device_manager.connect_device(device_id):
                     self._inc_stat('failed_collections')
-                    return
+                    return False
 
             timestamp = datetime.now()
 
@@ -287,10 +318,12 @@ class DataCollector:
             self._inc_stat('successful_collections')
             with self._stats_lock:
                 self.stats['last_collection_time'] = timestamp
+            return True
 
         except Exception as e:
             logger.error(f"采集设备 {device_id} 数据异常: {e}")
             self._inc_stat('failed_collections')
+            return False
 
     def _collect_modbus(self, client, device_id: str, device_config: dict[str, Any], timestamp):
         """采集Modbus设备的寄存器数据"""

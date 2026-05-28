@@ -3,9 +3,11 @@ Modbus客户端模块
 实现Modbus TCP/RTU协议通信
 """
 
+import math
 import time
 import struct
 import logging
+import threading
 from typing import Any
 from pymodbus.client import ModbusTcpClient, ModbusSerialClient
 from pymodbus.exceptions import ModbusException, ConnectionException
@@ -20,12 +22,6 @@ class ModbusClient:
     """
 
     def __init__(self, config: dict[str, Any]):
-        """
-        初始化Modbus客户端
-
-        Args:
-            config: 设备配置字典
-        """
         self.config = config
         self.device_id = config.get('id')
         self.device_name = config.get('name')
@@ -47,7 +43,13 @@ class ModbusClient:
             self.stopbits = config.get('stopbits', 1)
             self.bytesize = config.get('bytesize', 8)
 
-        # 统计信息
+        # 重连参数
+        self._reconnect_attempts = 0
+        self._max_reconnect_delay = 60  # 最大退避 60 秒
+        self._last_reconnect_time = 0
+
+        # 统计信息（线程安全）
+        self._stats_lock = threading.Lock()
         self.stats: dict[str, Any] = {
             'total_reads': 0,
             'successful_reads': 0,
@@ -56,19 +58,18 @@ class ModbusClient:
             'last_error': None
         }
 
-    def connect(self) -> bool:
-        """
-        建立Modbus连接
+    def _inc_stat(self, key: str):
+        with self._stats_lock:
+            self.stats[key] = self.stats.get(key, 0) + 1
 
-        Returns:
-            bool: 连接是否成功
-        """
+    def connect(self) -> bool:
+        """建立Modbus连接"""
         try:
             if self.protocol == 'modbus_tcp':
                 self.client = ModbusTcpClient(
                     host=self.host,
                     port=self.port,
-                    timeout=10
+                    timeout=3  # 3秒超时，不是10秒
                 )
             else:  # modbus_rtu
                 self.client = ModbusSerialClient(
@@ -77,13 +78,13 @@ class ModbusClient:
                     parity=self.parity,
                     stopbits=self.stopbits,
                     bytesize=self.bytesize,
-                    timeout=10
+                    timeout=2  # RTU 2秒超时
                 )
 
-            # 建立连接
             self.connected = self.client.connect()
 
             if self.connected:
+                self._reconnect_attempts = 0
                 logger.info(f"设备 {self.device_name} 连接成功")
             else:
                 logger.error(f"设备 {self.device_name} 连接失败")
@@ -92,15 +93,37 @@ class ModbusClient:
 
         except Exception as e:
             logger.error(f"设备 {self.device_name} 连接异常: {e}")
-            self.stats['last_error'] = str(e)
+            with self._stats_lock:
+                self.stats['last_error'] = str(e)
             return False
+
+    def reconnect(self) -> bool:
+        """自动重连（指数退避）"""
+        if self._reconnect_attempts > 0:
+            delay = min(2 ** self._reconnect_attempts, self._max_reconnect_delay)
+            now = time.time()
+            if now - self._last_reconnect_time < delay:
+                return False  # 还在退避中
+
+        self._reconnect_attempts += 1
+        self._last_reconnect_time = time.time()
+
+        try:
+            self.disconnect()
+        except Exception:
+            pass
+
+        logger.info(f"设备 {self.device_name} 尝试重连 (第{self._reconnect_attempts}次)")
+        return self.connect()
 
     def disconnect(self):
         """断开Modbus连接"""
         if self.client:
-            self.client.close()
+            try:
+                self.client.close()
+            except Exception:
+                pass  # socket 可能已经坏了
             self.connected = False
-            logger.info(f"设备 {self.device_name} 已断开连接")
 
     def read_holding_registers(self, address: int, count: int, 
                                slave_id: int | None = None) -> list[int] | None:
@@ -120,7 +143,7 @@ class ModbusClient:
             return None
 
         slave = slave_id or self.slave_id
-        self.stats['total_reads'] += 1
+        self._inc_stat('total_reads')
 
         try:
             result = self.client.read_holding_registers(
@@ -131,26 +154,32 @@ class ModbusClient:
 
             if result.isError():
                 logger.error(f"读取寄存器失败: {result}")
-                self.stats['failed_reads'] += 1
-                self.stats['last_error'] = str(result)
+                self._inc_stat('failed_reads')
+                with self._stats_lock:
+                    self.stats['last_error'] = str(result)
                 return None
 
-            self.stats['successful_reads'] += 1
-            self.stats['last_read_time'] = time.time()
+            self._inc_stat('successful_reads')
+            with self._stats_lock:
+                self.stats['last_read_time'] = time.time()
 
             return result.registers
 
         except ConnectionException as e:
             logger.error(f"连接异常: {e}")
             self.connected = False
-            self.stats['failed_reads'] += 1
-            self.stats['last_error'] = str(e)
+            self._inc_stat('failed_reads')
+            with self._stats_lock:
+                self.stats['last_error'] = str(e)
+            # 自动重连
+            self.reconnect()
             return None
 
         except Exception as e:
             logger.error(f"读取异常: {e}")
-            self.stats['failed_reads'] += 1
-            self.stats['last_error'] = str(e)
+            self._inc_stat('failed_reads')
+            with self._stats_lock:
+                self.stats['last_error'] = str(e)
             return None
 
     def read_input_registers(self, address: int, count: int,
@@ -171,7 +200,7 @@ class ModbusClient:
             return None
 
         slave = slave_id or self.slave_id
-        self.stats['total_reads'] += 1
+        self._inc_stat('total_reads')
 
         try:
             result = self.client.read_input_registers(
@@ -182,17 +211,25 @@ class ModbusClient:
 
             if result.isError():
                 logger.error(f"读取输入寄存器失败: {result}")
-                self.stats['failed_reads'] += 1
+                self._inc_stat('failed_reads')
                 return None
 
-            self.stats['successful_reads'] += 1
-            self.stats['last_read_time'] = time.time()
+            self._inc_stat('successful_reads')
+            with self._stats_lock:
+                self.stats['last_read_time'] = time.time()
 
             return result.registers
 
+        except ConnectionException as e:
+            logger.error(f"连接异常: {e}")
+            self.connected = False
+            self._inc_stat('failed_reads')
+            self.reconnect()
+            return None
+
         except Exception as e:
             logger.error(f"读取异常: {e}")
-            self.stats['failed_reads'] += 1
+            self._inc_stat('failed_reads')
             return None
 
     def read_coils(self, address: int, count: int,
@@ -325,7 +362,7 @@ class ModbusClient:
             logger.error(f"写入线圈异常: {e}")
             return False
 
-    def decode_float32(self, registers: list[int]) -> float:
+    def decode_float32(self, registers: list[int]) -> float | None:
         """
         解码32位浮点数（两个寄存器）
 
@@ -333,25 +370,22 @@ class ModbusClient:
             registers: 寄存器值列表（2个）
 
         Returns:
-            float: 解码后的浮点数
+            float: 解码后的浮点数，NaN/Inf 返回 None
         """
-        # 将两个16位寄存器合并为32位
         raw = (registers[0] << 16) | registers[1]
-        # 解码为浮点数（大端序）
-        return struct.unpack('>f', struct.pack('>I', raw))[0]
+        value = struct.unpack('>f', struct.pack('>I', raw))[0]
+        # 传感器断线时 PLC 返回 0xFFFF → NaN，过滤掉
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
 
-    def decode_float64(self, registers: list[int]) -> float:
-        """
-        解码64位浮点数（四个寄存器）
-
-        Args:
-            registers: 寄存器值列表（4个）
-
-        Returns:
-            float: 解码后的浮点数
-        """
+    def decode_float64(self, registers: list[int]) -> float | None:
+        """解码64位浮点数（四个寄存器），NaN/Inf 返回 None"""
         raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
-        return struct.unpack('>d', raw)[0]
+        value = struct.unpack('>d', raw)[0]
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
 
     def decode_uint16(self, register: int) -> int:
         """

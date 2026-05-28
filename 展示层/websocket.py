@@ -74,35 +74,46 @@ def init_socketio(app, database, data_collector):
 
 
 def start_data_push_thread(database, data_collector):
-    """
-    启动数据推送线程
+    """启动数据推送线程（优化版：单次查询 + 状态缓存 + 异常保护）"""
+    _stop_event = threading.Event()
+    _last_status_time = 0
+    _cached_status = None
 
-    注意: async_mode='threading'时用time.sleep()而非socketio.sleep()
-    socketio.sleep()在gevent/eventlet模式下才正确工作
-    """
     def push_data():
-        """推送数据到客户端"""
-        while True:
+        nonlocal _last_status_time, _cached_status
+
+        while not _stop_event.is_set():
             try:
-                # 获取所有设备最新数据
+                # 获取所有设备最新数据（单次查询，不是 N+1）
                 devices = database.get_device_summary()
+                if devices:
+                    # 一次性获取所有设备的最新数据
+                    all_latest = database.get_latest_data_all()
+                    for device in devices:
+                        device_id = device['device_id']
+                        latest = all_latest.get(device_id) if all_latest else None
+                        if latest:
+                            try:
+                                socketio.emit('data_update', latest, room=f'device_{device_id}')
+                            except Exception as e:
+                                logger.debug(f"推送设备 {device_id} 数据失败: {e}")
 
-                for device in devices:
-                    device_id = device['device_id']
-                    latest_data = database.get_latest_data(device_id)
+                # 系统状态每 10 秒更新一次（不是每 2 秒查 5 个 COUNT）
+                now = time.time()
+                if now - _last_status_time >= 10:
+                    _cached_status = {
+                        'timestamp': datetime.now().isoformat(),
+                        'collector_stats': data_collector.get_stats(),
+                        'database_stats': database.get_database_stats()
+                    }
+                    _last_status_time = now
 
-                    if latest_data:
-                        socketio.emit('data_update', latest_data, room=f'device_{device_id}')
+                if _cached_status:
+                    try:
+                        socketio.emit('system_status', _cached_status)
+                    except Exception as e:
+                        logger.debug(f"推送系统状态失败: {e}")
 
-                # 推送系统状态
-                system_status = {
-                    'timestamp': datetime.now().isoformat(),
-                    'collector_stats': data_collector.get_stats(),
-                    'database_stats': database.get_database_stats()
-                }
-                socketio.emit('system_status', system_status)
-
-                # threading模式用time.sleep
                 time.sleep(2)
 
             except Exception as e:
@@ -117,20 +128,28 @@ def start_data_push_thread(database, data_collector):
 def emit_alarm(alarm_data):
     """发送报警通知（广播给所有客户端）"""
     if socketio:
-        # Flask-SocketIO 5.x: 不使用broadcast参数，直接emit即广播给所有客户端
-        socketio.emit('alarm', alarm_data)
+        try:
+            socketio.emit('alarm', alarm_data)
+        except Exception as e:
+            logger.debug(f"报警推送失败: {e}")
 
 
 def emit_broadcast(broadcast_data):
     """发送广播事件通知（广播给所有客户端）"""
     if socketio:
-        socketio.emit('broadcast', broadcast_data)
+        try:
+            socketio.emit('broadcast', broadcast_data)
+        except Exception as e:
+            logger.debug(f"广播推送失败: {e}")
 
 
 def emit_device_status(device_id, status):
     """发送设备状态更新"""
     if socketio:
-        socketio.emit('device_status', {
-            'device_id': device_id,
-            'status': status
-        }, room=f'device_{device_id}')
+        try:
+            socketio.emit('device_status', {
+                'device_id': device_id,
+                'status': status
+            }, room=f'device_{device_id}')
+        except Exception as e:
+            logger.debug(f"设备状态推送失败: {e}")

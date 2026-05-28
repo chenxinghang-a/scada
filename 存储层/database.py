@@ -1,10 +1,11 @@
 """
 数据库模块
-实现SQLite数据库操作
+实现SQLite数据库操作（含连接池优化）
 """
 
 import sqlite3
 import logging
+import threading
 from typing import Any
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -16,47 +17,52 @@ logger = logging.getLogger(__name__)
 class Database:
     """
     SQLite数据库管理类
-    负责数据存储、查询和维护
+    使用线程本地连接池，避免每次操作都 open/close
     """
 
     def __init__(self, db_path: str = 'data/scada.db'):
-        """
-        初始化数据库
-
-        Args:
-            db_path: 数据库文件路径
-        """
         self.db_path = db_path
-
-        # 确保目录存在
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # 初始化数据库
+        # 线程本地存储：每个线程复用一个连接
+        self._local = threading.local()
+
+        # 初始化数据库（用独立连接设置 WAL 等全局 PRAGMA）
+        self._init_pragmas()
         self._init_database()
+
+    def _init_pragmas(self):
+        """初始化全局 PRAGMA（只需执行一次）"""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA synchronous=NORMAL')
+        conn.execute('PRAGMA cache_size=-8000')  # 8MB 缓存
+        conn.execute('PRAGMA wal_autocheckpoint=2000')
+        conn.execute('PRAGMA busy_timeout=30000')
+        conn.close()
 
     @contextmanager
     def get_connection(self):
         """
-        获取数据库连接（上下文管理器）
-        使用WAL模式提升并发性能，设置超时避免死锁
+        获取数据库连接（线程本地复用）
 
         Yields:
             sqlite3.Connection: 数据库连接
         """
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        # WAL模式：允许多个读连接和一个写连接并发
-        conn.execute('PRAGMA journal_mode=WAL')
-        # 忙等待超时30秒
-        conn.execute('PRAGMA busy_timeout=30000')
+        # 每个线程复用一个连接，不再每次 open/close
+        conn = getattr(self._local, 'connection', None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.row_factory = sqlite3.Row
+            conn.execute('PRAGMA busy_timeout=30000')
+            self._local.connection = conn
+
         try:
             yield conn
             conn.commit()
         except Exception as e:
             conn.rollback()
             raise e
-        finally:
-            conn.close()
 
     def _init_database(self):
         """初始化数据库表结构"""
@@ -300,6 +306,35 @@ class Database:
                     row_dict = dict(row)
                     result[row_dict['register_name']] = row_dict
                 return result
+
+    def get_latest_data_all(self) -> dict[str, dict[str, dict]]:
+        """
+        一次性获取所有设备的最新数据（避免 N+1 查询）
+
+        Returns:
+            {device_id: {register_name: {value, timestamp, unit, ...}}}
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT r1.* FROM realtime_data r1
+                INNER JOIN (
+                    SELECT device_id, register_name, MAX(timestamp) as max_ts
+                    FROM realtime_data
+                    GROUP BY device_id, register_name
+                ) r2 ON r1.device_id = r2.device_id
+                     AND r1.register_name = r2.register_name
+                     AND r1.timestamp = r2.max_ts
+            ''')
+            rows = cursor.fetchall()
+            result = {}
+            for row in rows:
+                row_dict = dict(row)
+                dev_id = row_dict['device_id']
+                if dev_id not in result:
+                    result[dev_id] = {}
+                result[dev_id][row_dict['register_name']] = row_dict
+            return result
 
     def get_device_registers(self, device_id: str) -> list[str]:
         """
