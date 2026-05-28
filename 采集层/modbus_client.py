@@ -79,13 +79,15 @@ class ModbusClient:
                     timeout=3  # 3秒超时，不是10秒
                 )
             else:  # modbus_rtu
+                # RTU 超时按 T3.5 规范：9600 波特率 ≈ 200ms，115200 ≈ 50ms
+                rtu_timeout = max(0.05, min(0.5, 3.5 * 11 / self.baudrate * 10))
                 self.client = ModbusSerialClient(
                     port=self.serial_port,
                     baudrate=self.baudrate,
                     parity=self.parity,
                     stopbits=self.stopbits,
                     bytesize=self.bytesize,
-                    timeout=2  # RTU 2秒超时
+                    timeout=rtu_timeout
                 )
 
             self.connected = self.client.connect()
@@ -312,14 +314,16 @@ class ModbusClient:
             return None
 
     def write_single_register(self, address: int, value: int,
-                              slave_id: int | None = None) -> bool:
+                              slave_id: int | None = None,
+                              verify: bool = False) -> bool:
         """
-        写入单个寄存器（功能码06）
+        写入单个寄存器（功能码06），可选回读验证
 
         Args:
             address: 寄存器地址
             value: 写入值
             slave_id: 从站地址（可选）
+            verify: 写后回读验证
 
         Returns:
             bool: 写入是否成功
@@ -336,21 +340,42 @@ class ModbusClient:
                 slave=slave
             )
 
-            return not result.isError()
+            if isinstance(result, ExceptionResponse):
+                logger.error(f"写入寄存器异常码 0x{result.exception_code:02X}")
+                return False
+
+            if result.isError():
+                logger.error(f"写入寄存器失败: {result}")
+                return False
+
+            # 写后回读验证
+            if verify:
+                import time
+                time.sleep(0.05)
+                read_back = self.read_holding_registers(address, 1, slave_id=slave)
+                if read_back and read_back[0] == value:
+                    logger.debug(f"写入验证通过: addr={address}, value={value}")
+                else:
+                    logger.warning(f"写入验证失败: addr={address}, 写入={value}, 回读={read_back}")
+                    return False
+
+            return True
 
         except Exception as e:
             logger.error(f"写入寄存器异常: {e}")
             return False
 
     def write_single_coil(self, address: int, value: bool,
-                          slave_id: int | None = None) -> bool:
+                          slave_id: int | None = None,
+                          verify: bool = False) -> bool:
         """
-        写入单个线圈（功能码05）
+        写入单个线圈（功能码05），可选回读验证
 
         Args:
             address: 线圈地址
-            value: 写入值
+            value: 写入值（True=ON, False=OFF）
             slave_id: 从站地址（可选）
+            verify: 写后回读验证
 
         Returns:
             bool: 写入是否成功
@@ -367,10 +392,68 @@ class ModbusClient:
                 slave=slave
             )
 
-            return not result.isError()
+            if isinstance(result, ExceptionResponse):
+                logger.error(f"写入线圈异常码 0x{result.exception_code:02X}")
+                return False
+
+            if result.isError():
+                logger.error(f"写入线圈失败: {result}")
+                return False
+
+            # 写后回读验证
+            if verify:
+                import time
+                time.sleep(0.05)
+                read_back = self.read_coils(address, 1, slave_id=slave)
+                if read_back and read_back[0] == value:
+                    logger.debug(f"线圈写入验证通过: addr={address}, value={value}")
+                else:
+                    logger.warning(f"线圈写入验证失败: addr={address}, 写入={value}, 回读={read_back}")
+                    return False
+
+            return True
 
         except Exception as e:
             logger.error(f"写入线圈异常: {e}")
+            return False
+
+    def write_multiple_registers(self, address: int, values: list[int],
+                                  slave_id: int | None = None) -> bool:
+        """
+        写入多个寄存器（功能码16，规范限制最多 123 个）
+
+        Args:
+            address: 起始地址
+            values: 写入值列表
+            slave_id: 从站地址（可选）
+
+        Returns:
+            bool: 写入是否成功
+        """
+        if not self.connected:
+            return False
+
+        slave = slave_id or self.slave_id
+
+        try:
+            result = self.client.write_registers(
+                address=address,
+                values=values,
+                slave=slave
+            )
+
+            if isinstance(result, ExceptionResponse):
+                logger.error(f"批量写入异常码 0x{result.exception_code:02X}")
+                return False
+
+            if result.isError():
+                logger.error(f"批量写入失败: {result}")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"批量写入异常: {e}")
             return False
 
     def decode_float32(self, registers: list[int]) -> float | None:

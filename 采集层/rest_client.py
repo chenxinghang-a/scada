@@ -125,8 +125,8 @@ class RESTDeviceClient:
             # 设置认证
             self._setup_auth()
 
-            # 设置超时
-            self._session.timeout = (5, 30)  # (connect_timeout, read_timeout)
+            # 设置超时（connect 3s, read 5s — 工业场景下不宜太长）
+            self._session.timeout = (3, 5)
 
             # 测试连通性（尝试第一个端点）
             if self.endpoints:
@@ -178,39 +178,42 @@ class RESTDeviceClient:
         Returns:
             端点返回的数据
         """
-        try:
-            url = self.base_url.rstrip('/') + endpoint_config.get('path', '/')
-            method = endpoint_config.get('method', 'GET').upper()
-            params = endpoint_config.get('params', {})
-            body = endpoint_config.get('body')
+        url = self.base_url.rstrip('/') + endpoint_config.get('path', '/')
+        method = endpoint_config.get('method', 'GET').upper()
+        params = endpoint_config.get('params', {})
+        body = endpoint_config.get('body')
 
-            resp = self._session.request(
-                method=method,
-                url=url,
-                params=params if method == 'GET' else None,
-                json=body if method in ('POST', 'PUT', 'PATCH') else None
-            )
-            resp.raise_for_status()
+        # 重试 3 次，指数退避（0.5s, 1s, 2s）
+        last_error = None
+        for attempt in range(3):
+            try:
+                resp = self._session.request(
+                    method=method,
+                    url=url,
+                    params=params if method == 'GET' else None,
+                    json=body if method in ('POST', 'PUT', 'PATCH') else None
+                )
+                resp.raise_for_status()
 
-            self.stats['total_requests'] += 1
-            self.stats['successful_requests'] += 1
-            self.stats['last_request_time'] = datetime.now().isoformat()
+                self.stats['total_requests'] += 1
+                self.stats['successful_requests'] += 1
+                self.stats['last_request_time'] = datetime.now().isoformat()
 
-            # 解析JSON
-            data = resp.json()
+                data = resp.json()
+                json_path = endpoint_config.get('json_path', '')
+                value = self._extract_by_path(data, json_path) if json_path else data
+                return value
 
-            # 按json_path提取值
-            json_path = endpoint_config.get('json_path', '')
-            value = self._extract_by_path(data, json_path) if json_path else data
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(0.5 * (2 ** attempt))
 
-            return value
-
-        except Exception as e:
-            self.stats['total_requests'] += 1
-            self.stats['failed_requests'] += 1
-            self.stats['last_error'] = str(e)
-            logger.error(f"REST请求失败 [{endpoint_config.get('path')}]: {e}")
-            return None
+        self.stats['total_requests'] += 1
+        self.stats['failed_requests'] += 1
+        self.stats['last_error'] = str(last_error)
+        logger.error(f"REST请求失败(3次重试) [{endpoint_config.get('path')}]: {last_error}")
+        return None
 
     def write_endpoint(self, endpoint_config: dict[str, Any], value: Any) -> bool:
         """

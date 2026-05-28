@@ -75,14 +75,24 @@ class MQTTClient:
             password = kwargs.get('password')
             self.topics_config = []
 
-        self.client_id = f'scada_{self.device_id}_{datetime.now().strftime("%H%M%S")}'
+        self.client_id = f'scada_{self.device_id}'
 
-        # 创建MQTT客户端
-        self.client = mqtt.Client(client_id=self.client_id, protocol=mqtt.MQTTv311)
+        # 创建MQTT客户端（clean_session=False 保留订阅和排队消息）
+        self.client = mqtt.Client(client_id=self.client_id, protocol=mqtt.MQTTv311,
+                                   clean_session=False)
 
         # 设置认证
         if username:
             self.client.username_pw_set(username, password)
+
+        # LWT（遗嘱消息）：设备离线时 Broker 自动发布
+        lwt_topic = f'scada/{self.device_id}/status'
+        lwt_payload = json.dumps({'device_id': self.device_id, 'status': 'offline',
+                                   'timestamp': datetime.now().isoformat()})
+        self.client.will_set(lwt_topic, lwt_payload, qos=1, retain=True)
+
+        # 自动重连延迟（指数退避：1s → 2s → 4s → ... → 60s）
+        self.client.reconnect_delay_set(min_delay=1, max_delay=60)
 
         # 设置回调
         self.client.on_connect = self._on_connect
@@ -222,10 +232,16 @@ class MQTTClient:
             self.stats['connected_since'] = datetime.now().isoformat()
             logger.info(f"MQTT连接成功: {self.broker_host}:{self.broker_port}")
 
-            # 自动订阅已记录的主题
+            # 发布上线状态（retained）
+            status_topic = f'scada/{self.device_id}/status'
+            status_payload = json.dumps({'device_id': self.device_id, 'status': 'online',
+                                          'timestamp': datetime.now().isoformat()})
+            client.publish(status_topic, status_payload, qos=1, retain=True)
+
+            # 自动订阅已记录的主题（QoS 1）
             for topic, qos in self._subscriptions.items():
                 client.subscribe(topic, qos)
-                logger.info(f"自动订阅: {topic}")
+                logger.info(f"自动订阅: {topic} (QoS {qos})")
         else:
             logger.error(f"MQTT连接失败，返回码: {rc}")
 
