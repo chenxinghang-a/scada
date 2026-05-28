@@ -21,6 +21,7 @@ _require_engineer = role_required('admin', 'engineer')
 # ==================== 设备管理API ====================
 
 @devices_bp.route('/devices', methods=['GET'])
+@_require_auth
 def get_devices():
     """获取所有设备列表"""
     devices = current_app.device_manager.get_all_status()
@@ -28,6 +29,7 @@ def get_devices():
 
 
 @devices_bp.route('/devices/<device_id>', methods=['GET'])
+@_require_auth
 def get_device(device_id):
     """获取单个设备详情"""
     status = current_app.device_manager.get_device_status(device_id)

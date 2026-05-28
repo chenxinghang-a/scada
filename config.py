@@ -17,8 +17,8 @@ except ImportError:
 
 # Flask配置
 class FlaskConfig:
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'industrial-scada-secret-key')
-    DEBUG = True
+    SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
+    DEBUG = os.environ.get('FLASK_DEBUG', '0') == '1'
     HOST = '127.0.0.1'  # 默认绑定本地，生产环境可改为0.0.0.0
     PORT = 5000          # 模拟模式
     REAL_PORT = 5001     # 真实模式（Chrome 拦截 6000/6666 等端口）
@@ -98,7 +98,7 @@ class BroadcastConfig:
 # 日志配置
 class LogConfig:
     # 日志级别
-    LEVEL = 'DEBUG'
+    LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 
     # 日志文件路径
     LOG_DIR = BASE_DIR / 'logs'
@@ -120,7 +120,7 @@ class ExportConfig:
 # JWT认证配置
 class AuthConfig:
     # JWT密钥
-    JWT_SECRET = os.environ.get('JWT_SECRET', 'industrial-scada-jwt-secret-2026')
+    JWT_SECRET = os.environ.get('JWT_SECRET') or 'dev-jwt-secret-change-in-production'
 
     # JWT算法
     JWT_ALGORITHM = 'HS256'

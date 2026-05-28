@@ -30,7 +30,7 @@ def init_socketio(app, database, data_collector):
     """
     global socketio
 
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+    socketio = SocketIO(app, cors_allowed_origins="http://localhost:* http://127.0.0.1:*", async_mode='threading')
 
     # 注册事件处理
     @socketio.on('connect')

@@ -19,6 +19,7 @@ _require_auth = jwt_required
 # ==================== 数据查询API ====================
 
 @data_bp.route('/data/realtime', methods=['GET'])
+@_require_auth
 def get_realtime_data():
     """获取实时数据（realtime_data 是 UPSERT 表，每设备每寄存器只有一行）"""
     device_id = request.args.get('device_id')
@@ -28,6 +29,7 @@ def get_realtime_data():
 
 
 @data_bp.route('/data/latest/<device_id>', methods=['GET'])
+@_require_auth
 def get_latest_data(device_id):
     """获取设备最新数据"""
     register_name = request.args.get('register_name')
@@ -38,6 +40,7 @@ def get_latest_data(device_id):
 
 
 @data_bp.route('/data/history/<device_id>/<register_name>', methods=['GET'])
+@_require_auth
 def get_history_data(device_id, register_name):
     """获取历史数据"""
     start_time = request.args.get('start_time')
@@ -81,7 +84,8 @@ def export_device_data(device_id):
     )
 
     if filepath:
-        return jsonify({'success': True, 'filepath': filepath})
+        from pathlib import Path
+        return jsonify({'success': True, 'filename': Path(filepath).name})
     return jsonify({'success': False, 'message': '导出失败'}), 500
 
 
@@ -100,5 +104,6 @@ def export_alarms():
     )
 
     if filepath:
-        return jsonify({'success': True, 'filepath': filepath})
+        from pathlib import Path
+        return jsonify({'success': True, 'filename': Path(filepath).name})
     return jsonify({'success': False, 'message': '没有报警记录可导出'})

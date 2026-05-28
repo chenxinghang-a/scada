@@ -9,7 +9,7 @@ import yaml
 from flask import Blueprint, jsonify, request, current_app
 from datetime import datetime
 
-from 用户层.auth import role_required
+from 用户层.auth import role_required, jwt_required
 from ._common import load_yaml_config, save_yaml_config
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ system_bp = Blueprint('api_system', __name__, url_prefix='/api')
 # ==================== 系统信息API ====================
 
 @system_bp.route('/system/status', methods=['GET'])
+@jwt_required
 def get_system_status():
     """获取系统状态"""
     start_time = getattr(current_app, 'system_start_time', None)
