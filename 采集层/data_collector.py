@@ -137,11 +137,7 @@ class DataCollector:
         logger.info("数据采集器已停止")
 
     def start_device_task(self, device_id: str, device_config: dict[str, Any]):
-        """为指定设备启动采集任务（运行时添加设备时调用）
-
-        设备存在 ⟹ 有采集任务 ⟹ 有数据
-        设备不存在 ⟹ 无采集任务 ⟹ 无数据
-        """
+        """为指定设备启动采集任务（运行时添加设备时调用）"""
         if not self.running:
             logger.warning(f"数据采集器未运行，跳过设备 {device_id} 的采集启动")
             return
@@ -150,9 +146,17 @@ class DataCollector:
             logger.info(f"设备 {device_id} 已禁用，跳过采集启动")
             return
 
-        if device_id in self.tasks:
-            logger.debug(f"设备 {device_id} 已有采集任务，跳过")
-            return
+        with self._tasks_lock:
+            if device_id in self.tasks:
+                logger.debug(f"设备 {device_id} 已有采集任务，跳过")
+                return
+
+        # 确保客户端已创建（device_manager.add_device 只存配置，不创建客户端）
+        client = self.device_manager.get_client(device_id)
+        if client is None:
+            logger.info(f"设备 {device_id} 客户端不存在，尝试创建...")
+            if not self.device_manager.connect_device(device_id):
+                logger.warning(f"设备 {device_id} 客户端创建失败，采集任务仍会启动（等待重连）")
 
         protocol = device_config.get('protocol', 'modbus_tcp')
         if protocol in ('opcua', 'mqtt'):

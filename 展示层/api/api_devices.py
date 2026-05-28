@@ -113,13 +113,18 @@ def update_device(device_id):
 @devices_bp.route('/devices/<device_id>', methods=['DELETE'])
 @_require_engineer
 def delete_device(device_id):
-    """删除设备"""
-    # 第一步：停止采集（先停数据，再删配置）
+    """删除设备（先验证存在 → 停采集 → 删配置）"""
+    # 先检查设备是否存在
+    devices = current_app.device_manager.devices
+    if device_id not in devices:
+        return jsonify({'success': False, 'message': f'设备 {device_id} 不存在'}), 404
+
+    # 停止采集任务
     data_collector = getattr(current_app, 'data_collector', None)
     if data_collector:
         data_collector.remove_device_task(device_id)
 
-    # 第二步：删除设备配置
+    # 删除设备配置
     initializer = _get_simulation_initializer()
     if initializer is not None:
         result = initializer.remove_device(device_id)
@@ -127,20 +132,16 @@ def delete_device(device_id):
             get_auth_manager().log_operation(
                 request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
             return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
-        # simulation_initializer 失败，回退到 device_manager 直接删除
+        # 回退到 device_manager
         success = current_app.device_manager.remove_device(device_id)
-        if success:
-            get_auth_manager().log_operation(
-                request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
-            return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
-        return jsonify(result), 400
     else:
         success = current_app.device_manager.remove_device(device_id)
-        if success:
-            get_auth_manager().log_operation(
-                request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
-            return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
-        return jsonify({'success': False, 'message': f'删除设备 {device_id} 失败'}), 400
+
+    if success:
+        get_auth_manager().log_operation(
+            request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
+        return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
+    return jsonify({'success': False, 'message': f'删除设备 {device_id} 失败'}), 400
 
 
 @devices_bp.route('/devices/<device_id>/connect', methods=['POST'])
