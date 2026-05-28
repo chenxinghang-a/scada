@@ -326,18 +326,101 @@ class DataCollector:
             return False
 
     def _collect_modbus(self, client, device_id: str, device_config: dict[str, Any], timestamp):
-        """采集Modbus设备的寄存器数据"""
+        """
+        采集Modbus设备的寄存器数据（批量读取优化）
+
+        按 Modbus 规范：FC03 单次最多读 125 个寄存器。
+        将连续地址范围合并为一次请求，减少网络往返。
+        """
         registers = device_config.get('registers', [])
-        for register in registers:
-            data = self._read_register(client, register)
-            if data is not None:
-                self.data_queue.put({
-                    'device_id': device_id,
-                    'register_name': register['name'],
-                    'value': data,
-                    'timestamp': timestamp,
-                    'unit': register.get('unit', '')
-                })
+        if not registers:
+            return
+
+        # 计算每个寄存器需要的寄存器数
+        reg_sizes = {}
+        for reg in registers:
+            dt = reg.get('data_type', 'uint16')
+            if dt in ('float32', 'float64', 'int32', 'uint32'):
+                reg_sizes[reg['address']] = 2
+            else:
+                reg_sizes[reg['address']] = 1
+
+        # 计算整体地址范围
+        min_addr = min(r['address'] for r in registers)
+        max_end = max(r['address'] + reg_sizes[r['address']] for r in registers)
+        total_count = max_end - min_addr
+
+        # 单次 FC03 读取整个范围（规范限制 125，超出则分段）
+        if total_count <= 125:
+            all_regs = client.read_holding_registers(min_addr, total_count)
+            if all_regs is None:
+                return
+            # 从批量结果中解析每个寄存器
+            for reg in registers:
+                offset = reg['address'] - min_addr
+                size = reg_sizes[reg['address']]
+                raw = all_regs[offset:offset + size]
+                if len(raw) < size:
+                    continue
+                value = self._decode_register(client, raw, reg)
+                if value is not None:
+                    self.data_queue.put({
+                        'device_id': device_id,
+                        'register_name': reg['name'],
+                        'value': value,
+                        'timestamp': timestamp,
+                        'unit': reg.get('unit', '')
+                    })
+        else:
+            # 地址范围超过 125，分段读取
+            for start in range(min_addr, max_end, 125):
+                count = min(125, max_end - start)
+                chunk = client.read_holding_registers(start, count)
+                if chunk is None:
+                    continue
+                for reg in registers:
+                    if reg['address'] < start or reg['address'] >= start + count:
+                        continue
+                    offset = reg['address'] - start
+                    size = reg_sizes[reg['address']]
+                    raw = chunk[offset:offset + size]
+                    if len(raw) < size:
+                        continue
+                    value = self._decode_register(client, raw, reg)
+                    if value is not None:
+                        self.data_queue.put({
+                            'device_id': device_id,
+                            'register_name': reg['name'],
+                            'value': value,
+                            'timestamp': timestamp,
+                            'unit': reg.get('unit', '')
+                        })
+
+    def _decode_register(self, client, raw_regs: list[int], register: dict) -> float | None:
+        """从原始寄存器值解码为工程值"""
+        try:
+            data_type = register.get('data_type', 'uint16')
+            scale = register.get('scale', 1)
+            offset = register.get('offset', 0)
+
+            if data_type == 'float32':
+                value = client.decode_float32(raw_regs)
+            elif data_type == 'float64':
+                value = client.decode_float64(raw_regs)
+            elif data_type == 'int32':
+                value = client.decode_int32(raw_regs)
+            elif data_type == 'uint32':
+                value = client.decode_uint32(raw_regs)
+            elif data_type == 'int16':
+                value = client.decode_int16(raw_regs[0])
+            else:
+                value = client.decode_uint16(raw_regs[0])
+
+            if value is None:
+                return None
+            return round(value * scale + offset, 4)
+        except Exception:
+            return None
 
     def _collect_from_cache(self, client, device_id: str, timestamp):
         """通用方法：从客户端缓存采集数据（适用于REST/OPC UA/MQTT）"""

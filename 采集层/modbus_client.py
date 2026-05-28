@@ -11,8 +11,15 @@ import threading
 from typing import Any
 from pymodbus.client import ModbusTcpClient, ModbusSerialClient
 from pymodbus.exceptions import ModbusException, ConnectionException
+from pymodbus.pdu import ExceptionResponse
 
 logger = logging.getLogger(__name__)
+
+# Modbus 异常码分类（Modbus Application Protocol V1.1b3）
+# 永久错误：不重试，配置问题
+_PERMANENT_EXCEPTIONS = {0x01, 0x02, 0x03}  # Illegal Function/Address/Value
+# 瞬态错误：可重试
+_TRANSIENT_EXCEPTIONS = {0x04, 0x06, 0x08, 0x0A, 0x0B}  # Device Failure/Busy/Parity/Gateway
 
 
 class ModbusClient:
@@ -153,7 +160,11 @@ class ModbusClient:
             )
 
             if result.isError():
-                logger.error(f"读取寄存器失败: {result}")
+                # 区分永久错误（配置问题）和瞬态错误（可重试）
+                if isinstance(result, ExceptionResponse) and result.exception_code in _PERMANENT_EXCEPTIONS:
+                    logger.error(f"Modbus 永久错误 (0x{result.exception_code:02X}): {result} — 不重试，检查寄存器配置")
+                else:
+                    logger.warning(f"Modbus 瞬态错误: {result} — 可重试")
                 self._inc_stat('failed_reads')
                 with self._stats_lock:
                     self.stats['last_error'] = str(result)
