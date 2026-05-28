@@ -73,14 +73,10 @@ function populateDeviceSelector(deviceIds) {
 
     select.addEventListener('change', function() {
         selectedDeviceId = this.value;
-        // 清空缓存，重新开始收集该设备的数据
-        Object.keys(dataBuffers).forEach(key => {
-            if (!key.startsWith(selectedDeviceId + ':')) {
-                delete dataBuffers[key];
-            }
-        });
+        // 清空所有缓存（切换设备后重新开始收集）
+        Object.keys(dataBuffers).forEach(key => delete dataBuffers[key]);
         if (trendChart) {
-            trendChart.setOption({ series: [], legend: { data: [] } });
+            trendChart.clear();
         }
     });
 }

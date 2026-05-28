@@ -98,49 +98,97 @@
 
 {% block extra_js %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
+// 设备名缓存
+let _alarmDeviceNames = {};
+
+document.addEventListener('DOMContentLoaded', async function() {
+    // 加载设备列表填充下拉框
+    await loadAlarmDeviceList();
     loadAlarms();
-    
-    // 筛选按钮
+
     document.getElementById('filter-btn').addEventListener('click', loadAlarms);
     document.getElementById('refresh-btn').addEventListener('click', loadAlarms);
 });
 
+async function loadAlarmDeviceList() {
+    try {
+        const resp = await fetch('/api/devices', { headers: getAuthHeaders() });
+        const data = await resp.json();
+        const select = document.getElementById('alarm-device-filter');
+        if (data.devices) {
+            // 兼容数组和对象
+            const devices = Array.isArray(data.devices) ? data.devices : Object.values(data.devices);
+            devices.forEach(d => {
+                const id = d.device_id || d.id;
+                const name = d.name || id;
+                _alarmDeviceNames[id] = name;
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = name;
+                select.appendChild(opt);
+            });
+        }
+    } catch (e) {
+        console.warn('加载设备列表失败');
+    }
+}
+
 async function loadAlarms() {
     const deviceFilter = document.getElementById('alarm-device-filter').value;
     const levelFilter = document.getElementById('alarm-level-filter').value;
-    
-    let url = '/api/alarms?limit=50';
+    const statusFilter = document.getElementById('alarm-status-filter').value;
+
+    let url = '/api/alarms?limit=200';
     if (deviceFilter) url += `&device_id=${deviceFilter}`;
     if (levelFilter) url += `&alarm_level=${levelFilter}`;
-    
+
     try {
         const response = await fetch(url, { headers: getAuthHeaders() });
         const data = await response.json();
-        const tbody = document.getElementById('alarm-tbody');
-        
+        let alarms = data.alarms || [];
+
+        // 前端筛选状态（API 不一定支持 status 参数）
+        if (statusFilter === 'unacknowledged') {
+            alarms = alarms.filter(a => !a.acknowledged);
+        } else if (statusFilter === 'acknowledged') {
+            alarms = alarms.filter(a => a.acknowledged);
+        }
+
         // 更新统计
-        const alarms = data.alarms || [];
-        document.getElementById('total-alarms').textContent = alarms.length;
-        document.getElementById('unacknowledged-alarms').textContent = alarms.filter(a => !a.acknowledged).length;
-        document.getElementById('high-alarms').textContent = alarms.filter(a => a.alarm_level === 'critical').length;
-        
+        const allAlarms = data.alarms || [];
+        document.getElementById('total-alarms').textContent = allAlarms.length;
+        document.getElementById('unacknowledged-alarms').textContent = allAlarms.filter(a => !a.acknowledged).length;
+        document.getElementById('high-alarms').textContent = allAlarms.filter(a => a.alarm_level === 'critical').length;
+
+        const tbody = document.getElementById('alarm-tbody');
         if (alarms.length > 0) {
-            tbody.innerHTML = alarms.map(a => `
-                <tr>
-                    <td>${new Date(a.timestamp).toLocaleString()}</td>
-                    <td>${getDeviceName(a.device_id)}</td>
-                    <td>${getRegisterName(a.register_name)}</td>
-                    <td><span class="badge bg-${a.alarm_level === 'critical' ? 'danger' : 'warning'}">${a.alarm_level === 'critical' ? '严重' : '警告'}</span></td>
-                    <td>${a.alarm_message}</td>
-                    <td>${a.threshold?.toFixed(2) || '-'}</td>
-                    <td>${a.actual_value?.toFixed(2) || '-'}</td>
-                    <td><span class="badge bg-${a.acknowledged ? 'success' : 'secondary'}">${a.acknowledged ? '已确认' : '未确认'}</span></td>
-                    <td>${a.acknowledged ? '' : `<button class="btn btn-sm btn-outline-primary" onclick="acknowledgeAlarm('${a.alarm_id}', '${a.device_id}', '${a.register_name}')">确认</button>`}</td>
-                </tr>
-            `).join('');
+            tbody.innerHTML = alarms.map(a => {
+                const time = new Date(a.timestamp).toLocaleString('zh-CN');
+                const deviceName = _alarmDeviceNames[a.device_id] || a.device_id;
+                const levelBadge = a.alarm_level === 'critical'
+                    ? '<span class="badge bg-danger">严重</span>'
+                    : '<span class="badge bg-warning text-dark">警告</span>';
+                const statusBadge = a.acknowledged
+                    ? '<span class="badge bg-success">已确认</span>'
+                    : '<span class="badge bg-secondary">未确认</span>';
+                const ackBtn = a.acknowledged
+                    ? ''
+                    : `<button class="btn btn-sm btn-outline-primary" onclick="acknowledgeAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}')">确认</button>`;
+
+                return `<tr>
+                    <td>${time}</td>
+                    <td>${deviceName}</td>
+                    <td>${a.register_name || '-'}</td>
+                    <td>${levelBadge}</td>
+                    <td>${a.alarm_message || '-'}</td>
+                    <td>${a.threshold != null ? parseFloat(a.threshold).toFixed(2) : '-'}</td>
+                    <td>${a.actual_value != null ? parseFloat(a.actual_value).toFixed(2) : '-'}</td>
+                    <td>${statusBadge}</td>
+                    <td>${ackBtn}</td>
+                </tr>`;
+            }).join('');
         } else {
-            tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">暂无报警记录</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">暂无报警记录</td></tr>';
         }
     } catch (error) {
         console.error('加载报警失败:', error);
@@ -159,35 +207,10 @@ async function acknowledgeAlarm(alarmId, deviceId, registerName) {
             })
         });
         const data = await response.json();
-        if (data.success) {
-            loadAlarms();
-        }
+        if (data.success) loadAlarms();
     } catch (error) {
         console.error('确认报警失败:', error);
     }
-}
-
-function getDeviceName(deviceId) {
-    const names = {
-        'temp_sensor_01': '温度传感器1号',
-        'pressure_sensor_01': '压力传感器1号',
-        'power_meter_01': '电力仪表1号'
-    };
-    return names[deviceId] || deviceId;
-}
-
-function getRegisterName(name) {
-    const names = {
-        'temperature': '温度',
-        'humidity': '湿度',
-        'pressure': '压力',
-        'voltage': '电压',
-        'current': '电流',
-        'power': '功率',
-        'energy': '电量',
-        'status': '状态'
-    };
-    return names[name] || name;
 }
 </script>
 {% endblock %}
