@@ -1,75 +1,50 @@
-/* 工业SCADA系统样式 */
+/* 工业SCADA系统样式 — 基于 Tabler 主题补充 */
 
 body {
     font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
-    background-color: #f5f7fa;
 }
 
-.navbar { box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
-.navbar-brand { font-weight: 600; }
-.nav-link { transition: background-color 0.2s; border-radius: 4px; margin: 0 2px; }
-.nav-link:hover { background-color: rgba(0,0,0,0.05); }
-.nav-link.active { background-color: rgba(0,0,0,0.08); font-weight: 600; }
-
-.card { border: none; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-radius: 10px; }
-.card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
-.card-header { background: #fff; border-bottom: 1px solid #eee; border-radius: 10px 10px 0 0 !important; }
-.card-title { font-size: 0.95rem; font-weight: 600; }
-
-.table { margin-bottom: 0; }
-.table th { background: #f8f9fa; font-weight: 600; font-size: 0.85rem; color: #555; }
-.table td { vertical-align: middle; }
-
-.status-online { color: #28a745; }
-.status-offline { color: #dc3545; }
-.status-warning { color: #ffc107; }
-
-.alarm-critical { color: #dc3545; font-weight: bold; }
-.alarm-warning { color: #ffc107; font-weight: bold; }
-.alarm-info { color: #17a2b8; }
-
-.device-card { border-left: 4px solid #28a745; padding: 10px; margin-bottom: 10px; background: #fff; border-radius: 4px; }
-.device-card.offline { border-left-color: #dc3545; }
-.device-card.warning { border-left-color: #ffc107; }
-
-.chart-container { position: relative; width: 100%; }
-
-.device-status-badge { padding: 4px 8px; border-radius: 12px; font-size: 0.85em; font-weight: 500; }
-.device-status-badge.online { background-color: #d4edda; color: #155724; }
-.device-status-badge.offline { background-color: #f8d7da; color: #721c24; }
-.device-status-badge.warning { background-color: #fff3cd; color: #856404; }
-
+/* 数据值（等宽字体） */
 .data-value { font-size: 1.1em; font-weight: bold; font-family: 'Consolas', monospace; }
-.data-value.high { color: #dc3545; }
-.data-value.low { color: #17a2b8; }
-.data-value.normal { color: #28a745; }
+.data-value.high { color: #d63939; }
+.data-value.low { color: #4299e1; }
+.data-value.normal { color: #2fb344; }
 
-.stat-value { font-size: 1.8rem; font-weight: 700; font-family: 'Consolas', monospace; }
-.stat-label { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+/* 统计值 */
+.stat-value { font-size: 2rem; font-weight: 700; font-family: 'Consolas', monospace; line-height: 1; }
+.stat-label { font-size: 0.75rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
 
-.heatmap-cell { width: 100%; height: 56px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.2s; }
+/* 热力图 */
+.heatmap-cell { width: 100%; height: 56px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.2s; }
 .heatmap-cell:hover { transform: scale(1.05); opacity: 0.9; }
 
+/* 健康度条 */
 .health-bar { height: 6px; border-radius: 3px; background: #e9ecef; overflow: hidden; }
 .health-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
 
+/* 迷你指标 */
 .metric-mini { padding: 10px; background: #f8f9fa; border-radius: 8px; text-align: center; }
-.metric-mini .value { font-size: 1.3rem; font-weight: 700; font-family: 'Consolas', monospace; color: #007bff; }
-.metric-mini .label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
+.metric-mini .value { font-size: 1.3rem; font-weight: 700; font-family: 'Consolas', monospace; color: #206bc4; }
+.metric-mini .label { font-size: 0.7rem; color: #6b7280; text-transform: uppercase; }
 
-.alarm-item { padding: 10px 12px; border-left: 4px solid; margin-bottom: 8px; border-radius: 0 6px 6px 0; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-.alarm-critical { border-color: #dc3545; }
-.alarm-warning { border-color: #ffc107; }
-.alarm-info { border-color: #17a2b8; }
+/* 报警条目 */
+.alarm-item { padding: 10px 12px; border-left: 4px solid; margin-bottom: 8px; border-radius: 0 8px 8px 0; }
+.alarm-critical { border-color: #d63939; }
+.alarm-warning { border-color: #f59f00; }
+.alarm-info { border-color: #4299e1; }
 
-.gauge-card { background: #fff; border-radius: 10px; padding: 16px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+/* 仪表盘卡片 */
+.gauge-card { border-radius: 12px; padding: 20px; text-align: center; }
 .gauge-container { width: 180px; height: 140px; margin: 0 auto; }
-.gauge-value { font-size: 1.6rem; font-weight: 700; font-family: 'Consolas', monospace; color: #007bff; }
-.gauge-label { font-size: 0.8rem; color: #888; }
+.gauge-value { font-size: 1.6rem; font-weight: 700; font-family: 'Consolas', monospace; color: #206bc4; }
+.gauge-label { font-size: 0.8rem; color: #6b7280; }
 
+/* 状态点 */
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.status-dot.online { background: #2fb344; box-shadow: 0 0 6px #2fb344; }
+.status-dot.offline { background: #d63939; box-shadow: 0 0 6px #d63939; }
+.status-dot.warning { background: #f59f00; box-shadow: 0 0 6px #f59f00; }
+
+/* 动画 */
 @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
 .alarm-active { animation: pulse 1s infinite; }
-
-.spinner-border { border-color: #dee2e6; border-top-color: #007bff; }
-
-.footer { background: #f8f9fa; border-top: 1px solid #eee; color: #888; font-size: 0.8rem; }
