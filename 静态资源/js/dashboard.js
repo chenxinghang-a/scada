@@ -203,12 +203,20 @@ async function loadRealtimeData() {
  * 更新趋势图 — 只显示选中设备的变量，最多 MAX_DATA_POINTS 个点
  */
 function updateTrendChart(data) {
-    if (!trendChart || !selectedDeviceId) return;
+    if (!trendChart) return;
+
+    // 如果还没选中设备，从数据里自动选第一个
+    if (!selectedDeviceId && data.length > 0) {
+        selectedDeviceId = data[0].device_id;
+        console.log('自动选中设备:', selectedDeviceId);
+    }
+    if (!selectedDeviceId) return;
 
     const now = new Date();
-    const timeLabel = now.toTimeString().slice(0, 8);  // HH:MM:SS
+    const timeLabel = now.toTimeString().slice(0, 8);
 
     // 只缓存选中设备的数据
+    let matched = 0;
     data.forEach(item => {
         if (item.device_id !== selectedDeviceId) return;
         if (item.value === null || item.value === undefined) return;
@@ -216,7 +224,15 @@ function updateTrendChart(data) {
         if (!dataBuffers[key]) dataBuffers[key] = [];
         dataBuffers[key].push({ time: timeLabel, value: parseFloat(item.value) });
         if (dataBuffers[key].length > MAX_DATA_POINTS) dataBuffers[key].shift();
+        matched++;
     });
+
+    // 调试：第一次打印匹配情况
+    if (!updateTrendChart._logged) {
+        console.log(`趋势图: selectedDeviceId=${selectedDeviceId}, 数据${data.length}条, 匹配${matched}条`);
+        console.log('数据中的 device_id 样本:', [...new Set(data.map(d => d.device_id))].slice(0, 5));
+        updateTrendChart._logged = true;
+    }
 
     const keys = Object.keys(dataBuffers);
     if (keys.length === 0) return;
