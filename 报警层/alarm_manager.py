@@ -64,6 +64,68 @@ class AlarmDedupConfig:
             self.warning_toast_duration = max(5, int(data['warning_toast_duration']))
 
 
+class AlarmShelveState:
+    """报警旁路/搁置状态"""
+
+    def __init__(self, alarm_key: tuple, reason: str, shelved_by: str,
+                 shelved_until: datetime | None = None):
+        self.alarm_key = alarm_key
+        self.reason = reason
+        self.shelved_by = shelved_by
+        self.shelved_at = datetime.now()
+        self.shelved_until = shelved_until  # None = 手动解除
+
+    def is_expired(self) -> bool:
+        if self.shelved_until is None:
+            return False  # 手动旁路，不过期
+        return datetime.now() > self.shelved_until
+
+    def to_dict(self) -> dict:
+        return {
+            'alarm_key': ':'.join(self.alarm_key),
+            'reason': self.reason,
+            'shelved_by': self.shelved_by,
+            'shelved_at': self.shelved_at.isoformat(),
+            'shelved_until': self.shelved_until.isoformat() if self.shelved_until else None,
+        }
+
+
+class AlarmPriorityMatrix:
+    """
+    ISA-18.2 报警优先级矩阵
+    严重度(Severity) × 可能性(Likelihood) → 优先级(Priority)
+    """
+
+    # 严重度: 1=可忽略, 2=次要, 3=中等, 4=严重, 5=灾难
+    # 可能性: 1=罕见, 2=不太可能, 3=可能, 4=很可能, 5=频繁
+    MATRIX = {
+        # (severity, likelihood) -> priority
+        (5, 5): 'P1', (5, 4): 'P1', (5, 3): 'P1',
+        (5, 2): 'P2', (5, 1): 'P2',
+        (4, 5): 'P1', (4, 4): 'P2', (4, 3): 'P2',
+        (4, 2): 'P3', (4, 1): 'P3',
+        (3, 5): 'P2', (3, 4): 'P2', (3, 3): 'P3',
+        (3, 2): 'P3', (3, 1): 'P4',
+        (2, 5): 'P3', (2, 4): 'P3', (2, 3): 'P4',
+        (2, 2): 'P4', (2, 1): 'P5',
+        (1, 5): 'P4', (1, 4): 'P4', (1, 3): 'P5',
+        (1, 2): 'P5', (1, 1): 'P5',
+    }
+
+    PRIORITY_ORDER = {'P1': 1, 'P2': 2, 'P3': 3, 'P4': 4, 'P5': 5}
+
+    @classmethod
+    def get_priority(cls, severity: int, likelihood: int) -> str:
+        severity = max(1, min(5, severity))
+        likelihood = max(1, min(5, likelihood))
+        return cls.MATRIX.get((severity, likelihood), 'P3')
+
+    @classmethod
+    def is_higher(cls, p1: str, p2: str) -> bool:
+        """判断 p1 是否比 p2 优先级更高"""
+        return cls.PRIORITY_ORDER.get(p1, 99) < cls.PRIORITY_ORDER.get(p2, 99)
+
+
 class AlarmManager:
     """
     报警管理器（重写版）
@@ -109,6 +171,12 @@ class AlarmManager:
 
         # 去重配置
         self.dedup_config = AlarmDedupConfig()
+
+        # ISA-18.2: 旁路/搁置的报警
+        self._shelved_alarms: dict[tuple, AlarmShelveState] = {}
+
+        # ISA-18.2: 死区配置 (rule_id -> deadband_value)
+        self._deadbands: dict[str, float] = {}
 
         # 去重状态：记录每个报警的最后推送时间
         # key: (alarm_id, device_id, register_name) -> last_emit_timestamp
@@ -170,6 +238,9 @@ class AlarmManager:
             value: 数据值
             timestamp: 时间戳
         """
+        # 清理过期的旁路
+        self._cleanup_expired_shelves()
+
         # 查找匹配的报警规则
         for rule_id, rule_config in self.rules.items():
             if not rule_config.get('enabled', True):
@@ -179,11 +250,17 @@ class AlarmManager:
             if (rule_config.get('device_id') == device_id and
                 rule_config.get('register_name') == register_name):
 
-                # 检查报警条件
+                # ISA-18.2: 检查是否被旁路/搁置
+                alarm_key = (rule_id, device_id, register_name)
+                if alarm_key in self._shelved_alarms:
+                    continue
+
+                # 检查报警条件（含死区）
                 alarm_triggered = self._check_condition(
                     value=value,
                     condition=rule_config.get('condition'),
-                    threshold=rule_config.get('threshold')
+                    threshold=rule_config.get('threshold'),
+                    rule_id=rule_id
                 )
 
                 # 处理报警状态
@@ -197,30 +274,37 @@ class AlarmManager:
                     triggered=alarm_triggered
                 )
 
-    def _check_condition(self, value: float, condition: str, threshold: float) -> bool:
+    def _check_condition(self, value: float, condition: str, threshold: float,
+                         rule_id: str = None) -> bool:
         """
-        检查报警条件
+        检查报警条件（含死区支持）
+
+        死区（Deadband）防止阈值附近信号抖动导致报警反复触发/清除。
+        例如：阈值100，死区2，则 value>102 才报警，value<98 才清除。
 
         Args:
             value: 实际值
             condition: 条件类型
             threshold: 阈值
+            rule_id: 规则ID（用于查找死区配置）
 
         Returns:
             bool: 是否触发报警
         """
+        deadband = self._deadbands.get(rule_id, 0) if rule_id else 0
+
         if condition == 'greater_than':
-            return value > threshold
+            return value > (threshold + deadband)
         elif condition == 'less_than':
-            return value < threshold
+            return value < (threshold - deadband)
         elif condition == 'equal_to':
-            return abs(value - threshold) < 0.0001
+            return abs(value - threshold) < (deadband if deadband > 0 else 0.0001)
         elif condition == 'not_equal_to':
-            return abs(value - threshold) >= 0.0001
+            return abs(value - threshold) >= (deadband if deadband > 0 else 0.0001)
         elif condition == 'greater_equal':
-            return value >= threshold
+            return value >= (threshold + deadband)
         elif condition == 'less_equal':
-            return value <= threshold
+            return value <= (threshold - deadband)
         else:
             logger.warning(f"未知的报警条件: {condition}")
             return False
@@ -482,7 +566,7 @@ class AlarmManager:
             state['acknowledged_at'] = datetime.now()
 
         # 更新数据库
-        success = self.database.acknowledge_alarm(alarm_id, acknowledged_by)
+        success = self.database.acknowledge_alarm(alarm_id, acknowledged_by, device_id, register_name)
 
         if success:
             logger.info(f"报警已确认: {alarm_id} by {acknowledged_by}")
@@ -702,3 +786,117 @@ class AlarmManager:
 
         except Exception as e:
             logger.error(f"保存报警配置异常: {e}")
+
+    # ================================================================
+    # ISA-18.2 报警管理扩展
+    # ================================================================
+
+    def shelve_alarm(self, alarm_id: str, device_id: str, register_name: str,
+                     reason: str, shelved_by: str, duration_minutes: int = None) -> bool:
+        """
+        旁路/搁置报警（ISA-18.2 Alarm Shelving）
+
+        维护期间临时屏蔽特定报警，避免误报干扰。
+        支持定时自动解除或手动解除。
+
+        Args:
+            alarm_id: 报警规则ID
+            device_id: 设备ID
+            register_name: 寄存器名
+            reason: 旁路原因
+            shelved_by: 操作人
+            duration_minutes: 旁路时长（分钟），None=手动解除
+
+        Returns:
+            bool: 是否成功
+        """
+        alarm_key = (alarm_id, device_id, register_name)
+        shelved_until = None
+        if duration_minutes:
+            shelved_until = datetime.now() + timedelta(minutes=duration_minutes)
+
+        self._shelved_alarms[alarm_key] = AlarmShelveState(
+            alarm_key=alarm_key,
+            reason=reason,
+            shelved_by=shelved_by,
+            shelved_until=shelved_until,
+        )
+
+        logger.warning(f"报警已旁路: {alarm_id} ({device_id}/{register_name}) "
+                       f"by {shelved_by}, 原因: {reason}, "
+                       f"时长: {'手动解除' if not duration_minutes else f'{duration_minutes}分钟'}")
+        return True
+
+    def unshelve_alarm(self, alarm_id: str, device_id: str, register_name: str) -> bool:
+        """
+        解除报警旁路
+
+        Args:
+            alarm_id: 报警规则ID
+            device_id: 设备ID
+            register_name: 寄存器名
+
+        Returns:
+            bool: 是否成功
+        """
+        alarm_key = (alarm_id, device_id, register_name)
+        if alarm_key in self._shelved_alarms:
+            del self._shelved_alarms[alarm_key]
+            logger.info(f"报警旁路已解除: {alarm_id} ({device_id}/{register_name})")
+            return True
+        return False
+
+    def get_shelved_alarms(self) -> list[dict]:
+        """获取所有被旁路的报警"""
+        return [state.to_dict() for state in self._shelved_alarms.values()]
+
+    def _cleanup_expired_shelves(self):
+        """清理过期的旁路"""
+        expired = [k for k, v in self._shelved_alarms.items() if v.is_expired()]
+        for key in expired:
+            del self._shelved_alarms[key]
+            logger.info(f"报警旁路已过期自动解除: {':'.join(key)}")
+
+    def set_deadband(self, rule_id: str, deadband_value: float):
+        """
+        设置报警死区（ISA-18.2 Deadband）
+
+        防止阈值附近信号抖动导致报警反复触发/清除。
+        例如：阈值100，死区2，则 value>102 才触发，value<98 才清除。
+
+        Args:
+            rule_id: 报警规则ID
+            deadband_value: 死区值
+        """
+        self._deadbands[rule_id] = deadband_value
+        logger.info(f"报警死区已设置: {rule_id} = {deadband_value}")
+
+    def get_deadbands(self) -> dict[str, float]:
+        """获取所有死区配置"""
+        return dict(self._deadbands)
+
+    def get_priority_matrix(self) -> dict:
+        """获取 ISA-18.2 优先级矩阵定义"""
+        return {
+            'severity_levels': {
+                1: '可忽略',
+                2: '次要',
+                3: '中等',
+                4: '严重',
+                5: '灾难',
+            },
+            'likelihood_levels': {
+                1: '罕见',
+                2: '不太可能',
+                3: '可能',
+                4: '很可能',
+                5: '频繁',
+            },
+            'priorities': {
+                'P1': {'name': '紧急', 'response_time': '1分钟', 'color': 'red'},
+                'P2': {'name': '高', 'response_time': '5分钟', 'color': 'orange'},
+                'P3': {'name': '中', 'response_time': '15分钟', 'color': 'yellow'},
+                'P4': {'name': '低', 'response_time': '1小时', 'color': 'blue'},
+                'P5': {'name': '记录', 'response_time': '班次结束', 'color': 'gray'},
+            }
+        }
