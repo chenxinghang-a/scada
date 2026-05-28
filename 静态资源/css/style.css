@@ -1,399 +1,436 @@
-/* 工业SCADA系统样式 */
+/* 工业SCADA系统样式 — 深色工业主题 */
 
-/* 全局样式 */
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background-color: #f5f5f5;
+/* ========== 全局 ========== */
+:root {
+    --bg-primary: #0f1923;
+    --bg-secondary: #1a2633;
+    --bg-card: #1e2d3d;
+    --bg-card-hover: #243447;
+    --border-color: #2a3f52;
+    --text-primary: #e0e6ed;
+    --text-secondary: #8899aa;
+    --accent-blue: #00b4d8;
+    --accent-green: #00e676;
+    --accent-yellow: #ffd600;
+    --accent-red: #ff5252;
+    --accent-orange: #ff9100;
+    --shadow: 0 2px 12px rgba(0,0,0,0.3);
 }
 
-/* 导航栏优化 */
+* { box-sizing: border-box; }
+
+body {
+    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+}
+
+a { color: var(--accent-blue); }
+a:hover { color: #48cae4; }
+
+/* ========== 导航栏 ========== */
 .navbar {
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    background: var(--bg-secondary) !important;
+    border-bottom: 1px solid var(--border-color);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    padding: 0.4rem 1rem;
 }
 
 .navbar-brand {
-    font-weight: 600;
+    font-weight: 700;
+    font-size: 1.1rem;
+    letter-spacing: 1px;
+    color: var(--accent-blue) !important;
 }
 
 .nav-link {
-    transition: background-color 0.2s;
+    color: var(--text-secondary) !important;
     border-radius: 4px;
-    margin: 0 2px;
+    margin: 0 1px;
+    padding: 6px 12px !important;
+    font-size: 0.9rem;
+    transition: all 0.2s;
 }
 
 .nav-link:hover {
-    background-color: rgba(255,255,255,0.1);
+    color: var(--text-primary) !important;
+    background: rgba(255,255,255,0.06);
 }
 
 .nav-link.active {
-    background-color: rgba(255,255,255,0.2);
+    color: var(--accent-blue) !important;
+    background: rgba(0,180,216,0.12);
 }
 
-/* 卡片样式 */
+/* ========== 面包屑 ========== */
+.breadcrumb {
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    padding: 8px 16px;
+    margin-bottom: 1rem;
+}
+
+.breadcrumb-item a { color: var(--text-secondary); }
+.breadcrumb-item.active { color: var(--text-primary); }
+.breadcrumb-item + .breadcrumb-item::before { color: var(--text-secondary); }
+
+/* ========== 卡片 ========== */
 .card {
-    border: none;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    transition: transform 0.2s;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    transition: transform 0.2s, box-shadow 0.2s;
+    color: var(--text-primary);
 }
 
 .card:hover {
     transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
 }
 
 .card-header {
-    background-color: #fff;
-    border-bottom: 1px solid #eee;
+    background: rgba(0,0,0,0.15);
+    border-bottom: 1px solid var(--border-color);
+    border-radius: 10px 10px 0 0 !important;
+    padding: 12px 16px;
 }
 
-/* 表格样式 */
+.card-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* ========== 统计卡片 ========== */
+.stat-card-primary { border-left: 4px solid var(--accent-blue); }
+.stat-card-success { border-left: 4px solid var(--accent-green); }
+.stat-card-warning { border-left: 4px solid var(--accent-yellow); }
+.stat-card-danger  { border-left: 4px solid var(--accent-red); }
+.stat-card-info    { border-left: 4px solid #4fc3f7; }
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    font-family: 'Consolas', 'Courier New', monospace;
+    line-height: 1;
+}
+
+.stat-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ========== 表格 ========== */
 .table {
+    color: var(--text-primary);
     margin-bottom: 0;
 }
 
 .table th {
-    background-color: #f8f9fa;
+    background: rgba(0,0,0,0.2);
+    color: var(--text-secondary);
     font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border-bottom: 1px solid var(--border-color);
+    padding: 10px 12px;
 }
 
 .table td {
     vertical-align: middle;
+    border-bottom: 1px solid rgba(42,63,82,0.5);
+    padding: 10px 12px;
+    font-size: 0.9rem;
 }
 
-/* 状态指示器 */
-.status-online {
-    color: #28a745;
+.table-hover tbody tr:hover {
+    background: rgba(0,180,216,0.06);
 }
 
-.status-offline {
-    color: #dc3545;
+/* ========== 仪表盘专用 ========== */
+.gauge-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
 }
 
-.status-warning {
-    color: #ffc107;
+.gauge-container {
+    width: 180px;
+    height: 140px;
+    margin: 0 auto;
 }
 
-/* 报警级别颜色 */
-.alarm-critical {
-    color: #dc3545;
-    font-weight: bold;
+.gauge-value {
+    font-size: 1.6rem;
+    font-weight: 700;
+    font-family: 'Consolas', monospace;
+    color: var(--accent-blue);
 }
 
-.alarm-warning {
-    color: #ffc107;
-    font-weight: bold;
+.gauge-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
 }
 
-.alarm-info {
-    color: #17a2b8;
-}
-
-/* 设备状态卡片 */
-.device-card {
-    border-left: 4px solid #28a745;
-    padding: 10px;
-    margin-bottom: 10px;
-    background-color: #fff;
-    border-radius: 4px;
-}
-
-.device-card.offline {
-    border-left-color: #dc3545;
-}
-
-.device-card.warning {
-    border-left-color: #ffc107;
-}
-
-/* 图表容器 */
-.chart-container {
-    position: relative;
-    height: 300px;
+/* 热力图单元 */
+.heatmap-cell {
     width: 100%;
+    height: 56px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: 600;
+    font-size: 0.8rem;
+    transition: all 0.3s;
+    cursor: pointer;
+    border: 1px solid transparent;
 }
 
-/* 设备管理页面优化 */
-.device-status-badge {
-    padding: 4px 8px;
-    border-radius: 12px;
-    font-size: 0.85em;
+.heatmap-cell:hover {
+    transform: scale(1.05);
+    border-color: rgba(255,255,255,0.3);
+}
+
+/* 健康度条 */
+.health-bar {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.08);
+    overflow: hidden;
+}
+
+.health-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s;
+}
+
+/* 迷你指标 */
+.metric-mini {
+    padding: 10px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 8px;
+    text-align: center;
+}
+
+.metric-mini .value {
+    font-size: 1.3rem;
+    font-weight: 700;
+    font-family: 'Consolas', monospace;
+    color: var(--accent-blue);
+}
+
+.metric-mini .label {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+/* 报警条目 */
+.alarm-item {
+    padding: 10px 12px;
+    border-left: 4px solid;
+    margin-bottom: 8px;
+    border-radius: 0 6px 6px 0;
+    background: rgba(0,0,0,0.2);
+}
+
+.alarm-critical { border-color: var(--accent-red); }
+.alarm-warning  { border-color: var(--accent-yellow); }
+.alarm-info     { border-color: var(--accent-blue); }
+
+/* ========== 状态指示器 ========== */
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+
+.status-dot.online  { background: var(--accent-green); box-shadow: 0 0 6px var(--accent-green); }
+.status-dot.offline { background: var(--accent-red); box-shadow: 0 0 6px var(--accent-red); }
+.status-dot.warning { background: var(--accent-yellow); box-shadow: 0 0 6px var(--accent-yellow); }
+
+/* ========== 徽章 ========== */
+.badge { font-weight: 500; font-size: 0.78rem; }
+
+.badge-success { background: rgba(0,230,118,0.2); color: var(--accent-green); }
+.badge-danger  { background: rgba(255,82,82,0.2); color: var(--accent-red); }
+.badge-warning { background: rgba(255,214,0,0.2); color: var(--accent-yellow); }
+.badge-info    { background: rgba(0,180,216,0.2); color: var(--accent-blue); }
+
+/* ========== 按钮 ========== */
+.btn-primary {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
     font-weight: 500;
 }
 
-.device-status-badge.online {
-    background-color: #d4edda;
-    color: #155724;
+.btn-primary:hover {
+    background: #0096b7;
+    border-color: #0096b7;
 }
 
-.device-status-badge.offline {
-    background-color: #f8d7da;
-    color: #721c24;
+.btn-outline-light {
+    border-color: var(--border-color);
+    color: var(--text-secondary);
 }
 
-.device-status-badge.warning {
-    background-color: #fff3cd;
-    color: #856404;
+.btn-outline-light:hover {
+    background: rgba(255,255,255,0.06);
+    color: var(--text-primary);
 }
 
-/* 操作按钮组 */
-.action-btn-group {
-    display: flex;
-    gap: 4px;
+/* ========== 表单 ========== */
+.form-control, .form-select {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
 }
 
-.action-btn-group .btn {
-    padding: 4px 8px;
-    font-size: 0.85em;
+.form-control:focus, .form-select:focus {
+    background: var(--bg-secondary);
+    border-color: var(--accent-blue);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 0.2rem rgba(0,180,216,0.2);
 }
 
-/* 图表分析页面优化 */
-.chart-controls {
-    position: sticky;
-    top: 20px;
+.form-control::placeholder { color: var(--text-secondary); }
+
+/* ========== 模态框 ========== */
+.modal-content {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
 }
 
+.modal-header {
+    background: rgba(0,0,0,0.15);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-title { color: var(--text-primary); }
+
+/* ========== 分页 ========== */
+.page-link {
+    background: var(--bg-secondary);
+    border-color: var(--border-color);
+    color: var(--text-secondary);
+}
+
+.page-item.active .page-link {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
+}
+
+/* ========== 进度条 ========== */
+.progress {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.08);
+}
+
+.progress-bar { border-radius: 3px; }
+
+/* ========== 数据值 ========== */
+.data-value {
+    font-size: 1.1em;
+    font-weight: 700;
+    font-family: 'Consolas', monospace;
+}
+
+.data-value.high   { color: var(--accent-red); }
+.data-value.low    { color: #4fc3f7; }
+.data-value.normal { color: var(--accent-green); }
+
+/* ========== 设备卡片 ========== */
+.device-card {
+    border-left: 4px solid var(--accent-green);
+    padding: 10px;
+    margin-bottom: 10px;
+    background: var(--bg-card);
+    border-radius: 0 6px 6px 0;
+}
+
+.device-card.offline { border-left-color: var(--accent-red); }
+.device-card.warning { border-left-color: var(--accent-yellow); }
+
+/* ========== 图表容器 ========== */
+.chart-container {
+    position: relative;
+    width: 100%;
+}
+
+/* ========== 注册标签 ========== */
 .register-tag {
     display: inline-block;
     padding: 2px 8px;
     margin: 2px;
-    background-color: #e9ecef;
+    background: rgba(0,180,216,0.12);
+    border: 1px solid rgba(0,180,216,0.3);
     border-radius: 4px;
-    font-size: 0.85em;
+    font-size: 0.82rem;
+    color: var(--accent-blue);
 }
 
-.register-tag .btn-close {
-    font-size: 0.7em;
-    padding: 2px;
+/* ========== 加载动画 ========== */
+.loading {
+    text-align: center;
+    padding: 30px;
+    color: var(--text-secondary);
 }
 
-/* 统计卡片 */
-.stat-card {
-    transition: transform 0.2s;
+.spinner-border {
+    border-color: var(--border-color);
+    border-top-color: var(--accent-blue);
 }
 
-.stat-card:hover {
-    transform: translateY(-4px);
+/* ========== Toast 报警 ========== */
+.toast {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-primary);
 }
 
-.stat-card .stat-value {
-    font-size: 1.5rem;
-    font-weight: 600;
+@keyframes slideInRight {
+    from { transform: translateX(100%); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
 }
 
-/* 实时数据卡片 */
-.realtime-card {
-    border-left: 3px solid #007bff;
-    animation: fadeIn 0.3s;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-/* 响应式优化 */
-@media (max-width: 768px) {
-    .action-btn-group {
-        flex-direction: column;
-    }
-    
-    .chart-controls {
-        position: static;
-        margin-bottom: 20px;
-    }
-}
-
-/* 数据值显示 */
-.data-value {
-    font-size: 1.2em;
-    font-weight: bold;
-}
-
-.data-value.high {
-    color: #dc3545;
-}
-
-.data-value.low {
-    color: #17a2b8;
-}
-
-.data-value.normal {
-    color: #28a745;
-}
-
-/* 导航栏样式 */
-.navbar {
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-.navbar-brand {
-    font-weight: 600;
-}
-
-/* 页脚样式 */
-.footer {
-    background-color: #f8f9fa;
-    border-top: 1px solid #eee;
-}
-
-/* 响应式调整 */
-@media (max-width: 768px) {
-    .card {
-        margin-bottom: 15px;
-    }
-    
-    .table-responsive {
-        font-size: 0.9em;
-    }
-}
-
-/* 动画效果 */
 @keyframes pulse {
-    0% { opacity: 1; }
+    0%  { opacity: 1; }
     50% { opacity: 0.5; }
     100% { opacity: 1; }
 }
 
-.alarm-active {
-    animation: pulse 1s infinite;
+.alarm-active { animation: pulse 1s infinite; }
+
+/* ========== 滚动条 ========== */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3a5568; }
+
+/* ========== 页脚 ========== */
+.footer {
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.8rem;
 }
 
-/* 加载指示器 */
-.loading {
-    text-align: center;
-    padding: 20px;
-    color: #6c757d;
-}
-
-.loading::after {
-    content: '';
-    display: inline-block;
-    width: 20px;
-    height: 20px;
-    border: 2px solid #6c757d;
-    border-radius: 50%;
-    border-top-color: transparent;
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
-
-/* 工具提示 */
-.tooltip-inner {
-    max-width: 300px;
-    text-align: left;
-}
-
-/* 按钮样式 */
-.btn-primary {
-    background-color: #007bff;
-    border-color: #007bff;
-}
-
-.btn-primary:hover {
-    background-color: #0056b3;
-    border-color: #0056b3;
-}
-
-/* 表单样式 */
-.form-control:focus {
-    border-color: #007bff;
-    box-shadow: 0 0 0 0.2rem rgba(0,123,255,0.25);
-}
-
-/* 模态框样式 */
-.modal-header {
-    background-color: #f8f9fa;
-    border-bottom: 1px solid #eee;
-}
-
-/* 标签样式 */
-.badge {
-    font-weight: 500;
-}
-
-.badge-success {
-    background-color: #28a745;
-}
-
-.badge-danger {
-    background-color: #dc3545;
-}
-
-.badge-warning {
-    background-color: #ffc107;
-    color: #212529;
-}
-
-/* 进度条样式 */
-.progress {
-    height: 8px;
-    border-radius: 4px;
-}
-
-.progress-bar {
-    border-radius: 4px;
-}
-
-/* Toast报警通知动画 */
-@keyframes slideInRight {
-    from {
-        transform: translateX(100%);
-        opacity: 0;
-    }
-    to {
-        transform: translateX(0);
-        opacity: 1;
-    }
-}
-
-@keyframes slideOutRight {
-    from {
-        transform: translateX(0);
-        opacity: 1;
-    }
-    to {
-        transform: translateX(100%);
-        opacity: 0;
-    }
-}
-
-/* Toast样式优化 */
-.toast {
-    border-radius: 8px;
-    font-size: 0.9rem;
-    transition: all 0.3s ease;
-}
-
-.toast:hover {
-    transform: translateX(-5px);
-}
-
-.toast .toast-body {
-    padding: 12px 16px;
-}
-
-.toast .btn-close {
-    filter: brightness(0) invert(1);
-    opacity: 0.7;
-}
-
-.toast .btn-close:hover {
-    opacity: 1;
-}
-
-/* 报警计数徽章动画 */
-#active-alarms {
-    transition: transform 0.2s;
-}
-
-#active-alarms.badge-pulse {
-    animation: badgePulse 0.5s ease;
-}
-
-@keyframes badgePulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.3); }
-    100% { transform: scale(1); }
+/* ========== 响应式 ========== */
+@media (max-width: 768px) {
+    .stat-value { font-size: 1.5rem; }
+    .card { margin-bottom: 12px; }
 }

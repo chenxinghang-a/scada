@@ -170,31 +170,10 @@
     </div>
 </div>
 
-<!-- 仪表盘图表行 -->
-<div class="row mb-4">
-    <div class="col-md-4">
-        <div class="gauge-card">
-            <h6 class="mb-3"><i class="bi bi-thermometer-half text-danger"></i> 温度监控</h6>
-            <div class="gauge-container" id="temp-gauge"></div>
-            <div class="gauge-value" id="temp-value">--°C</div>
-            <div class="gauge-label">当前温度</div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="gauge-card">
-            <h6 class="mb-3"><i class="bi bi-speedometer text-primary"></i> 压力监控</h6>
-            <div class="gauge-container" id="pressure-gauge"></div>
-            <div class="gauge-value" id="pressure-value">-- MPa</div>
-            <div class="gauge-label">当前压力</div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="gauge-card">
-            <h6 class="mb-3"><i class="bi bi-lightning-charge text-warning"></i> 电压监控</h6>
-            <div class="gauge-container" id="voltage-gauge"></div>
-            <div class="gauge-value" id="voltage-value">-- V</div>
-            <div class="gauge-label">当前电压</div>
-        </div>
+<!-- 动态仪表盘（由JS根据实际数据生成） -->
+<div class="row mb-4" id="gauge-section">
+    <div class="col-12 text-center text-muted py-3">
+        <div class="spinner-border spinner-border-sm me-2"></div>加载中...
     </div>
 </div>
 
@@ -252,37 +231,19 @@
             </div>
         </div>
         
-        <!-- 系统健康度 -->
-        <div class="card mb-3" style="border-radius: 12px;">
-            <div class="card-header bg-white" style="border-radius: 12px 12px 0 0;">
-                <h5 class="card-title mb-0"><i class="bi bi-heart-pulse"></i> 系统健康度</h5>
+        <!-- 系统状态 -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><i class="bi bi-heart-pulse"></i> 系统状态</h5>
             </div>
             <div class="card-body">
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between mb-1">
-                        <span>CPU使用率</span>
-                        <span id="cpu-usage">--%</span>
-                    </div>
-                    <div class="health-bar">
-                        <div class="health-bar-fill bg-success" id="cpu-bar" style="width: 0%"></div>
-                    </div>
-                </div>
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between mb-1">
-                        <span>内存使用率</span>
-                        <span id="mem-usage">--%</span>
-                    </div>
-                    <div class="health-bar">
-                        <div class="health-bar-fill bg-info" id="mem-bar" style="width: 0%"></div>
-                    </div>
-                </div>
                 <div class="mb-3">
                     <div class="d-flex justify-content-between mb-1">
                         <span>数据库大小</span>
                         <span id="db-size">-- MB</span>
                     </div>
                     <div class="health-bar">
-                        <div class="health-bar-fill bg-warning" id="db-bar" style="width: 0%"></div>
+                        <div class="health-bar-fill bg-info" id="db-bar" style="width: 0%"></div>
                     </div>
                 </div>
                 <div class="row mt-3">
@@ -319,40 +280,18 @@
     </div>
 </div>
 
-<!-- 趋势图表 -->
+<!-- 趋势图表（多变量叠加） -->
 <div class="row">
-    <div class="col-md-6">
-        <div class="card mb-3" style="border-radius: 12px;">
-            <div class="card-header bg-white" style="border-radius: 12px 12px 0 0;">
+    <div class="col-12">
+        <div class="card mb-3">
+            <div class="card-header">
                 <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="card-title mb-0"><i class="bi bi-graph-up"></i> 温度趋势</h5>
-                    <select class="form-select form-select-sm" style="width: auto;" id="temp-timerange" onchange="updateTemperatureChart()">
-                        <option value="1h">最近1小时</option>
-                        <option value="6h">最近6小时</option>
-                        <option value="24h">最近24小时</option>
-                    </select>
+                    <h5 class="card-title mb-0"><i class="bi bi-graph-up"></i> 实时趋势</h5>
+                    <small class="text-muted">自动追踪所有采集变量</small>
                 </div>
             </div>
             <div class="card-body">
-                <div id="temperature-chart" style="height: 300px;"></div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-md-6">
-        <div class="card mb-3" style="border-radius: 12px;">
-            <div class="card-header bg-white" style="border-radius: 12px 12px 0 0;">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="card-title mb-0"><i class="bi bi-graph-up"></i> 压力趋势</h5>
-                    <select class="form-select form-select-sm" style="width: auto;" id="pressure-timerange" onchange="updatePressureChart()">
-                        <option value="1h">最近1小时</option>
-                        <option value="6h">最近6小时</option>
-                        <option value="24h">最近24小时</option>
-                    </select>
-                </div>
-            </div>
-            <div class="card-body">
-                <div id="pressure-chart" style="height: 300px;"></div>
+                <div id="trend-chart" style="height: 350px;"></div>
             </div>
         </div>
     </div>
@@ -361,189 +300,4 @@
 
 {% block extra_js %}
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
-<script>
-    // 初始化仪表盘图表
-    let tempGauge, pressureGauge, voltageGauge;
-    
-    function initGauges() {
-        // 温度仪表盘
-        tempGauge = echarts.init(document.getElementById('temp-gauge'));
-        tempGauge.setOption({
-            series: [{
-                type: 'gauge',
-                startAngle: 200,
-                endAngle: -20,
-                min: 0,
-                max: 100,
-                splitNumber: 10,
-                itemStyle: { color: '#f44336' },
-                progress: { show: true, width: 18 },
-                pointer: { show: false },
-                axisLine: { lineStyle: { width: 18, color: [[1, '#e0e0e0']] } },
-                axisTick: { show: false },
-                splitLine: { show: false },
-                axisLabel: { show: false },
-                detail: { show: false },
-                data: [{ value: 0 }]
-            }]
-        });
-        
-        // 压力仪表盘
-        pressureGauge = echarts.init(document.getElementById('pressure-gauge'));
-        pressureGauge.setOption({
-            series: [{
-                type: 'gauge',
-                startAngle: 200,
-                endAngle: -20,
-                min: 0,
-                max: 1.6,
-                splitNumber: 8,
-                itemStyle: { color: '#1565c0' },
-                progress: { show: true, width: 18 },
-                pointer: { show: false },
-                axisLine: { lineStyle: { width: 18, color: [[1, '#e0e0e0']] } },
-                axisTick: { show: false },
-                splitLine: { show: false },
-                axisLabel: { show: false },
-                detail: { show: false },
-                data: [{ value: 0 }]
-            }]
-        });
-        
-        // 电压仪表盘
-        voltageGauge = echarts.init(document.getElementById('voltage-gauge'));
-        voltageGauge.setOption({
-            series: [{
-                type: 'gauge',
-                startAngle: 200,
-                endAngle: -20,
-                min: 0,
-                max: 500,
-                splitNumber: 10,
-                itemStyle: { color: '#ff9800' },
-                progress: { show: true, width: 18 },
-                pointer: { show: false },
-                axisLine: { lineStyle: { width: 18, color: [[1, '#e0e0e0']] } },
-                axisTick: { show: false },
-                splitLine: { show: false },
-                axisLabel: { show: false },
-                detail: { show: false },
-                data: [{ value: 0 }]
-            }]
-        });
-    }
-    
-    function updateGauges(data) {
-        if (!data) return;
-        
-        // 更新温度
-        if (data.temperature !== undefined && data.temperature !== null) {
-            tempGauge.setOption({ series: [{ data: [{ value: data.temperature }] }] });
-            const tempUnit = data.tempUnit || '°C';
-            document.getElementById('temp-value').textContent = data.temperature.toFixed(1) + ' ' + tempUnit;
-        }
-        
-        // 更新压力
-        if (data.pressure !== undefined && data.pressure !== null) {
-            pressureGauge.setOption({ series: [{ data: [{ value: data.pressure }] }] });
-            const pressureUnit = data.pressureUnit || 'MPa';
-            document.getElementById('pressure-value').textContent = data.pressure.toFixed(3) + ' ' + pressureUnit;
-        }
-        
-        // 更新电压
-        if (data.voltage !== undefined && data.voltage !== null) {
-            voltageGauge.setOption({ series: [{ data: [{ value: data.voltage }] }] });
-            const voltageUnit = data.voltageUnit || 'V';
-            document.getElementById('voltage-value').textContent = data.voltage.toFixed(1) + ' ' + voltageUnit;
-        }
-    }
-    
-    function updateDeviceHeatmap(devices) {
-        const container = document.getElementById('device-heatmap');
-        if (!devices || devices.length === 0) {
-            container.innerHTML = '<div class="col-12 text-center text-muted">暂无设备</div>';
-            return;
-        }
-        
-        container.innerHTML = devices.map(device => {
-            const isOnline = device.connected;
-            const bgColor = isOnline ? '#4caf50' : '#f44336';
-            return `
-                <div class="col-6">
-                    <div class="heatmap-cell" style="background: ${bgColor};" 
-                         title="${device.name || device.device_id}">
-                        <div>
-                            <div style="font-size: 0.8rem;">${(device.name || device.device_id).substring(0, 6)}</div>
-                            <div style="font-size: 0.7rem; opacity: 0.8;">${isOnline ? '在线' : '离线'}</div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }).join('');
-    }
-    
-    function updateHealthMetrics(stats) {
-        if (!stats) return;
-        
-        // 模拟CPU和内存（实际需要后端支持）
-        const cpu = Math.floor(Math.random() * 30 + 20);
-        const mem = Math.floor(Math.random() * 40 + 30);
-        
-        document.getElementById('cpu-usage').textContent = cpu + '%';
-        document.getElementById('cpu-bar').style.width = cpu + '%';
-        document.getElementById('cpu-bar').className = `health-bar-fill ${cpu > 80 ? 'bg-danger' : cpu > 60 ? 'bg-warning' : 'bg-success'}`;
-        
-        document.getElementById('mem-usage').textContent = mem + '%';
-        document.getElementById('mem-bar').style.width = mem + '%';
-        
-        if (stats.database) {
-            document.getElementById('db-size').textContent = stats.database.database_size_mb + ' MB';
-            const dbPercent = Math.min(stats.database.database_size_mb / 100 * 100, 100);
-            document.getElementById('db-bar').style.width = dbPercent + '%';
-            
-            document.getElementById('total-records').textContent = 
-                (stats.database.total_records || (stats.database.realtime_records + stats.database.history_records)).toLocaleString();
-        }
-        
-        if (stats.collector) {
-            document.getElementById('collection-rate').textContent = 
-                Math.floor(stats.collector.total_collections / Math.max(stats.uptime_seconds / 60, 1));
-        }
-    }
-    
-    function updateLatestAlarms(alarms) {
-        const container = document.getElementById('latest-alarms');
-        if (!alarms || alarms.length === 0) {
-            container.innerHTML = '<div class="text-center text-muted py-3">暂无报警</div>';
-            return;
-        }
-        
-        container.innerHTML = alarms.slice(0, 5).map(alarm => {
-            const levelClass = alarm.alarm_level === 'critical' ? 'alarm-critical' : 
-                              alarm.alarm_level === 'warning' ? 'alarm-warning' : 'alarm-info';
-            const time = new Date(alarm.timestamp).toLocaleTimeString('zh-CN');
-            return `
-                <div class="alarm-item ${levelClass}">
-                    <div class="d-flex justify-content-between">
-                        <strong>${alarm.alarm_message || alarm.alarm_id}</strong>
-                        <small class="text-muted">${time}</small>
-                    </div>
-                    <small>${alarm.device_id} - ${alarm.register_name}: ${alarm.actual_value}</small>
-                </div>
-            `;
-        }).join('');
-    }
-    
-    // 初始化
-    document.addEventListener('DOMContentLoaded', function() {
-        initGauges();
-        
-        // 窗口大小改变时重绘图表
-        window.addEventListener('resize', function() {
-            if (tempGauge) tempGauge.resize();
-            if (pressureGauge) pressureGauge.resize();
-            if (voltageGauge) voltageGauge.resize();
-        });
-    });
-</script>
 {% endblock %}

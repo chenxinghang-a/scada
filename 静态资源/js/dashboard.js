@@ -1,116 +1,176 @@
 /**
- * 仪表盘页面JavaScript
+ * 仪表盘页面JavaScript — 重写版
+ * 动态图表、真实数据、时间范围筛选
  */
 
 // 图表实例
-let temperatureChart = null;
-let pressureChart = null;
+let trendChart = null;
+const gaugeCharts = {};
 
-// 数据缓存
-const temperatureData = [];
-const pressureData = [];
-const MAX_DATA_POINTS = 50;
+// 数据缓存：按变量分组
+const dataBuffers = {};  // { variable_key: [{time, value}] }
+const MAX_DATA_POINTS = 120;
+
+// 设备名缓存（从API动态获取）
+let deviceNameCache = {};
 
 /**
- * 初始化仪表盘
+ * 初始化
  */
 document.addEventListener('DOMContentLoaded', function() {
-    // 初始化图表
-    initCharts();
-    
-    // 加载实时数据
+    initTrendChart();
+    loadDeviceNames();
     loadRealtimeData();
-    
-    // 定时更新
     setInterval(loadRealtimeData, 3000);
-    
-    // 加载最新报警
-    loadLatestAlarms();
+
+    // 窗口 resize
+    window.addEventListener('resize', () => {
+        if (trendChart) trendChart.resize();
+        Object.values(gaugeCharts).forEach(g => g.resize());
+    });
 });
 
 /**
- * 初始化ECharts图表
+ * 从API加载设备名映射
  */
-function initCharts() {
-    // 温度图表
-    const tempDom = document.getElementById('temperature-chart');
-    if (tempDom) {
-        temperatureChart = echarts.init(tempDom);
-        const tempOption = {
-            title: { text: '温度趋势', left: 'center' },
-            tooltip: { trigger: 'axis' },
-            xAxis: { type: 'category', data: [] },
-            yAxis: { type: 'value', name: '°C' },
-            series: [{
-                name: '温度',
-                type: 'line',
-                data: [],
-                smooth: true,
-                areaStyle: { opacity: 0.3 }
-            }]
-        };
-        temperatureChart.setOption(tempOption);
-    }
-    
-    // 压力图表
-    const pressDom = document.getElementById('pressure-chart');
-    if (pressDom) {
-        pressureChart = echarts.init(pressDom);
-        const pressOption = {
-            title: { text: '压力趋势', left: 'center' },
-            tooltip: { trigger: 'axis' },
-            xAxis: { type: 'category', data: [] },
-            yAxis: { type: 'value', name: 'MPa' },
-            series: [{
-                name: '压力',
-                type: 'line',
-                data: [],
-                smooth: true,
-                areaStyle: { opacity: 0.3 }
-            }]
-        };
-        pressureChart.setOption(pressOption);
+async function loadDeviceNames() {
+    try {
+        const resp = await apiRequest('/devices');
+        if (resp && resp.devices) {
+            resp.devices.forEach(d => {
+                deviceNameCache[d.device_id || d.id] = d.name || d.device_id || d.id;
+            });
+        }
+    } catch (e) {
+        console.warn('加载设备名失败，使用默认');
     }
 }
 
 /**
- * 加载实时数据
+ * 获取设备显示名
+ */
+function getDeviceName(deviceId) {
+    return deviceNameCache[deviceId] || deviceId;
+}
+
+/**
+ * 获取寄存器中文名
+ */
+function getRegisterLabel(name) {
+    const map = {
+        'temperature': '温度', 'boiler_temperature': '锅炉温度',
+        'heat_exchanger_temperature': '换热器温度', 'flue_gas_temperature': '排烟温度',
+        'extrusion_temperature': '挤出温度', 'mold_temperature': '模具温度',
+        'pressure': '压力', 'boiler_pressure': '锅炉压力',
+        'injection_pressure': '注射压力',
+        'flow': '流量', 'steam_flow': '蒸汽流量', 'cooling_water_flow': '冷却水流量',
+        'level': '液位', 'feed_water_level': '给水液位', 'hopper_level': '料斗液位',
+        'voltage': '电压', 'current': '电流', 'power': '功率',
+        'vibration': '振动', 'ph': 'pH值',
+        'oxygen_content': '含氧量', 'boiler_status': '锅炉状态',
+        'humidity': '湿度', 'energy': '电量',
+    };
+    // 先精确匹配
+    if (map[name]) return map[name];
+    // 模糊匹配
+    const lower = name.toLowerCase();
+    for (const [key, val] of Object.entries(map)) {
+        if (lower.includes(key)) return val;
+    }
+    return name;
+}
+
+/**
+ * 获取变量单位
+ */
+function getRegisterUnit(name) {
+    const lower = name.toLowerCase();
+    if (lower.includes('temperature') || lower.includes('temp')) return '°C';
+    if (lower.includes('pressure')) return 'MPa';
+    if (lower.includes('flow')) return 't/h';
+    if (lower.includes('level')) return 'mm';
+    if (lower.includes('voltage')) return 'V';
+    if (lower.includes('current')) return 'A';
+    if (lower.includes('power')) return 'kW';
+    if (lower.includes('energy')) return 'kWh';
+    if (lower.includes('vibration')) return 'mm/s';
+    if (lower.includes('ph')) return '';
+    if (lower.includes('oxygen')) return '%';
+    if (lower.includes('humidity')) return '%';
+    return '';
+}
+
+/**
+ * 初始化趋势图（多变量叠加）
+ */
+function initTrendChart() {
+    const dom = document.getElementById('trend-chart');
+    if (!dom) return;
+
+    trendChart = echarts.init(dom);
+    trendChart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: {
+            trigger: 'axis',
+            backgroundColor: 'rgba(26,38,51,0.95)',
+            borderColor: '#2a3f52',
+            textStyle: { color: '#e0e6ed', fontSize: 12 },
+        },
+        legend: {
+            top: 4,
+            textStyle: { color: '#8899aa', fontSize: 11 },
+            type: 'scroll',
+            pageTextStyle: { color: '#8899aa' },
+        },
+        grid: { left: 50, right: 20, top: 40, bottom: 30 },
+        xAxis: {
+            type: 'category',
+            data: [],
+            axisLine: { lineStyle: { color: '#2a3f52' } },
+            axisLabel: { color: '#8899aa', fontSize: 10 },
+            splitLine: { show: false },
+        },
+        yAxis: {
+            type: 'value',
+            axisLine: { show: false },
+            axisLabel: { color: '#8899aa', fontSize: 10 },
+            splitLine: { lineStyle: { color: 'rgba(42,63,82,0.4)' } },
+        },
+        series: [],
+        dataZoom: [{
+            type: 'inside',
+            start: 0,
+            end: 100,
+        }],
+    });
+}
+
+/**
+ * 主数据加载
  */
 async function loadRealtimeData() {
     try {
-        const data = await apiRequest('/data/realtime?limit=20');
-        
+        const data = await apiRequest('/data/realtime?limit=50');
+
         if (data.data && data.data.length > 0) {
             updateRealtimeTable(data.data);
-            updateCharts(data.data);
-            updateGaugeValues(data.data);
-            
-            // 更新数据状态
-            const dataStatus = document.getElementById('data-status');
-            if (dataStatus) {
-                dataStatus.textContent = '实时更新中';
-                dataStatus.className = 'badge bg-success';
+            updateTrendChart(data.data);
+            updateGaugeSection(data.data);
+
+            const statusEl = document.getElementById('data-status');
+            if (statusEl) {
+                statusEl.textContent = '实时更新中';
+                statusEl.className = 'badge bg-success';
             }
-            
-            // 更新最后更新时间
             const lastUpdate = document.getElementById('last-update');
-            if (lastUpdate) {
-                lastUpdate.textContent = new Date().toLocaleTimeString('zh-CN');
-            }
-        } else {
-            // 没有数据时显示提示
-            const dataStatus = document.getElementById('data-status');
-            if (dataStatus) {
-                dataStatus.textContent = '等待数据...';
-                dataStatus.className = 'badge bg-warning';
-            }
+            if (lastUpdate) lastUpdate.textContent = new Date().toLocaleTimeString('zh-CN');
         }
-        
-        // 更新系统统计
+
+        // 系统统计
         const statusData = await apiRequest('/system/status');
         updateDashboardStats(statusData);
-        
-        // 更新设备热力图
+
+        // 设备热力图
         if (statusData.devices) {
             let deviceList = statusData.devices;
             if (typeof deviceList === 'object' && !Array.isArray(deviceList)) {
@@ -118,62 +178,64 @@ async function loadRealtimeData() {
             }
             updateDeviceHeatmap(deviceList);
         }
-        
-        // 更新系统健康度
+
         updateHealthMetrics(statusData);
-        
+
     } catch (error) {
-        console.error('加载实时数据失败:', error);
-        const dataStatus = document.getElementById('data-status');
-        if (dataStatus) {
-            dataStatus.textContent = '连接失败';
-            dataStatus.className = 'badge bg-danger';
+        console.error('加载数据失败:', error);
+        const statusEl = document.getElementById('data-status');
+        if (statusEl) {
+            statusEl.textContent = '连接失败';
+            statusEl.className = 'badge bg-danger';
         }
     }
 }
 
 /**
- * 更新仪表盘图表值
+ * 更新趋势图 — 动态变量、多系列
  */
-function updateGaugeValues(data) {
-    let temp = null, pressure = null, voltage = null;
-    let tempUnit = '°C', pressureUnit = 'MPa', voltageUnit = 'V';
-    
+function updateTrendChart(data) {
+    if (!trendChart) return;
+
+    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // 按变量分组缓存
     data.forEach(item => {
-        // 动态匹配温度相关寄存器
-        if (item.register_name.includes('temperature') || item.register_name.includes('temp')) {
-            if (temp === null) {
-                temp = item.value;
-                tempUnit = item.unit || '°C';
-            }
-        }
-        // 动态匹配压力相关寄存器
-        if (item.register_name.includes('pressure')) {
-            if (pressure === null) {
-                pressure = item.value;
-                pressureUnit = item.unit || 'MPa';
-            }
-        }
-        // 动态匹配电压相关寄存器
-        if (item.register_name.includes('voltage') || item.register_name.includes('volt')) {
-            if (voltage === null) {
-                voltage = item.value;
-                voltageUnit = item.unit || 'V';
-            }
-        }
+        const key = `${item.device_id}:${item.register_name}`;
+        if (!dataBuffers[key]) dataBuffers[key] = [];
+        dataBuffers[key].push({ time: now, value: item.value });
+        if (dataBuffers[key].length > MAX_DATA_POINTS) dataBuffers[key].shift();
     });
-    
-    // 更新仪表盘
-    if (typeof updateGauges === 'function') {
-        updateGauges({ 
-            temperature: temp, 
-            pressure: pressure, 
-            voltage: voltage,
-            tempUnit: tempUnit,
-            pressureUnit: pressureUnit,
-            voltageUnit: voltageUnit
-        });
-    }
+
+    // 构建 ECharts series
+    const keys = Object.keys(dataBuffers);
+    const timeSet = new Set();
+    keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.time)));
+    const times = Array.from(timeSet).sort();
+
+    const series = keys.map(key => {
+        const [deviceId, regName] = key.split(':');
+        const deviceLabel = getDeviceName(deviceId);
+        const regLabel = getRegisterLabel(regName);
+        const buffer = dataBuffers[key];
+        const timeToValue = {};
+        buffer.forEach(d => { timeToValue[d.time] = d.value; });
+
+        return {
+            name: `${deviceLabel} - ${regLabel}`,
+            type: 'line',
+            smooth: true,
+            symbol: 'none',
+            lineStyle: { width: 1.5 },
+            areaStyle: { opacity: 0.05 },
+            data: times.map(t => timeToValue[t] ?? null),
+        };
+    });
+
+    trendChart.setOption({
+        xAxis: { data: times },
+        series: series,
+    });
 }
 
 /**
@@ -182,129 +244,203 @@ function updateGaugeValues(data) {
 function updateRealtimeTable(data) {
     const tbody = document.getElementById('realtime-data');
     if (!tbody) return;
-    
-    // 按设备和参数分组，取最新值
-    const latestData = {};
+
+    // 按设备+寄存器去重取最新
+    const latest = {};
     data.forEach(item => {
         const key = `${item.device_id}_${item.register_name}`;
-        if (!latestData[key] || new Date(item.timestamp) > new Date(latestData[key].timestamp)) {
-            latestData[key] = item;
+        if (!latest[key] || new Date(item.timestamp) > new Date(latest[key].timestamp)) {
+            latest[key] = item;
         }
     });
-    
-    // 生成表格行
-    const rows = Object.values(latestData).map(item => `
-        <tr>
+
+    tbody.innerHTML = Object.values(latest).map(item => {
+        const value = typeof item.value === 'number' ? item.value.toFixed(2) : item.value;
+        const unit = item.unit || getRegisterUnit(item.register_name);
+        const time = new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        // 状态判断
+        let statusBadge = '<span class="badge bg-success">正常</span>';
+        if (item.value !== null && item.value !== undefined) {
+            // 根据变量类型判断异常
+            const v = parseFloat(item.value);
+            const name = item.register_name.toLowerCase();
+            if (name.includes('temperature') && v > 150) statusBadge = '<span class="badge bg-danger">超温</span>';
+            else if (name.includes('temperature') && v > 120) statusBadge = '<span class="badge bg-warning">偏高</span>';
+            else if (name.includes('pressure') && v > 1.5) statusBadge = '<span class="badge bg-danger">超压</span>';
+            else if (name.includes('pressure') && v > 1.2) statusBadge = '<span class="badge bg-warning">偏高</span>';
+        }
+
+        return `<tr>
             <td>${getDeviceName(item.device_id)}</td>
-            <td>${getRegisterName(item.register_name)}</td>
-            <td><strong>${formatNumber(item.value)}</strong></td>
-            <td>${item.unit || ''}</td>
-            <td>${formatDateTime(item.timestamp)}</td>
-            <td><span class="badge bg-success">正常</span></td>
-        </tr>
-    `).join('');
-    
-    tbody.innerHTML = rows;
+            <td>${getRegisterLabel(item.register_name)}</td>
+            <td><strong class="data-value">${value}</strong></td>
+            <td>${unit}</td>
+            <td>${time}</td>
+            <td>${statusBadge}</td>
+        </tr>`;
+    }).join('');
 }
 
 /**
- * 更新图表数据
+ * 更新仪表盘区域 — 动态生成，基于实际数据
  */
-function updateCharts(data) {
-    const now = new Date().toLocaleTimeString();
-    
-    // 更新温度数据
-    data.forEach(item => {
-        if (item.register_name.includes('temperature') || item.register_name.includes('temp')) {
-            temperatureData.push({ time: now, value: item.value });
-            if (temperatureData.length > MAX_DATA_POINTS) {
-                temperatureData.shift();
-            }
-        }
-        
-        if (item.register_name.includes('pressure')) {
-            pressureData.push({ time: now, value: item.value });
-            if (pressureData.length > MAX_DATA_POINTS) {
-                pressureData.shift();
-            }
-        }
-    });
-    
-    // 更新温度图表
-    if (temperatureChart) {
-        temperatureChart.setOption({
-            xAxis: { data: temperatureData.map(d => d.time) },
-            series: [{ data: temperatureData.map(d => d.value) }]
-        });
+function updateGaugeSection(data) {
+    const container = document.getElementById('gauge-section');
+    if (!container) return;
+
+    // 选取前3个数值型变量做仪表盘
+    const numericItems = data.filter(item => typeof item.value === 'number').slice(0, 3);
+    if (numericItems.length === 0) return;
+
+    // 确保容器有3个gauge div
+    if (container.children.length !== numericItems.length) {
+        container.innerHTML = numericItems.map((item, i) => `
+            <div class="col-md-4">
+                <div class="gauge-card">
+                    <h6 class="mb-2"><i class="bi bi-gauge text-info"></i> ${getRegisterLabel(item.register_name)}</h6>
+                    <div class="gauge-container" id="gauge-${i}"></div>
+                    <div class="gauge-value" id="gauge-val-${i}">--</div>
+                    <div class="gauge-label">${getDeviceName(item.device_id)} · ${getRegisterUnit(item.register_name)}</div>
+                </div>
+            </div>
+        `).join('');
     }
-    
-    // 更新压力图表
-    if (pressureChart) {
-        pressureChart.setOption({
-            xAxis: { data: pressureData.map(d => d.time) },
-            series: [{ data: pressureData.map(d => d.value) }]
+
+    numericItems.forEach((item, i) => {
+        const dom = document.getElementById(`gauge-${i}`);
+        if (!dom) return;
+
+        if (!gaugeCharts[i]) {
+            gaugeCharts[i] = echarts.init(dom);
+        }
+
+        const val = item.value;
+        const unit = getRegisterUnit(item.register_name);
+        // 动态范围：值的 ±50%，最小10
+        const absVal = Math.abs(val) || 1;
+        const max = Math.ceil(absVal * 1.5 / 10) * 10 || 100;
+
+        gaugeCharts[i].setOption({
+            series: [{
+                type: 'gauge',
+                startAngle: 200,
+                endAngle: -20,
+                min: 0,
+                max: max,
+                progress: { show: true, width: 14 },
+                pointer: { show: false },
+                axisLine: { lineStyle: { width: 14, color: [[0.6, '#00e676'], [0.8, '#ffd600'], [1, '#ff5252']] } },
+                axisTick: { show: false },
+                splitLine: { show: false },
+                axisLabel: { show: false },
+                detail: { show: false },
+                data: [{ value: val }],
+            }]
         });
+
+        const valEl = document.getElementById(`gauge-val-${i}`);
+        if (valEl) valEl.textContent = val.toFixed(1) + ' ' + unit;
+    });
+}
+
+/**
+ * 更新设备热力图
+ */
+function updateDeviceHeatmap(devices) {
+    const container = document.getElementById('device-heatmap');
+    if (!devices || devices.length === 0) {
+        container.innerHTML = '<div class="col-12 text-center text-muted py-3">暂无设备</div>';
+        return;
+    }
+
+    container.innerHTML = devices.map(device => {
+        const isOnline = device.connected;
+        const hasWarning = device.status === 'warning' || device.status === 'fault';
+        let bgColor = isOnline ? (hasWarning ? '#ff9100' : '#00e676') : '#ff5252';
+        const name = (device.name || device.device_id || '').substring(0, 8);
+
+        return `<div class="col-6">
+            <div class="heatmap-cell" style="background: ${bgColor};" title="${device.name || device.device_id}">
+                <div>
+                    <div>${name}</div>
+                    <div style="font-size:0.65rem;opacity:0.8">${isOnline ? (hasWarning ? '告警' : '在线') : '离线'}</div>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+/**
+ * 更新系统健康度（真实数据）
+ */
+function updateHealthMetrics(stats) {
+    if (!stats) return;
+
+    // 数据库
+    if (stats.database) {
+        const dbSize = stats.database.database_size_mb || 0;
+        const el = document.getElementById('db-size');
+        if (el) el.textContent = dbSize.toFixed(1) + ' MB';
+        const bar = document.getElementById('db-bar');
+        if (bar) bar.style.width = Math.min(dbSize, 100) + '%';
+
+        const totalEl = document.getElementById('total-records');
+        if (totalEl) totalEl.textContent = (stats.database.total_records || stats.database.realtime_records || 0).toLocaleString();
+    }
+
+    // 采集
+    if (stats.collector) {
+        const rate = Math.floor((stats.collector.total_collections || 0) / Math.max((stats.uptime_seconds || 1) / 60, 1));
+        const rateEl = document.getElementById('collection-rate');
+        if (rateEl) rateEl.textContent = rate;
     }
 }
 
 /**
- * 更新仪表盘统计信息
+ * 更新仪表盘统计
  */
 function updateDashboardStats(stats) {
-    // 设备统计
+    if (!stats) return;
+
+    // 设备
     if (stats.devices) {
-        // 处理设备列表（可能是数组或对象）
         let deviceList = stats.devices;
         if (typeof deviceList === 'object' && !Array.isArray(deviceList)) {
             deviceList = Object.values(deviceList);
         }
-        
         const total = deviceList.length;
         const online = deviceList.filter(d => d.connected).length;
-        
-        document.getElementById('device-count').textContent = total;
-        document.getElementById('device-online').textContent = online;
-        document.getElementById('device-offline').textContent = total - online;
-        
-        // 更新设备状态列表
-        updateDeviceStatusList(deviceList);
+
+        setText('device-count', total);
+        setText('device-online', online);
+        setText('device-offline', total - online);
     }
-    
-    // 数据采集统计
-    if (stats.collector) {
-        document.getElementById('data-count').textContent = stats.collector.total_collections || 0;
-    }
-    
-    // 数据库统计
-    if (stats.database) {
-        document.getElementById('data-today').textContent = (stats.database.total_records || stats.database.realtime_records || 0).toLocaleString();
-    }
-    
-    // 报警统计
+
+    // 数据
+    if (stats.collector) setText('data-count', stats.collector.total_collections || 0);
+    if (stats.database) setText('data-today', (stats.database.total_records || stats.database.realtime_records || 0).toLocaleString());
+
+    // 报警
     if (stats.alarms) {
-        document.getElementById('alarm-count-card').textContent = stats.alarms.total_active_alarms || 0;
-        document.getElementById('alarm-critical').textContent = stats.alarms.by_level?.critical || 0;
-        document.getElementById('alarm-warning').textContent = stats.alarms.by_level?.warning || 0;
+        setText('alarm-count-card', stats.alarms.total_active_alarms || 0);
+        setText('alarm-critical', stats.alarms.by_level?.critical || 0);
+        setText('alarm-warning', stats.alarms.by_level?.warning || 0);
+
+        const navEl = document.getElementById('active-alarms');
+        if (navEl) navEl.textContent = stats.alarms.total_active_alarms || 0;
     }
-    
+
     // 运行时间
-    if (stats.uptime_seconds !== undefined) {
-        document.getElementById('uptime').textContent = formatUptime(stats.uptime_seconds);
-    }
-    
+    if (stats.uptime_seconds !== undefined) setText('uptime', formatUptime(stats.uptime_seconds));
+
     // 运行模式
     if (stats.simulation_mode !== undefined) {
-        const modeEl = document.getElementById('run-mode');
-        if (modeEl) {
-            modeEl.textContent = stats.simulation_mode ? '模拟模式' : '真实设备';
-            modeEl.className = `badge ${stats.simulation_mode ? 'bg-info' : 'bg-success'}`;
+        const el = document.getElementById('run-mode');
+        if (el) {
+            el.textContent = stats.simulation_mode ? '模拟模式' : '真实设备';
+            el.className = `badge ${stats.simulation_mode ? 'bg-info' : 'bg-success'}`;
         }
-    }
-    
-    // 更新导航栏报警数
-    const navAlarmEl = document.getElementById('active-alarms');
-    if (navAlarmEl && stats.alarms) {
-        navAlarmEl.textContent = stats.alarms.total_active_alarms || 0;
     }
 }
 
@@ -312,138 +448,26 @@ function updateDashboardStats(stats) {
  * 格式化运行时间
  */
 function formatUptime(seconds) {
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    
-    if (days > 0) {
-        return `${days}天${hours}时${minutes}分`;
-    } else if (hours > 0) {
-        return `${hours}时${minutes}分${secs}秒`;
-    } else if (minutes > 0) {
-        return `${minutes}分${secs}秒`;
-    } else {
-        return `${secs}秒`;
-    }
-}
-
-/**
- * 更新设备状态列表
- */
-function updateDeviceStatusList(devices) {
-    const container = document.getElementById('device-status-list');
-    if (!container) return;
-    
-    container.innerHTML = devices.map(d => `
-        <div class="d-flex justify-content-between align-items-center mb-2 p-2 border rounded">
-            <div>
-                <strong>${d.name || d.device_id}</strong>
-                <br>
-                <small class="text-muted">${d.description || ''}</small>
-            </div>
-            <span class="badge bg-${d.connected ? 'success' : 'danger'}">
-                ${d.connected ? '在线' : '离线'}
-            </span>
-        </div>
-    `).join('');
-}
-
-/**
- * 加载最新报警
- */
-async function loadLatestAlarms() {
-    try {
-        const data = await apiRequest('/alarms?limit=5');
-        const container = document.getElementById('latest-alarms');
-        if (!container) return;
-        
-        if (data.alarms && data.alarms.length > 0) {
-            container.innerHTML = data.alarms.map(a => `
-                <div class="alert alert-${a.alarm_level === 'critical' ? 'danger' : 'warning'} py-2 mb-2">
-                    <small>
-                        <strong>${a.alarm_message}</strong><br>
-                        ${a.device_id} | 值: ${a.actual_value?.toFixed(2) || '-'}
-                    </small>
-                </div>
-            `).join('');
-        } else {
-            container.innerHTML = '<p class="text-muted text-center">暂无报警</p>';
-        }
-    } catch (error) {
-        console.error('加载报警失败:', error);
-    }
-}
-
-/**
- * 获取设备显示名称
- */
-function getDeviceName(deviceId) {
-    const names = {
-        'siemens_1500_01': '西门子S7-1500 PLC',
-        'hollysys_lk_01': '和利时LK PLC',
-        'abb_m4m_01': 'ABB M4M电力分析仪',
-        'schneider_m340_01': '施耐德M340 PLC',
-        'mitsubishi_fx5u_01': '三菱FX5U PLC',
-        'delta_dvp_01': '台达DVP PLC',
-        'inovance_h5u_01': '汇川H5U PLC'
-    };
-    return names[deviceId] || deviceId;
-}
-
-/**
- * 获取参数显示名称
- */
-function getRegisterName(name) {
-    const names = {
-        'temperature': '温度',
-        'humidity': '湿度',
-        'pressure': '压力',
-        'voltage': '电压',
-        'current': '电流',
-        'power': '功率',
-        'energy': '电量',
-        'status': '状态'
-    };
-    return names[name] || name;
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (d > 0) return `${d}天${h}时${m}分`;
+    if (h > 0) return `${h}时${m}分`;
+    return `${m}分${Math.floor(seconds % 60)}秒`;
 }
 
 /**
  * 格式化数字
  */
-function formatNumber(value) {
-    if (value === null || value === undefined) return '-';
-    if (typeof value === 'number') {
-        return value.toFixed(2);
-    }
-    return value;
+function formatNumber(v) {
+    if (v === null || v === undefined) return '-';
+    return typeof v === 'number' ? v.toFixed(2) : v;
 }
 
 /**
- * 格式化日期时间
+ * setText helper
  */
-function formatDateTime(timestamp) {
-    if (!timestamp) return '-';
-    const date = new Date(timestamp);
-    return date.toLocaleString('zh-CN', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit'
-    });
-}
-
-/**
- * 更新温度图表时间范围
- */
-function updateTemperatureChart() {
-    // 重新加载数据
-    loadRealtimeData();
-}
-
-/**
- * 更新压力图表时间范围
- */
-function updatePressureChart() {
-    // 重新加载数据
-    loadRealtimeData();
+function setText(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
 }
