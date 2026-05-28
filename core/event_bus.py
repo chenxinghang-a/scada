@@ -5,6 +5,7 @@
 
 import logging
 import threading
+from datetime import datetime
 from typing import Any, Callable, Dict, List
 from collections import defaultdict
 
@@ -84,7 +85,7 @@ class EventBus:
             'type': event_type,
             'data': data,
             'source': source,
-            'timestamp': threading.current_thread().ident
+            'timestamp': datetime.now()
         }
         
         # 记录历史
