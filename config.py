@@ -152,3 +152,11 @@ class MQTTConfig:
 
     # 主题前缀
     TOPIC_PREFIX = 'scada/'
+
+# TDengine时序数据库配置
+class TDengineConfig:
+    HOST = os.environ.get('TDENGINE_HOST', 'localhost')
+    PORT = int(os.environ.get('TDENGINE_PORT', 6041))
+    USER = os.environ.get('TDENGINE_USER', 'root')
+    PASSWORD = os.environ.get('TDENGINE_PASSWORD', 'taosdata')
+    DATABASE = os.environ.get('TDENGINE_DATABASE', 'scada')

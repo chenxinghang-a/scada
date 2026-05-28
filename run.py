@@ -144,7 +144,10 @@ def main():
             from 智能层.tsdb_adapter import TSDBAdapter, RealtimeDataBridge
             from timeseries.tdengine_client import TDengineClient
 
-            tdengine = TDengineClient("localhost", 6041)
+            import os
+            td_host = os.environ.get('TDENGINE_HOST', 'localhost')
+            td_port = int(os.environ.get('TDENGINE_PORT', 6041))
+            tdengine = TDengineClient(td_host, td_port)
             if tdengine.connect():
                 tdengine.init_tables()
 
