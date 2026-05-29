@@ -85,6 +85,35 @@ def app():
 
 
 @pytest.fixture
+def auth_headers(app):
+    """Generate valid JWT auth headers for testing"""
+    import jwt
+    from datetime import datetime, timedelta, timezone
+    from config import AuthConfig
+
+    now = datetime.now(timezone.utc)
+    payload = {
+        'username': 'testuser',
+        'role': 'admin',
+        'type': 'access',
+        'iat': now,
+        'exp': now + timedelta(hours=AuthConfig.JWT_EXPIRATION_HOURS)
+    }
+    token = jwt.encode(payload, AuthConfig.JWT_SECRET, algorithm=AuthConfig.JWT_ALGORITHM)
+
+    # Make auth_manager.verify_token() return a valid user for this token
+    app.auth_manager.verify_token.return_value = {
+        'username': 'testuser',
+        'role': 'admin',
+        'display_name': 'Test User',
+        'permissions': ['read', 'write', 'delete', 'manage_users', 'manage_devices',
+                        'acknowledge_alarms', 'export_data', 'system_config']
+    }
+
+    return {'Authorization': f'Bearer {token}'}
+
+
+@pytest.fixture
 def client(app):
     """Flask test client"""
     return app.test_client()

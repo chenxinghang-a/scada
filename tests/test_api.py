@@ -54,46 +54,46 @@ class TestDevicesAPI:
 class TestAlarmsAPI:
     """Tests for alarm-related endpoints"""
 
-    def test_alarms_endpoint_structure(self, client):
+    def test_alarms_endpoint_structure(self, client, auth_headers):
         """GET /api/alarms returns expected JSON structure"""
-        resp = client.get('/api/alarms')
+        resp = client.get('/api/alarms', headers=auth_headers)
         assert resp.status_code == 200
         data = resp.get_json()
         assert 'alarms' in data
 
-    def test_active_alarms_endpoint(self, client):
+    def test_active_alarms_endpoint(self, client, auth_headers):
         """GET /api/alarms/active returns JSON"""
-        resp = client.get('/api/alarms/active')
+        resp = client.get('/api/alarms/active', headers=auth_headers)
         assert resp.status_code == 200
         data = resp.get_json()
         assert 'alarms' in data
 
-    def test_alarm_statistics_endpoint(self, client):
+    def test_alarm_statistics_endpoint(self, client, auth_headers):
         """GET /api/alarms/statistics returns JSON"""
-        resp = client.get('/api/alarms/statistics')
+        resp = client.get('/api/alarms/statistics', headers=auth_headers)
         assert resp.status_code == 200
         data = resp.get_json()
         assert data is not None
 
-    def test_alarms_accepts_filter_params(self, client):
+    def test_alarms_accepts_filter_params(self, client, auth_headers):
         """GET /api/alarms accepts query parameters for filtering"""
-        resp = client.get('/api/alarms?device_id=test&alarm_level=warning&limit=10')
+        resp = client.get('/api/alarms?device_id=test&alarm_level=warning&limit=10', headers=auth_headers)
         assert resp.status_code == 200
 
 
 class TestSystemAPI:
     """Tests for system information endpoints"""
 
-    def test_database_stats_returns_json(self, client):
+    def test_database_stats_returns_json(self, client, auth_headers):
         """GET /api/system/database returns JSON"""
-        resp = client.get('/api/system/database')
+        resp = client.get('/api/system/database', headers=auth_headers)
         assert resp.status_code == 200
         data = resp.get_json()
         assert data is not None
 
-    def test_simulation_mode_returns_json(self, client):
+    def test_simulation_mode_returns_json(self, client, auth_headers):
         """GET /api/system/simulation-mode returns JSON with simulation_mode field"""
-        resp = client.get('/api/system/simulation-mode')
+        resp = client.get('/api/system/simulation-mode', headers=auth_headers)
         assert resp.status_code == 200
         data = resp.get_json()
         assert 'simulation_mode' in data
