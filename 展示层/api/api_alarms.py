@@ -21,6 +21,7 @@ _require_engineer = role_required('admin', 'engineer')
 # ==================== 报警相关API ====================
 
 @alarms_bp.route('/alarms', methods=['GET'])
+@_require_auth
 def get_alarms():
     """获取报警记录"""
     device_id = request.args.get('device_id')
@@ -38,12 +39,14 @@ def get_alarms():
 
 
 @alarms_bp.route('/alarms/active', methods=['GET'])
+@_require_auth
 def get_active_alarms():
     """获取活动报警"""
     return jsonify({'alarms': current_app.alarm_manager.get_active_alarms()})
 
 
 @alarms_bp.route('/alarms/<alarm_id>/acknowledge', methods=['POST'])
+@_require_auth
 def acknowledge_alarm(alarm_id):
     """确认报警"""
     data = request.get_json()
@@ -57,6 +60,7 @@ def acknowledge_alarm(alarm_id):
 
 
 @alarms_bp.route('/alarms/statistics', methods=['GET'])
+@_require_auth
 def get_alarm_statistics():
     """获取报警统计（含声光输出+广播系统状态）"""
     return jsonify(current_app.alarm_manager.get_alarm_statistics())
@@ -182,6 +186,7 @@ def get_broadcast_history():
 # ==================== 报警规则API ====================
 
 @alarms_bp.route('/alarm-rules', methods=['GET'])
+@_require_auth
 def get_alarm_rules():
     """获取所有报警规则"""
     config = load_yaml_config('配置/alarms.yaml')
@@ -492,6 +497,7 @@ def update_broadcast_config():
 # ==================== 报警去重配置API ====================
 
 @alarms_bp.route('/alarms/dedup-config', methods=['GET'])
+@_require_auth
 def get_dedup_config():
     """获取报警去重配置"""
     alarm_manager = current_app.alarm_manager
