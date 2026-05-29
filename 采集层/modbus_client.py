@@ -473,6 +473,92 @@ class ModbusClient:
             logger.error(f"批量写入异常: {e}")
             return False
 
+    def write_multiple_coils(self, address: int, values: list[bool],
+                              slave_id: int | None = None) -> bool:
+        """
+        写入多个线圈（功能码15 / FC0F）
+
+        Args:
+            address: 起始地址
+            values: 写入值列表 (True=ON, False=OFF)
+            slave_id: 从站地址（可选）
+
+        Returns:
+            bool: 写入是否成功
+        """
+        if not self.connected:
+            return False
+
+        slave = slave_id or self.slave_id
+
+        try:
+            result = self.client.write_coils(
+                address=address,
+                values=values,
+                slave=slave
+            )
+
+            if isinstance(result, ExceptionResponse):
+                logger.error(f"批量写入线圈异常码 0x{result.exception_code:02X}")
+                return False
+
+            if result.isError():
+                logger.error(f"批量写入线圈失败: {result}")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"批量写入线圈异常: {e}")
+            return False
+
+    def read_write_multiple_registers(self, read_address: int, read_count: int,
+                                       write_address: int, write_values: list[int],
+                                       slave_id: int | None = None) -> list[int] | None:
+        """
+        读写多个寄存器（功能码23 / FC17）
+
+        原子操作：先读取read_count个寄存器，再写入write_values。
+        适用于需要"读-改-写"的场景。
+
+        Args:
+            read_address: 读取起始地址
+            read_count: 读取数量
+            write_address: 写入起始地址
+            write_values: 写入值列表
+            slave_id: 从站地址（可选）
+
+        Returns:
+            list[int]: 读取到的寄存器值，失败返回None
+        """
+        if not self.connected:
+            return None
+
+        slave = slave_id or self.slave_id
+
+        try:
+            result = self.client.readwrite_registers(
+                read_address=read_address,
+                read_count=read_count,
+                write_address=write_address,
+                write_registers=write_values,
+                slave=slave
+            )
+
+            if isinstance(result, ExceptionResponse):
+                logger.error(f"读写寄存器异常码 0x{result.exception_code:02X}")
+                return None
+
+            if result.isError():
+                logger.error(f"读写寄存器失败: {result}")
+                return None
+
+            return result.registers
+
+        except Exception as e:
+            logger.error(f"读写寄存器异常: {e}")
+            return None
+
     def decode_float32(self, registers: list[int]) -> float | None:
         """
         解码32位浮点数（两个寄存器）

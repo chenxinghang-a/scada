@@ -119,6 +119,22 @@ class ModbusClientInterface(BaseDeviceClient):
         """写入单个线圈"""
         pass
 
+    def write_multiple_coils(self, address: int, values: list[bool],
+                              slave_id: int | None = None) -> bool:
+        """写入多个线圈（功能码15）"""
+        raise NotImplementedError
+
+    def write_multiple_registers(self, address: int, values: list[int],
+                                  slave_id: int | None = None) -> bool:
+        """写入多个寄存器（功能码16）"""
+        raise NotImplementedError
+
+    def read_write_multiple_registers(self, read_address: int, read_count: int,
+                                       write_address: int, write_values: list[int],
+                                       slave_id: int | None = None) -> list[int] | None:
+        """读写多个寄存器（功能码23）"""
+        raise NotImplementedError
+
     # 数据解码方法（有默认实现）
     def decode_float32(self, registers: list[int]) -> float:
         """解码32位浮点数（大端序）"""

@@ -192,12 +192,81 @@ class AlarmManager:
         # 线程锁（保护去重状态的并发访问）
         self._dedup_lock = Lock()
 
+        # 报警升级配置
+        self._escalation_timeout = self.config.get('escalation_timeout', 600)  # 默认10分钟
+        self._escalation_callbacks: list = []  # 升级回调函数列表
+
         # 加载报警配置
         self.load_config()
 
     def set_websocket_emit(self, emit_func: Callable[..., Any]):
         """注入WebSocket emit函数（由run.py启动时调用）"""
         self._websocket_emit = emit_func
+
+    def add_escalation_callback(self, callback: Callable[..., Any]):
+        """
+        注册报警升级回调
+
+        当报警超过escalation_timeout仍未确认时，调用此回调。
+        回调签名: callback(alarm_info: dict)
+        """
+        self._escalation_callbacks.append(callback)
+
+    def check_escalation(self):
+        """
+        检查报警升级
+
+        遍历所有活动报警，如果超过escalation_timeout仍未确认，
+        触发升级动作（通知上级/发送短信/触发广播）。
+        """
+        now = datetime.now()
+        escalation_timeout = self._escalation_timeout
+
+        for state_key, state in list(self.alarm_states.items()):
+            if state.get('acknowledged', False):
+                continue  # 已确认，跳过
+
+            if state.get('escalated', False):
+                continue  # 已升级，跳过
+
+            # 检查是否超时
+            first_trigger = state.get('first_trigger_time')
+            if first_trigger is None:
+                continue
+
+            if isinstance(first_trigger, str):
+                first_trigger = datetime.fromisoformat(first_trigger)
+
+            elapsed = (now - first_trigger).total_seconds()
+            if elapsed >= escalation_timeout:
+                # 标记为已升级
+                state['escalated'] = True
+                state['escalation_time'] = now.isoformat()
+
+                device_id, register_name = state_key
+                rule_id = state.get('alarm_id')
+                rule_config = self.rules.get(rule_id, {})
+
+                alarm_info = {
+                    'alarm_id': rule_id,
+                    'device_id': device_id,
+                    'register_name': register_name,
+                    'alarm_level': rule_config.get('level', 'warning'),
+                    'alarm_message': rule_config.get('name', '未知报警'),
+                    'first_trigger_time': first_trigger.isoformat() if hasattr(first_trigger, 'isoformat') else str(first_trigger),
+                    'elapsed_seconds': elapsed,
+                    'escalation_reason': f'报警超过{escalation_timeout}秒未确认',
+                }
+
+                logger.warning(f"报警升级: {rule_id} ({device_id}/{register_name}) "
+                              f"已超时{elapsed:.0f}秒未确认")
+
+                # 调用升级回调
+                for callback in self._escalation_callbacks:
+                    try:
+                        callback(alarm_info)
+                    except Exception as e:
+                        logger.error(f"报警升级回调异常: {e}")
 
     def set_alarm_statistics(self, alarm_statistics):
         """注入报警统计分析器"""

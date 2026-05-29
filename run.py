@@ -123,6 +123,7 @@ def main():
         from 智能层.energy_manager import EnergyManager
         from 智能层.edge_decision import EdgeDecisionEngine
         from 智能层.device_control import DeviceControlSafety
+        from 智能层.vibration_analyzer import VibrationAnalyzer
 
         predictive_maintenance = PredictiveMaintenance(database)
         oee_calculator = OEECalculator(database)
@@ -130,6 +131,7 @@ def main():
         energy_manager = EnergyManager(database)
         edge_decision = EdgeDecisionEngine(database)
         device_control = DeviceControlSafety(database, device_manager, alarm_manager)
+        vibration_analyzer = VibrationAnalyzer(database)
 
         # 初始化TDengine适配器（可选，需要TDengine服务）
         realtime_bridge = None
@@ -194,6 +196,7 @@ def main():
             edge_decision=edge_decision,
             device_control=device_control,
             realtime_bridge=realtime_bridge,
+            vibration_analyzer=vibration_analyzer,
         )
 
         # 创建Flask应用
@@ -204,10 +207,51 @@ def main():
                          spc_analyzer=spc_analyzer,
                          energy_manager=energy_manager,
                          edge_decision=edge_decision,
-                         device_control=device_control)
+                         device_control=device_control,
+                         vibration_analyzer=vibration_analyzer)
 
         # 将启动时间传递给app
         app.system_start_time = SYSTEM_START_TIME
+
+        # 注册健康检查
+        logger.info("注册健康检查...")
+        from core.health_checker import HealthChecker
+
+        def check_database():
+            try:
+                stats = database.get_database_stats()
+                return {'status': 'healthy', 'message': f'数据库正常，{stats.get("total_records", 0)}条记录'}
+            except Exception as e:
+                return {'status': 'unhealthy', 'message': f'数据库异常: {e}'}
+
+        def check_collector():
+            try:
+                stats = data_collector.get_stats()
+                running = stats.get('running', False)
+                if running:
+                    return {'status': 'healthy', 'message': f'采集器运行中，队列{stats.get("queue_size", 0)}条'}
+                else:
+                    return {'status': 'unhealthy', 'message': '采集器未运行'}
+            except Exception as e:
+                return {'status': 'unhealthy', 'message': f'采集器异常: {e}'}
+
+        def check_device_connections():
+            try:
+                all_status = device_manager.get_all_status()
+                total = len(all_status)
+                connected = sum(1 for s in all_status if s.get('connected', False))
+                if connected == total:
+                    return {'status': 'healthy', 'message': f'全部{total}个设备已连接'}
+                elif connected > 0:
+                    return {'status': 'degraded', 'message': f'{connected}/{total}个设备已连接'}
+                else:
+                    return {'status': 'unhealthy', 'message': f'无设备连接'}
+            except Exception as e:
+                return {'status': 'unhealthy', 'message': f'设备连接检查异常: {e}'}
+
+        HealthChecker.register('database', check_database, interval=60)
+        HealthChecker.register('collector', check_collector, interval=30)
+        HealthChecker.register('devices', check_device_connections, interval=60)
 
         # ---- 后台连接设备 + 启动采集（不阻塞Web服务启动） ----
         def _background_start():
@@ -229,6 +273,17 @@ def main():
             oee_calculator.start()
             energy_manager.start()
             edge_decision.start()
+            vibration_analyzer.start()
+
+            # 注册边缘决策PID输出回调
+            def edge_write_register(device_id, address, value):
+                """边缘决策PID输出回调：实际写入设备"""
+                try:
+                    device_manager.adjust_device(device_id, str(address), float(value))
+                except Exception as e:
+                    logger.error(f"边缘决策写入失败: {e}")
+
+            edge_decision.register_action('write_register', edge_write_register)
 
             # 启动TDengine适配器（如果可用）
             if realtime_bridge:

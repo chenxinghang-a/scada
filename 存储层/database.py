@@ -736,6 +736,97 @@ class Database:
             logger.error(f"数据库压缩失败: {e}")
             return False
 
+    def enforce_retention_policy(self, realtime_hours: int = 24,
+                                  history_days: int = 30,
+                                  alarm_days: int = 90):
+        """
+        执行数据保留策略
+
+        Args:
+            realtime_hours: 实时数据保留小时数（默认24小时）
+            history_days: 历史数据保留天数（默认30天）
+            alarm_days: 报警记录保留天数（默认90天）
+        """
+        now = datetime.now()
+        results = {}
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 清理过期实时数据
+            realtime_cutoff = now - timedelta(hours=realtime_hours)
+            cursor.execute('DELETE FROM realtime_data WHERE timestamp < ?', (realtime_cutoff,))
+            results['realtime_deleted'] = cursor.rowcount
+
+            # 清理过期历史数据
+            history_cutoff = now - timedelta(days=history_days)
+            cursor.execute('DELETE FROM history_data WHERE timestamp < ?', (history_cutoff,))
+            results['history_deleted'] = cursor.rowcount
+
+            # 清理过期报警记录
+            alarm_cutoff = now - timedelta(days=alarm_days)
+            cursor.execute('DELETE FROM alarm_records WHERE timestamp < ?', (alarm_cutoff,))
+            results['alarm_deleted'] = cursor.rowcount
+
+        total_deleted = sum(results.values())
+        if total_deleted > 0:
+            logger.info(f"数据保留策略执行完成: {results}")
+
+        return results
+
+    def backup_database(self, backup_dir: str = 'data/backups') -> str | None:
+        """
+        备份数据库
+
+        Args:
+            backup_dir: 备份目录
+
+        Returns:
+            备份文件路径，失败返回None
+        """
+        import shutil
+        from pathlib import Path
+
+        try:
+            backup_path = Path(backup_dir)
+            backup_path.mkdir(parents=True, exist_ok=True)
+
+            # 生成备份文件名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            db_name = Path(self.db_path).stem
+            backup_file = backup_path / f"{db_name}_{timestamp}.db"
+
+            # 使用SQLite的VACUUM INTO进行热备份
+            with self.get_connection() as conn:
+                conn.execute(f"VACUUM INTO '{backup_file}'")
+
+            logger.info(f"数据库备份成功: {backup_file}")
+
+            # 清理旧备份（保留最近7个）
+            self._cleanup_old_backups(backup_path, db_name, keep=7)
+
+            return str(backup_file)
+
+        except Exception as e:
+            logger.error(f"数据库备份失败: {e}")
+            return None
+
+    def _cleanup_old_backups(self, backup_dir: Path, db_name: str, keep: int = 7):
+        """清理旧备份文件"""
+        try:
+            backups = sorted(
+                backup_dir.glob(f"{db_name}_*.db"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True
+            )
+
+            for old_backup in backups[keep:]:
+                old_backup.unlink()
+                logger.debug(f"删除旧备份: {old_backup}")
+
+        except Exception as e:
+            logger.warning(f"清理旧备份失败: {e}")
+
     def get_table_sizes(self) -> dict[str, int]:
         """
         获取各表的记录数

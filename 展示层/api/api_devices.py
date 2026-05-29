@@ -294,6 +294,8 @@ def get_supported_protocols():
         {'id': 'opcua', 'name': 'OPC UA', 'description': '工业4.0标准协议，面向对象，内置安全认证', 'default_port': 4840, 'requires': ['endpoint', 'nodes']},
         {'id': 'mqtt', 'name': 'MQTT', 'description': '物联网消息协议，适合无线传感器和IoT设备', 'default_port': 1883, 'requires': ['host', 'port', 'topics']},
         {'id': 'rest', 'name': 'REST HTTP', 'description': 'HTTP接口，适合智能网关和云平台对接', 'default_port': 80, 'requires': ['base_url', 'endpoints']},
+        {'id': 'mc', 'name': '三菱MC协议', 'description': '三菱PLC SLMP/3E帧协议，适用于FX5U/Q/iQ-R系列', 'default_port': 5000, 'requires': ['host', 'port', 'registers']},
+        {'id': 'fins', 'name': '欧姆龙FINS', 'description': '欧姆龙PLC FINS/TCP协议，适用于NJ/NX/CJ系列', 'default_port': 9600, 'requires': ['host', 'port', 'registers']},
     ]
     return jsonify({'protocols': protocols, 'summary': current_app.device_manager.get_protocol_summary()})
 
@@ -574,6 +576,153 @@ def get_device_templates():
              {'name': 'humidity', 'path': '/sensors/humi', 'method': 'GET', 'json_path': 'data.value', 'unit': '%RH'},
              {'name': 'production_count', 'path': '/production/count', 'method': 'GET', 'json_path': 'data.total', 'unit': '个'}
          ]},
+
+        # ==================== 伺服驱动器 ====================
+        {'id': 'mitsubishi_servo', 'name': '三菱伺服驱动器', 'description': '三菱MR-J5/J4系列伺服驱动器（位置/速度/转矩控制）', 'protocol': 'modbus_tcp', 'port': 502,
+         'vendor': '三菱电机', 'device_model': 'MR-J5-20A',
+         'device_category': 'mechanical',
+         'registers': [
+             {'name': 'control_word', 'description': '控制字 (0x0006=使能/0x0007=启动)', 'address': 0, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'status_word', 'description': '状态字 (运行/停止/故障)', 'address': 1, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'operation_mode', 'description': '运行模式 (1=位置/3=速度/4=转矩)', 'address': 2, 'length': 1, 'data_type': 'int16', 'scale': 1, 'unit': ''},
+             {'name': 'position_command', 'description': '位置指令', 'address': 10, 'length': 2, 'data_type': 'int32', 'scale': 1, 'unit': 'pulse'},
+             {'name': 'position_feedback', 'description': '位置反馈', 'address': 12, 'length': 2, 'data_type': 'int32', 'scale': 1, 'unit': 'pulse'},
+             {'name': 'following_error', 'description': '跟随误差', 'address': 14, 'length': 2, 'data_type': 'int32', 'scale': 1, 'unit': 'pulse'},
+             {'name': 'velocity_command', 'description': '速度指令', 'address': 20, 'length': 2, 'data_type': 'int32', 'scale': 0.1, 'unit': 'r/min'},
+             {'name': 'velocity_feedback', 'description': '速度反馈', 'address': 22, 'length': 2, 'data_type': 'int32', 'scale': 0.1, 'unit': 'r/min'},
+             {'name': 'torque_command', 'description': '转矩指令', 'address': 30, 'length': 1, 'data_type': 'int16', 'scale': 0.1, 'unit': '%'},
+             {'name': 'torque_feedback', 'description': '转矩反馈', 'address': 31, 'length': 1, 'data_type': 'int16', 'scale': 0.1, 'unit': '%'},
+             {'name': 'alarm_code', 'description': '报警代码', 'address': 40, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'motor_temperature', 'description': '电机温度', 'address': 50, 'length': 1, 'data_type': 'int16', 'scale': 0.1, 'unit': '°C'},
+         ]},
+
+        # ==================== 变频器（完整版） ====================
+        {'id': 'abb_vfd', 'name': 'ABB变频器', 'description': 'ABB ACS580系列变频器（完整参数集）', 'protocol': 'modbus_tcp', 'port': 502,
+         'vendor': 'ABB', 'device_model': 'ACS580-01',
+         'device_category': 'mechanical',
+         'registers': [
+             # 运行参数
+             {'name': 'output_frequency', 'description': '输出频率', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'Hz'},
+             {'name': 'output_current', 'description': '输出电流', 'address': 2, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'A'},
+             {'name': 'output_voltage', 'description': '输出电压', 'address': 4, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'V'},
+             {'name': 'output_power', 'description': '输出功率', 'address': 6, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'kW'},
+             {'name': 'dc_bus_voltage', 'description': '直流母线电压', 'address': 8, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'V'},
+             {'name': 'motor_temperature', 'description': '电机温度', 'address': 10, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': '°C'},
+             {'name': 'heatsink_temperature', 'description': '散热器温度', 'address': 12, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': '°C'},
+             # 控制参数
+             {'name': 'frequency_reference', 'description': '频率设定值', 'address': 20, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'Hz'},
+             {'name': 'acceleration_time', 'description': '加速时间', 'address': 22, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 's'},
+             {'name': 'deceleration_time', 'description': '减速时间', 'address': 24, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 's'},
+             {'name': 'run_status', 'description': '运行状态 (0=停止/1=运行/2=故障)', 'address': 30, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'fault_code', 'description': '故障代码', 'address': 31, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             # 能耗数据
+             {'name': 'energy_consumed', 'description': '累计耗电量', 'address': 40, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'kWh'},
+             {'name': 'power_factor', 'description': '功率因数', 'address': 42, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': ''},
+         ]},
+
+        # ==================== 三菱MC协议设备 ====================
+        {'id': 'fx5u_mc', 'name': '三菱FX5U PLC (MC协议)', 'description': '三菱FX5U系列PLC，SLMP/3E帧协议', 'protocol': 'mc', 'port': 5000,
+         'vendor': '三菱电机', 'device_model': 'FX5U-64M',
+         'registers': [
+             {'name': 'temperature', 'description': '模具温度', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': '°C'},
+             {'name': 'injection_pressure', 'description': '注射压力', 'address': 2, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'MPa'},
+             {'name': 'injection_speed', 'description': '注射速度', 'address': 4, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'mm/s'},
+             {'name': 'cycle_time', 'description': '成型周期', 'address': 6, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 's'},
+             {'name': 'shot_count', 'description': '注射计数', 'address': 8, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '个'},
+             {'name': 'mold_temperature', 'description': '模具温度2', 'address': 10, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': '°C'},
+         ]},
+
+        # ==================== 欧姆龙FINS协议设备 ====================
+        {'id': 'nj501_fins', 'name': '欧姆龙NJ501 PLC (FINS协议)', 'description': '欧姆龙NJ系列机器自动化控制器', 'protocol': 'fins', 'port': 9600,
+         'vendor': '欧姆龙', 'device_model': 'NJ501-1300',
+         'registers': [
+             {'name': 'position_x', 'description': 'X轴位置', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 0.001, 'unit': 'mm'},
+             {'name': 'position_y', 'description': 'Y轴位置', 'address': 2, 'length': 2, 'data_type': 'float32', 'scale': 0.001, 'unit': 'mm'},
+             {'name': 'speed', 'description': '运行速度', 'address': 4, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'mm/s'},
+             {'name': 'torque', 'description': '扭矩', 'address': 6, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': 'N·m'},
+             {'name': 'cycle_count', 'description': '循环计数', 'address': 8, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '个'},
+         ]},
+
+        # ==================== IO-Link主站 ====================
+        {'id': 'io_link_master', 'name': 'IO-Link主站', 'description': 'Turck TBEN-L系列IO-Link主站（8端口）', 'protocol': 'modbus_tcp', 'port': 502,
+         'vendor': 'Turck', 'device_model': 'TBEN-L4-8IOL',
+         'registers': [
+             {'name': 'port1_pressure', 'description': '端口1-压力传感器', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 0.001, 'unit': 'MPa'},
+             {'name': 'port2_flow', 'description': '端口2-流量传感器', 'address': 2, 'length': 2, 'data_type': 'float32', 'scale': 0.01, 'unit': 'L/min'},
+             {'name': 'port3_temperature', 'description': '端口3-温度传感器', 'address': 4, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': '°C'},
+             {'name': 'port4_distance', 'description': '端口4-距离传感器', 'address': 6, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': 'mm'},
+             {'name': 'device_status', 'description': '设备状态字', 'address': 20, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'port_status', 'description': '端口状态位图', 'address': 21, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+         ]},
+
+        # ==================== 编码器 ====================
+        {'id': 'absolute_encoder', 'name': '绝对值编码器', 'description': '多圈绝对值编码器（SSI/Biss-C接口）', 'protocol': 'modbus_tcp', 'port': 502,
+         'vendor': '海德汉', 'device_model': 'ROQ 437',
+         'registers': [
+             {'name': 'position', 'description': '当前位置（多圈）', 'address': 0, 'length': 2, 'data_type': 'int32', 'scale': 1, 'unit': 'pulse'},
+             {'name': 'position_mm', 'description': '当前位置(mm)', 'address': 2, 'length': 2, 'data_type': 'float32', 'scale': 0.001, 'unit': 'mm'},
+             {'name': 'speed', 'description': '转速', 'address': 4, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': 'r/min'},
+             {'name': 'turns', 'description': '圈数', 'address': 6, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '圈'},
+             {'name': 'status', 'description': '编码器状态', 'address': 8, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+         ]},
+
+        # ==================== 视觉系统 ====================
+        {'id': 'vision_system', 'name': '机器视觉系统', 'description': '康耐视In-Sight系列视觉传感器', 'protocol': 'modbus_tcp', 'port': 502,
+         'vendor': '康耐视', 'device_model': 'In-Sight 2800',
+         'registers': [
+             {'name': 'result', 'description': '检测结果 (0=NG/1=OK)', 'address': 0, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'score', 'description': '匹配分数', 'address': 1, 'length': 2, 'data_type': 'float32', 'scale': 0.01, 'unit': '%'},
+             {'name': 'position_x', 'description': '检测X坐标', 'address': 3, 'length': 2, 'data_type': 'float32', 'scale': 0.01, 'unit': 'mm'},
+             {'name': 'position_y', 'description': '检测Y坐标', 'address': 5, 'length': 2, 'data_type': 'float32', 'scale': 0.01, 'unit': 'mm'},
+             {'name': 'angle', 'description': '检测角度', 'address': 7, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': '°'},
+             {'name': 'total_count', 'description': '检测总数', 'address': 10, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '个'},
+             {'name': 'ng_count', 'description': '不良数', 'address': 11, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '个'},
+         ]},
+
+        # ==================== 安全PLC ====================
+        {'id': 'safety_plc', 'name': '安全PLC', 'description': 'Pilz PNOZ multi系列安全控制器', 'protocol': 'modbus_tcp', 'port': 502,
+         'vendor': 'Pilz', 'device_model': 'PNOZ m B1',
+         'registers': [
+             {'name': 'safety_input_1', 'description': '安全输入1 (急停)', 'address': 0, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'safety_input_2', 'description': '安全输入2 (安全门)', 'address': 1, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'safety_input_3', 'description': '安全输入3 (光栅)', 'address': 2, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'safety_output_1', 'description': '安全输出1 (主接触器)', 'address': 10, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'safety_output_2', 'description': '安全输出2 (液压阀)', 'address': 11, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'diagnostic_code', 'description': '诊断代码', 'address': 20, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'reset_required', 'description': '需要复位 (0=正常/1=需要复位)', 'address': 21, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+         ]},
+
+        # ==================== 条码/RFID读写器 ====================
+        {'id': 'barcode_reader', 'name': '条码/RFID读写器', 'description': '基恩士SR系列条码读取器', 'protocol': 'modbus_tcp', 'port': 502,
+         'vendor': '基恩士', 'device_model': 'SR-2000',
+         'registers': [
+             {'name': 'read_status', 'description': '读取状态 (0=无/1=成功/2=失败)', 'address': 0, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+             {'name': 'barcode_data', 'description': '条码数据(数值部分)', 'address': 1, 'length': 2, 'data_type': 'uint32', 'scale': 1, 'unit': ''},
+             {'name': 'read_count', 'description': '读取成功次数', 'address': 10, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '次'},
+             {'name': 'error_count', 'description': '读取失败次数', 'address': 11, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '次'},
+             {'name': 'trigger', 'description': '触发读取 (写1触发)', 'address': 20, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
+         ]},
+
+        # ==================== 电力分析仪（完整版） ====================
+        {'id': 'power_analyzer_full', 'name': '多功能电力分析仪', 'description': 'ABB M4M系列电力分析仪（完整参数）', 'protocol': 'modbus_tcp', 'port': 502,
+         'vendor': 'ABB', 'device_model': 'M4M 30',
+         'registers': [
+             {'name': 'voltage_l1', 'description': 'L1相电压', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': 'V'},
+             {'name': 'voltage_l2', 'description': 'L2相电压', 'address': 2, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': 'V'},
+             {'name': 'voltage_l3', 'description': 'L3相电压', 'address': 4, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': 'V'},
+             {'name': 'current_l1', 'description': 'L1相电流', 'address': 6, 'length': 2, 'data_type': 'float32', 'scale': 0.01, 'unit': 'A'},
+             {'name': 'current_l2', 'description': 'L2相电流', 'address': 8, 'length': 2, 'data_type': 'float32', 'scale': 0.01, 'unit': 'A'},
+             {'name': 'current_l3', 'description': 'L3相电流', 'address': 10, 'length': 2, 'data_type': 'float32', 'scale': 0.01, 'unit': 'A'},
+             {'name': 'active_power', 'description': '有功功率', 'address': 12, 'length': 2, 'data_type': 'float32', 'scale': 0.001, 'unit': 'kW'},
+             {'name': 'reactive_power', 'description': '无功功率', 'address': 14, 'length': 2, 'data_type': 'float32', 'scale': 0.001, 'unit': 'kvar'},
+             {'name': 'apparent_power', 'description': '视在功率', 'address': 16, 'length': 2, 'data_type': 'float32', 'scale': 0.001, 'unit': 'kVA'},
+             {'name': 'power_factor', 'description': '功率因数', 'address': 18, 'length': 2, 'data_type': 'float32', 'scale': 0.01, 'unit': ''},
+             {'name': 'frequency', 'description': '频率', 'address': 20, 'length': 2, 'data_type': 'float32', 'scale': 0.01, 'unit': 'Hz'},
+             {'name': 'thd_voltage', 'description': '电压谐波畸变率', 'address': 22, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': '%'},
+             {'name': 'thd_current', 'description': '电流谐波畸变率', 'address': 24, 'length': 2, 'data_type': 'float32', 'scale': 0.1, 'unit': '%'},
+             {'name': 'energy_active', 'description': '有功电能', 'address': 30, 'length': 2, 'data_type': 'float64', 'scale': 0.01, 'unit': 'kWh'},
+             {'name': 'energy_reactive', 'description': '无功电能', 'address': 34, 'length': 2, 'data_type': 'float64', 'scale': 0.01, 'unit': 'kvarh'},
+         ]},
     ]
     return jsonify({'templates': templates})
 
@@ -602,6 +751,14 @@ def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
             raise ValueError('REST设备缺少必填字段: base_url')
         if not data.get('endpoints'):
             raise ValueError('REST设备缺少端点配置')
+    elif protocol == 'mc':
+        for field in ('host', 'port'):
+            if field not in data:
+                raise ValueError(f'MC协议设备缺少必填字段: {field}')
+    elif protocol == 'fins':
+        for field in ('host', 'port'):
+            if field not in data:
+                raise ValueError(f'FINS协议设备缺少必填字段: {field}')
 
 
 def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -649,6 +806,16 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
                 config['auth_username'] = data.get('auth_username', '')
                 config['auth_password'] = data.get('auth_password', '')
         config['endpoints'] = data['endpoints']
+    elif protocol == 'mc':
+        config['host'] = data['host']
+        config['port'] = int(data['port'])
+        config['network'] = int(data.get('network', 0))
+        config['pc'] = int(data.get('pc', 0xFF))
+        config['registers'] = data.get('registers', [])
+    elif protocol == 'fins':
+        config['host'] = data['host']
+        config['port'] = int(data['port'])
+        config['registers'] = data.get('registers', [])
 
     return config
 
@@ -671,6 +838,14 @@ def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: 
         for key in ('base_url', 'poll_interval', 'auth_type', 'auth_token', 'auth_username', 'auth_password', 'endpoints'):
             if key in data:
                 device_config[key] = int(data[key]) if key == 'poll_interval' else data[key]
+    elif protocol == 'mc':
+        for key in ('host', 'port', 'network', 'pc', 'registers'):
+            if key in data:
+                device_config[key] = int(data[key]) if key in ('port', 'network', 'pc') else data[key]
+    elif protocol == 'fins':
+        for key in ('host', 'port', 'registers'):
+            if key in data:
+                device_config[key] = int(data[key]) if key == 'port' else data[key]
 
 
 # ==================== 模拟设备预设API ====================
@@ -695,7 +870,7 @@ def _create_test_client(config: dict, simulation_mode: bool):
             EnhancedSimulatedMQTTClient,
             EnhancedSimulatedRESTClient
         )
-        if protocol in ('modbus_tcp', 'modbus_rtu'):
+        if protocol in ('modbus_tcp', 'modbus_rtu', 'mc', 'fins'):
             return EnhancedSimulatedModbusClient(config)
         elif protocol == 'opcua':
             return EnhancedSimulatedOPCUAClient(config)
@@ -717,6 +892,12 @@ def _create_test_client(config: dict, simulation_mode: bool):
             return MQTTClient(config)
         elif protocol == 'rest':
             return RESTDeviceClient(config)
+        elif protocol == 'mc':
+            from 采集层.mc_client import MCClient
+            return MCClient(config)
+        elif protocol == 'fins':
+            from 采集层.fins_client import FINSClient
+            return FINSClient(config)
 
     return None
 

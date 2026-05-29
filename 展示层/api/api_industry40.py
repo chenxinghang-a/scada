@@ -467,6 +467,86 @@ def get_devices_status():
         return error_response(f"获取设备状态失败: {str(e)}", 500)
 
 
+# ==================== 振动分析API ====================
+
+@industry40_bp.route('/industry40/vibration', methods=['GET'])
+@_require_auth
+def get_vibration_scores():
+    """获取所有设备振动评分"""
+    try:
+        va, err = _module_check('vibration_analyzer', '振动分析')
+        if err:
+            return err
+
+        scores = va.get_vibration_scores()
+        logger.debug(f"获取振动评分: {len(scores) if scores else 0} 个设备")
+        return success_response(scores if scores else {}, message="获取振动评分成功")
+    except Exception as e:
+        logger.error(f"获取振动评分失败: {e}\n{traceback.format_exc()}")
+        return error_response(f"获取振动评分失败: {str(e)}", 500)
+
+
+@industry40_bp.route('/industry40/vibration/<device_id>', methods=['GET'])
+@_require_auth
+def get_device_vibration(device_id):
+    """获取指定设备振动评分"""
+    try:
+        va, err = _module_check('vibration_analyzer', '振动分析')
+        if err:
+            return err
+
+        result = va.get_device_vibration(device_id)
+        if result is None:
+            return error_response(f"设备 '{device_id}' 无振动数据", 404)
+
+        logger.debug(f"获取设备 {device_id} 振动评分成功")
+        return success_response(result, message=f"获取设备 {device_id} 振动评分成功")
+    except Exception as e:
+        logger.error(f"获取设备 {device_id} 振动评分失败: {e}\n{traceback.format_exc()}")
+        return error_response(f"获取设备振动评分失败: {str(e)}", 500)
+
+
+@industry40_bp.route('/industry40/vibration/<device_id>/spectrum', methods=['GET'])
+@_require_auth
+def get_vibration_spectrum(device_id):
+    """获取设备振动频谱（FFT分析）"""
+    try:
+        va, err = _module_check('vibration_analyzer', '振动分析')
+        if err:
+            return err
+
+        result = va.get_spectrum(device_id)
+        if result is None:
+            return error_response(f"设备 '{device_id}' 频谱数据不足（需要至少64个采样点）", 404)
+
+        logger.debug(f"获取设备 {device_id} 振动频谱成功")
+        return success_response(result, message=f"获取设备 {device_id} 振动频谱成功")
+    except Exception as e:
+        logger.error(f"获取设备 {device_id} 振动频谱失败: {e}\n{traceback.format_exc()}")
+        return error_response(f"获取设备振动频谱失败: {str(e)}", 500)
+
+
+@industry40_bp.route('/industry40/vibration/<device_id>/bearing', methods=['GET'])
+@_require_auth
+def check_bearing_fault(device_id):
+    """轴承故障频率检测"""
+    try:
+        va, err = _module_check('vibration_analyzer', '振动分析')
+        if err:
+            return err
+
+        rpm = request.args.get('rpm', 1500, type=float)
+        result = va.check_bearing_fault(device_id, rpm)
+        if result is None:
+            return error_response(f"设备 '{device_id}' 无振动数据", 404)
+
+        logger.debug(f"设备 {device_id} 轴承故障检测完成")
+        return success_response(result, message="轴承故障检测完成")
+    except Exception as e:
+        logger.error(f"轴承故障检测失败: {e}\n{traceback.format_exc()}")
+        return error_response(f"轴承故障检测失败: {str(e)}", 500)
+
+
 # ==================== 工业4.0总览API ====================
 
 @industry40_bp.route('/industry40/overview', methods=['GET'])

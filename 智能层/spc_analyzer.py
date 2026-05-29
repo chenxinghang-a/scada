@@ -435,12 +435,16 @@ class SPCAnalyzer:
     def _check_violations(self, points: list[float], cl: float,
                            ucl: float, lcl: float) -> list[dict[str, Any]]:
         """
-        Western Electric判异规则检测
+        Western Electric判异规则检测（完整8条）
 
         规则1: 1点超出3σ控制限
         规则2: 连续9点在中心线同一侧
         规则3: 连续6点递增或递减
         规则4: 连续14点交替上下
+        规则5: 连续3点中有2点超出2σ
+        规则6: 连续5点中有4点超出1σ
+        规则7: 连续15点在1σ以内（中心线附近）
+        规则8: 连续8点超出1σ（在中心线两侧）
         """
         violations = []
         n = len(points)
@@ -449,6 +453,10 @@ class SPCAnalyzer:
             return violations
 
         sigma = (ucl - cl) / 3 if (ucl - cl) > 0 else 1
+        one_sigma_up = cl + sigma
+        one_sigma_down = cl - sigma
+        two_sigma_up = cl + 2 * sigma
+        two_sigma_down = cl - 2 * sigma
 
         # 规则1: 超出控制限
         for i, p in enumerate(points):
@@ -506,6 +514,52 @@ class SPCAnalyzer:
                         'index': i,
                         'severity': 'warning',
                     })
+
+        # 规则5: 连续3点中有2点超出2σ
+        for i in range(n - 2):
+            segment = points[i:i+3]
+            count_outside = sum(1 for p in segment if p > two_sigma_up or p < two_sigma_down)
+            if count_outside >= 2:
+                violations.append({
+                    'rule': 5,
+                    'description': f'点{i+1}~{i+3}连续3点中有2点超出2σ',
+                    'index': i,
+                    'severity': 'warning',
+                })
+
+        # 规则6: 连续5点中有4点超出1σ
+        for i in range(n - 4):
+            segment = points[i:i+5]
+            count_outside = sum(1 for p in segment if p > one_sigma_up or p < one_sigma_down)
+            if count_outside >= 4:
+                violations.append({
+                    'rule': 6,
+                    'description': f'点{i+1}~{i+5}连续5点中有4点超出1σ',
+                    'index': i,
+                    'severity': 'warning',
+                })
+
+        # 规则7: 连续15点在1σ以内
+        for i in range(n - 14):
+            segment = points[i:i+15]
+            if all(one_sigma_down <= p <= one_sigma_up for p in segment):
+                violations.append({
+                    'rule': 7,
+                    'description': f'点{i+1}~{i+15}连续15点在1σ以内（过度集中）',
+                    'index': i,
+                    'severity': 'info',
+                })
+
+        # 规则8: 连续8点超出1σ
+        for i in range(n - 7):
+            segment = points[i:i+8]
+            if all(p > one_sigma_up or p < one_sigma_down for p in segment):
+                violations.append({
+                    'rule': 8,
+                    'description': f'点{i+1}~{i+8}连续8点超出1σ',
+                    'index': i,
+                    'severity': 'warning',
+                })
 
         return violations
 

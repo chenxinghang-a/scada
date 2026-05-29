@@ -32,7 +32,7 @@ class SimulatedDeviceManager(IDeviceManager):
     - 可以独立运行，无需切换模式
     """
 
-    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest']
+    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest', 'mc', 'fins']
 
     def __init__(self, config_path: str | None = None):
         """
@@ -85,10 +85,10 @@ class SimulatedDeviceManager(IDeviceManager):
     def _create_simulated_client(self, config: dict[str, Any]) -> IDeviceClient | None:
         """
         根据协议类型创建模拟客户端
-        
+
         Args:
             config: 设备配置
-            
+
         Returns:
             模拟客户端实例
         """
@@ -102,6 +102,12 @@ class SimulatedDeviceManager(IDeviceManager):
             return EnhancedSimulatedMQTTClient(config)
         elif protocol == 'rest':
             return EnhancedSimulatedRESTClient(config)
+        elif protocol == 'mc':
+            # 三菱MC协议使用Modbus模拟客户端（寄存器结构兼容）
+            return EnhancedSimulatedModbusClient(config)
+        elif protocol == 'fins':
+            # 欧姆龙FINS协议使用Modbus模拟客户端（寄存器结构兼容）
+            return EnhancedSimulatedModbusClient(config)
         else:
             logger.error(f"不支持的协议类型: {protocol}")
             return None

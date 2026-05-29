@@ -25,7 +25,7 @@ class DataCollector:
     def __init__(self, device_manager, database, alarm_manager=None,
                  predictive_maintenance=None, oee_calculator=None,
                  spc_analyzer=None, energy_manager=None, edge_decision=None,
-                 device_control=None, realtime_bridge=None):
+                 device_control=None, realtime_bridge=None, vibration_analyzer=None):
         self.device_manager = device_manager
         self.database = database
         self.alarm_manager = alarm_manager
@@ -37,6 +37,7 @@ class DataCollector:
         self.energy_manager = energy_manager
         self.edge_decision = edge_decision
         self.device_control = device_control
+        self.vibration_analyzer = vibration_analyzer
 
         # TDengine实时数据桥接器（可选）
         self.realtime_bridge = realtime_bridge
@@ -584,6 +585,11 @@ class DataCollector:
                     ]
                     if any(kw in register_name.lower() for kw in spc_keywords):
                         self.spc_analyzer.feed_data(device_id, register_name, value)
+
+                # 振动分析 — 振动数据喂入
+                if self.vibration_analyzer:
+                    self.vibration_analyzer.feed_data(
+                        device_id, register_name, value, timestamp)
 
                 # OEE — 设备状态和产量数据喂入
                 if self.oee_calculator:

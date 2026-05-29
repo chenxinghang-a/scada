@@ -29,7 +29,7 @@ class RealDeviceManager(IDeviceManager):
     - 适用于生产环境
     """
 
-    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest']
+    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest', 'mc', 'fins']
 
     # 连接失败重试策略
     MAX_RETRY_COUNT = 3       # 最大重试次数后进入退避
@@ -91,10 +91,10 @@ class RealDeviceManager(IDeviceManager):
     def _create_real_client(self, config: dict[str, Any]) -> IDeviceClient | None:
         """
         根据协议类型创建真实客户端
-        
+
         Args:
             config: 设备配置
-            
+
         Returns:
             真实客户端实例
         """
@@ -108,6 +108,12 @@ class RealDeviceManager(IDeviceManager):
             return MQTTClient(config)
         elif protocol == 'rest':
             return RESTDeviceClient(config)
+        elif protocol == 'mc':
+            from .mc_client import MCClient
+            return MCClient(config)
+        elif protocol == 'fins':
+            from .fins_client import FINSClient
+            return FINSClient(config)
         else:
             logger.error(f"不支持的协议类型: {protocol}")
             return None
