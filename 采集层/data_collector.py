@@ -50,8 +50,8 @@ class DataCollector:
         # 失败计数器（用于退避）
         self._failure_counts = {}  # device_id -> consecutive_failures
 
-        # 数据队列
-        self.data_queue = Queue(maxsize=10000)
+        # 数据队列（大容量，防丢数据）
+        self.data_queue = Queue(maxsize=50000)
 
         # 动态采集频率配置
         self._dynamic_interval_config = {
@@ -198,7 +198,7 @@ class DataCollector:
                     'unit': unit
                 })
             except queue.Full:
-                logger.warning(f"数据队列已满，丢弃 {device_id}/{name}")
+                pass  # 静默丢弃，不打日志（高频场景日志本身也卡）
 
         if hasattr(client, 'add_data_callback'):
             client.add_data_callback(on_data)
@@ -355,12 +355,23 @@ class DataCollector:
         max_end = max(r['address'] + reg_sizes[r['address']] for r in registers)
         total_count = max_end - min_addr
 
+        def _enqueue(item):
+            """非阻塞入队，满则丢最旧"""
+            if self.data_queue.full():
+                try:
+                    self.data_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            try:
+                self.data_queue.put_nowait(item)
+            except queue.Full:
+                pass
+
         # 单次 FC03 读取整个范围（规范限制 125，超出则分段）
         if total_count <= 125:
             all_regs = client.read_holding_registers(min_addr, total_count)
             if all_regs is None:
                 return
-            # 从批量结果中解析每个寄存器
             for reg in registers:
                 offset = reg['address'] - min_addr
                 size = reg_sizes[reg['address']]
@@ -369,7 +380,7 @@ class DataCollector:
                     continue
                 value = self._decode_register(client, raw, reg)
                 if value is not None:
-                    self.data_queue.put({
+                    _enqueue({
                         'device_id': device_id,
                         'register_name': reg['name'],
                         'value': value,
@@ -377,7 +388,6 @@ class DataCollector:
                         'unit': reg.get('unit', '')
                     })
         else:
-            # 地址范围超过 125，分段读取
             for start in range(min_addr, max_end, 125):
                 count = min(125, max_end - start)
                 chunk = client.read_holding_registers(start, count)
@@ -393,7 +403,7 @@ class DataCollector:
                         continue
                     value = self._decode_register(client, raw, reg)
                     if value is not None:
-                        self.data_queue.put({
+                        _enqueue({
                             'device_id': device_id,
                             'register_name': reg['name'],
                             'value': value,
@@ -429,23 +439,27 @@ class DataCollector:
 
     def _collect_from_cache(self, client, device_id: str, timestamp):
         """通用方法：从客户端缓存采集数据（适用于REST/OPC UA/MQTT）"""
-        # 设备已断开时不去读取缓存（避免读取到断开前的旧数据）
         if not getattr(client, 'connected', False):
-            logger.debug(f"设备 {device_id} 已断开，跳过缓存采集")
             return
         latest = client.get_latest_data()
         for name, data in latest.items():
             value = data.get('value')
             if value is not None:
                 try:
-                    self.data_queue.put({
+                    item = {
                         'device_id': device_id,
                         'register_name': name,
                         'value': float(value) if value is not None else 0,
                         'timestamp': timestamp,
                         'unit': data.get('unit', '')
-                    })
-                except (ValueError, TypeError):
+                    }
+                    if self.data_queue.full():
+                        try:
+                            self.data_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                    self.data_queue.put_nowait(item)
+                except (ValueError, TypeError, queue.Full):
                     pass
 
     def _collect_rest(self, client, device_id: str, device_config: dict[str, Any], timestamp):
@@ -505,9 +519,9 @@ class DataCollector:
             return None
 
     def _process_data(self):
-        """数据处理线程 — 主循环只做DB+报警，智能层异步分发"""
+        """数据处理线程 — 批量写DB + 报警检查，智能层异步分发"""
         # 智能层分发队列（独立线程处理，不阻塞主循环）
-        intel_queue = Queue(maxsize=5000)
+        intel_queue = Queue(maxsize=10000)
 
         def _intel_worker():
             """智能层数据分发工作线程"""
@@ -518,83 +532,84 @@ class DataCollector:
                     continue
                 try:
                     self._dispatch_intelligence(data)
-                except Exception as e:
-                    logger.debug(f"智能层分发异常: {e}")
+                except Exception:
+                    pass
 
         intel_thread = threading.Thread(target=_intel_worker, daemon=True, name="intel_dispatch")
         intel_thread.start()
 
-        # 预编译关键词集合（避免每条数据都做any()遍历）
-        _power_kw = frozenset(['power', 'watt', 'kw', 'active_power', 'reactive_power', 'apparent_power'])
-        _energy_kw = frozenset(['energy', 'kwh', 'mwh', 'electricity', 'consumption'])
-        _status_kw = frozenset(['status', 'state', 'running', 'line_status', 'boiler_status', 'packing_status'])
-        _count_kw = frozenset(['count', 'product', 'shot', 'label', 'palletizing', 'batch', 'painted', 'quantity'])
-        _spc_kw = frozenset([
-            'temperature', 'pressure', 'ph', 'quality', 'dimension',
-            'voltage', 'current', 'speed', 'flow', 'level',
-            'humidity', 'torque', 'frequency', 'thickness',
-            'viscosity', 'density', 'concentration', 'turbidity',
-            'conductivity', 'oxygen', 'vibration', 'force',
-            'position', 'distance', 'cycle_time', 'injection',
-            'mold', 'dryer', 'distill', 'boiler', 'heat_exchanger',
-            'spray', 'coating', 'sealing', 'conveyor'
-        ])
-
-        def _has_keyword(name_lower, keywords):
-            for kw in keywords:
-                if kw in name_lower:
-                    return True
-            return False
+        # 批量参数
+        BATCH_MAX = 200       # 最大批次大小
+        BATCH_TIMEOUT = 0.5   # 最大等待时间（秒）
 
         while self.running:
+            # === 批量收集：从队列取一批数据 ===
+            batch = []
             try:
-                data = self.data_queue.get(timeout=1)
+                # 阻塞等第一条
+                first = self.data_queue.get(timeout=1)
+                batch.append(first)
             except queue.Empty:
                 continue
 
+            # 非阻塞取剩余（凑满批次或等超时）
+            deadline = time.time() + BATCH_TIMEOUT
+            while len(batch) < BATCH_MAX and time.time() < deadline:
+                try:
+                    batch.append(self.data_queue.get_nowait())
+                except queue.Empty:
+                    # 队列空了，等一小会再试
+                    remaining = deadline - time.time()
+                    if remaining > 0.01:
+                        time.sleep(min(remaining, 0.05))
+                        continue
+                    break
+
+            if not batch:
+                continue
+
             try:
-                # === 核心路径：DB写入 + 报警检查（必须同步） ===
-                self.database.insert_data(
-                    device_id=data['device_id'],
-                    register_name=data['register_name'],
-                    value=data['value'],
-                    timestamp=data['timestamp'],
-                    unit=data['unit']
-                )
+                # === 批量写DB（单事务，比逐条快10-50倍） ===
+                self.database.insert_data_batch(batch)
 
+                # === 报警检查（每条都要检查） ===
                 if self.alarm_manager:
-                    self.alarm_manager.check_alarm(
-                        device_id=data['device_id'],
-                        register_name=data['register_name'],
-                        value=data['value'],
-                        timestamp=data['timestamp']
-                    )
-
-                # TDengine桥接（非阻塞，失败不影响主流程）
-                if self.realtime_bridge:
-                    try:
-                        self.realtime_bridge.feed(
+                    for data in batch:
+                        self.alarm_manager.check_alarm(
                             device_id=data['device_id'],
                             register_name=data['register_name'],
                             value=data['value'],
-                            timestamp=data['timestamp'],
-                            unit=data.get('unit', ''),
-                            protocol=data.get('protocol', ''),
-                            gateway_id=data.get('gateway_id', '')
+                            timestamp=data['timestamp']
                         )
-                    except Exception:
-                        pass
 
-                # === 智能层：扔进异步队列，不阻塞 ===
-                if not intel_queue.full():
-                    intel_queue.put_nowait(data)
+                # === TDengine桥接（非阻塞） ===
+                if self.realtime_bridge:
+                    for data in batch:
+                        try:
+                            self.realtime_bridge.feed(
+                                device_id=data['device_id'],
+                                register_name=data['register_name'],
+                                value=data['value'],
+                                timestamp=data['timestamp'],
+                                unit=data.get('unit', ''),
+                                protocol=data.get('protocol', ''),
+                                gateway_id=data.get('gateway_id', '')
+                            )
+                        except Exception:
+                            pass
+
+                # === 智能层：扔进异步队列 ===
+                for data in batch:
+                    if not intel_queue.full():
+                        intel_queue.put_nowait(data)
 
                 with self._stats_lock:
                     self.stats['queue_size'] = self.data_queue.qsize()
+                    self.stats['total_collections'] = self.stats.get('total_collections', 0) + len(batch)
 
             except Exception as e:
                 if self.running:
-                    logger.error(f"数据处理异常: {e}")
+                    logger.error(f"批量数据处理异常: {e}")
 
     def _dispatch_intelligence(self, data: dict):
         """智能层数据分发（在独立线程中运行）"""

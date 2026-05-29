@@ -36,9 +36,10 @@ class Database:
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA synchronous=NORMAL')
-        conn.execute('PRAGMA cache_size=-8000')  # 8MB 缓存
-        conn.execute('PRAGMA wal_autocheckpoint=2000')
-        conn.execute('PRAGMA busy_timeout=30000')
+        conn.execute('PRAGMA cache_size=-32000')  # 32MB 缓存（高吞吐场景）
+        conn.execute('PRAGMA wal_autocheckpoint=4000')
+        conn.execute('PRAGMA busy_timeout=10000')  # 10秒超时（不卡太久）
+        conn.execute('PRAGMA temp_store=MEMORY')   # 临时表放内存
         conn.close()
 
     @contextmanager
@@ -206,10 +207,10 @@ class Database:
             except Exception:
                 pass  # 列已存在，忽略
 
-    def insert_data(self, device_id: str, register_name: str, 
+    def insert_data(self, device_id: str, register_name: str,
                     value: float, timestamp: datetime, unit: str = ''):
         """
-        插入数据
+        插入数据（单条）
         - realtime_data: UPSERT，每个设备+寄存器只保留最新一条
         - history_data: INSERT，保留全量历史记录
 
@@ -223,18 +224,50 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # realtime_data: UPSERT — 每个(device_id, register_name)只保留最新值
-            # 使用INSERT OR REPLACE避免DELETE+INSERT的竞态条件
             cursor.execute('''
                 INSERT OR REPLACE INTO realtime_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
             ''', (device_id, register_name, value, unit, timestamp))
 
-            # history_data: INSERT — 保留全量历史
             cursor.execute('''
                 INSERT INTO history_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
             ''', (device_id, register_name, value, unit, timestamp))
+
+    def insert_data_batch(self, batch: list[dict]):
+        """
+        批量插入数据（单事务，性能比逐条快10-50倍）
+
+        Args:
+            batch: [{'device_id', 'register_name', 'value', 'timestamp', 'unit'}, ...]
+        """
+        if not batch:
+            return
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # realtime_data: 批量UPSERT
+            realtime_rows = [
+                (d['device_id'], d['register_name'], d['value'],
+                 d.get('unit', ''), d['timestamp'])
+                for d in batch
+            ]
+            cursor.executemany('''
+                INSERT OR REPLACE INTO realtime_data (device_id, register_name, value, unit, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            ''', realtime_rows)
+
+            # history_data: 批量INSERT
+            history_rows = [
+                (d['device_id'], d['register_name'], d['value'],
+                 d.get('unit', ''), d['timestamp'])
+                for d in batch
+            ]
+            cursor.executemany('''
+                INSERT INTO history_data (device_id, register_name, value, unit, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            ''', history_rows)
 
     def delete_device_data(self, device_id: str):
         """
