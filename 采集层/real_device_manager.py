@@ -167,32 +167,136 @@ class RealDeviceManager(IDeviceManager):
             logger.info("[真实] 紧急停机已激活")
 
     def stop_device(self, device_id: str) -> bool:
-        """停止指定设备（发送停机信号）"""
+        """停止指定设备（仅限机械类设备）"""
+        config = self.devices.get(device_id)
+        if not config:
+            return False
+
+        category = IDeviceManager.get_device_category(config)
+        if category != 'mechanical':
+            logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
+            return False
+
         self._stopped_devices.add(device_id)
         client = self.get_client(device_id)
         if client:
-            # 优先线圈写入：coil 0 = False 表示停止
-            if hasattr(client, 'write_single_coil') and callable(client.write_single_coil):
-                client.write_single_coil(0, False)
-            # 降级：寄存器写入 0
-            elif hasattr(client, 'write_single_register') and callable(client.write_single_register):
-                client.write_single_register(100, 0)
-            logger.info(f"[真实] 已向 {device_id} 发送停止信号")
+            # 从配置读取控制地址，而非硬编码
+            ctrl = config.get('control', {})
+            stop_coil = ctrl.get('stop_coil')      # 线圈地址
+            stop_register = ctrl.get('stop_register')  # 寄存器地址
+
+            if stop_coil is not None and hasattr(client, 'write_single_coil'):
+                success = client.write_single_coil(stop_coil, False)
+            elif stop_register is not None and hasattr(client, 'write_single_register'):
+                success = client.write_single_register(stop_register, 0)
+            else:
+                # 无控制配置时降级：coil 0 = False
+                success = client.write_single_coil(0, False) if hasattr(client, 'write_single_coil') else False
+
+            if success:
+                logger.info(f"[真实] 设备 {device_id} 已停止")
+            else:
+                logger.error(f"[真实] 设备 {device_id} 停止命令发送失败")
+                return False
         return True
 
     def start_device(self, device_id: str) -> bool:
-        """启动指定设备（发送启动信号）"""
+        """启动指定设备（仅限机械类设备）"""
+        config = self.devices.get(device_id)
+        if not config:
+            return False
+
+        category = IDeviceManager.get_device_category(config)
+        if category != 'mechanical':
+            logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
+            return False
+
         self._stopped_devices.discard(device_id)
         client = self.get_client(device_id)
         if client:
-            # 线圈 True = 启动
-            if hasattr(client, 'write_single_coil') and callable(client.write_single_coil):
-                client.write_single_coil(0, True)
-            # 降级：寄存器写入 1
-            elif hasattr(client, 'write_single_register') and callable(client.write_single_register):
-                client.write_single_register(100, 1)
-            logger.info(f"[真实] 已向 {device_id} 发送启动信号")
+            ctrl = config.get('control', {})
+            start_coil = ctrl.get('start_coil')
+            start_register = ctrl.get('start_register')
+
+            if start_coil is not None and hasattr(client, 'write_single_coil'):
+                success = client.write_single_coil(start_coil, True)
+            elif start_register is not None and hasattr(client, 'write_single_register'):
+                success = client.write_single_register(start_register, 1)
+            else:
+                success = client.write_single_coil(0, True) if hasattr(client, 'write_single_coil') else False
+
+            if success:
+                logger.info(f"[真实] 设备 {device_id} 已启动")
+            else:
+                logger.error(f"[真实] 设备 {device_id} 启动命令发送失败")
+                return False
         return True
+
+    def adjust_device(self, device_id: str, register_name: str, value: float) -> dict:
+        """
+        调节设备参数（写入指定寄存器值）
+
+        Args:
+            device_id: 设备ID
+            register_name: 寄存器名（如 'speed', 'temperature_setpoint'）
+            value: 目标值
+
+        Returns:
+            {'success': bool, 'message': str}
+        """
+        config = self.devices.get(device_id)
+        if not config:
+            return {'success': False, 'message': f'设备 {device_id} 不存在'}
+
+        # 找到对应的寄存器配置
+        registers = config.get('registers', [])
+        target_reg = None
+        for reg in registers:
+            if reg.get('name') == register_name:
+                target_reg = reg
+                break
+
+        if not target_reg:
+            return {'success': False, 'message': f'寄存器 {register_name} 不存在'}
+
+        # 检查是否可写
+        if target_reg.get('access') == 'ro':
+            return {'success': False, 'message': f'寄存器 {register_name} 只读'}
+
+        client = self.get_client(device_id)
+        if not client:
+            return {'success': False, 'message': f'设备 {device_id} 未连接'}
+
+        address = target_reg['address']
+        data_type = target_reg.get('data_type', 'uint16')
+        scale = target_reg.get('scale', 1.0)
+        offset = target.get('offset', 0)
+
+        # 反向换算：工程值 → 原始值
+        raw_value = (value - offset) / scale if scale else value
+
+        try:
+            if data_type in ('float32', 'float', 'real'):
+                # float32 写入需要编码为两个寄存器
+                import struct
+                raw_bytes = struct.pack('>f', float(raw_value))
+                reg0 = struct.unpack('>H', raw_bytes[0:2])[0]
+                reg1 = struct.unpack('>H', raw_bytes[2:4])[0]
+                success = client.write_multiple_registers(address, [reg0, reg1])
+            elif data_type in ('uint16', 'int16'):
+                success = client.write_single_register(address, int(raw_value))
+            else:
+                success = client.write_single_register(address, int(raw_value))
+
+            if success:
+                logger.info(f"[真实] 设备 {device_id} 调节 {register_name} = {value}")
+                return {'success': True, 'message': f'{register_name} 设置为 {value}'}
+            else:
+                return {'success': False, 'message': '写入失败'}
+
+        except Exception as e:
+            logger.error(f"调节失败 {device_id}/{register_name}: {e}")
+            return {'success': False, 'message': str(e)}
 
     def connect_device(self, device_id: str) -> bool:
         """连接设备（含退避逻辑）"""

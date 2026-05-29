@@ -100,6 +100,30 @@ def write_coil(device_id):
     return jsonify({'success': False, 'message': '写入失败，请检查设备连接和线圈地址'}), 400
 
 
+@control_bp.route('/devices/<device_id>/adjust', methods=['POST'])
+@_require_engineer
+def adjust_device(device_id):
+    """调节设备参数（写入指定寄存器值，如温度设定值、速度等）"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': '请提供调节参数'}), 400
+
+    register_name = data.get('register_name')
+    value = data.get('value')
+    if register_name is None or value is None:
+        return jsonify({'error': '缺少 register_name 或 value 参数'}), 400
+
+    operator = request.current_user['username']
+    result = current_app.device_manager.adjust_device(device_id, register_name, float(value))
+
+    if result['success']:
+        get_auth_manager().log_operation(
+            operator, 'adjust_device',
+            f'设备 {device_id} 调节 {register_name} = {value}')
+
+    return jsonify(result)
+
+
 @control_bp.route('/devices/<device_id>/write-endpoint', methods=['POST'])
 @_require_engineer
 def write_endpoint(device_id):

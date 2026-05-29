@@ -139,6 +139,13 @@ class IDeviceManager(ABC):
         """
         return False
 
+    def adjust_device(self, device_id: str, register_name: str, value: float) -> dict:
+        """
+        调节设备参数（写入指定寄存器值）
+        Returns: {'success': bool, 'message': str}
+        """
+        return {'success': False, 'message': '不支持调节'}
+
     @staticmethod
     def get_device_category(device_config: dict) -> str:
         """

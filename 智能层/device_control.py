@@ -707,23 +707,19 @@ class DeviceControlSafety:
         if self.device_manager:
             self.device_manager.set_estop_override(True)
 
-        # 停止所有设备（设置 stopped 标志 + 发 Modbus 命令）
+        # 只停止机械类设备（传感器和安全设备继续工作）
         stopped_devices = []
         if self.device_manager:
-            all_devices = list(self.device_manager.get_all_devices().keys())
-            logger.warning(f"紧急停机: 停止 {len(all_devices)} 个设备")
-            for device_id in all_devices:
+            from 采集层.interfaces import IDeviceManager
+            all_devices = self.device_manager.get_all_devices()
+            mechanical = [did for did, cfg in all_devices.items()
+                         if IDeviceManager.get_device_category(cfg) == 'mechanical']
+            logger.warning(f"紧急停机: 停止 {len(mechanical)} 个机械类设备（共 {len(all_devices)} 个设备）")
+            for device_id in mechanical:
                 try:
-                    # 设置 stopped 标志（模拟层返回零值，前端显示"已停止"）
-                    self.device_manager.stop_device(device_id)
-                    stopped_devices.append(device_id)
-
-                    # 向可控设备发送 Modbus 停机命令
-                    client = self.device_manager.get_client(device_id)
-                    if client and hasattr(client, 'write_single_coil'):
-                        client.write_single_coil(0, False)
-                    elif client and hasattr(client, 'write_single_register'):
-                        client.write_single_register(100, 0)
+                    success = self.device_manager.stop_device(device_id)
+                    if success:
+                        stopped_devices.append(device_id)
                 except Exception as e:
                     logger.error(f"紧急停机失败 {device_id}: {e}")
 

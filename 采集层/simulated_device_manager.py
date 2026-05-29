@@ -135,16 +135,50 @@ class SimulatedDeviceManager(IDeviceManager):
         logger.info(f"[模拟] E-STOP override: {'激活' if active else '已解除'}")
 
     def stop_device(self, device_id: str) -> bool:
-        """停止指定设备（所有寄存器归零）"""
+        """停止指定设备（仅限机械类）"""
+        config = self.devices.get(device_id)
+        if not config:
+            return False
+        category = IDeviceManager.get_device_category(config)
+        if category != 'mechanical':
+            logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
+            return False
         set_device_stopped(device_id, True)
         logger.info(f"[模拟] 设备 {device_id} 已停止")
         return True
 
     def start_device(self, device_id: str) -> bool:
-        """启动指定设备"""
+        """启动指定设备（仅限机械类）"""
+        config = self.devices.get(device_id)
+        if not config:
+            return False
+        category = IDeviceManager.get_device_category(config)
+        if category != 'mechanical':
+            logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
+            return False
         set_device_stopped(device_id, False)
         logger.info(f"[模拟] 设备 {device_id} 已启动")
         return True
+
+    def adjust_device(self, device_id: str, register_name: str, value: float) -> dict:
+        """调节设备参数（模拟模式：记录值但不实际写入）"""
+        config = self.devices.get(device_id)
+        if not config:
+            return {'success': False, 'message': f'设备 {device_id} 不存在'}
+
+        # 验证寄存器存在
+        registers = config.get('registers', [])
+        target = None
+        for reg in registers:
+            if reg.get('name') == register_name:
+                target = reg
+                break
+
+        if not target:
+            return {'success': False, 'message': f'寄存器 {register_name} 不存在'}
+
+        logger.info(f"[模拟] 设备 {device_id} 调节 {register_name} = {value}")
+        return {'success': True, 'message': f'{register_name} 设置为 {value}（模拟）'}
 
     def disconnect_device(self, device_id: str):
         """断开设备连接"""
