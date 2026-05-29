@@ -38,7 +38,7 @@ def create_app(database, device_manager, alarm_manager, data_collector,
                 template_folder='../模板',
                 static_folder='../静态资源')
 
-    from config import FlaskConfig
+    from config import FlaskConfig, SecurityConfig
     app.config['SECRET_KEY'] = FlaskConfig.SECRET_KEY
 
     # 初始化认证管理器
@@ -65,6 +65,37 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     app.edge_decision = edge_decision
     app.device_control = device_control
     app.vibration_analyzer = vibration_analyzer
+
+    # 安全响应头 (GB/T 22239 等保2.0)
+    @app.after_request
+    def add_security_headers(response):
+        if not SecurityConfig.SECURITY_HEADERS:
+            return response
+        # 防止点击劫持
+        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+        # 防止MIME类型嗅探
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        # XSS保护
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        # 内容安全策略 - 允许CDN资源
+        csp_directives = [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com" + (' ' + ' '.join(SecurityConfig.CSP_EXTRA_SCRIPTS) if SecurityConfig.CSP_EXTRA_SCRIPTS else ''),
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com",
+            "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net",
+            "img-src 'self' data: blob:",
+            "connect-src 'self' ws: wss:",
+            "frame-ancestors 'self'",
+        ]
+        response.headers['Content-Security-Policy'] = '; '.join(csp_directives)
+        # 严格传输安全 (仅在HTTPS时启用)
+        if request.is_secure:
+            response.headers['Strict-Transport-Security'] = f'max-age={SecurityConfig.HSTS_MAX_AGE}; includeSubDomains'
+        # 引荐来源策略
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        # 权限策略
+        response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+        return response
 
     # 页面路由
     @app.route('/')

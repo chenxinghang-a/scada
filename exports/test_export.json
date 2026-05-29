@@ -1,0 +1,12 @@
+[
+  {
+    "device_id": "test",
+    "value": 25.5,
+    "timestamp": "2024-01-01 12:00:00"
+  },
+  {
+    "device_id": "test",
+    "value": 26.0,
+    "timestamp": "2024-01-01 12:01:00"
+  }
+]

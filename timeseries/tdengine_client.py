@@ -16,6 +16,7 @@ TDengine客户端封装
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -76,6 +77,16 @@ class TDengineClient:
 
         # 已创建的表缓存
         self._created_tables: set[str] = set()
+
+    def _sanitize_identifier(self, name: str) -> str:
+        """Sanitize SQL identifier (table/column name) - only allow alphanumeric and underscore"""
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+            raise ValueError(f"Invalid identifier: {name}")
+        return name
+
+    def _escape_string(self, value: str) -> str:
+        """Escape string value for TDengine SQL"""
+        return value.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
 
     def connect(self) -> bool:
         """
@@ -139,9 +150,10 @@ class TDengineClient:
 
     def _create_database(self):
         """创建数据库"""
-        sql = f"CREATE DATABASE IF NOT EXISTS {self.database} KEEP 365 DAYS 10 BLOCKS 6"
+        db_name = self._sanitize_identifier(self.database)
+        sql = f"CREATE DATABASE IF NOT EXISTS {db_name} KEEP 365 DAYS 10 BLOCKS 6"
         self._execute_sql(sql)
-        sql = f"USE {self.database}"
+        sql = f"USE {db_name}"
         self._execute_sql(sql)
         self.logger.info(f"数据库 {self.database} 已就绪")
 
@@ -244,7 +256,10 @@ class TDengineClient:
         if table_name in self._created_tables:
             return
 
-        sql = get_create_table_sql(table_name, stable_name, tags)
+        # Sanitize identifiers before passing to SQL generation
+        safe_table = self._sanitize_identifier(table_name)
+        safe_stable = self._sanitize_identifier(stable_name)
+        sql = get_create_table_sql(safe_table, safe_stable, tags)
         result = self._execute_sql(sql)
         if result:
             self._created_tables.add(table_name)
@@ -269,9 +284,11 @@ class TDengineClient:
             'gateway_id': record.gateway_id
         })
 
-        # 构造INSERT语句
+        # 构造INSERT语句 (sanitize table name, escape timestamp)
+        safe_table = self._sanitize_identifier(table_name)
         ts = record.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        sql = f"INSERT INTO {table_name} VALUES ('{ts}', {record.value}, {record.quality})"
+        safe_ts = self._escape_string(ts)
+        sql = f"INSERT INTO {safe_table} VALUES ('{safe_ts}', {record.value}, {record.quality})"
 
         result = self._execute_sql(sql)
         if result:
@@ -309,13 +326,15 @@ class TDengineClient:
                 'gateway_id': first.gateway_id
             })
 
-            # 构造批量INSERT
+            # 构造批量INSERT (sanitize table name, escape timestamps)
+            safe_table = self._sanitize_identifier(table_name)
             values = []
             for record in table_records:
                 ts = record.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                values.append(f"('{ts}', {record.value}, {record.quality})")
+                safe_ts = self._escape_string(ts)
+                values.append(f"('{safe_ts}', {record.value}, {record.quality})")
 
-            sql = f"INSERT INTO {table_name} VALUES {', '.join(values)}"
+            sql = f"INSERT INTO {safe_table} VALUES {', '.join(values)}"
             result = self._execute_sql(sql)
 
             if result:

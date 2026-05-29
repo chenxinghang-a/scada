@@ -79,9 +79,16 @@ class AuthManager:
                     locked_until DATETIME,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT 1
+                    is_active BOOLEAN DEFAULT 1,
+                    must_change_password BOOLEAN DEFAULT 0
                 )
             ''')
+
+            # 为已有表添加 must_change_password 列（兼容升级）
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 0')
+            except Exception:
+                pass  # 列已存在
 
             # 创建操作日志表
             cursor.execute('''
@@ -116,10 +123,22 @@ class AuthManager:
             if cursor.fetchone()[0] == 0:
                 password_hash = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt())
                 cursor.execute('''
-                    INSERT INTO users (username, password_hash, role, display_name)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO users (username, password_hash, role, display_name, must_change_password)
+                    VALUES (?, ?, ?, ?, 1)
                 ''', ('admin', password_hash.decode('utf-8'), 'admin', '系统管理员'))
                 logger.info("已创建默认管理员账户: admin/admin123")
+
+    def _validate_password_strength(self, password: str) -> tuple[bool, str]:
+        """验证密码强度 - 等保2.0要求"""
+        if len(password) < 8:
+            return False, "密码长度至少8位"
+        if not any(c.isupper() for c in password):
+            return False, "密码必须包含大写字母"
+        if not any(c.islower() for c in password):
+            return False, "密码必须包含小写字母"
+        if not any(c.isdigit() for c in password):
+            return False, "密码必须包含数字"
+        return True, ""
 
     def register(self, username: str, password: str, role: str = 'viewer',
                  display_name: str | None = None, email: str | None = None, phone: str | None = None) -> dict[str, Any]:
@@ -145,9 +164,10 @@ class AuthManager:
         if len(username) < 3 or len(username) > 20:
             return {'success': False, 'message': '用户名长度需在3-20之间'}
 
-        # 验证密码强度
-        if len(password) < 6:
-            return {'success': False, 'message': '密码长度至少6位'}
+        # 验证密码强度（等保2.0）
+        valid, msg = self._validate_password_strength(password)
+        if not valid:
+            return {'success': False, 'message': msg}
 
         # 哈希密码
         password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
@@ -238,6 +258,21 @@ class AuthManager:
 
         self._log_operation(username, 'login', None, '登录成功', ip_address)
         logger.info(f"用户登录成功: {username}")
+
+        # 检查是否需要强制改密
+        if user.get('must_change_password'):
+            return {
+                'success': True,
+                'status': 'must_change_password',
+                'token': token,
+                'message': '首次登录请修改密码',
+                'user': {
+                    'username': user['username'],
+                    'role': user['role'],
+                    'display_name': user['display_name'],
+                    'permissions': ROLES.get(user['role'], {}).get('permissions', [])
+                }
+            }
 
         return {
             'success': True,
@@ -346,8 +381,9 @@ class AuthManager:
         Returns:
             dict[str, Any]: 修改结果
         """
-        if len(new_password) < 6:
-            return {'success': False, 'message': '新密码长度至少6位'}
+        valid, msg = self._validate_password_strength(new_password)
+        if not valid:
+            return {'success': False, 'message': msg}
 
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
@@ -371,6 +407,63 @@ class AuthManager:
 
         self._log_operation(username, 'change_password', None, '修改密码成功')
         return {'success': True, 'message': '密码修改成功'}
+
+    def force_change_password(self, username: str, new_password: str) -> dict[str, Any]:
+        """
+        强制修改密码（首次登录改密专用，不需要旧密码）
+
+        Args:
+            username: 用户名
+            new_password: 新密码
+
+        Returns:
+            dict[str, Any]: 修改结果
+        """
+        valid, msg = self._validate_password_strength(new_password)
+        if not valid:
+            return {'success': False, 'message': msg}
+
+        with self.database.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT must_change_password FROM users WHERE username = ?', (username,))
+            user = cursor.fetchone()
+
+        if not user:
+            return {'success': False, 'message': '用户不存在'}
+
+        new_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+
+        with self.database.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ?
+                WHERE username = ?
+            ''', (new_hash.decode('utf-8'), datetime.now(), username))
+
+        self._log_operation(username, 'force_change_password', None, '首次登录改密成功')
+        logger.info(f"用户 {username} 首次登录改密成功")
+
+        # 生成新token
+        with self.database.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+            user = dict(cursor.fetchone())
+
+        token = self._generate_token(user)
+        refresh_token = self._generate_refresh_token(user)
+
+        return {
+            'success': True,
+            'message': '密码修改成功',
+            'token': token,
+            'refresh_token': refresh_token,
+            'user': {
+                'username': user['username'],
+                'role': user['role'],
+                'display_name': user['display_name'],
+                'permissions': ROLES.get(user['role'], {}).get('permissions', [])
+            }
+        }
 
     def get_users(self) -> list[dict[str, Any]]:
         """获取所有用户列表"""

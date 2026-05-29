@@ -183,6 +183,16 @@ class MQTTConfig:
     # 主题前缀
     TOPIC_PREFIX = 'scada/'
 
+# 安全配置 - 等保2.0
+class SecurityConfig:
+    """安全配置 - 等保2.0 (GB/T 22239)"""
+    # 是否启用安全响应头
+    SECURITY_HEADERS = os.environ.get('SECURITY_HEADERS', 'true').lower() == 'true'
+    # HSTS max-age（秒）
+    HSTS_MAX_AGE = int(os.environ.get('HSTS_MAX_AGE', '31536000'))
+    # CSP额外允许的脚本源（逗号分隔）
+    CSP_EXTRA_SCRIPTS = [s.strip() for s in os.environ.get('CSP_EXTRA_SCRIPTS', '').split(',') if s.strip()]
+
 # TDengine时序数据库配置
 class TDengineConfig:
     HOST = os.environ.get('TDENGINE_HOST', 'localhost')

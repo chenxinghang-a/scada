@@ -1,0 +1,808 @@
+{"timestamp": "2026-05-08T19:51:52.318011", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'schneider_m340_01', 'abb_m4m_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'turck_iolink_01', 'signal_tower_01', 'signal_tower_02', 'relay_output_01', 'relay_output_02']"}
+{"timestamp": "2026-05-08T20:07:53.744922", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'schneider_m340_01', 'abb_m4m_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'turck_iolink_01', 'signal_tower_01', 'signal_tower_02', 'relay_output_01', 'relay_output_02']"}
+{"timestamp": "2026-05-08T20:07:55.247294", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-08T20:18:28.410762", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'schneider_m340_01', 'abb_m4m_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'turck_iolink_01', 'signal_tower_01', 'signal_tower_02', 'relay_output_01', 'relay_output_02']"}
+{"timestamp": "2026-05-08T22:48:23.174414", "action": "write_failed", "operator": "admin", "detail": "写入失败: opcua_plc_01/0=0"}
+{"timestamp": "2026-05-08T23:16:09.017545", "action": "write_success", "operator": "admin", "detail": "写入成功: mitsubishi_fx5u_01/0=0, 回读=16894, 验证失败"}
+{"timestamp": "2026-05-08T23:16:11.552863", "action": "write_success", "operator": "admin", "detail": "写入成功: mitsubishi_fx5u_01/0=0, 回读=16893, 验证失败"}
+{"timestamp": "2026-05-08T23:16:15.463257", "action": "write_success", "operator": "admin", "detail": "写入成功: mitsubishi_fx5u_01/0=0, 回读=16896, 验证失败"}
+{"timestamp": "2026-05-08T23:24:07.621888", "action": "write_success", "operator": "admin", "detail": "写入成功: mitsubishi_fx5u_01/0=0, 回读=16930, 验证失败"}
+{"timestamp": "2026-05-08T23:24:28.492243", "action": "write_success", "operator": "admin", "detail": "写入成功: mitsubishi_fx5u_01/100=0, 回读=381, 验证失败"}
+{"timestamp": "2026-05-09T08:07:50.304715", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['mitsubishi_fx5u_01', 'hollysys_lk_01', 'siemens_1500_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'delta_dvp_01', 'inovance_h5u_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-09T08:08:23.100870", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T12:28:12.176355", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'delta_dvp_01', 'inovance_h5u_01', 'signal_tower_01', 'relay_output_01', 'siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01']"}
+{"timestamp": "2026-05-09T12:29:15.349425", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T19:13:35.410413", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'delta_dvp_01', 'inovance_h5u_01', 'signal_tower_01', 'relay_output_01', 'siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01']"}
+{"timestamp": "2026-05-09T19:13:49.435067", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T19:27:59.696437", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'delta_dvp_01', 'inovance_h5u_01', 'signal_tower_01', 'relay_output_01', 'siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01']"}
+{"timestamp": "2026-05-09T19:28:26.743618", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T19:28:35.848915", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T19:28:35.849784", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T19:28:35.850913", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T19:28:35.851578", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T19:28:35.852231", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T19:28:35.853027", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T19:28:35.853883", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T19:28:35.854651", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T19:28:35.855134", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T19:28:35.855569", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.695028", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.695789", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.696625", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.697582", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.698442", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.699172", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.699989", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.700775", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.701508", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T19:28:59.702236", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.166813", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.167538", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.168250", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.168815", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.169195", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.169542", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.170080", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.170625", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.171363", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T19:29:03.171995", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T19:29:07.583075", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'delta_dvp_01', 'inovance_h5u_01', 'signal_tower_01', 'relay_output_01', 'siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01']"}
+{"timestamp": "2026-05-09T20:18:13.714111", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: []"}
+{"timestamp": "2026-05-09T20:18:15.716739", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T20:38:01.481048", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: []"}
+{"timestamp": "2026-05-09T20:59:45.799057", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-09T21:00:51.690285", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-09T21:00:54.445024", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T21:00:59.445337", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T21:00:59.446061", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T21:00:59.446874", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T21:00:59.447837", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T21:00:59.448533", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T21:00:59.449094", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T21:00:59.449534", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T21:00:59.449898", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T21:00:59.450244", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T21:00:59.450645", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.143003", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.144057", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.145145", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.146970", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.148474", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.149493", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.150286", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.150995", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.152548", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T21:01:04.153498", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.941222", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.942522", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.942961", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.943384", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.943905", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.944589", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.945133", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.945790", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.946161", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T21:01:08.946964", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T21:03:10.742978", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-09T21:23:14.372582", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T21:23:18.226618", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-09T21:24:07.582189", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T21:24:12.837815", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-09T21:24:15.842852", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T21:42:46.262601", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T21:42:46.263561", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T21:42:46.264547", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T21:42:46.265108", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T21:42:46.265616", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T21:42:46.266068", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T21:42:46.266664", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T21:42:46.267432", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T21:42:46.267902", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T21:42:46.268749", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.070960", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.071924", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.072660", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.073706", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.074691", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.075392", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.076248", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.076912", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.077386", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T21:50:50.077817", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T22:04:09.918822", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-09T22:04:27.451879", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T22:05:12.120749", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T22:05:12.121860", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T22:05:12.122842", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T22:05:12.123582", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T22:05:12.124339", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T22:05:12.124802", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T22:05:12.125438", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T22:05:12.126156", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T22:05:12.126830", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T22:05:12.127251", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.646771", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.647630", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.648844", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.649764", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.650628", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.651317", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.651833", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.652592", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.653237", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T22:05:26.653874", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T22:18:50.260032", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-09T22:19:14.054636", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T22:19:28.995366", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T22:19:28.996195", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T22:19:28.996772", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T22:19:28.997791", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T22:19:28.998417", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T22:19:28.999197", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T22:19:29.000023", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T22:19:29.000568", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T22:19:29.001355", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T22:19:29.002087", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T22:27:16.191875", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-09T22:27:26.214954", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-09T22:27:29.816947", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T22:27:29.817741", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T22:27:29.818319", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T22:27:29.818839", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T22:27:29.819438", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T22:27:29.820219", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T22:27:29.821477", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T22:27:29.822063", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T22:27:29.822482", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T22:27:29.822932", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.299045", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.300118", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.301336", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.302538", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.303477", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.304311", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.305338", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.306456", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.307721", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T22:27:38.308431", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.295470", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.296650", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.297778", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.299005", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.300058", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.300868", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.301692", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.302630", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.303472", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-09T23:01:50.304739", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.255883", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.257694", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.258968", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.260041", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.260597", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.261248", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.262102", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.263030", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.263986", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-10T00:14:55.265283", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-10T16:03:01.080302", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-10T16:03:27.370147", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'hollysys_lk_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01']"}
+{"timestamp": "2026-05-10T16:03:32.877760", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-10T16:08:49.036773", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-10T16:08:49.038743", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-10T16:08:49.039877", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-10T16:08:49.041605", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-10T16:08:49.043073", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-10T16:08:49.044816", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-10T16:08:49.046175", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-10T16:08:49.047470", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-10T16:08:49.048505", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-10T16:08:49.049617", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.306169", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.307252", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.308226", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.309167", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.310033", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.310859", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.311764", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.312882", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.313781", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-10T16:08:59.314734", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.299203", "action": "batch_start", "operator": "admin", "detail": "批量start设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.300127", "action": "batch_start", "operator": "admin", "detail": "批量start设备 hollysys_lk_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.301137", "action": "batch_start", "operator": "admin", "detail": "批量start设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.302205", "action": "batch_start", "operator": "admin", "detail": "批量start设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.302763", "action": "batch_start", "operator": "admin", "detail": "批量start设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.303304", "action": "batch_start", "operator": "admin", "detail": "批量start设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.303898", "action": "batch_start", "operator": "admin", "detail": "批量start设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.304854", "action": "batch_start", "operator": "admin", "detail": "批量start设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.305935", "action": "batch_start", "operator": "admin", "detail": "批量start设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-10T17:23:58.307244", "action": "batch_start", "operator": "admin", "detail": "批量start设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-10T17:24:06.769134", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 siemens_1500_01: 成功"}
+{"timestamp": "2026-05-10T17:24:06.769827", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 mitsubishi_fx5u_01: 成功"}
+{"timestamp": "2026-05-10T17:24:06.770685", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 delta_dvp_01: 成功"}
+{"timestamp": "2026-05-10T17:24:06.771558", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-10T17:24:06.772727", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 schneider_m340_01: 成功"}
+{"timestamp": "2026-05-10T17:24:06.773431", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 abb_m4m_01: 成功"}
+{"timestamp": "2026-05-10T17:24:06.774602", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 turck_iolink_01: 成功"}
+{"timestamp": "2026-05-10T17:24:06.775454", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 signal_tower_01: 成功"}
+{"timestamp": "2026-05-10T17:24:06.776362", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 relay_output_01: 成功"}
+{"timestamp": "2026-05-28T01:52:35.963142", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 联锁 interlock_estop 触发紧急停机，影响设备: ['siemens_1500_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01', 'hollysys_lk_01']"}
+{"timestamp": "2026-05-28T01:52:35.964276", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_estop (急停按钮联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:36.215638", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:37.217880", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:38.218356", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:39.221088", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:40.222727", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:41.224073", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:42.225437", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:43.226418", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:44.227589", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:45.229289", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:46.231792", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:47.231999", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:48.235387", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:49.238148", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:50.239496", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:51.240978", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:52.241853", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:53.243544", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:54.245511", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:55.547792", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:56.551338", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:57.552655", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:58.555465", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:52:59.557000", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:00.557830", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:01.560507", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:02.561463", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:03.564238", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:04.566269", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:05.567508", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:06.568918", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:07.571618", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:08.573461", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:09.575511", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:10.576995", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:11.578660", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:12.581384", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:13.582171", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:14.586216", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:15.588212", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:16.589429", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:17.590956", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:18.595035", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:19.597952", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:20.598399", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:21.602498", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:22.603159", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:23.605911", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:24.608033", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:25.609940", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:26.613193", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:27.616084", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:28.618564", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:29.620738", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:30.624555", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:31.624907", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:32.630203", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:33.632584", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:34.635407", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:35.636274", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:36.639342", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:37.640838", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:38.643751", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:39.645676", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:40.647419", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:41.650914", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:42.653512", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:43.655383", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:44.657626", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:45.659003", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:46.660773", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:47.663621", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:48.664660", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:49.666371", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:50.667467", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:51.668636", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:52.671475", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:53.673698", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:54.675908", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:55.676550", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:56.678324", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:57.981936", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:58.984342", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:53:59.987007", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:00.988156", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:01.989688", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:02.991892", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:03.992980", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:04.994854", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:05.997317", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:06.999848", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:08.002496", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:09.004818", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:10.006274", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:11.008511", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:12.011598", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:13.012615", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:14.014065", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:15.018059", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:16.019314", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:17.020419", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:18.022588", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:19.024586", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:20.025455", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:21.028827", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:22.030252", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:23.032731", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:24.034573", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:25.036446", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:26.037710", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:27.040457", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:28.042566", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:29.050502", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:30.052535", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:31.053746", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:32.057178", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:33.058211", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:34.059327", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:35.060743", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:36.064263", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:37.066455", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:38.068053", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:39.071683", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:40.073457", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:41.076139", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:42.078543", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:43.080622", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:44.081636", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:45.086880", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:46.090749", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:47.093307", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:48.095056", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:49.097477", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:50.098189", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:51.100949", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:52.103573", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:53.104338", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:54.106480", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:55.106966", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:56.408930", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:57.410792", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:54:58.412036", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:00.415988", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:01.417005", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:02.419071", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:03.423415", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:04.424836", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:05.426780", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:06.428020", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:07.430379", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:08.432526", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:09.434818", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:10.437126", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:11.438060", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:12.441113", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:13.443800", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:14.445263", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:15.448262", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:16.450403", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:17.451996", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:18.455471", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:19.456788", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:20.457345", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:21.460970", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:23.464344", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:24.465524", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:25.467205", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:26.470195", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:27.471418", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:28.473368", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:29.475126", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:30.478080", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:31.480431", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:32.481364", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:33.484802", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:34.486811", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:35.488350", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:36.490052", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:37.491459", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:38.492921", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:39.495402", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:40.498071", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:41.501358", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:42.502661", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:43.503908", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:44.506793", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:45.808866", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:46.810886", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:47.812297", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:48.814023", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:49.815220", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:50.817666", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:51.820804", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:52.822196", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:53.825532", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:54.827638", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:55.830642", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:56.833173", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:57.834446", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:58.835871", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:55:59.839557", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:00.841976", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:01.844717", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:02.847477", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:03.848897", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:04.850833", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:05.854959", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:06.857015", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:07.858315", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:08.861237", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:09.863731", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:10.864800", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:11.866376", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:12.869745", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:13.872710", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:14.873567", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:15.877251", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:16.877798", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:17.879260", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:18.881304", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:19.883997", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:20.886835", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:21.889814", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:22.892054", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:23.894712", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:24.897565", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:25.897385", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:26.900109", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:27.902583", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:28.903413", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:29.905371", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:30.906820", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:31.909740", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:32.909891", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:33.913094", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:34.915592", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:35.916957", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:36.918956", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:38.219852", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:39.221898", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:40.222631", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:41.224411", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:42.227500", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:43.230538", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:44.230937", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:45.233041", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:46.233973", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:47.235750", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:48.239306", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:49.241875", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:50.243141", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:51.246117", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:52.247825", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:53.250146", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:54.252625", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:55.253265", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:56.254852", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:57.257464", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:58.259288", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:56:59.262207", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:57:00.263978", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:57:01.265419", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:57:02.267302", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:57:03.270321", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:57:04.270848", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T01:57:05.274450", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T19:13:31.288006", "action": "batch_stop", "operator": "admin", "detail": "批量stop设备 inovance_h5u_01: 成功"}
+{"timestamp": "2026-05-28T20:27:32.735930", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 联锁 interlock_estop 触发紧急停机，影响设备: ['siemens_1500_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01', 'hollysys_lk_01']"}
+{"timestamp": "2026-05-28T20:27:32.737807", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_estop (急停按钮联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:32.989175", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:34.242757", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 联锁 interlock_estop 触发紧急停机，影响设备: ['siemens_1500_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01', 'hollysys_lk_01']"}
+{"timestamp": "2026-05-28T20:27:34.243961", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_estop (急停按钮联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:34.493488", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:35.494883", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:36.497823", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:37.500566", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:38.500910", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:39.504098", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:40.507291", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:41.509198", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:42.511259", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:43.512798", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:44.516701", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:45.517942", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:46.519821", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:47.521826", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:48.523695", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:49.524581", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:50.526670", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:51.529273", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:52.531338", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:53.533001", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:54.533486", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:55.538725", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:56.541208", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:57.541697", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:58.543271", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:27:59.546205", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:00.548486", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:01.549959", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:02.552294", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:03.553121", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:04.555129", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:06.558775", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:07.560906", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:08.562960", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:09.565576", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:10.566754", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:11.569263", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:12.570786", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:13.574955", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:14.576638", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:15.577392", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:16.580815", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:17.582725", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:18.584862", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:19.587611", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:20.589520", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:21.591482", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:22.591975", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:23.595725", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:24.596553", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:25.599912", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:26.600276", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:27.603567", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:28.605019", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:29.607805", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:31.610699", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:32.612074", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:33.615269", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:34.616503", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:35.619874", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:36.622111", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:37.624028", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:38.625703", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:39.627756", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:40.629685", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:41.635756", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:42.636021", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:43.638765", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:44.641912", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:45.643489", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:46.644374", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:47.647287", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:48.647978", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:49.950363", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:50.951959", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:51.956466", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:52.957229", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:53.961323", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:54.962792", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:55.963391", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:56.967828", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:57.969523", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:58.971738", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:28:59.974365", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:00.976539", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:01.979034", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:02.981559", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:03.983321", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:04.985653", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:05.987922", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:06.988739", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:07.990932", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:08.993113", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:09.996806", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:10.997557", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:11.999957", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:13.001815", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:14.004291", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:15.007104", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:16.011463", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:17.013445", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:18.016205", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:19.019088", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:20.019068", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:21.021795", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:22.022072", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:23.024251", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:24.027324", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:25.030440", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:26.030422", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:27.033795", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:28.035953", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:29.037250", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:30.039719", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:31.042025", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:32.043806", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:33.046793", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:34.049304", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:35.050378", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:36.352753", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:37.354357", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:38.356493", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:39.358252", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:40.359770", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:41.363709", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:42.362528", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:43.365935", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:44.368321", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:45.369027", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:46.371030", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:47.374862", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:48.377153", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:49.380739", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:50.383106", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:51.387645", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:52.388185", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:53.391093", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:54.393218", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:55.396209", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:56.396378", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:57.398198", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:58.400852", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:29:59.405043", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:00.405920", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:01.410130", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:02.412364", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:03.413295", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:04.416362", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:05.417657", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:06.418753", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:07.422378", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:08.423712", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:09.425832", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:10.428553", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:11.429442", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:12.433431", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:13.435543", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:14.436914", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:15.438186", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:16.740667", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:17.742183", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:18.743482", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:19.746352", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:20.747087", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:21.748968", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:22.749810", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:23.752061", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:24.753906", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:25.754805", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:26.757115", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:27.758707", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:28.760882", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:29.762250", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:30.763866", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:31.766079", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:32.768835", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:33.770464", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:34.771469", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:35.774625", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:36.776417", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:37.777219", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:38.780049", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:39.782531", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:40.785377", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:41.787924", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:42.790002", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:43.791708", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:44.794521", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:45.796474", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:46.798338", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:47.801842", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:48.803020", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:49.803478", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:50.806556", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:51.810407", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:52.810825", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:53.814831", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:54.818689", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:55.818595", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:56.821815", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:57.823344", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:30:58.824774", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:00.127792", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:01.128404", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:02.131127", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:03.133351", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:04.135217", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:05.138016", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:06.138160", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:07.140859", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:08.143192", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:09.143926", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:10.148314", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:11.150155", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:12.150522", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:13.152696", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:14.154541", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:15.155560", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:16.158510", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:18.160229", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:19.164273", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:20.165416", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:21.166239", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:22.169426", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:23.171588", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:24.173783", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:25.174335", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:26.175429", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:27.176798", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:28.178209", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:29.180409", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:30.181229", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:31.183189", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:32.184610", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:33.186724", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:34.188524", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:35.189984", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:36.191685", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:37.192793", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:38.495275", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:39.497094", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:40.498153", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:41.499519", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:42.500930", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:43.503053", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:44.505542", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:45.506111", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:46.510510", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:47.513176", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:48.514096", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:49.516785", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:50.518707", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:51.521050", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:52.523955", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:53.526127", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:54.528491", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:55.528727", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:56.532008", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:57.533460", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:58.536457", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:31:59.536977", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:00.538748", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:01.540824", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:02.542439", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:03.544244", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:04.545626", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:05.547393", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:06.548994", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:07.550706", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:08.552022", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:09.554773", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:10.557608", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:11.559084", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:12.862512", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:13.863528", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:14.864817", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:15.867083", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:16.869502", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:17.870969", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:18.873512", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:19.875552", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:20.877291", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:22.880441", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:23.881566", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:24.882245", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:25.883303", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:26.884187", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:27.887510", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:28.888737", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:29.890224", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:30.893643", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T20:32:31.894829", "action": "interlock_triggered", "operator": "system", "detail": "联锁 interlock_door_open (门禁联锁) 触发"}
+{"timestamp": "2026-05-28T21:01:15.894020", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01', 'hollysys_lk_01']"}
+{"timestamp": "2026-05-28T21:01:18.147501", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01', 'hollysys_lk_01']"}
+{"timestamp": "2026-05-28T21:01:22.403568", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-28T21:02:45.598954", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['siemens_1500_01', 'mitsubishi_fx5u_01', 'delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01', 'hollysys_lk_01']"}
+{"timestamp": "2026-05-28T21:02:48.104416", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-28T21:30:19.449423", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['delta_dvp_01', 'inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01', 'hollysys_lk_01', 'siemens_1500_01', 'mitsubishi_fx5u_01']"}
+{"timestamp": "2026-05-28T21:31:46.358462", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-29T13:27:47.936986", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01', 'hollysys_lk_01', 'siemens_1500_01', 'mitsubishi_fx5u_01', 'delta_dvp_01']"}
+{"timestamp": "2026-05-29T13:29:27.357470", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-29T15:29:54.408179", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'signal_tower_01', 'relay_output_01', 'hollysys_lk_01', 'siemens_1500_01', 'mitsubishi_fx5u_01', 'delta_dvp_01']"}
+{"timestamp": "2026-05-29T15:30:25.707120", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-29T16:23:09.512263", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: 操作员手动触发，影响设备: ['inovance_h5u_01', 'schneider_m340_01', 'abb_m4m_01', 'turck_iolink_01', 'vibration_sensor_01', 'water_quality_01', 'siemens_web_01', 'mes_api_01', 'signal_tower_01', 'relay_output_01', 'opcua_plc_01', 'hollysys_lk_01', 'siemens_1500_01', 'mitsubishi_fx5u_01', 'delta_dvp_01']"}
+{"timestamp": "2026-05-29T16:23:51.047025", "action": "estop_reset", "operator": "admin", "detail": "紧急停机已解除"}
