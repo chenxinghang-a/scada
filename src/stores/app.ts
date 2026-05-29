@@ -16,9 +16,9 @@ export const useAppStore = defineStore('app', () => {
     try {
       systemStatus.value = await systemApi.getStatus()
       simulationMode.value = systemStatus.value.simulation_mode
-      activeAlarmCount.value = systemStatus.value.alarms_active
+      activeAlarmCount.value = systemStatus.value.alarms?.total_active_alarms || 0
     } catch {
-      // 忽略，可能未登录
+      // ignore
     }
   }
 
