@@ -238,7 +238,8 @@ function updateCharts() {
 }
 
 function connectSocket() {
-  socket = io(window.location.origin, { transports: ['websocket', 'polling'] })
+  const socketUrl = import.meta.env.DEV ? window.location.origin : 'http://localhost:5000'
+  socket = io(socketUrl, { transports: ['websocket', 'polling'] })
 
   socket.on('data_update', (data: any) => {
     // 更新实时数据

@@ -2,8 +2,10 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '@/router'
 
+// 生产模式（Electron 打包后）直接请求后端，开发模式走 Vite proxy
+const isDev = import.meta.env.DEV
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: isDev ? '/api' : 'http://localhost:5000/api',
   timeout: 30000,
 })
 
