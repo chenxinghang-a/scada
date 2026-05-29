@@ -64,10 +64,9 @@ function handleDataUpdate(data) {
  * 处理报警
  */
 function handleAlarm(data) {
-    // 显示报警通知
-    showAlarmNotification(data);
-    
-    // 更新报警计数
+    // 更新顶部报警条（不弹窗，不打断操作）
+    updateAlarmBanner(data);
+    // 更新导航栏计数
     updateAlarmCount();
 }
 
@@ -198,106 +197,39 @@ const AlarmDedupManager = {
 setInterval(() => AlarmDedupManager.cleanup(), 60000);
 
 /**
- * 显示报警通知（非侵入式Toast通知，带去重逻辑）
+ * 更新顶部报警条（不弹窗，不打断操作）
  */
-function showAlarmNotification(alarm) {
-    // 去重检查
-    if (!AlarmDedupManager.shouldShow(alarm)) {
-        console.log('[Alarm] 报警被去重跳过:', alarm.dedup_key || alarm.alarm_id);
-        return;
-    }
+function updateAlarmBanner(alarm) {
+    const banner = document.getElementById('alarm-banner');
+    if (!banner) return;
 
-    // 记录已显示
-    AlarmDedupManager.recordShow(alarm);
-
-    // 创建Toast容器（如果不存在）
-    let toastContainer = document.getElementById('alarm-toast-container');
-    if (!toastContainer) {
-        toastContainer = document.createElement('div');
-        toastContainer.id = 'alarm-toast-container';
-        toastContainer.style.cssText = `
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            z-index: 9999;
-            max-width: 350px;
-            display: flex;
-            flex-direction: column-reverse;
-            gap: 8px;
-        `;
-        document.body.appendChild(toastContainer);
-    }
-    
-    // 创建Toast元素
-    const toast = document.createElement('div');
     const isCritical = alarm.level === 'critical' || alarm.alarm_level === 'critical';
-    
-    toast.className = `toast show align-items-center border-0`;
-    toast.style.cssText = `
-        background-color: ${isCritical ? '#dc3545' : '#ffc107'};
-        color: ${isCritical ? 'white' : '#333'};
-        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-        animation: slideInRight 0.3s ease-out;
-        max-width: 100%;
-    `;
-    
-    toast.innerHTML = `
-        <div class="d-flex">
-            <div class="toast-body">
-                <div class="d-flex align-items-center mb-1">
-                    <i class="bi bi-${isCritical ? 'exclamation-triangle-fill' : 'exclamation-circle-fill'} me-2"></i>
-                    <strong class="me-auto">${isCritical ? '严重报警' : '警告'}</strong>
-                    <small>${new Date().toLocaleTimeString()}</small>
-                </div>
-                <div class="mb-1">${alarm.message || alarm.alarm_message || '报警'}</div>
-                <small class="opacity-75">
-                    ${alarm.device_id ? '设备: ' + alarm.device_id : ''}
-                    ${alarm.register_name ? ' | 参数: ' + alarm.register_name : ''}
-                    ${alarm.value || alarm.actual_value ? ' | 值: ' + (alarm.value || alarm.actual_value) : ''}
-                </small>
-            </div>
-            <button type="button" class="btn-close btn-close-white me-2 m-auto" id="dismiss-${Date.now()}"></button>
-        </div>
-    `;
-    
-    // 绑定关闭按钮事件（记录dismissed）
-    const closeBtn = toast.querySelector('.btn-close');
-    if (closeBtn) {
-        closeBtn.addEventListener('click', function() {
-            AlarmDedupManager.recordDismiss(alarm);
-            toast.style.animation = 'slideOutRight 0.3s ease-in';
-            setTimeout(() => toast.remove(), 300);
-        });
+    const msg = alarm.alarm_message || alarm.message || '新报警';
+    const device = alarm.device_id || '';
+
+    // 更新文字
+    const textEl = document.getElementById('alarm-banner-text');
+    if (textEl) {
+        textEl.textContent = isCritical
+            ? `紧急：${msg} (${device})`
+            : `警告：${msg} (${device})`;
     }
-    
-    // 添加到容器
-    toastContainer.appendChild(toast);
-    
-    // 播放提示音（仅严重报警）
-    if (isCritical) {
-        playAlarmSound();
-    }
-    
-    // 自动消失时间：使用后端配置
-    const dismissTime = isCritical
-        ? (AlarmDedupManager.config.critical_toast_duration * 1000)
-        : (AlarmDedupManager.config.warning_toast_duration * 1000);
-    setTimeout(() => {
-        if (toast.parentNode) {
-            toast.style.animation = 'slideOutRight 0.3s ease-in';
-            setTimeout(() => toast.remove(), 300);
-        }
-    }, dismissTime);
-    
-    // 限制最多显示的通知数（使用后端配置）
-    const maxToasts = AlarmDedupManager.config.max_visible_toasts || 3;
-    while (toastContainer.children.length > maxToasts) {
-        // 移除最旧的toast时也记录dismissed
-        const oldest = toastContainer.firstChild;
-        if (oldest) oldest.remove();
-    }
-    
-    // 更新报警计数（静默更新，不弹窗）
+
+    // 更新背景色
+    banner.style.background = isCritical ? '#fee2e2' : '#fff3cd';
+    banner.style.borderBottomColor = isCritical ? '#dc2626' : '#f59e0b';
+
+    // 显示
+    banner.style.display = 'block';
+
+    // 闪一下提醒（不遮挡操作）
+    banner.style.opacity = '0.6';
+    setTimeout(() => { banner.style.opacity = '1'; }, 200);
+    setTimeout(() => { banner.style.opacity = '0.7'; }, 400);
+    setTimeout(() => { banner.style.opacity = '1'; }, 600);
+
+    // 更新计数
+    updateAlarmCount();
     updateAlarmCountSilent();
 }
 
@@ -332,13 +264,39 @@ function updateAlarmCount() {
     fetch(`${API_BASE}/alarms/active`)
         .then(response => response.json())
         .then(data => {
-            const count = data.alarms ? data.alarms.length : 0;
-            document.getElementById('active-alarms').textContent = count;
-            
-            // 更新卡片
+            const alarms = data.alarms || [];
+            const count = alarms.length;
+
+            // 导航栏计数
+            const el = document.getElementById('active-alarms');
+            if (el) el.textContent = count;
+
+            // 报警卡片
             const countCard = document.getElementById('alarm-count-card');
-            if (countCard) {
-                countCard.textContent = count;
+            if (countCard) countCard.textContent = count;
+
+            // 更新报警条徽章
+            const critCount = alarms.filter(a => a.alarm_level === 'critical').length;
+            const warnCount = alarms.filter(a => a.alarm_level === 'warning').length;
+
+            const critBadge = document.getElementById('alarm-banner-crit');
+            const warnBadge = document.getElementById('alarm-banner-warn');
+            const countBadge = document.getElementById('alarm-banner-count');
+
+            if (critBadge) {
+                critBadge.textContent = '紧急 ' + critCount;
+                critBadge.style.display = critCount > 0 ? '' : 'none';
+            }
+            if (warnBadge) {
+                warnBadge.textContent = '警告 ' + warnCount;
+                warnBadge.style.display = warnCount > 0 ? '' : 'none';
+            }
+            if (countBadge) countBadge.textContent = count;
+
+            // 无报警时隐藏报警条
+            const banner = document.getElementById('alarm-banner');
+            if (banner && count === 0) {
+                banner.style.display = 'none';
             }
         });
 }
