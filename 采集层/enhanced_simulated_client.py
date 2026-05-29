@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .base_client import ModbusClientInterface, PushClientInterface
 from .device_behavior_simulator import DeviceBehaviorSimulator, DeviceState, FaultType
+from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
 
 logger = logging.getLogger(__name__)
 
@@ -124,10 +125,9 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         if not self.connected:
             return None
 
-        # 停机设备不返回数据
-        with self._data_lock:
-            if self._latest_data.get('_stopped'):
-                return None
+        # 停机设备返回全零（与基础模拟客户端行为一致）
+        if is_device_stopped(self.device_id) or _ESTOP_ACTIVE:
+            return [0] * count
 
         # 模拟通信延迟
         if self._latency_ms > 0:
@@ -284,7 +284,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         """获取最新数据"""
         with self._data_lock:
             # 停机设备返回空数据
-            if self._latest_data.get('_stopped'):
+            if is_device_stopped(self.device_id):
                 return {}
             return dict(self._latest_data)
     
@@ -378,13 +378,17 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
     
     def _generate_data(self):
         """生成数据"""
+        # 停机设备不产生数据
+        if is_device_stopped(self.device_id):
+            return
+
         # 更新行为模拟器
         data = self.behavior_simulator.update(2.0)
-        
+
         # ===== 停机设备不产生数据 =====
         if data.get('_stopped'):
             return
-        
+
         # 更新节点数据
         for i, node_cfg in enumerate(self.node_configs):
             name = node_cfg.get('name', node_cfg.get('node_id', 'unknown'))
@@ -532,9 +536,12 @@ class EnhancedSimulatedMQTTClient(PushClientInterface):
     
     def _generate_data(self):
         """生成数据"""
+        if is_device_stopped(self.device_id):
+            return
+
         # 更新行为模拟器
         data = self.behavior_simulator.update(3.0)
-        
+
         # ===== 停机设备不产生数据 =====
         if data.get('_stopped'):
             return
@@ -838,13 +845,16 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
 
     def _generate_data(self):
         """生成数据"""
+        if is_device_stopped(self.device_id):
+            return
+
         # 更新行为模拟器
         data = self.behavior_simulator.update(1.0)
-        
+
         # ===== 停机设备不产生数据 =====
         if data.get('_stopped'):
             return
-        
+
         # 更新端点数据
         for i, ep in enumerate(self.endpoints):
             name = ep.get('name', 'unknown')

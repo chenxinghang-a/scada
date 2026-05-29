@@ -161,9 +161,56 @@ body {
 }
 
 .dev-status.online  { background: var(--running); }
+.dev-status.stopped { background: var(--accent); }
 .dev-status.fault   { background: var(--alarm-crit); }
 .dev-status.warning { background: var(--alarm-med); }
-.dev-status.offline { background: #444; }
+.dev-status.offline { background: #ccc; }
+
+.dev-state-tag {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 500;
+    margin-left: 4px;
+}
+
+.dev-state-tag.online  { background: rgba(34,197,94,0.15); color: #16a34a; }
+.dev-state-tag.stopped { background: rgba(99,102,241,0.15); color: #4f46e5; }
+.dev-state-tag.warning { background: rgba(234,179,8,0.15); color: #a16207; }
+.dev-state-tag.offline { background: rgba(156,163,175,0.15); color: #6b7280; }
+
+.dev-ctrl-btn {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    border: none;
+    font-size: 12px;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+
+.dev-ctrl-btn.stop {
+    background: rgba(220,38,38,0.1);
+    color: #dc2626;
+}
+
+.dev-ctrl-btn.stop:hover {
+    background: #dc2626;
+    color: #fff;
+}
+
+.dev-ctrl-btn.start {
+    background: rgba(34,197,94,0.1);
+    color: #16a34a;
+}
+
+.dev-ctrl-btn.start:hover {
+    background: #16a34a;
+    color: #fff;
+}
 
 .dev-info { flex: 1; min-width: 0; }
 

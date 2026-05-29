@@ -139,11 +139,22 @@ function updateDeviceGrid(stats) {
         const id = d.device_id || d.id;
         const name = d.name || id;
         const online = d.connected;
+        const stopped = d.stopped;
         const hasAlarm = d.status === 'fault' || d.status === 'warning';
+        const category = d.device_category || 'sensor';
 
         let statusClass = 'offline';
-        if (online && hasAlarm) statusClass = 'warning';
-        else if (online) statusClass = 'online';
+        let statusText = '离线';
+        if (online && stopped) {
+            statusClass = 'stopped';
+            statusText = '已停止';
+        } else if (online && hasAlarm) {
+            statusClass = 'warning';
+            statusText = '告警';
+        } else if (online) {
+            statusClass = 'online';
+            statusText = '运行中';
+        }
 
         // 取前 2 个寄存器值
         const regs = d.registers || [];
@@ -152,13 +163,19 @@ function updateDeviceGrid(stats) {
             return `<span class="dev-val"><span class="label">${label}</span> <span class="num" id="dv-${id}-${r.name}">--</span></span>`;
         }).join('');
 
+        // 机械类设备显示启停按钮
+        const ctrlBtn = category === 'mechanical' && online
+            ? `<button class="dev-ctrl-btn ${stopped ? 'start' : 'stop'}" onclick="event.stopPropagation();toggleDevice('${id}',${!stopped})" title="${stopped ? '启动' : '停止'}">${stopped ? '▶' : '■'}</button>`
+            : '';
+
         return `<div class="dev-card" onclick="selectDevice('${id}')" title="${name}">
             <div class="dev-status ${statusClass}"></div>
             <div class="dev-info">
-                <div class="dev-name">${name}</div>
+                <div class="dev-name">${name} <span class="dev-state-tag ${statusClass}">${statusText}</span></div>
                 <div class="dev-meta">${d.protocol || 'modbus_tcp'} · ${d.host || ''}</div>
                 <div class="dev-values">${valStr}</div>
             </div>
+            ${ctrlBtn}
         </div>`;
     }).join('');
 
@@ -186,6 +203,27 @@ function selectDevice(id) {
     if (select) select.value = id;
     Object.keys(dataBuffers).forEach(k => delete dataBuffers[k]);
     if (trendChart) trendChart.clear();
+}
+
+// ========== 设备启停控制 ==========
+async function toggleDevice(deviceId, stop) {
+    const action = stop ? 'stop' : 'start';
+    if (!confirm(`确认${stop ? '停止' : '启动'}设备 ${deviceId}？`)) return;
+
+    try {
+        const resp = await fetch(`/api/devices/${deviceId}/${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+        });
+        const data = await resp.json();
+        if (data.success) {
+            loadData(); // 刷新状态
+        } else {
+            alert(data.message || '操作失败');
+        }
+    } catch (e) {
+        alert('操作异常: ' + e.message);
+    }
 }
 
 // ========== 报警面板 ==========
