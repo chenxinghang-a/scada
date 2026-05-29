@@ -230,7 +230,7 @@ class TSDBAdapter:
             if isinstance(timestamp_str, str):
                 try:
                     timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                except:
+                except Exception:
                     timestamp = datetime.now()
             else:
                 timestamp = datetime.now()

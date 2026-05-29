@@ -372,14 +372,14 @@ class SQLiteToTDengineMigrator:
             try:
                 cursor.execute("SELECT COUNT(*) FROM oee_records")
                 results['oee']['sqlite_count'] = cursor.fetchone()[0]
-            except:
+            except Exception:
                 pass
 
             # 验证能源数据
             try:
                 cursor.execute("SELECT COUNT(*) FROM energy_records")
                 results['energy']['sqlite_count'] = cursor.fetchone()[0]
-            except:
+            except Exception:
                 pass
 
             self.logger.info("验证完成")

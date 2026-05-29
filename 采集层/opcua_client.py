@@ -299,7 +299,7 @@ class OPCUADiscovery:
                     }
                     servers.append(server_info)
                     await client.disconnect()
-                except:
+                except Exception:
                     pass
 
         except Exception as e:

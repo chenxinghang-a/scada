@@ -1,21 +1,19 @@
 @echo off
-chcp 65001 >nul
-title 工业SCADA系统 - Modbus模拟器模式
+cd /d "%~dp0"
+
 echo ========================================
-echo   启动 Modbus 模拟器 + SCADA 系统
-echo   采集层走真实 Modbus TCP 协议
+echo   Modbus Simulator + SCADA System
+echo   Real Modbus TCP Protocol
 echo ========================================
 echo.
 
-:: 启动模拟器（后台）
-echo [1/2] 启动 Modbus TCP 模拟器 (端口 5020)...
+echo [1/2] Starting Modbus Simulator (port 5020)...
 start /b python tools\modbus_simulator.py --port 5020
 timeout /t 2 >nul
 
-:: 启动 SCADA
-echo [2/2] 启动 SCADA 系统...
-echo 访问地址: http://localhost:5000
-echo 账号: admin  密码: admin123
+echo [2/2] Starting SCADA System...
+echo   URL: http://localhost:5000
+echo   Account: admin / admin123
 echo.
 python run.py --simulator
 pause

@@ -253,7 +253,7 @@ class AlarmKPI:
                     dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                     hour_key = dt.strftime('%Y-%m-%d %H:00')
                     hourly_count[hour_key] += 1
-                except:
+                except Exception:
                     pass
         
         # 生成趋势数据

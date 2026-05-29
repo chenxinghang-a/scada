@@ -752,7 +752,7 @@ class Database:
                 try:
                     cursor.execute(f'SELECT COUNT(*) FROM {table}')
                     result[table] = cursor.fetchone()[0]
-                except:
+                except Exception:
                     result[table] = 0
 
         return result

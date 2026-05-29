@@ -278,7 +278,7 @@ class ModbusGateway(BaseGateway):
         if old_client:
             try:
                 old_client.close()
-            except:
+            except Exception:
                 pass
 
         # 创建新连接
