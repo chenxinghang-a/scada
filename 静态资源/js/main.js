@@ -53,11 +53,15 @@ function updateSystemStatus(status) {
  * 处理数据更新
  */
 function handleDataUpdate(data) {
-    // 更新实时数据表格
-    updateRealtimeTable(data);
-    
-    // 更新图表
-    updateCharts(data);
+    // 更新实时数据表格（兼容函数，非仪表盘页面调用）
+    if (typeof updateRealtimeTable === 'function') {
+        updateRealtimeTable(data);
+    }
+
+    // 更新图表（兼容函数，非仪表盘页面调用）
+    if (typeof updateCharts === 'function') {
+        updateCharts(data);
+    }
 }
 
 /**
@@ -346,24 +350,30 @@ function updateAlarmCountSilent() {
  * 更新系统统计信息
  */
 function updateSystemStats(stats) {
-    // 更新设备数量
+    // 更新设备数量（安全设置，元素不存在不报错）
     if (stats.devices) {
-        const deviceCount = stats.devices.length;
-        const onlineCount = stats.devices.filter(d => d.connected).length;
-        
-        document.getElementById('device-count').textContent = deviceCount;
-        document.getElementById('device-online').textContent = onlineCount;
-        document.getElementById('device-offline').textContent = deviceCount - onlineCount;
+        const devs = Array.isArray(stats.devices) ? stats.devices : Object.values(stats.devices);
+        const deviceCount = devs.length;
+        const onlineCount = devs.filter(d => d.connected).length;
+
+        const el1 = document.getElementById('device-count');
+        const el2 = document.getElementById('device-online');
+        const el3 = document.getElementById('device-offline');
+        if (el1) el1.textContent = deviceCount;
+        if (el2) el2.textContent = onlineCount;
+        if (el3) el3.textContent = deviceCount - onlineCount;
     }
-    
+
     // 更新数据采集统计
     if (stats.collector_stats) {
-        document.getElementById('data-count').textContent = stats.collector_stats.total_collections || 0;
+        const el = document.getElementById('data-count');
+        if (el) el.textContent = stats.collector_stats.total_collections || 0;
     }
-    
+
     // 更新运行时间
     if (stats.start_time) {
-        document.getElementById('start-time').textContent = stats.start_time;
+        const el = document.getElementById('start-time');
+        if (el) el.textContent = stats.start_time;
         updateUptime(stats.start_time);
     }
 }
@@ -372,16 +382,18 @@ function updateSystemStats(stats) {
  * 更新运行时间
  */
 function updateUptime(startTime) {
+    const el = document.getElementById('uptime');
+    if (!el) return;  // 仪表盘页面没有这个元素，跳过
+
     const start = new Date(startTime);
     const now = new Date();
     const diff = now - start;
-    
+
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
     const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-    
-    document.getElementById('uptime').textContent = 
-        `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+    el.textContent = `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
 /**
@@ -467,6 +479,21 @@ async function loadInitialData() {
     } catch (error) {
         console.error('加载初始数据失败:', error);
     }
+}
+
+/**
+ * 更新设备状态列表（兼容函数，非仪表盘页面调用）
+ */
+function updateDeviceStatusList(devices) {
+    // 仪表盘页面有自己的updateDeviceGrid，这里只更新计数
+    if (!devices) return;
+    const devs = Array.isArray(devices) ? devices : Object.values(devices);
+    const el1 = document.getElementById('device-count');
+    const el2 = document.getElementById('device-online');
+    const el3 = document.getElementById('device-offline');
+    if (el1) el1.textContent = devs.length;
+    if (el2) el2.textContent = devs.filter(d => d.connected).length;
+    if (el3) el3.textContent = devs.filter(d => !d.connected).length;
 }
 
 /**
