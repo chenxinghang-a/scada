@@ -20,7 +20,13 @@ TDengine查询构建器
            .build())
 """
 
+import re
 from datetime import datetime
+
+
+def _escape_value(val: str) -> str:
+    """防SQL注入：转义字符串值"""
+    return str(val).replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
 
 
 class QueryBuilder:
@@ -83,7 +89,7 @@ class QueryBuilder:
 
     def where_device(self, device_id: str) -> 'QueryBuilder':
         """添加设备ID条件"""
-        self._where_clauses.append(f"device_id = '{device_id}'")
+        self._where_clauses.append(f"device_id = '{_escape_value(device_id)}'")
         return self
 
     def where_time(self, start: datetime, end: datetime) -> 'QueryBuilder':
@@ -102,7 +108,7 @@ class QueryBuilder:
 
     def where_level(self, level: str) -> 'QueryBuilder':
         """添加报警级别条件"""
-        self._where_clauses.append(f"level = '{level}'")
+        self._where_clauses.append(f"level = '{_escape_value(level)}'")
         return self
 
     def where_value_gt(self, value: float) -> 'QueryBuilder':

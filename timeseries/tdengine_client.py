@@ -78,15 +78,17 @@ class TDengineClient:
         # 已创建的表缓存
         self._created_tables: set[str] = set()
 
-    def _sanitize_identifier(self, name: str) -> str:
-        """Sanitize SQL identifier (table/column name) - only allow alphanumeric and underscore"""
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
-            raise ValueError(f"Invalid identifier: {name}")
-        return name
+    @staticmethod
+    def _sanitize_identifier(name: str) -> str:
+        """防SQL注入：只允许字母数字下划线"""
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', str(name)):
+            raise ValueError(f"Invalid SQL identifier: {name}")
+        return str(name)
 
-    def _escape_string(self, value: str) -> str:
-        """Escape string value for TDengine SQL"""
-        return value.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
+    @staticmethod
+    def _escape_value(val: str) -> str:
+        """防SQL注入：转义字符串值"""
+        return str(val).replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
 
     def connect(self) -> bool:
         """
@@ -287,7 +289,7 @@ class TDengineClient:
         # 构造INSERT语句 (sanitize table name, escape timestamp)
         safe_table = self._sanitize_identifier(table_name)
         ts = record.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        safe_ts = self._escape_string(ts)
+        safe_ts = self._escape_value(ts)
         sql = f"INSERT INTO {safe_table} VALUES ('{safe_ts}', {record.value}, {record.quality})"
 
         result = self._execute_sql(sql)
@@ -331,7 +333,7 @@ class TDengineClient:
             values = []
             for record in table_records:
                 ts = record.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                safe_ts = self._escape_string(ts)
+                safe_ts = self._escape_value(ts)
                 values.append(f"('{safe_ts}', {record.value}, {record.quality})")
 
             sql = f"INSERT INTO {safe_table} VALUES {', '.join(values)}"
@@ -351,7 +353,8 @@ class TDengineClient:
             'alarm_id': record.alarm_id
         })
 
-        sql = f"INSERT INTO {table_name} VALUES {record.to_sql_values()}"
+        safe_table = self._sanitize_identifier(table_name)
+        sql = f"INSERT INTO {safe_table} VALUES {record.to_sql_values()}"
         result = self._execute_sql(sql)
         if result:
             self.stats['writes'] += 1
@@ -364,7 +367,8 @@ class TDengineClient:
             'device_id': record.device_id
         })
 
-        sql = f"INSERT INTO {table_name} VALUES {record.to_sql_values()}"
+        safe_table = self._sanitize_identifier(table_name)
+        sql = f"INSERT INTO {safe_table} VALUES {record.to_sql_values()}"
         result = self._execute_sql(sql)
         if result:
             self.stats['writes'] += 1
@@ -377,7 +381,8 @@ class TDengineClient:
             'device_id': record.device_id
         })
 
-        sql = f"INSERT INTO {table_name} VALUES {record.to_sql_values()}"
+        safe_table = self._sanitize_identifier(table_name)
+        sql = f"INSERT INTO {safe_table} VALUES {record.to_sql_values()}"
         result = self._execute_sql(sql)
         if result:
             self.stats['writes'] += 1
@@ -390,7 +395,8 @@ class TDengineClient:
             'device_id': record.device_id
         })
 
-        sql = f"INSERT INTO {table_name} VALUES {record.to_sql_values()}"
+        safe_table = self._sanitize_identifier(table_name)
+        sql = f"INSERT INTO {safe_table} VALUES {record.to_sql_values()}"
         result = self._execute_sql(sql)
         if result:
             self.stats['writes'] += 1
@@ -414,13 +420,14 @@ class TDengineClient:
             list[dict[str, Any]]: 数据列表
         """
         table_name = get_telemetry_table_name(device_id, register_name)
+        safe_table = self._sanitize_identifier(table_name)
 
         start_ts = start_time.strftime('%Y-%m-%d %H:%M:%S')
         end_ts = end_time.strftime('%Y-%m-%d %H:%M:%S')
 
         sql = f"""
-            SELECT ts, value, quality 
-            FROM {table_name} 
+            SELECT ts, value, quality
+            FROM {safe_table}
             WHERE ts >= '{start_ts}' AND ts <= '{end_ts}'
             ORDER BY ts DESC
             LIMIT {limit}
@@ -435,8 +442,9 @@ class TDengineClient:
     def query_telemetry_latest(self, device_id: str, register_name: str) -> dict[str, Any] | None:
         """查询最新的遥测数据"""
         table_name = get_telemetry_table_name(device_id, register_name)
+        safe_table = self._sanitize_identifier(table_name)
 
-        sql = f"SELECT LAST(ts, value, quality) FROM {table_name}"
+        sql = f"SELECT LAST(ts, value, quality) FROM {safe_table}"
 
         result = self._execute_sql(sql)
         if result and result.get('data'):
@@ -459,15 +467,16 @@ class TDengineClient:
             interval: 聚合间隔，如 "1m", "5m", "1h", "1d"
         """
         table_name = get_telemetry_table_name(device_id, register_name)
+        safe_table = self._sanitize_identifier(table_name)
 
         start_ts = start_time.strftime('%Y-%m-%d %H:%M:%S')
         end_ts = end_time.strftime('%Y-%m-%d %H:%M:%S')
 
         sql = f"""
-            SELECT _wstart as ts, AVG(value) as avg_val, 
+            SELECT _wstart as ts, AVG(value) as avg_val,
                    MAX(value) as max_val, MIN(value) as min_val,
                    COUNT(*) as count
-            FROM {table_name}
+            FROM {safe_table}
             WHERE ts >= '{start_ts}' AND ts <= '{end_ts}'
             INTERVAL({interval})
             ORDER BY ts
@@ -484,17 +493,18 @@ class TDengineClient:
                      level: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         """查询报警记录"""
         table_name = get_alarm_table_name(device_id)
+        safe_table = self._sanitize_identifier(table_name)
 
         start_ts = start_time.strftime('%Y-%m-%d %H:%M:%S')
         end_ts = end_time.strftime('%Y-%m-%d %H:%M:%S')
 
         where_clauses = [f"ts >= '{start_ts}'", f"ts <= '{end_ts}'"]
         if level:
-            where_clauses.append(f"level = '{level}'")
+            where_clauses.append(f"level = '{self._escape_value(level)}'")
 
         sql = f"""
             SELECT ts, level, alarm_type, message, value, threshold, acknowledged
-            FROM {table_name}
+            FROM {safe_table}
             WHERE {' AND '.join(where_clauses)}
             ORDER BY ts DESC
             LIMIT {limit}
@@ -511,6 +521,7 @@ class TDengineClient:
     def query_oee(self, device_id: str, start_time: datetime, end_time: datetime) -> list[dict[str, Any]]:
         """查询OEE记录"""
         table_name = get_oee_table_name(device_id)
+        safe_table = self._sanitize_identifier(table_name)
 
         start_ts = start_time.strftime('%Y-%m-%d %H:%M:%S')
         end_ts = end_time.strftime('%Y-%m-%d %H:%M:%S')
@@ -518,7 +529,7 @@ class TDengineClient:
         sql = f"""
             SELECT ts, availability, performance, quality_rate, oee,
                    total_count, good_count, run_time, downtime
-            FROM {table_name}
+            FROM {safe_table}
             WHERE ts >= '{start_ts}' AND ts <= '{end_ts}'
             ORDER BY ts DESC
         """
@@ -535,6 +546,7 @@ class TDengineClient:
                      interval: str = "1h") -> list[dict[str, Any]]:
         """查询能源数据聚合"""
         table_name = get_energy_table_name(device_id)
+        safe_table = self._sanitize_identifier(table_name)
 
         start_ts = start_time.strftime('%Y-%m-%d %H:%M:%S')
         end_ts = end_time.strftime('%Y-%m-%d %H:%M:%S')
@@ -542,7 +554,7 @@ class TDengineClient:
         sql = f"""
             SELECT _wstart as ts, AVG(power) as avg_power,
                    MAX(power) as max_power, SUM(energy) as total_energy
-            FROM {table_name}
+            FROM {safe_table}
             WHERE ts >= '{start_ts}' AND ts <= '{end_ts}'
             INTERVAL({interval})
             ORDER BY ts

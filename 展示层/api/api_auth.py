@@ -37,7 +37,11 @@ def login():
     ip_address = request.remote_addr
     result = auth_manager.login(username, password, ip_address)
 
-    return jsonify(result), (200 if result['success'] else 401)
+    if not result['success']:
+        return jsonify(result), 401
+    if result.get('status') == 'must_change_password':
+        return jsonify(result), 403
+    return jsonify(result), 200
 
 
 @auth_bp.route('/auth/register', methods=['POST'])
@@ -113,6 +117,42 @@ def change_password():
         new_password=data.get('new_password', '')
     )
     return jsonify(result)
+
+
+@auth_bp.route('/auth/force-change-password', methods=['POST'])
+def force_change_password():
+    """首次登录强制改密（不需要旧密码，需要有效token）"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请提供改密信息'}), 400
+
+    username = data.get('username', '').strip()
+    new_password = data.get('new_password', '')
+
+    if not username or not new_password:
+        return jsonify({'success': False, 'message': '用户名和新密码不能为空'}), 400
+
+    # 验证token（从请求头或body中获取）
+    token = None
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        token = auth_header[7:]
+    if not token:
+        token = data.get('token')
+
+    if not token:
+        return jsonify({'success': False, 'message': '请提供认证令牌'}), 401
+
+    auth_manager = get_auth_manager()
+    user = auth_manager.verify_token(token)
+    if not user or user['username'] != username:
+        return jsonify({'success': False, 'message': '令牌无效或用户名不匹配'}), 401
+
+    result = auth_manager.force_change_password(username, new_password)
+
+    if result['success']:
+        return jsonify(result), 200
+    return jsonify(result), 400
 
 
 @auth_bp.route('/auth/users', methods=['GET'])

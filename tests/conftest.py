@@ -277,3 +277,32 @@ def alarm_config():
             },
         ]
     }
+
+
+@pytest.fixture
+def auth_manager():
+    """Create a real AuthManager with a temp SQLite database for unit testing"""
+    import sqlite3
+    from 用户层.auth import AuthManager
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+
+    class TestDatabase:
+        def __init__(self, path):
+            self._path = path
+        def get_connection(self):
+            conn = sqlite3.connect(self._path)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+    db = TestDatabase(tmp_path)
+    mgr = AuthManager(db)
+
+    yield mgr
+
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass

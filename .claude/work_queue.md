@@ -10,7 +10,7 @@
 
 ### 批次1：安全加固
 1. [ ] 默认admin强制首次登录改密 + 密码复杂度(>=8位+大小写+数字)
-2. [ ] TDengine SQL注入修复：f-string → 参数化查询
+2. [x] TDengine SQL注入修复：f-string → 参数化查询
 3. [x] 安全响应头：CSP, X-Frame-Options, X-Content-Type-Options, HSTS
 4. [x] 页面级认证：所有HTML页面路由检查JWT(除login页)
 

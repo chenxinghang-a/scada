@@ -28,6 +28,7 @@ class ProtocolType(Enum):
     REST = "REST"
     MC = "MC"  # 三菱MC协议
     FINS = "FINS"  # 欧姆龙FINS协议
+    IEC_104 = "IEC104"  # IEC 60870-5-104 (DL/T 634.5104)
 
 
 class DataQuality(Enum):

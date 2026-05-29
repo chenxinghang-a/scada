@@ -16,9 +16,19 @@ TDengine核心概念：
 - 列用于存储时序数据
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+
+
+def _sanitize_table_name(raw: str) -> str:
+    """防SQL注入：表名只保留字母数字下划线"""
+    clean = re.sub(r'[^a-zA-Z0-9_]', '_', str(raw))
+    # 确保不以数字开头
+    if clean and clean[0].isdigit():
+        clean = '_' + clean
+    return clean
 
 
 @dataclass
@@ -75,9 +85,11 @@ class AlarmRecord:
     def to_sql_values(self) -> str:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         ack = 1 if self.acknowledged else 0
-        # 转义单引号
-        msg = self.message.replace("'", "\\'")
-        return f"('{ts}', '{self.level}', '{self.alarm_type}', '{msg}', {self.value}, {self.threshold}, {ack})"
+        # 防SQL注入：转义反斜杠、单引号、空字节
+        msg = self.message.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
+        level = self.level.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
+        alarm_type = self.alarm_type.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
+        return f"('{ts}', '{level}', '{alarm_type}', '{msg}', {self.value}, {self.threshold}, {ack})"
 
 
 @dataclass
@@ -143,8 +155,9 @@ class PredictiveRecord:
 
     def to_sql_values(self) -> str:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        trend = _escape_sql_value(self.trend)
         return (f"('{ts}', {self.health_score}, {self.failure_probability}, "
-                f"{self.remaining_life}, {self.anomaly_score}, '{self.trend}')")
+                f"{self.remaining_life}, {self.anomaly_score}, '{trend}')")
 
 
 # TDengine超级表定义
@@ -227,6 +240,11 @@ STABLE_DEFINITIONS = {
 }
 
 
+def _escape_sql_value(val: str) -> str:
+    """防SQL注入：转义字符串值"""
+    return str(val).replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
+
+
 def get_create_table_sql(table_name: str, stable_name: str, tags: dict[str, str]) -> str:
     """
     生成创建子表的SQL
@@ -236,37 +254,36 @@ def get_create_table_sql(table_name: str, stable_name: str, tags: dict[str, str]
         stable_name: 超级表名称
         tags: 标签值 {tag_name: tag_value}
     """
-    tag_values = ", ".join([f"'{v}'" for v in tags.values()])
+    tag_values = ", ".join([f"'{_escape_sql_value(v)}'" for v in tags.values()])
     return f"CREATE TABLE IF NOT EXISTS {table_name} USING {stable_name} TAGS ({tag_values})"
 
 
 def get_telemetry_table_name(device_id: str, register_name: str) -> str:
     """生成遥测数据子表名称"""
-    # 清理特殊字符
-    clean_device = device_id.replace('-', '_').replace('.', '_')
-    clean_register = register_name.replace('-', '_').replace('.', '_')
+    clean_device = _sanitize_table_name(device_id)
+    clean_register = _sanitize_table_name(register_name)
     return f"tel_{clean_device}_{clean_register}"
 
 
 def get_alarm_table_name(device_id: str) -> str:
     """生成报警记录子表名称"""
-    clean_device = device_id.replace('-', '_').replace('.', '_')
+    clean_device = _sanitize_table_name(device_id)
     return f"alarm_{clean_device}"
 
 
 def get_oee_table_name(device_id: str) -> str:
     """生成OEE记录子表名称"""
-    clean_device = device_id.replace('-', '_').replace('.', '_')
+    clean_device = _sanitize_table_name(device_id)
     return f"oee_{clean_device}"
 
 
 def get_energy_table_name(device_id: str) -> str:
     """生成能源记录子表名称"""
-    clean_device = device_id.replace('-', '_').replace('.', '_')
+    clean_device = _sanitize_table_name(device_id)
     return f"energy_{clean_device}"
 
 
 def get_predictive_table_name(device_id: str) -> str:
     """生成预测性维护记录子表名称"""
-    clean_device = device_id.replace('-', '_').replace('.', '_')
+    clean_device = _sanitize_table_name(device_id)
     return f"predict_{clean_device}"
