@@ -108,6 +108,9 @@ class Database:
                     threshold REAL,
                     actual_value REAL,
                     timestamp DATETIME NOT NULL,
+                    trigger_count INTEGER DEFAULT 1,
+                    last_trigger_time DATETIME,
+                    last_value REAL,
                     acknowledged BOOLEAN DEFAULT 0,
                     acknowledged_at DATETIME,
                     acknowledged_by TEXT,
@@ -184,7 +187,24 @@ class Database:
                 ON history_archive(device_id, archive_date)
             ''')
 
+            # 迁移：给旧表添加新列（如果不存在）
+            self._migrate_alarm_table(cursor)
+
             logger.info("数据库初始化完成")
+
+    def _migrate_alarm_table(self, cursor):
+        """给alarm_records表添加新列（兼容旧数据库）"""
+        new_columns = [
+            ('trigger_count', 'INTEGER DEFAULT 1'),
+            ('last_trigger_time', 'DATETIME'),
+            ('last_value', 'REAL'),
+        ]
+        for col_name, col_type in new_columns:
+            try:
+                cursor.execute(f'ALTER TABLE alarm_records ADD COLUMN {col_name} {col_type}')
+                logger.info(f"数据库迁移: 添加列 alarm_records.{col_name}")
+            except Exception:
+                pass  # 列已存在，忽略
 
     def insert_data(self, device_id: str, register_name: str, 
                     value: float, timestamp: datetime, unit: str = ''):
@@ -428,7 +448,10 @@ class Database:
                      alarm_level: str, alarm_message: str, threshold: float,
                      actual_value: float, timestamp: datetime):
         """
-        插入报警记录
+        插入或更新报警记录
+
+        同一报警（alarm_id + device_id + register_name）未确认时只更新计数和最新值，
+        不重复插入新记录。确认后再次触发才新建记录。
 
         Args:
             alarm_id: 报警ID
@@ -442,13 +465,38 @@ class Database:
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
+
+            # 查找同一报警的未确认记录
             cursor.execute('''
-                INSERT INTO alarm_records 
-                (alarm_id, device_id, register_name, alarm_level, alarm_message, 
-                 threshold, actual_value, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (alarm_id, device_id, register_name, alarm_level, alarm_message,
-                  threshold, actual_value, timestamp))
+                SELECT id, trigger_count FROM alarm_records
+                WHERE alarm_id = ? AND device_id = ? AND register_name = ?
+                  AND acknowledged = 0
+                ORDER BY timestamp DESC LIMIT 1
+            ''', (alarm_id, device_id, register_name))
+
+            existing = cursor.fetchone()
+
+            if existing:
+                # 已有未确认记录 → 更新计数和最新值
+                alarm_row_id = existing['id']
+                new_count = (existing['trigger_count'] or 1) + 1
+                cursor.execute('''
+                    UPDATE alarm_records
+                    SET trigger_count = ?,
+                        last_trigger_time = ?,
+                        last_value = ?,
+                        actual_value = ?
+                    WHERE id = ?
+                ''', (new_count, timestamp, actual_value, actual_value, alarm_row_id))
+            else:
+                # 无未确认记录 → 新建
+                cursor.execute('''
+                    INSERT INTO alarm_records
+                    (alarm_id, device_id, register_name, alarm_level, alarm_message,
+                     threshold, actual_value, timestamp, trigger_count, last_trigger_time, last_value)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                ''', (alarm_id, device_id, register_name, alarm_level, alarm_message,
+                      threshold, actual_value, timestamp, timestamp, actual_value))
 
     def get_alarm_records(self, device_id: str | None = None, alarm_level: str | None = None,
                           start_time: datetime | None = None, end_time: datetime | None = None,

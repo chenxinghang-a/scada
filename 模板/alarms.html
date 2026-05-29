@@ -75,13 +75,15 @@
                     <table class="table table-striped table-hover" id="alarm-table">
                         <thead>
                             <tr>
-                                <th>时间</th>
+                                <th>首次触发</th>
+                                <th>最后触发</th>
                                 <th>设备</th>
                                 <th>参数</th>
                                 <th>级别</th>
                                 <th>报警信息</th>
                                 <th>阈值</th>
-                                <th>实际值</th>
+                                <th>最新值</th>
+                                <th>触发次数</th>
                                 <th>状态</th>
                                 <th>操作</th>
                             </tr>
@@ -163,7 +165,10 @@ async function loadAlarms() {
         const tbody = document.getElementById('alarm-tbody');
         if (alarms.length > 0) {
             tbody.innerHTML = alarms.map(a => {
-                const time = new Date(a.timestamp).toLocaleString('zh-CN');
+                const firstTime = new Date(a.timestamp).toLocaleString('zh-CN');
+                const lastTime = a.last_trigger_time
+                    ? new Date(a.last_trigger_time).toLocaleString('zh-CN')
+                    : '-';
                 const deviceName = _alarmDeviceNames[a.device_id] || a.device_id;
                 const levelBadge = a.alarm_level === 'critical'
                     ? '<span class="badge bg-danger">严重</span>'
@@ -175,20 +180,30 @@ async function loadAlarms() {
                     ? ''
                     : `<button class="btn btn-sm btn-outline-primary" onclick="acknowledgeAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}')">确认</button>`;
 
+                const triggerCount = a.trigger_count || 1;
+                const countBadge = triggerCount > 1
+                    ? `<span class="badge bg-danger">${triggerCount}次</span>`
+                    : `<span class="badge bg-secondary">1次</span>`;
+
+                const latestValue = a.last_value != null ? parseFloat(a.last_value).toFixed(2)
+                    : (a.actual_value != null ? parseFloat(a.actual_value).toFixed(2) : '-');
+
                 return `<tr>
-                    <td>${time}</td>
+                    <td><small>${firstTime}</small></td>
+                    <td><small>${lastTime}</small></td>
                     <td>${deviceName}</td>
                     <td>${a.register_name || '-'}</td>
                     <td>${levelBadge}</td>
                     <td>${a.alarm_message || '-'}</td>
                     <td>${a.threshold != null ? parseFloat(a.threshold).toFixed(2) : '-'}</td>
-                    <td>${a.actual_value != null ? parseFloat(a.actual_value).toFixed(2) : '-'}</td>
+                    <td><strong>${latestValue}</strong></td>
+                    <td>${countBadge}</td>
                     <td>${statusBadge}</td>
                     <td>${ackBtn}</td>
                 </tr>`;
             }).join('');
         } else {
-            tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">暂无报警记录</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">暂无报警记录</td></tr>';
         }
     } catch (error) {
         console.error('加载报警失败:', error);

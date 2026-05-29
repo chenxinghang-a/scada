@@ -526,27 +526,17 @@ class AlarmManager:
         threshold = rule_config.get('threshold', 0)
         alarm_area = rule_config.get('area', 'all')
 
-        # 1. 记录数据库（去重：同一报警在冷却期内只插入一次）
-        alarm_key = (rule_id, device_id, register_name)
-        now = time.time()
-
-        with self._dedup_lock:
-            last_db_insert = self._emit_history.get(('db', *alarm_key))
-            cooldown = self.dedup_config.emit_cooldown_seconds
-            if last_db_insert is not None and (now - last_db_insert) < cooldown:
-                pass  # 冷却期内，跳过DB写入
-            else:
-                self.database.insert_alarm(
-                    alarm_id=rule_id,
-                    device_id=device_id,
-                    register_name=register_name,
-                    alarm_level=alarm_level,
-                    alarm_message=alarm_message,
-                    threshold=threshold,
-                    actual_value=value,
-                    timestamp=timestamp
-                )
-                self._emit_history[('db', *alarm_key)] = now
+        # 1. 记录数据库（同一报警未确认时只更新计数，不重复插入）
+        self.database.insert_alarm(
+            alarm_id=rule_id,
+            device_id=device_id,
+            register_name=register_name,
+            alarm_level=alarm_level,
+            alarm_message=alarm_message,
+            threshold=threshold,
+            actual_value=value,
+            timestamp=timestamp
+        )
 
         logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")
 
