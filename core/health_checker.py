@@ -5,6 +5,7 @@
 
 import logging
 import time
+import threading
 from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 
@@ -43,40 +44,40 @@ class HealthCheck:
     
     def run(self) -> Dict[str, Any]:
         """
-        运行健康检查
-        
+        运行健康检查（带超时强制执行）
+
         Returns:
             检查结果
         """
         start_time = time.time()
-        
-        try:
-            result = self.check_func()
-            duration = time.time() - start_time
-            
-            # 确保结果包含必要字段
-            if 'status' not in result:
-                result['status'] = HealthStatus.UNKNOWN
-            if 'message' not in result:
-                result['message'] = ''
-            if 'details' not in result:
-                result['details'] = {}
-            
-            result['duration'] = duration
-            result['timestamp'] = datetime.now().isoformat()
-            
-            # 更新状态
-            self.last_check = datetime.now()
-            self.last_result = result
-            
-            # 记录历史
-            self.history.append(result)
-            if len(self.history) > self.max_history:
-                self.history.pop(0)
-            
-            return result
-        except Exception as e:
-            duration = time.time() - start_time
+
+        # 在子线程中执行检查函数，以便强制超时
+        result_container = [None]
+        exception_container = [None]
+
+        def _target():
+            try:
+                result_container[0] = self.check_func()
+            except Exception as e:
+                exception_container[0] = e
+
+        worker = threading.Thread(target=_target, daemon=True)
+        worker.start()
+        worker.join(timeout=self.timeout)
+
+        duration = time.time() - start_time
+
+        if worker.is_alive():
+            # 超时：子线程仍在运行
+            result = {
+                'status': HealthStatus.UNHEALTHY,
+                'message': f'健康检查超时（{self.timeout}秒）',
+                'details': {'error': 'TimeoutError'},
+                'duration': duration,
+                'timestamp': datetime.now().isoformat()
+            }
+        elif exception_container[0] is not None:
+            e = exception_container[0]
             result = {
                 'status': HealthStatus.UNHEALTHY,
                 'message': str(e),
@@ -84,12 +85,29 @@ class HealthCheck:
                 'duration': duration,
                 'timestamp': datetime.now().isoformat()
             }
-            
-            self.last_check = datetime.now()
-            self.last_result = result
-            self.history.append(result)
-            
-            return result
+        else:
+            result = result_container[0]
+            # 确保结果包含必要字段
+            if 'status' not in result:
+                result['status'] = HealthStatus.UNKNOWN
+            if 'message' not in result:
+                result['message'] = ''
+            if 'details' not in result:
+                result['details'] = {}
+
+            result['duration'] = duration
+            result['timestamp'] = datetime.now().isoformat()
+
+        # 更新状态
+        self.last_check = datetime.now()
+        self.last_result = result
+
+        # 记录历史
+        self.history.append(result)
+        if len(self.history) > self.max_history:
+            self.history.pop(0)
+
+        return result
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -110,6 +128,7 @@ class HealthChecker:
     管理和运行所有健康检查
     """
     
+    _lock = threading.Lock()
     _checks: Dict[str, HealthCheck] = {}
     _global_status = HealthStatus.UNKNOWN
     
@@ -125,7 +144,8 @@ class HealthChecker:
             interval: 检查间隔（秒）
             timeout: 超时时间（秒）
         """
-        cls._checks[name] = HealthCheck(name, check_func, interval, timeout)
+        with cls._lock:
+            cls._checks[name] = HealthCheck(name, check_func, interval, timeout)
         logger.info(f"注册健康检查: {name}")
     
     @classmethod
@@ -136,9 +156,10 @@ class HealthChecker:
         Args:
             name: 检查名称
         """
-        if name in cls._checks:
-            del cls._checks[name]
-            logger.info(f"取消注册健康检查: {name}")
+        with cls._lock:
+            if name in cls._checks:
+                del cls._checks[name]
+                logger.info(f"取消注册健康检查: {name}")
     
     @classmethod
     def check(cls, name: str = None) -> Dict[str, Any]:
@@ -152,27 +173,33 @@ class HealthChecker:
             检查结果
         """
         if name:
-            check = cls._checks.get(name)
+            with cls._lock:
+                check = cls._checks.get(name)
             if not check:
                 return {'status': HealthStatus.UNKNOWN, 'message': f'检查 {name} 未注册'}
             return check.run()
-        
+
+        # 快照当前检查列表（避免长时间持锁）
+        with cls._lock:
+            checks_snapshot = dict(cls._checks)
+
         # 运行所有检查
         results = {}
         overall_status = HealthStatus.HEALTHY
-        
-        for check_name, check in cls._checks.items():
+
+        for check_name, check in checks_snapshot.items():
             result = check.run()
             results[check_name] = result
-            
+
             # 更新整体状态
             if result['status'] == HealthStatus.UNHEALTHY:
                 overall_status = HealthStatus.UNHEALTHY
             elif result['status'] == HealthStatus.DEGRADED and overall_status != HealthStatus.UNHEALTHY:
                 overall_status = HealthStatus.DEGRADED
-        
-        cls._global_status = overall_status
-        
+
+        with cls._lock:
+            cls._global_status = overall_status
+
         return {
             'status': overall_status,
             'checks': results,
@@ -187,18 +214,19 @@ class HealthChecker:
         Returns:
             健康状态信息
         """
-        checks_status = {}
-        for name, check in cls._checks.items():
-            checks_status[name] = {
-                'status': check.last_result['status'] if check.last_result else HealthStatus.UNKNOWN,
-                'last_check': check.last_check.isoformat() if check.last_check else None
+        with cls._lock:
+            checks_status = {}
+            for name, check in cls._checks.items():
+                checks_status[name] = {
+                    'status': check.last_result['status'] if check.last_result else HealthStatus.UNKNOWN,
+                    'last_check': check.last_check.isoformat() if check.last_check else None
+                }
+
+            return {
+                'global_status': cls._global_status,
+                'checks': checks_status,
+                'total_checks': len(cls._checks)
             }
-        
-        return {
-            'global_status': cls._global_status,
-            'checks': checks_status,
-            'total_checks': len(cls._checks)
-        }
     
     @classmethod
     def get_history(cls, name: str, limit: int = 100) -> List[Dict[str, Any]]:
@@ -212,15 +240,17 @@ class HealthChecker:
         Returns:
             检查历史列表
         """
-        check = cls._checks.get(name)
+        with cls._lock:
+            check = cls._checks.get(name)
         if not check:
             return []
-        
+
         return check.history[-limit:]
     
     @classmethod
     def clear(cls):
         """清除所有检查"""
-        cls._checks.clear()
-        cls._global_status = HealthStatus.UNKNOWN
+        with cls._lock:
+            cls._checks.clear()
+            cls._global_status = HealthStatus.UNKNOWN
         logger.debug("清除所有健康检查")

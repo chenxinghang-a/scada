@@ -12,6 +12,7 @@
 import logging
 import yaml
 import time
+import threading
 from typing import Any, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -192,6 +193,9 @@ class AlarmManager:
         # 线程锁（保护去重状态的并发访问）
         self._dedup_lock = Lock()
 
+        # 状态锁（保护 alarm_states, rules, _shelved_alarms, _deadbands）
+        self._state_lock = Lock()
+
         # 报警升级配置
         self._escalation_timeout = 600  # 默认10分钟
         self._escalation_callbacks: list = []  # 升级回调函数列表
@@ -199,8 +203,50 @@ class AlarmManager:
         # 规则索引：(device_id, register_name) -> [(rule_id, rule_config), ...]
         self._rules_index: dict[tuple, list[tuple[str, dict]]] = {}
 
+        # 上次清理过期旁路的时间戳
+        self._last_shelf_cleanup: float = 0
+
+        # 报警升级定时器（后台自动检查）
+        self._escalation_timer: threading.Timer | None = None
+        self._escalation_interval = 30  # 每30秒检查一次升级
+
         # 加载报警配置
         self.load_config()
+
+        # 启动报警升级自动检查定时器
+        self._start_escalation_timer()
+
+    def _start_escalation_timer(self):
+        """启动报警升级后台检查定时器"""
+        if self._escalation_timer is not None:
+            self._escalation_timer.cancel()
+
+        def _tick():
+            try:
+                self.check_escalation()
+            except Exception as e:
+                logger.error(f"报警升级定时检查异常: {e}")
+            finally:
+                # 重新调度下一次
+                self._escalation_timer = threading.Timer(
+                    self._escalation_interval, _tick
+                )
+                self._escalation_timer.daemon = True
+                self._escalation_timer.start()
+
+        self._escalation_timer = threading.Timer(
+            self._escalation_interval, _tick
+        )
+        self._escalation_timer.daemon = True
+        self._escalation_timer.start()
+        logger.info(f"报警升级定时器已启动（间隔{self._escalation_interval}秒）")
+
+    def stop_escalation_timer(self):
+        """停止报警升级定时器"""
+        if self._escalation_timer is not None:
+            self._escalation_timer.cancel()
+            self._escalation_timer = None
+            logger.info("报警升级定时器已停止")
 
     def set_websocket_emit(self, emit_func: Callable[..., Any]):
         """注入WebSocket emit函数（由run.py启动时调用）"""
@@ -237,7 +283,10 @@ class AlarmManager:
         now = datetime.now()
         escalation_timeout = self._escalation_timeout
 
-        for state_key, state in list(self.alarm_states.items()):
+        with self._state_lock:
+            states_snapshot = list(self.alarm_states.items())
+
+        for state_key, state in states_snapshot:
             if state.get('acknowledged', False):
                 continue  # 已确认，跳过
 
@@ -255,8 +304,9 @@ class AlarmManager:
             elapsed = (now - first_trigger).total_seconds()
             if elapsed >= escalation_timeout:
                 # 标记为已升级
-                state['escalated'] = True
-                state['escalation_time'] = now.isoformat()
+                with self._state_lock:
+                    state['escalated'] = True
+                    state['escalation_time'] = now.isoformat()
 
                 device_id, register_name = state_key
                 rule_id = state.get('alarm_id')
@@ -345,8 +395,6 @@ class AlarmManager:
             return
 
         # 清理过期的旁路（低频执行）
-        if not hasattr(self, '_last_shelf_cleanup'):
-            self._last_shelf_cleanup = 0
         now_ts = time.time()
         if now_ts - self._last_shelf_cleanup > 60:
             self._cleanup_expired_shelves()
@@ -429,14 +477,17 @@ class AlarmManager:
             triggered: 是否触发
         """
         state_key = (device_id, register_name)
-        current_state = self.alarm_states.get(state_key, {})
+
+        with self._state_lock:
+            current_state = self.alarm_states.get(state_key, {})
 
         # 获取延迟时间
         delay = rule_config.get('delay', 0)
 
         if triggered:
             # 用实时引用检查（同一次check_alarm中其他规则可能已修改alarm_states）
-            live_state = self.alarm_states.get(state_key)
+            with self._state_lock:
+                live_state = self.alarm_states.get(state_key)
             if live_state and live_state.get('alarm_id') == rule_id:
                 # 已经在报警，只更新时间和数值，不重复触发声光/弹窗
                 live_state['last_trigger_time'] = timestamp
@@ -468,12 +519,14 @@ class AlarmManager:
                     self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
                     self._record_emit(rule_id, device_id, register_name)
 
-                self.alarm_states[state_key] = alarm_state
+                with self._state_lock:
+                    self.alarm_states[state_key] = alarm_state
         else:
             # 未触发，检查是否需要清除报警（只清除自己规则的状态）
-            live_state = self.alarm_states.get(state_key)
-            if live_state and live_state.get('alarm_id') == rule_id:
-                del self.alarm_states[state_key]
+            with self._state_lock:
+                live_state = self.alarm_states.get(state_key)
+                if live_state and live_state.get('alarm_id') == rule_id:
+                    del self.alarm_states[state_key]
                 logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
 
     def _should_emit(self, rule_id: str, device_id: str, register_name: str) -> bool:
@@ -666,12 +719,13 @@ class AlarmManager:
             bool: 确认是否成功
         """
         state_key = (device_id, register_name)
-        state = self.alarm_states.get(state_key)
 
-        if state and state.get('alarm_id') == alarm_id:
-            state['acknowledged'] = True
-            state['acknowledged_by'] = acknowledged_by
-            state['acknowledged_at'] = datetime.now()
+        with self._state_lock:
+            state = self.alarm_states.get(state_key)
+            if state and state.get('alarm_id') == alarm_id:
+                state['acknowledged'] = True
+                state['acknowledged_by'] = acknowledged_by
+                state['acknowledged_at'] = datetime.now()
 
         # 更新数据库
         success = self.database.acknowledge_alarm(alarm_id, acknowledged_by, device_id, register_name)
@@ -697,12 +751,13 @@ class AlarmManager:
         Args:
             device_id: 设备ID（None=全部复位）
         """
-        if device_id:
-            keys_to_remove = [k for k in self.alarm_states if k[0] == device_id]
-            for key in keys_to_remove:
-                del self.alarm_states[key]
-        else:
-            self.alarm_states.clear()
+        with self._state_lock:
+            if device_id:
+                keys_to_remove = [k for k in self.alarm_states if k[0] == device_id]
+                for key in keys_to_remove:
+                    del self.alarm_states[key]
+            else:
+                self.alarm_states.clear()
 
         # 清除去重历史（复位后允许重新推送）
         with self._dedup_lock:
@@ -925,12 +980,13 @@ class AlarmManager:
         if duration_minutes:
             shelved_until = datetime.now() + timedelta(minutes=duration_minutes)
 
-        self._shelved_alarms[alarm_key] = AlarmShelveState(
-            alarm_key=alarm_key,
-            reason=reason,
-            shelved_by=shelved_by,
-            shelved_until=shelved_until,
-        )
+        with self._state_lock:
+            self._shelved_alarms[alarm_key] = AlarmShelveState(
+                alarm_key=alarm_key,
+                reason=reason,
+                shelved_by=shelved_by,
+                shelved_until=shelved_until,
+            )
 
         logger.warning(f"报警已旁路: {alarm_id} ({device_id}/{register_name}) "
                        f"by {shelved_by}, 原因: {reason}, "
@@ -950,22 +1006,25 @@ class AlarmManager:
             bool: 是否成功
         """
         alarm_key = (alarm_id, device_id, register_name)
-        if alarm_key in self._shelved_alarms:
-            del self._shelved_alarms[alarm_key]
-            logger.info(f"报警旁路已解除: {alarm_id} ({device_id}/{register_name})")
-            return True
+        with self._state_lock:
+            if alarm_key in self._shelved_alarms:
+                del self._shelved_alarms[alarm_key]
+                logger.info(f"报警旁路已解除: {alarm_id} ({device_id}/{register_name})")
+                return True
         return False
 
     def get_shelved_alarms(self) -> list[dict]:
         """获取所有被旁路的报警"""
-        return [state.to_dict() for state in self._shelved_alarms.values()]
+        with self._state_lock:
+            return [state.to_dict() for state in self._shelved_alarms.values()]
 
     def _cleanup_expired_shelves(self):
         """清理过期的旁路"""
-        expired = [k for k, v in self._shelved_alarms.items() if v.is_expired()]
-        for key in expired:
-            del self._shelved_alarms[key]
-            logger.info(f"报警旁路已过期自动解除: {':'.join(key)}")
+        with self._state_lock:
+            expired = [k for k, v in self._shelved_alarms.items() if v.is_expired()]
+            for key in expired:
+                del self._shelved_alarms[key]
+                logger.info(f"报警旁路已过期自动解除: {':'.join(key)}")
 
     def set_deadband(self, rule_id: str, deadband_value: float):
         """
@@ -978,12 +1037,14 @@ class AlarmManager:
             rule_id: 报警规则ID
             deadband_value: 死区值
         """
-        self._deadbands[rule_id] = deadband_value
+        with self._state_lock:
+            self._deadbands[rule_id] = deadband_value
         logger.info(f"报警死区已设置: {rule_id} = {deadband_value}")
 
     def get_deadbands(self) -> dict[str, float]:
         """获取所有死区配置"""
-        return dict(self._deadbands)
+        with self._state_lock:
+            return dict(self._deadbands)
 
     def get_priority_matrix(self) -> dict:
         """获取 ISA-18.2 优先级矩阵定义"""

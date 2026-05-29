@@ -8,6 +8,7 @@
 import logging
 import yaml
 import socket
+import threading
 from typing import Any
 from pathlib import Path
 
@@ -114,6 +115,7 @@ class DeviceManager:
         self.use_enhanced_simulation = use_enhanced_simulation
         self.devices = {}  # device_id -> device_config
         self.clients = {}  # device_id -> protocol client
+        self._lock = threading.Lock()
 
         # 加载设备配置
         self.load_config()
@@ -180,7 +182,17 @@ class DeviceManager:
         Returns:
             协议客户端实例（ModbusClient / OPCUAClient / MQTTClient / RESTDeviceClient）
         """
-        if device_id not in self.clients:
+        # 无锁快速路径
+        client = self.clients.get(device_id)
+        if client is not None:
+            return client
+
+        with self._lock:
+            # 双重检查：另一个线程可能已经创建了客户端
+            client = self.clients.get(device_id)
+            if client is not None:
+                return client
+
             device_config = self.devices.get(device_id)
             if not device_config:
                 logger.error(f"设备 {device_id} 配置不存在")
@@ -192,7 +204,7 @@ class DeviceManager:
 
             self.clients[device_id] = client
 
-        return self.clients[device_id]
+        return client
 
     def connect_device(self, device_id: str) -> bool:
         """连接设备"""
@@ -354,25 +366,9 @@ class DeviceManager:
                     if connected:
                         logger.info(f"添加设备并连接成功: {device_id} [{protocol}]")
                     else:
-                        # 模拟模式下连接失败，强制标记为已连接
-                        if self.simulation_mode:
-                            client = self.clients.get(device_id)
-                            if client:
-                                client.connected = True
-                                logger.info(f"添加设备并强制连接（模拟模式）: {device_id} [{protocol}]")
-                            else:
-                                logger.warning(f"添加设备成功但客户端未创建: {device_id} [{protocol}]")
-                        else:
-                            logger.warning(f"添加设备成功但连接失败: {device_id} [{protocol}]")
+                        logger.warning(f"添加设备成功但连接失败: {device_id} [{protocol}]")
                 except Exception as conn_e:
-                    # 模拟模式下连接异常，强制标记为已连接
-                    if self.simulation_mode:
-                        client = self.clients.get(device_id)
-                        if client:
-                            client.connected = True
-                            logger.info(f"添加设备并强制连接（模拟模式，忽略异常）: {device_id} [{protocol}]")
-                    else:
-                        logger.warning(f"添加设备成功但连接异常: {device_id} [{conn_e}]")
+                    logger.warning(f"添加设备成功但连接异常: {device_id} [{conn_e}]")
             else:
                 logger.info(f"添加设备（已禁用）: {device_id} [{protocol}]")
 

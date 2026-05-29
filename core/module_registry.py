@@ -4,6 +4,7 @@
 """
 
 import logging
+import threading
 from typing import Any, Callable, Dict, List, Optional
 from enum import Enum
 
@@ -54,6 +55,7 @@ class ModuleRegistry:
     管理所有模块的注册、初始化、状态监控和生命周期
     """
     
+    _lock = threading.RLock()
     _modules: Dict[str, ModuleInfo] = {}
     _initialization_order: List[str] = []
     
@@ -69,13 +71,14 @@ class ModuleRegistry:
             config: 模块配置
             dependencies: 依赖的其他模块名称列表
         """
-        if name in cls._modules:
-            logger.warning(f"模块 '{name}' 已存在，将被覆盖")
-        
-        module_info = ModuleInfo(name, module_class, config)
-        module_info.dependencies = dependencies or []
-        cls._modules[name] = module_info
-        
+        with cls._lock:
+            if name in cls._modules:
+                logger.warning(f"模块 '{name}' 已存在，将被覆盖")
+
+            module_info = ModuleInfo(name, module_class, config)
+            module_info.dependencies = dependencies or []
+            cls._modules[name] = module_info
+
         logger.info(f"注册模块: {name} ({module_class.__name__})")
     
     @classmethod
@@ -90,39 +93,45 @@ class ModuleRegistry:
         Returns:
             是否初始化成功
         """
-        module_info = cls._modules.get(name)
-        if not module_info:
-            logger.error(f"模块 '{name}' 未注册")
-            return False
-        
-        if module_info.status == ModuleStatus.INITIALIZED:
-            logger.warning(f"模块 '{name}' 已初始化")
-            return True
-        
-        # 检查依赖
-        for dep_name in module_info.dependencies:
-            dep_info = cls._modules.get(dep_name)
-            if not dep_info or dep_info.status != ModuleStatus.INITIALIZED:
-                logger.error(f"模块 '{name}' 的依赖 '{dep_name}' 未初始化")
-                module_info.status = ModuleStatus.ERROR
-                module_info.error = f"依赖 '{dep_name}' 未初始化"
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if not module_info:
+                logger.error(f"模块 '{name}' 未注册")
                 return False
-        
-        # 初始化模块
-        module_info.status = ModuleStatus.INITIALIZING
+
+            if module_info.status == ModuleStatus.INITIALIZED:
+                logger.warning(f"模块 '{name}' 已初始化")
+                return True
+
+            # 检查依赖
+            for dep_name in module_info.dependencies:
+                dep_info = cls._modules.get(dep_name)
+                if not dep_info or dep_info.status != ModuleStatus.INITIALIZED:
+                    logger.error(f"模块 '{name}' 的依赖 '{dep_name}' 未初始化")
+                    module_info.status = ModuleStatus.ERROR
+                    module_info.error = f"依赖 '{dep_name}' 未初始化"
+                    return False
+
+            # 初始化模块
+            module_info.status = ModuleStatus.INITIALIZING
+
         try:
-            # 合并配置和额外参数
+            # 合并配置和额外参数（构造函数可能耗时，不持有锁）
             init_config = {**module_info.config, **kwargs}
-            module_info.instance = module_info.module_class(**init_config)
-            module_info.status = ModuleStatus.INITIALIZED
-            cls._initialization_order.append(name)
-            logger.info(f"模块 '{name}' 初始化成功")
-            return True
+            instance = module_info.module_class(**init_config)
         except Exception as e:
-            module_info.status = ModuleStatus.ERROR
-            module_info.error = e
+            with cls._lock:
+                module_info.status = ModuleStatus.ERROR
+                module_info.error = e
             logger.error(f"模块 '{name}' 初始化失败: {e}")
             return False
+
+        with cls._lock:
+            module_info.instance = instance
+            module_info.status = ModuleStatus.INITIALIZED
+            cls._initialization_order.append(name)
+        logger.info(f"模块 '{name}' 初始化成功")
+        return True
     
     @classmethod
     def initialize_all(cls) -> Dict[str, bool]:
@@ -146,28 +155,36 @@ class ModuleRegistry:
     def _topological_sort(cls) -> List[str]:
         """
         拓扑排序，确保依赖先于被依赖者初始化
-        
+
         Returns:
             排序后的模块名称列表
+
+        Raises:
+            ValueError: 检测到循环依赖
         """
         visited = set()
+        visiting = set()  # 当前DFS路径上的节点（用于检测环）
         result = []
-        
+
         def dfs(name):
             if name in visited:
                 return
-            visited.add(name)
-            
+            if name in visiting:
+                raise ValueError(f"检测到循环依赖，涉及模块: {name}")
+            visiting.add(name)
+
             module_info = cls._modules.get(name)
             if module_info:
                 for dep in module_info.dependencies:
                     dfs(dep)
-            
+
+            visiting.discard(name)
+            visited.add(name)
             result.append(name)
-        
+
         for name in cls._modules:
             dfs(name)
-        
+
         return result
     
     @classmethod
@@ -480,11 +497,13 @@ class ModuleRegistry:
     @classmethod
     def clear(cls):
         """清除所有模块注册"""
-        # 先停止所有运行中的模块
-        for name, info in cls._modules.items():
-            if info.status in (ModuleStatus.RUNNING, ModuleStatus.PAUSED):
-                cls.stop(name)
-        
-        cls._modules.clear()
-        cls._initialization_order.clear()
+        with cls._lock:
+            # 按初始化的逆序停止运行中的模块（依赖者先停止）
+            for name in reversed(cls._initialization_order):
+                info = cls._modules.get(name)
+                if info and info.status in (ModuleStatus.RUNNING, ModuleStatus.PAUSED):
+                    cls.stop(name)
+
+            cls._modules.clear()
+            cls._initialization_order.clear()
         logger.debug("清除所有模块注册")

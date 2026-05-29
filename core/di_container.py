@@ -4,6 +4,7 @@
 """
 
 import logging
+import threading
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ class DIContainer:
     3. scoped - 作用域内共享实例（如每个请求）
     """
     
+    _lock = threading.Lock()
     _services: Dict[str, Dict[str, Any]] = {}
     _singletons: Dict[str, Any] = {}
     _scoped: Dict[str, Dict[str, Any]] = {}
@@ -69,27 +71,29 @@ class DIContainer:
         Returns:
             服务实例
         """
-        # 检查单例
+        # 检查单例（无锁快速路径）
         if name in cls._singletons:
             return cls._singletons[name]
-        
+
         # 检查服务注册
         service = cls._services.get(name)
         if not service:
             raise KeyError(f"服务 '{name}' 未注册")
-        
+
         # 解析依赖
         dependencies = []
         for dep_name in service['dependencies']:
             dep = cls.resolve(dep_name, scope_id)
             dependencies.append(dep)
-        
+
         # 根据生命周期创建实例
         lifecycle = service['lifecycle']
-        
+
         if lifecycle == 'singleton':
-            if name not in cls._singletons:
-                cls._singletons[name] = service['factory'](*dependencies)
+            # 加锁防止并发时重复创建单例
+            with cls._lock:
+                if name not in cls._singletons:
+                    cls._singletons[name] = service['factory'](*dependencies)
             return cls._singletons[name]
         
         elif lifecycle == 'scoped':
