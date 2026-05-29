@@ -237,9 +237,7 @@ def test_device_connection(device_id):
     protocol = device_config.get('protocol', 'modbus_tcp')
 
     try:
-        from 采集层.device_manager import _create_client
-
-        test_client = _create_client(device_config, device_manager.simulation_mode)
+        test_client = _create_test_client(device_config, device_manager.simulation_mode)
         if test_client is None:
             return jsonify({'success': False, 'message': f'不支持的协议: {protocol}'}), 400
 
@@ -676,6 +674,52 @@ def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: 
 
 
 # ==================== 模拟设备预设API ====================
+
+def _create_test_client(config: dict, simulation_mode: bool):
+    """
+    创建测试用设备客户端
+
+    Args:
+        config: 设备配置
+        simulation_mode: 是否模拟模式
+
+    Returns:
+        设备客户端实例，不支持的协议返回None
+    """
+    protocol = config.get('protocol', 'modbus_tcp')
+
+    if simulation_mode:
+        from 采集层.enhanced_simulated_client import (
+            EnhancedSimulatedModbusClient,
+            EnhancedSimulatedOPCUAClient,
+            EnhancedSimulatedMQTTClient,
+            EnhancedSimulatedRESTClient
+        )
+        if protocol in ('modbus_tcp', 'modbus_rtu'):
+            return EnhancedSimulatedModbusClient(config)
+        elif protocol == 'opcua':
+            return EnhancedSimulatedOPCUAClient(config)
+        elif protocol == 'mqtt':
+            return EnhancedSimulatedMQTTClient(config)
+        elif protocol == 'rest':
+            return EnhancedSimulatedRESTClient(config)
+    else:
+        from 采集层.modbus_client import ModbusClient
+        from 采集层.opcua_client import OPCUAClient
+        from 采集层.mqtt_client import MQTTClient
+        from 采集层.rest_client import RESTDeviceClient
+
+        if protocol in ('modbus_tcp', 'modbus_rtu'):
+            return ModbusClient(config)
+        elif protocol == 'opcua':
+            return OPCUAClient(config)
+        elif protocol == 'mqtt':
+            return MQTTClient(config)
+        elif protocol == 'rest':
+            return RESTDeviceClient(config)
+
+    return None
+
 
 def _get_simulation_initializer():
     """安全获取SimulationInitializer实例"""

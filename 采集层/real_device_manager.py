@@ -270,7 +270,7 @@ class RealDeviceManager(IDeviceManager):
         address = target_reg['address']
         data_type = target_reg.get('data_type', 'uint16')
         scale = target_reg.get('scale', 1.0)
-        offset = target.get('offset', 0)
+        offset = target_reg.get('offset', 0)
 
         # 反向换算：工程值 → 原始值
         raw_value = (value - offset) / scale if scale else value
@@ -445,6 +445,25 @@ class RealDeviceManager(IDeviceManager):
             p = d.get('protocol', 'modbus_tcp')
             summary[p] = summary.get(p, 0) + 1
         return summary
+
+    def switch_simulation_mode(self, new_mode: bool) -> dict:
+        """
+        切换模拟/真实模式（运行时热切换）
+
+        真实管理器始终为真实模式，切换到模拟模式需要重启。
+
+        Args:
+            new_mode: True=模拟模式, False=真实模式
+
+        Returns:
+            dict: {'success': bool, 'message': str}
+        """
+        if new_mode:
+            return {
+                'success': False,
+                'message': '当前为真实设备管理器，无法切换到模拟模式。请使用 --simulator 参数重启系统。'
+            }
+        return {'success': True, 'message': '当前已是真实模式'}
 
     def _save_config(self):
         """保存设备配置到文件"""

@@ -31,9 +31,11 @@ from .thing_model import (
 
 from .base_gateway import BaseGateway
 from .modbus_gateway import ModbusGateway
+from .s7_gateway import S7Gateway
+from .opcua_gateway import OPCUAGateway
 from .mqtt_subscriber import MQTTSubscriber, MQTTDataDistributor
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 __author__ = "Industrial SCADA Team"
 
 __all__ = [
@@ -53,6 +55,8 @@ __all__ = [
 
     # 协议网关
     'ModbusGateway',
+    'S7Gateway',
+    'OPCUAGateway',
 
     # MQTT订阅
     'MQTTSubscriber',

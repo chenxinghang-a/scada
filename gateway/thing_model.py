@@ -305,6 +305,64 @@ class ThingModelConverter:
         )
 
     @staticmethod
+    def from_s7_data(device_id: str, data: dict[str, float],
+                     gateway_id: str = "") -> DeviceTelemetry:
+        """
+        从西门子S7数据转换
+
+        Args:
+            device_id: 设备ID
+            data: S7数据 {name: value}
+            gateway_id: 网关ID
+        """
+        metrics = {}
+        for name, value in data.items():
+            unit = ThingModelConverter._infer_unit(name)
+            metrics[name] = {
+                "value": value,
+                "unit": unit,
+                "quality": DataQuality.GOOD.value,
+                "description": ""
+            }
+
+        return DeviceTelemetry(
+            DeviceID=device_id,
+            Timestamp=time.time(),
+            Protocol=ProtocolType.S7.value,
+            Metrics=metrics,
+            GatewayID=gateway_id
+        )
+
+    @staticmethod
+    def from_opcua_data(device_id: str, data: dict[str, float],
+                        gateway_id: str = "") -> DeviceTelemetry:
+        """
+        从OPC UA数据转换
+
+        Args:
+            device_id: 设备ID
+            data: OPC UA数据 {name: value}
+            gateway_id: 网关ID
+        """
+        metrics = {}
+        for name, value in data.items():
+            unit = ThingModelConverter._infer_unit(name)
+            metrics[name] = {
+                "value": value,
+                "unit": unit,
+                "quality": DataQuality.GOOD.value,
+                "description": ""
+            }
+
+        return DeviceTelemetry(
+            DeviceID=device_id,
+            Timestamp=time.time(),
+            Protocol=ProtocolType.OPC_UA.value,
+            Metrics=metrics,
+            GatewayID=gateway_id
+        )
+
+    @staticmethod
     def _infer_unit(register_name: str) -> str:
         """根据寄存器名称推断单位"""
         name_lower = register_name.lower()

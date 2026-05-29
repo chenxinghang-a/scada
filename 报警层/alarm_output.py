@@ -370,6 +370,22 @@ class AlarmOutput:
         with self._lock:
             self._write_do(do_addr, False)
 
+    # ==================== 接口兼容 ====================
+
+    def activate_alarm(self, level: str, message: str = '') -> bool:
+        """
+        激活报警（IAlarmOutput接口方法）
+
+        Args:
+            level: 报警级别 ('critical', 'warning', 'info')
+            message: 报警消息
+
+        Returns:
+            是否成功
+        """
+        result = self.trigger_alarm(level=level, message=message)
+        return result is not None
+
     # ==================== 状态查询 ====================
 
     def get_status(self) -> dict[str, Any]:

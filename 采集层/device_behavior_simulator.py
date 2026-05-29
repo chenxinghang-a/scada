@@ -169,7 +169,12 @@ class DeviceBehaviorSimulator:
         
         device_role = "监测" if self._is_monitoring_device else "工作"
         logger.info(f"[行为模拟] 设备 {self.device_name} 初始化完成, 角色: {device_role}, 参数: {len(self._device_param_names)} 个")
-    
+
+    @property
+    def is_monitoring_device(self) -> bool:
+        """是否为监测设备（传感器/分析仪），监测设备不受停机命令影响"""
+        return self._is_monitoring_device
+
     def _configure_process_model(self):
         """根据设备类型配置过程模型"""
         device_type = self.device_config.get('description', '').lower()

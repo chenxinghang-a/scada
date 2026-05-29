@@ -132,40 +132,76 @@ gateways:
             type: "uint16"
             description: "湿度 (0.1%)"
   
-  # TODO: 西门子S7网关
-  # - type: "s7"
-  #   gateway_id: "s7_gateway_01"
-  #   mqtt_broker: "localhost"
-  #   mqtt_port: 1883
-  #   poll_interval: 5.0
-  #   
-  #   devices:
-  #     - device_id: "S7_1200_001"
-  #       host: "192.168.1.200"
-  #       rack: 0
-  #       slot: 1
-  #       
-  #       registers:
-  #         - name: "temperature"
-  #           db: 1
-  #           offset: 0
-  #           type: "real"
-  
-  # TODO: OPC UA网关
-  # - type: "opcua"
-  #   gateway_id: "opcua_gateway_01"
-  #   mqtt_broker: "localhost"
-  #   mqtt_port: 1883
-  #   poll_interval: 5.0
-  #   
-  #   devices:
-  #     - device_id: "OPCUA_Server_001"
-  #       endpoint: "opc.tcp://192.168.1.300:4840"
-  #       
-  #       nodes:
-  #         - name: "temperature"
-  #           node_id: "ns=2;s=Temperature"
-  #           description: "温度"
+  # 西门子S7网关
+  - type: "s7"
+    gateway_id: "s7_gateway_01"
+    mqtt_broker: "localhost"
+    mqtt_port: 1883
+    poll_interval: 5.0
+
+    devices:
+      - device_id: "S7_1200_001"
+        host: "192.168.1.200"
+        rack: 0
+        slot: 1
+
+        registers:
+          - name: "temperature"
+            db: 1
+            offset: 0
+            type: "real"
+            description: "温度传感器"
+
+          - name: "pressure"
+            db: 1
+            offset: 4
+            type: "real"
+            description: "压力传感器"
+
+          - name: "running_status"
+            db: 1
+            offset: 8
+            type: "int"
+            description: "运行状态 (0=停止, 1=运行, 2=故障)"
+
+          - name: "product_count"
+            db: 1
+            offset: 10
+            type: "dint"
+            description: "产品计数"
+
+  # OPC UA网关
+  - type: "opcua"
+    gateway_id: "opcua_gateway_01"
+    mqtt_broker: "localhost"
+    mqtt_port: 1883
+    poll_interval: 5.0
+
+    devices:
+      - device_id: "OPCUA_Server_001"
+        endpoint: "opc.tcp://192.168.1.300:4840"
+        security_mode: "None"
+
+        nodes:
+          - name: "temperature"
+            node_id: "ns=2;s=Temperature"
+            type: "double"
+            description: "温度"
+
+          - name: "pressure"
+            node_id: "ns=2;s=Pressure"
+            type: "double"
+            description: "压力"
+
+          - name: "motor_speed"
+            node_id: "ns=2;s=MotorSpeed"
+            type: "double"
+            description: "电机转速"
+
+          - name: "running_status"
+            node_id: "ns=2;s=RunningStatus"
+            type: "int32"
+            description: "运行状态"
 
 # 报警配置
 alarms:

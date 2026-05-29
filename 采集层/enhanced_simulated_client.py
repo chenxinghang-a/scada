@@ -419,7 +419,7 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
         if self.connected:
             self._generate_data()
         # 停机设备返回空数据
-        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator._is_monitoring_device:
+        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
             return {}
         return dict(self.latest_data)
     
@@ -576,7 +576,7 @@ class EnhancedSimulatedMQTTClient(PushClientInterface):
     def get_latest_data(self) -> Dict[str, Dict[str, Any]]:
         """获取最新数据"""
         # 停机设备返回空数据
-        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator._is_monitoring_device:
+        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
             return {}
         return dict(self.latest_data)
     
@@ -666,7 +666,7 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
         if self.connected:
             self._generate_data()
         # 停机设备返回空数据
-        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator._is_monitoring_device:
+        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
             return {}
         return dict(self.latest_data)
     

@@ -24,7 +24,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from gateway import ModbusGateway
+from gateway import ModbusGateway, S7Gateway, OPCUAGateway
 
 
 def setup_logging(log_level: str = "INFO"):
@@ -49,10 +49,8 @@ def create_gateway(gateway_type: str, config: dict[str, Any]):
     """根据类型创建网关实例"""
     gateway_map = {
         'modbus': ModbusGateway,
-        # TODO: 添加其他协议网关
-        # 's7': S7Gateway,
-        # 'opcua': OPCUAGateway,
-        # 'mqtt': MQTTGateway,
+        's7': S7Gateway,
+        'opcua': OPCUAGateway,
     }
 
     gateway_class = gateway_map.get(gateway_type)
