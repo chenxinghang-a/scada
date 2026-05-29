@@ -196,12 +196,27 @@ class AlarmManager:
         self._escalation_timeout = 600  # 默认10分钟
         self._escalation_callbacks: list = []  # 升级回调函数列表
 
+        # 规则索引：(device_id, register_name) -> [(rule_id, rule_config), ...]
+        self._rules_index: dict[tuple, list[tuple[str, dict]]] = {}
+
         # 加载报警配置
         self.load_config()
 
     def set_websocket_emit(self, emit_func: Callable[..., Any]):
         """注入WebSocket emit函数（由run.py启动时调用）"""
         self._websocket_emit = emit_func
+
+    def _rebuild_rules_index(self):
+        """构建规则索引：(device_id, register_name) -> [(rule_id, rule_config)]"""
+        self._rules_index.clear()
+        for rule_id, rule_config in self.rules.items():
+            if not rule_config.get('enabled', True):
+                continue
+            key = (rule_config.get('device_id'), rule_config.get('register_name'))
+            if key not in self._rules_index:
+                self._rules_index[key] = []
+            self._rules_index[key].append((rule_id, rule_config))
+        logger.debug(f"规则索引已构建: {len(self._rules_index)} 个设备/寄存器组合")
 
     def add_escalation_callback(self, callback: Callable[..., Any]):
         """
@@ -293,6 +308,9 @@ class AlarmManager:
 
             logger.info(f"共加载 {len(self.rules)} 条报警规则")
 
+            # 构建规则索引
+            self._rebuild_rules_index()
+
             # 加载去重配置
             dedup_cfg = config.get('dedup', {})
             if dedup_cfg:
@@ -312,7 +330,7 @@ class AlarmManager:
     def check_alarm(self, device_id: str, register_name: str,
                     value: float, timestamp: datetime):
         """
-        检查报警
+        检查报警（使用索引快速查找匹配规则）
 
         Args:
             device_id: 设备ID
@@ -320,41 +338,45 @@ class AlarmManager:
             value: 数据值
             timestamp: 时间戳
         """
-        # 清理过期的旁路
-        self._cleanup_expired_shelves()
+        # 用索引快速查找匹配的规则（避免遍历所有规则）
+        rules_key = (device_id, register_name)
+        matched_rules = self._rules_index.get(rules_key)
+        if not matched_rules:
+            return
 
-        # 查找匹配的报警规则
-        for rule_id, rule_config in self.rules.items():
-            if not rule_config.get('enabled', True):
+        # 清理过期的旁路（低频执行）
+        if not hasattr(self, '_last_shelf_cleanup'):
+            self._last_shelf_cleanup = 0
+        now_ts = time.time()
+        if now_ts - self._last_shelf_cleanup > 60:
+            self._cleanup_expired_shelves()
+            self._last_shelf_cleanup = now_ts
+
+        # 遍历匹配的规则
+        for rule_id, rule_config in matched_rules:
+            # ISA-18.2: 检查是否被旁路/搁置
+            alarm_key = (rule_id, device_id, register_name)
+            if alarm_key in self._shelved_alarms:
                 continue
 
-            # 检查设备和寄存器是否匹配
-            if (rule_config.get('device_id') == device_id and
-                rule_config.get('register_name') == register_name):
+            # 检查报警条件（含死区）
+            alarm_triggered = self._check_condition(
+                value=value,
+                condition=rule_config.get('condition'),
+                threshold=rule_config.get('threshold'),
+                rule_id=rule_id
+            )
 
-                # ISA-18.2: 检查是否被旁路/搁置
-                alarm_key = (rule_id, device_id, register_name)
-                if alarm_key in self._shelved_alarms:
-                    continue
-
-                # 检查报警条件（含死区）
-                alarm_triggered = self._check_condition(
-                    value=value,
-                    condition=rule_config.get('condition'),
-                    threshold=rule_config.get('threshold'),
-                    rule_id=rule_id
-                )
-
-                # 处理报警状态
-                self._process_alarm_state(
-                    rule_id=rule_id,
-                    rule_config=rule_config,
-                    device_id=device_id,
-                    register_name=register_name,
-                    value=value,
-                    timestamp=timestamp,
-                    triggered=alarm_triggered
-                )
+            # 处理报警状态
+            self._process_alarm_state(
+                rule_id=rule_id,
+                rule_config=rule_config,
+                device_id=device_id,
+                register_name=register_name,
+                value=value,
+                timestamp=timestamp,
+                triggered=alarm_triggered
+            )
 
     def _check_condition(self, value: float, condition: str, threshold: float,
                          rule_id: str = None) -> bool:
@@ -817,6 +839,7 @@ class AlarmManager:
 
             # 添加到内存
             self.rules[rule_id] = rule_config
+            self._rebuild_rules_index()
 
             # 保存到配置文件
             self._save_config()
@@ -841,6 +864,7 @@ class AlarmManager:
         try:
             if rule_id in self.rules:
                 del self.rules[rule_id]
+                self._rebuild_rules_index()
 
                 # 保存到配置文件
                 self._save_config()

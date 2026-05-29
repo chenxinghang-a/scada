@@ -208,6 +208,7 @@ def add_alarm_rule():
     save_yaml_config('配置/alarms.yaml', config)
 
     current_app.alarm_manager.rules[data['id']] = data
+    current_app.alarm_manager._rebuild_rules_index()
     get_auth_manager().log_operation(
         request.current_user['username'], 'add_alarm_rule', f"添加报警规则: {data['id']}")
     return jsonify({'success': True, 'message': f"规则 {data['id']} 已添加"})
@@ -238,6 +239,7 @@ def update_alarm_rule(rule_id):
     save_yaml_config('配置/alarms.yaml', config)
 
     current_app.alarm_manager.rules[rule_id] = rules[[r['id'] for r in rules].index(rule_id)]
+    current_app.alarm_manager._rebuild_rules_index()
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_alarm_rule', f"更新报警规则: {rule_id}")
     return jsonify({'success': True, 'message': f'规则 {rule_id} 已更新'})
@@ -260,6 +262,7 @@ def delete_alarm_rule(rule_id):
 
     if rule_id in current_app.alarm_manager.rules:
         del current_app.alarm_manager.rules[rule_id]
+        current_app.alarm_manager._rebuild_rules_index()
 
     get_auth_manager().log_operation(
         request.current_user['username'], 'delete_alarm_rule', f"删除报警规则: {rule_id}")

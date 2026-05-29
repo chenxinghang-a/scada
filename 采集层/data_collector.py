@@ -505,11 +505,55 @@ class DataCollector:
             return None
 
     def _process_data(self):
-        """数据处理线程"""
+        """数据处理线程 — 主循环只做DB+报警，智能层异步分发"""
+        # 智能层分发队列（独立线程处理，不阻塞主循环）
+        intel_queue = Queue(maxsize=5000)
+
+        def _intel_worker():
+            """智能层数据分发工作线程"""
+            while self.running:
+                try:
+                    data = intel_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
+                try:
+                    self._dispatch_intelligence(data)
+                except Exception as e:
+                    logger.debug(f"智能层分发异常: {e}")
+
+        intel_thread = threading.Thread(target=_intel_worker, daemon=True, name="intel_dispatch")
+        intel_thread.start()
+
+        # 预编译关键词集合（避免每条数据都做any()遍历）
+        _power_kw = frozenset(['power', 'watt', 'kw', 'active_power', 'reactive_power', 'apparent_power'])
+        _energy_kw = frozenset(['energy', 'kwh', 'mwh', 'electricity', 'consumption'])
+        _status_kw = frozenset(['status', 'state', 'running', 'line_status', 'boiler_status', 'packing_status'])
+        _count_kw = frozenset(['count', 'product', 'shot', 'label', 'palletizing', 'batch', 'painted', 'quantity'])
+        _spc_kw = frozenset([
+            'temperature', 'pressure', 'ph', 'quality', 'dimension',
+            'voltage', 'current', 'speed', 'flow', 'level',
+            'humidity', 'torque', 'frequency', 'thickness',
+            'viscosity', 'density', 'concentration', 'turbidity',
+            'conductivity', 'oxygen', 'vibration', 'force',
+            'position', 'distance', 'cycle_time', 'injection',
+            'mold', 'dryer', 'distill', 'boiler', 'heat_exchanger',
+            'spray', 'coating', 'sealing', 'conveyor'
+        ])
+
+        def _has_keyword(name_lower, keywords):
+            for kw in keywords:
+                if kw in name_lower:
+                    return True
+            return False
+
         while self.running:
             try:
                 data = self.data_queue.get(timeout=1)
+            except queue.Empty:
+                continue
 
+            try:
+                # === 核心路径：DB写入 + 报警检查（必须同步） ===
                 self.database.insert_data(
                     device_id=data['device_id'],
                     register_name=data['register_name'],
@@ -517,18 +561,6 @@ class DataCollector:
                     timestamp=data['timestamp'],
                     unit=data['unit']
                 )
-
-                # 同时写入TDengine（如果配置了桥接器）
-                if self.realtime_bridge:
-                    self.realtime_bridge.feed(
-                        device_id=data['device_id'],
-                        register_name=data['register_name'],
-                        value=data['value'],
-                        timestamp=data['timestamp'],
-                        unit=data.get('unit', ''),
-                        protocol=data.get('protocol', ''),
-                        gateway_id=data.get('gateway_id', '')
-                    )
 
                 if self.alarm_manager:
                     self.alarm_manager.check_alarm(
@@ -538,99 +570,83 @@ class DataCollector:
                         timestamp=data['timestamp']
                     )
 
-                # ===== 工业4.0智能层数据分发 =====
-                device_id = data['device_id']
-                register_name = data['register_name']
-                value = data['value']
-                timestamp = data['timestamp']
+                # TDengine桥接（非阻塞，失败不影响主流程）
+                if self.realtime_bridge:
+                    try:
+                        self.realtime_bridge.feed(
+                            device_id=data['device_id'],
+                            register_name=data['register_name'],
+                            value=data['value'],
+                            timestamp=data['timestamp'],
+                            unit=data.get('unit', ''),
+                            protocol=data.get('protocol', ''),
+                            gateway_id=data.get('gateway_id', '')
+                        )
+                    except Exception:
+                        pass
 
-                # 预测性维护 — 喂入所有数值数据
-                if self.predictive_maintenance:
-                    self.predictive_maintenance.feed_data(
-                        device_id, register_name, value, timestamp)
-
-                # 边缘决策引擎 — 更新数据快照
-                if self.edge_decision:
-                    self.edge_decision.update_data(
-                        f"{device_id}:{register_name}", value)
-
-                # 能源管理 — 电力数据喂入
-                if self.energy_manager:
-                    power_keywords = ['power', 'watt', 'kw', 'active_power', 'reactive_power', 'apparent_power']
-                    energy_keywords = ['energy', 'kwh', 'mwh', 'electricity', 'consumption']
-                    
-                    if any(kw in register_name.lower() for kw in power_keywords):
-                        # 功率数据（kW）
-                        power_value = value
-                        if 'w' in register_name.lower() and 'kw' not in register_name.lower():
-                            power_value = value / 1000  # W转kW
-                        self.energy_manager.feed_power_data(
-                            device_id, power_value, timestamp=timestamp)
-                    elif any(kw in register_name.lower() for kw in energy_keywords):
-                        # 累积电量数据（kWh）
-                        self.energy_manager.feed_power_data(
-                            device_id, 0, energy_kwh=value, timestamp=timestamp)
-
-                # SPC — 质量相关数据喂入（扩展关键词范围）
-                if self.spc_analyzer:
-                    spc_keywords = [
-                        'temperature', 'pressure', 'ph', 'quality', 'dimension',
-                        'voltage', 'current', 'speed', 'flow', 'level',
-                        'humidity', 'torque', 'frequency', 'thickness',
-                        'viscosity', 'density', 'concentration', 'turbidity',
-                        'conductivity', 'oxygen', 'vibration', 'force',
-                        'position', 'distance', 'cycle_time', 'injection',
-                        'mold', 'dryer', 'distill', 'boiler', 'heat_exchanger',
-                        'spray', 'coating', 'sealing', 'conveyor'
-                    ]
-                    if any(kw in register_name.lower() for kw in spc_keywords):
-                        self.spc_analyzer.feed_data(device_id, register_name, value)
-
-                # 振动分析 — 振动数据喂入
-                if self.vibration_analyzer:
-                    self.vibration_analyzer.feed_data(
-                        device_id, register_name, value, timestamp)
-
-                # OEE — 设备状态和产量数据喂入
-                if self.oee_calculator:
-                    # 设备运行状态（兼容多种寄存器名称）
-                    status_keywords = ['status', 'state', 'running', 'line_status', 'boiler_status', 'packing_status']
-                    if any(kw in register_name.lower() for kw in status_keywords):
-                        status_map = {0: 'stopped', 1: 'idle', 2: 'running', 3: 'fault', 4: 'maintenance', 5: 'setup'}
-                        status = status_map.get(int(value), 'stopped')
-                        self.oee_calculator.update_device_state(device_id, status)
-                    
-                    # 产品计数（兼容多种寄存器名称）
-                    count_keywords = ['count', 'product', 'shot', 'label', 'palletizing', 'batch', 'painted', 'quantity']
-                    if any(kw in register_name.lower() for kw in count_keywords):
-                        # 区分合格品和总产量
-                        good_keywords = ['good', 'ok', 'pass', 'qualified']
-                        reject_keywords = ['reject', 'ng', 'defect', 'scrap']
-                        
-                        if any(kw in register_name.lower() for kw in good_keywords):
-                            self.oee_calculator.record_production(device_id, good_count=int(value))
-                        elif any(kw in register_name.lower() for kw in reject_keywords):
-                            # 不良品不计入合格品
-                            pass
-                        else:
-                            # 默认作为总产量
-                            self.oee_calculator.record_production(device_id, count=int(value))
-
-                # 安全联锁检查（每次数据采集时触发）
-                if self.device_control:
-                    self.device_control.check_interlocks(
-                        device_id, register_name, value)
+                # === 智能层：扔进异步队列，不阻塞 ===
+                if not intel_queue.full():
+                    intel_queue.put_nowait(data)
 
                 with self._stats_lock:
                     self.stats['queue_size'] = self.data_queue.qsize()
 
-            except queue.Empty:
-                continue
             except Exception as e:
                 if self.running:
-                    logger.error(f"数据处理异常: {e}", exc_info=True)
-                    # 打印更多调试信息
-                    logger.error(f"异常数据: {data if 'data' in locals() else 'N/A'}")
+                    logger.error(f"数据处理异常: {e}")
+
+    def _dispatch_intelligence(self, data: dict):
+        """智能层数据分发（在独立线程中运行）"""
+        device_id = data['device_id']
+        register_name = data['register_name']
+        value = data['value']
+        timestamp = data['timestamp']
+        name_lower = register_name.lower()
+
+        # 预测性维护
+        if self.predictive_maintenance:
+            self.predictive_maintenance.feed_data(device_id, register_name, value, timestamp)
+
+        # 边缘决策
+        if self.edge_decision:
+            self.edge_decision.update_data(f"{device_id}:{register_name}", value)
+
+        # 能源管理
+        if self.energy_manager:
+            if _has_keyword(name_lower, _power_kw):
+                power_value = value
+                if 'w' in name_lower and 'kw' not in name_lower:
+                    power_value = value / 1000
+                self.energy_manager.feed_power_data(device_id, power_value, timestamp=timestamp)
+            elif _has_keyword(name_lower, _energy_kw):
+                self.energy_manager.feed_power_data(device_id, 0, energy_kwh=value, timestamp=timestamp)
+
+        # SPC
+        if self.spc_analyzer and _has_keyword(name_lower, _spc_kw):
+            self.spc_analyzer.feed_data(device_id, register_name, value)
+
+        # 振动分析
+        if self.vibration_analyzer:
+            self.vibration_analyzer.feed_data(device_id, register_name, value, timestamp)
+
+        # OEE
+        if self.oee_calculator:
+            if _has_keyword(name_lower, _status_kw):
+                status_map = {0: 'stopped', 1: 'idle', 2: 'running', 3: 'fault', 4: 'maintenance', 5: 'setup'}
+                status = status_map.get(int(value), 'stopped')
+                self.oee_calculator.update_device_state(device_id, status)
+            elif _has_keyword(name_lower, _count_kw):
+                good_kw = frozenset(['good', 'ok', 'pass', 'qualified'])
+                reject_kw = frozenset(['reject', 'ng', 'defect', 'scrap'])
+                if _has_keyword(name_lower, good_kw):
+                    self.oee_calculator.record_production(device_id, good_count=int(value))
+                elif not _has_keyword(name_lower, reject_kw):
+                    self.oee_calculator.record_production(device_id, count=int(value))
+
+        # 安全联锁
+        if self.device_control:
+            self.device_control.check_interlocks(device_id, register_name, value)
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
