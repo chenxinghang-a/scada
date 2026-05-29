@@ -421,6 +421,8 @@ class AlarmManager:
                 current_state['last_value'] = value
                 # 持续报警不重复触发 — 只记录，不重发声光和弹窗
             else:
+                logger.debug(f"新报警触发: rule={rule_id} device={device_id} reg={register_name} "
+                           f"current_alarm_id={current_state.get('alarm_id')} state_key={state_key}")
                 # 新报警（或不同规则覆盖同一设备/寄存器）
                 alarm_state = {
                     'alarm_id': rule_id,
@@ -526,27 +528,23 @@ class AlarmManager:
         # 1. 记录数据库（去重：同一报警在冷却期内只插入一次）
         alarm_key = (rule_id, device_id, register_name)
         now = time.time()
-        should_insert_db = True
 
         with self._dedup_lock:
             last_db_insert = self._emit_history.get(('db', *alarm_key))
-            if last_db_insert is not None:
-                cooldown = self.dedup_config.emit_cooldown_seconds
-                if now - last_db_insert < cooldown:
-                    should_insert_db = False
-
-        if should_insert_db:
-            self.database.insert_alarm(
-                alarm_id=rule_id,
-                device_id=device_id,
-                register_name=register_name,
-                alarm_level=alarm_level,
-                alarm_message=alarm_message,
-                threshold=threshold,
-                actual_value=value,
-                timestamp=timestamp
-            )
-            with self._dedup_lock:
+            cooldown = self.dedup_config.emit_cooldown_seconds
+            if last_db_insert is not None and (now - last_db_insert) < cooldown:
+                pass  # 冷却期内，跳过DB写入
+            else:
+                self.database.insert_alarm(
+                    alarm_id=rule_id,
+                    device_id=device_id,
+                    register_name=register_name,
+                    alarm_level=alarm_level,
+                    alarm_message=alarm_message,
+                    threshold=threshold,
+                    actual_value=value,
+                    timestamp=timestamp
+                )
                 self._emit_history[('db', *alarm_key)] = now
 
         logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")
