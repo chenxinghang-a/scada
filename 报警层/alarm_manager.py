@@ -413,12 +413,13 @@ class AlarmManager:
         delay = rule_config.get('delay', 0)
 
         if triggered:
-            # 检查是否已经在报警状态（同一规则）
-            if current_state.get('alarm_id') == rule_id:
+            # 用实时引用检查（同一次check_alarm中其他规则可能已修改alarm_states）
+            live_state = self.alarm_states.get(state_key)
+            if live_state and live_state.get('alarm_id') == rule_id:
                 # 已经在报警，只更新时间和数值，不重复触发声光/弹窗
-                current_state['last_trigger_time'] = timestamp
-                current_state['trigger_count'] = current_state.get('trigger_count', 0) + 1
-                current_state['last_value'] = value
+                live_state['last_trigger_time'] = timestamp
+                live_state['trigger_count'] = live_state.get('trigger_count', 0) + 1
+                live_state['last_value'] = value
                 # 持续报警不重复触发 — 只记录，不重发声光和弹窗
             else:
                 logger.debug(f"新报警触发: rule={rule_id} device={device_id} reg={register_name} "
@@ -447,9 +448,9 @@ class AlarmManager:
 
                 self.alarm_states[state_key] = alarm_state
         else:
-            # 未触发，检查是否需要清除报警
-            if current_state.get('alarm_id') == rule_id:
-                # 清除报警状态
+            # 未触发，检查是否需要清除报警（只清除自己规则的状态）
+            live_state = self.alarm_states.get(state_key)
+            if live_state and live_state.get('alarm_id') == rule_id:
                 del self.alarm_states[state_key]
                 logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
 
