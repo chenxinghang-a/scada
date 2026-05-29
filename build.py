@@ -1,94 +1,119 @@
 """
-打包脚本：将 SCADA 系统打包为单个 exe
+打包脚本：将 SCADA 系统打包为桌面 exe
 用法：python build.py
 """
 
 import subprocess
 import sys
-import os
 import shutil
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent
-DIST_DIR = PROJECT_ROOT / 'dist'
-BUILD_DIR = PROJECT_ROOT / 'build'
+
 
 def build():
     print("=" * 50)
-    print("  SCADA 系统打包 (PyInstaller)")
+    print("  SCADA 桌面应用打包")
     print("=" * 50)
 
-    # 清理旧构建
-    for d in [DIST_DIR, BUILD_DIR]:
-        if d.exists():
-            shutil.rmtree(d)
-            print(f"[清理] {d}")
+    # 安装依赖
+    print("\n[1/4] 安装打包依赖...")
+    subprocess.run([sys.executable, '-m', 'pip', 'install', 'pyinstaller', 'pywebview', '-q'])
 
-    # PyInstaller 参数
-    cmd = [
-        sys.executable, '-m', 'PyInstaller',
-        '--onefile',                        # 单文件
-        '--name', 'SCADA',                  # exe 名称
-        '--console',                        # 保留控制台（显示日志）
-        '--add-data', f'模板;模板',           # Jinja2 模板
-        '--add-data', f'静态资源;静态资源',    # CSS/JS/图片
-        '--add-data', f'配置;配置',           # YAML 配置
-        '--add-data', f'paths.py;.',         # 路径模块
-        '--add-data', f'config.py;.',        # 配置模块
-        '--add-data', f'core;core',          # 核心模块
-        '--add-data', f'采集层;采集层',       # 协议客户端
-        '--add-data', f'存储层;存储层',       # 数据库
-        '--add-data', f'报警层;报警层',       # 报警系统
-        '--add-data', f'展示层;展示层',       # Web 展示
-        '--add-data', f'智能层;智能层',       # 智能分析
-        '--add-data', f'用户层;用户层',       # 认证
-        '--add-data', f'timeseries;timeseries',  # 时序数据库
-        '--add-data', f'tools;tools',        # 工具
-        '--hidden-import', 'flask',
-        '--hidden-import', 'flask_socketio',
-        '--hidden-import', 'socketio',
-        '--hidden-import', 'engineio',
-        '--hidden-import', 'pymodbus',
-        '--hidden-import', 'asyncua',
-        '--hidden-import', 'paho.mqtt',
-        '--hidden-import', 'jwt',
-        '--hidden-import', 'bcrypt',
-        '--hidden-import', 'pandas',
-        '--hidden-import', 'numpy',
-        '--hidden-import', 'yaml',
-        '--hidden-import', 'loguru',
-        '--hidden-import', 'apscheduler',
-        '--hidden-import', 'openpyxl',
-        '--hidden-import', 'dotenv',
-        '--hidden-import', 'requests',
-        '--exclude-module', 'tkinter',
-        '--exclude-module', 'matplotlib',
-        '--exclude-module', 'PIL',
-        'launcher.py',                      # 入口脚本
+    # 清理
+    for d in ['dist', 'build']:
+        p = PROJECT_ROOT / d
+        if p.exists():
+            shutil.rmtree(p)
+    spec = PROJECT_ROOT / 'SCADA.spec'
+    if spec.exists():
+        spec.unlink()
+
+    # 打包
+    print("\n[2/4] PyInstaller 打包中...")
+
+    # 收集所有需要的数据目录
+    data_dirs = [
+        ('模板', '模板'),
+        ('静态资源', '静态资源'),
+        ('配置', '配置'),
+        ('core', 'core'),
+        ('采集层', '采集层'),
+        ('存储层', '存储层'),
+        ('报警层', '报警层'),
+        ('展示层', '展示层'),
+        ('智能层', '智能层'),
+        ('用户层', '用户层'),
+        ('timeseries', 'timeseries'),
+        ('tools', 'tools'),
     ]
 
-    print("\n[构建] 开始打包...")
-    print(f"命令: {' '.join(cmd[:5])}...")
+    cmd = [
+        sys.executable, '-m', 'PyInstaller',
+        '--onefile',
+        '--name', 'SCADA',
+        '--windowed',           # 无控制台窗口（桌面应用）
+        '--noconfirm',
+    ]
+
+    # 添加数据目录
+    for src, dst in data_dirs:
+        src_path = PROJECT_ROOT / src
+        if src_path.exists():
+            cmd.extend(['--add-data', f'{src_path};{dst}'])
+
+    # 添加单文件模块
+    for f in ['paths.py', 'config.py']:
+        fp = PROJECT_ROOT / f
+        if fp.exists():
+            cmd.extend(['--add-data', f'{fp};.'])
+
+    # Hidden imports
+    hidden_imports = [
+        'flask', 'flask_socketio', 'socketio', 'engineio',
+        'pymodbus', 'asyncua', 'paho.mqtt', 'jwt', 'bcrypt',
+        'pandas', 'numpy', 'yaml', 'loguru', 'apscheduler',
+        'openpyxl', 'dotenv', 'requests', 'webview',
+        'webview.platforms.edgechromium', 'webview.platforms.winforms',
+    ]
+    for imp in hidden_imports:
+        cmd.extend(['--hidden-import', imp])
+
+    # 排除不需要的模块
+    for exc in ['tkinter', 'matplotlib', 'PIL', 'scipy', 'sklearn']:
+        cmd.extend(['--exclude-module', exc])
+
+    cmd.append('launcher.py')
 
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
 
-    if result.returncode == 0:
-        exe_path = DIST_DIR / 'SCADA.exe'
-        if exe_path.exists():
-            size_mb = exe_path.stat().st_size / (1024 * 1024)
-            print(f"\n{'=' * 50}")
-            print(f"  打包成功！")
-            print(f"  输出: {exe_path}")
-            print(f"  大小: {size_mb:.1f} MB")
-            print(f"{'=' * 50}")
-            print(f"\n使用方式:")
-            print(f"  模拟模式: SCADA.exe")
-            print(f"  真实模式: SCADA.exe --real")
-            print(f"  模拟器:   SCADA.exe --simulator")
-        else:
-            print("[错误] exe 文件未生成")
+    # 检查结果
+    exe_path = PROJECT_ROOT / 'dist' / 'SCADA.exe'
+    if result.returncode == 0 and exe_path.exists():
+        size_mb = exe_path.stat().st_size / (1024 * 1024)
+
+        # 复制运行时文件到 dist 目录
+        print("\n[3/4] 复制运行时文件...")
+        dist = PROJECT_ROOT / 'dist'
+        for subdir in ['data', 'logs', 'exports']:
+            (dist / subdir).mkdir(exist_ok=True)
+
+        if not (dist / '.env').exists():
+            env_example = PROJECT_ROOT / '.env.example'
+            if env_example.exists():
+                shutil.copy2(env_example, dist / '.env')
+
+        print("\n[4/4] 完成！")
+        print(f"\n{'=' * 50}")
+        print(f"  输出: {exe_path}")
+        print(f"  大小: {size_mb:.1f} MB")
+        print(f"{'=' * 50}")
+        print(f"\n使用方式:")
+        print(f"  双击 SCADA.exe 启动（自动弹出窗口）")
+        print(f"  命令行: SCADA.exe --real")
     else:
-        print(f"[错误] 打包失败，返回码: {result.returncode}")
+        print(f"\n[错误] 打包失败")
+        print("如果缺少依赖，先运行: pip install pywebview pyinstaller")
 
 
 if __name__ == '__main__':
