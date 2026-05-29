@@ -85,20 +85,6 @@
     from { opacity: 0; transform: translateY(-10px); }
     to { opacity: 1; transform: translateY(0); }
 }
-/* Toast容器 */
-#toast-container {
-    position: fixed;
-    top: 70px;
-    right: 20px;
-    z-index: 9999;
-    width: 350px;
-    max-height: 60vh;
-    overflow-y: auto;
-    pointer-events: none;
-}
-#toast-container .toast {
-    pointer-events: auto;
-}
 
 /* 广播历史 */
 .broadcast-item {
@@ -127,9 +113,6 @@
 {% endblock %}
 
 {% block content %}
-<!-- 报警弹窗容器 -->
-<div id="toast-container"></div>
-
 <!-- 顶部状态栏 -->
 <div class="row mb-3">
     <div class="col-12">
@@ -485,12 +468,14 @@ function initAlarmWebSocket() {
 
     wsSocket.on('connect', () => console.log('[报警输出] WebSocket已连接'));
 
-    // 实时报警事件 → 立即更新灯塔 + 播放声音
+    // 实时报警事件 → 更新灯塔状态 + 用报警条（不弹窗）
     wsSocket.on('alarm', (data) => {
         console.log('[报警输出] 收到报警:', data);
-        playAlarmSound(data.alarm_level);
         loadAlarmOutputStatus();  // 立即刷新灯塔状态
-        showToast(data);          // 页面内弹窗
+        // 使用全局报警条（base.html中的alarm-banner），不弹窗
+        if (typeof updateAlarmBanner === 'function') {
+            updateAlarmBanner(data);
+        }
     });
 
     // 实时广播事件 → 立即更新广播历史
@@ -500,32 +485,7 @@ function initAlarmWebSocket() {
     });
 }
 
-// 页面内报警弹窗（不阻塞操作）
-function showToast(alarm) {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
-    const level = alarm.alarm_level || 'warning';
-    const color = level === 'critical' ? 'danger' : level === 'warning' ? 'warning' : 'info';
-    const icon = level === 'critical' ? 'exclamation-triangle' : 'bell';
-    const toast = document.createElement('div');
-    toast.className = `toast show border-${color} mb-2`;
-    toast.style.borderLeftWidth = '4px';
-    toast.innerHTML = `
-        <div class="toast-header bg-${color} text-white">
-            <i class="bi bi-${icon} me-2"></i>
-            <strong class="me-auto">${level === 'critical' ? '严重报警' : level === 'warning' ? '警告' : '信息'}</strong>
-            <small>${new Date().toLocaleTimeString()}</small>
-            <button type="button" class="btn-close btn-close-white ms-2" onclick="this.closest('.toast').remove()"></button>
-        </div>
-        <div class="toast-body">
-            <strong>${alarm.alarm_message || ''}</strong><br>
-            <small>${alarm.device_id || ''} / ${alarm.register_name || ''} = ${alarm.actual_value ?? '-'}</small>
-        </div>
-    `;
-    container.appendChild(toast);
-    // 8秒后自动移除
-    setTimeout(() => toast.remove(), 8000);
-}
+// showToast 已移除 — 报警统一使用顶部报警条（base.html alarm-banner），不弹窗
 
 // 实时插入广播历史（最新在前）
 function prependBroadcastHistory(broadcast) {
