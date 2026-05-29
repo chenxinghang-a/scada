@@ -6,6 +6,8 @@ WebSocket模块
 import time
 import logging
 import threading
+import yaml
+from pathlib import Path
 from flask import request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime
@@ -14,6 +16,22 @@ logger = logging.getLogger(__name__)
 
 # 全局SocketIO实例
 socketio = None
+
+
+def _load_cors_origins():
+    """从配置文件加载CORS允许的源"""
+    try:
+        config_path = Path('配置/system.yaml')
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+            origins = config.get('web', {}).get('cors', {}).get('origins', [])
+            if origins and '*' not in origins:
+                return origins
+    except Exception as e:
+        logger.warning(f"加载CORS配置失败: {e}")
+    # 默认只允许本地开发
+    return ['http://localhost:5000', 'http://127.0.0.1:5000']
 
 
 def init_socketio(app, database, data_collector):
@@ -30,14 +48,26 @@ def init_socketio(app, database, data_collector):
     """
     global socketio
 
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+    cors_origins = _load_cors_origins()
+    socketio = SocketIO(app, cors_allowed_origins=cors_origins, async_mode='threading')
 
     # 注册事件处理
     @socketio.on('connect')
     def handle_connect():
-        """客户端连接"""
-        logger.info(f"客户端连接: {request.sid}")
-        emit('connected', {'message': '连接成功'})
+        """客户端连接（需要JWT认证）"""
+        token = request.args.get('token')
+        if not token:
+            logger.warning(f"WebSocket连接被拒绝: 未提供token, sid={request.sid}")
+            return False  # 拒绝连接
+
+        auth_manager = app.auth_manager
+        user = auth_manager.verify_token(token)
+        if not user:
+            logger.warning(f"WebSocket连接被拒绝: token无效, sid={request.sid}")
+            return False  # 拒绝连接
+
+        logger.info(f"客户端连接: {request.sid}, 用户: {user['username']}")
+        emit('connected', {'message': '连接成功', 'user': user['username']})
 
     @socketio.on('disconnect')
     def handle_disconnect():
