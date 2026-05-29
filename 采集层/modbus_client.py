@@ -52,8 +52,9 @@ class ModbusClient:
 
         # 重连参数
         self._reconnect_attempts = 0
-        self._max_reconnect_delay = 60  # 最大退避 60 秒
+        self._max_reconnect_delay = 60
         self._last_reconnect_time = 0
+        self._consecutive_failures = 0  # 连续失败计数，超过阈值才重连
 
         # 统计信息（线程安全）
         self._stats_lock = threading.Lock()
@@ -76,7 +77,7 @@ class ModbusClient:
                 self.client = ModbusTcpClient(
                     host=self.host,
                     port=self.port,
-                    timeout=3  # 3秒超时，不是10秒
+                    timeout=5  # 5秒超时（3秒太激进，网络稍慢就断）
                 )
             else:  # modbus_rtu
                 # RTU 超时按 T3.5 规范：9600 波特率 ≈ 200ms，115200 ≈ 50ms
@@ -123,7 +124,10 @@ class ModbusClient:
             pass
 
         logger.info(f"设备 {self.device_name} 尝试重连 (第{self._reconnect_attempts}次)")
-        return self.connect()
+        success = self.connect()
+        if success:
+            self._consecutive_failures = 0
+        return success
 
     def disconnect(self):
         """断开Modbus连接"""
@@ -173,19 +177,25 @@ class ModbusClient:
                 return None
 
             self._inc_stat('successful_reads')
+            self._consecutive_failures = 0  # 成功读取，重置失败计数
             with self._stats_lock:
                 self.stats['last_read_time'] = time.time()
 
             return result.registers
 
         except ConnectionException as e:
-            logger.error(f"连接异常: {e}")
-            self.connected = False
+            self._consecutive_failures += 1
             self._inc_stat('failed_reads')
             with self._stats_lock:
                 self.stats['last_error'] = str(e)
-            # 自动重连
-            self.reconnect()
+
+            # 连续失败 3 次才判定断连并重连（避免单次超时就断）
+            if self._consecutive_failures >= 3:
+                logger.warning(f"设备 {self.device_name} 连续 {self._consecutive_failures} 次失败，触发重连")
+                self.connected = False
+                self.reconnect()
+            else:
+                logger.debug(f"设备 {self.device_name} 读取失败 ({self._consecutive_failures}/3): {e}")
             return None
 
         except Exception as e:
@@ -228,16 +238,23 @@ class ModbusClient:
                 return None
 
             self._inc_stat('successful_reads')
+            self._consecutive_failures = 0  # 成功读取，重置失败计数
             with self._stats_lock:
                 self.stats['last_read_time'] = time.time()
 
             return result.registers
 
         except ConnectionException as e:
-            logger.error(f"连接异常: {e}")
-            self.connected = False
+            self._consecutive_failures += 1
             self._inc_stat('failed_reads')
-            self.reconnect()
+            with self._stats_lock:
+                self.stats['last_error'] = str(e)
+            if self._consecutive_failures >= 3:
+                logger.warning(f"设备 {self.device_name} 连续 {self._consecutive_failures} 次失败，触发重连")
+                self.connected = False
+                self.reconnect()
+            else:
+                logger.debug(f"设备 {self.device_name} 读取失败 ({self._consecutive_failures}/3): {e}")
             return None
 
         except Exception as e:
