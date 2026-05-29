@@ -508,7 +508,7 @@ class AlarmManager:
         """
         触发报警 → 三级联动输出
 
-        1. 记录数据库
+        1. 记录数据库（去重：冷却期内不重复插入）
         2. 声光报警器（Modbus DO控制灯塔+蜂鸣器）
         3. 语音广播（MQTT发布到现场音柱）
         4. 前端WebSocket推送（页面弹窗+音效+语音合成）
@@ -526,17 +526,31 @@ class AlarmManager:
         threshold = rule_config.get('threshold', 0)
         alarm_area = rule_config.get('area', 'all')
 
-        # 1. 记录数据库
-        self.database.insert_alarm(
-            alarm_id=rule_id,
-            device_id=device_id,
-            register_name=register_name,
-            alarm_level=alarm_level,
-            alarm_message=alarm_message,
-            threshold=threshold,
-            actual_value=value,
-            timestamp=timestamp
-        )
+        # 1. 记录数据库（去重：同一报警在冷却期内只插入一次）
+        alarm_key = (rule_id, device_id, register_name)
+        now = time.time()
+        should_insert_db = True
+
+        with self._dedup_lock:
+            last_db_insert = self._emit_history.get(('db', *alarm_key))
+            if last_db_insert is not None:
+                cooldown = self.dedup_config.emit_cooldown_seconds
+                if now - last_db_insert < cooldown:
+                    should_insert_db = False
+
+        if should_insert_db:
+            self.database.insert_alarm(
+                alarm_id=rule_id,
+                device_id=device_id,
+                register_name=register_name,
+                alarm_level=alarm_level,
+                alarm_message=alarm_message,
+                threshold=threshold,
+                actual_value=value,
+                timestamp=timestamp
+            )
+            with self._dedup_lock:
+                self._emit_history[('db', *alarm_key)] = now
 
         logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")
 
