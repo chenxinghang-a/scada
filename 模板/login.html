@@ -170,9 +170,9 @@
                     </button>
                 </form>
                 
-                <div class="default-accounts">
+                <div class="default-accounts" style="cursor:pointer" onclick="fillDefault('admin','admin123')" title="点击自动填入">
                     <div class="title">
-                        <i class="bi bi-info-circle me-1"></i>默认账户
+                        <i class="bi bi-info-circle me-1"></i>默认账户（点击填入）
                     </div>
                     <div>管理员: <code>admin</code> / <code>admin123</code></div>
                     <div class="mt-1 text-muted" style="font-size: 0.8rem;">
@@ -282,6 +282,12 @@
                 handleLogin(e);
             }
         });
+
+        // 点击默认账户自动填入
+        function fillDefault(username, password) {
+            document.getElementById('username').value = username;
+            document.getElementById('password').value = password;
+        }
     </script>
 </body>
 </html>

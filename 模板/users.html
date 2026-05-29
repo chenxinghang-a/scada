@@ -419,12 +419,17 @@
             document.getElementById('formUsername').disabled = true;
             document.getElementById('passwordGroup').style.display = 'none';
             document.getElementById('formPassword').required = false;
-            
-            // 加载用户信息
+
+            // 先弹模态框，再异步加载数据
+            userModal.show();
+
             fetch(`${API_BASE}/auth/users`, {
                 headers: { 'Authorization': `Bearer ${getToken()}` }
             })
-            .then(r => r.json())
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json();
+            })
             .then(data => {
                 const user = (data.users || []).find(u => u.username === username);
                 if (user) {
@@ -433,9 +438,12 @@
                     document.getElementById('formEmail').value = user.email || '';
                     document.getElementById('formPhone').value = user.phone || '';
                 }
+            })
+            .catch(e => {
+                console.error('加载用户信息失败:', e);
+                alert('加载用户信息失败: ' + e.message);
+                userModal.hide();
             });
-            
-            userModal.show();
         }
 
         async function saveUser() {
