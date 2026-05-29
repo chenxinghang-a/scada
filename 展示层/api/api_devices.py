@@ -226,6 +226,7 @@ def _start_device_collection(device_id: str):
 
 
 @devices_bp.route('/devices/<device_id>/test', methods=['POST'])
+@_require_auth
 def test_device_connection(device_id):
     """测试设备连接（支持所有协议）"""
     device_manager = current_app.device_manager
@@ -286,6 +287,7 @@ def test_device_connection(device_id):
 
 
 @devices_bp.route('/devices/protocols', methods=['GET'])
+@_require_auth
 def get_supported_protocols():
     """获取系统支持的协议列表"""
     protocols = [
@@ -301,6 +303,7 @@ def get_supported_protocols():
 
 
 @devices_bp.route('/devices/<device_id>/behavior', methods=['GET'])
+@_require_auth
 def get_device_behavior(device_id):
     """获取设备行为模拟状态（增强版模拟专用）"""
     device_manager = current_app.device_manager
@@ -348,11 +351,15 @@ def inject_device_fault(device_id):
     severity = data.get('severity', 0.5)
     
     device_manager = current_app.device_manager
+
+    if not device_manager.simulation_mode:
+        return jsonify({'error': '故障注入仅在模拟模式下可用'}), 403
+
     client = device_manager.get_client(device_id)
-    
+
     if not client:
         return jsonify({'error': f'设备 {device_id} 不存在或未连接'}), 404
-    
+
     # 检查是否是增强版模拟客户端
     if hasattr(client, 'inject_fault'):
         from 采集层.device_behavior_simulator import FaultType
@@ -399,11 +406,15 @@ def force_device_state(device_id):
     state_name = data.get('state', 'RUNNING')
     
     device_manager = current_app.device_manager
+
+    if not device_manager.simulation_mode:
+        return jsonify({'error': '状态强制设置仅在模拟模式下可用'}), 403
+
     client = device_manager.get_client(device_id)
-    
+
     if not client:
         return jsonify({'error': f'设备 {device_id} 不存在或未连接'}), 404
-    
+
     # 检查是否是增强版模拟客户端
     if hasattr(client, 'force_state'):
         from 采集层.device_behavior_simulator import DeviceState
@@ -439,6 +450,7 @@ def force_device_state(device_id):
 
 
 @devices_bp.route('/devices/templates', methods=['GET'])
+@_require_auth
 def get_device_templates():
     """获取设备模板列表"""
     templates = [
