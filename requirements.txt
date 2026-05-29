@@ -42,6 +42,3 @@ requests>=2.31.0
 
 # Development
 python-dotenv>=1.0.0
-
-# Desktop GUI (for exe packaging)
-pywebview>=5.0
