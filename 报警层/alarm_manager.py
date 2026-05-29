@@ -193,7 +193,7 @@ class AlarmManager:
         self._dedup_lock = Lock()
 
         # 报警升级配置
-        self._escalation_timeout = self.config.get('escalation_timeout', 600)  # 默认10分钟
+        self._escalation_timeout = 600  # 默认10分钟
         self._escalation_callbacks: list = []  # 升级回调函数列表
 
         # 加载报警配置
@@ -299,6 +299,12 @@ class AlarmManager:
                 self.dedup_config = AlarmDedupConfig(dedup_cfg)
                 logger.info(f"加载去重配置: 冷却{self.dedup_config.emit_cooldown_seconds}s, "
                             f"确认抑制{self.dedup_config.acknowledge_suppress_seconds}s")
+
+            # 加载升级配置
+            escalation_cfg = config.get('escalation', {})
+            if escalation_cfg:
+                self._escalation_timeout = escalation_cfg.get('timeout_seconds', 600)
+                logger.info(f"加载报警升级配置: 超时{self._escalation_timeout}s")
 
         except Exception as e:
             logger.error(f"加载报警配置异常: {e}")
