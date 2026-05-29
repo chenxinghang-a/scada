@@ -46,29 +46,24 @@
     ],
     "extraResources": [
       {
-        "from": "backend/scada-backend.exe",
-        "to": "scada-backend.exe"
-      },
-      {
-        "from": "backend/_internal",
-        "to": "_internal"
+        "from": "backend/",
+        "to": "backend/",
+        "filter": ["**/*"]
       }
     ],
     "win": {
       "target": [
         "nsis"
       ],
-      "icon": "resources/icon.ico"
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "SmartSCADA",
-      "installerIcon": "resources/icon.ico",
-      "uninstallerIcon": "resources/icon.ico",
-      "installerHeaderIcon": "resources/icon.ico"
-    }
+      "shortcutName": "SmartSCADA"
+    },
+    "forceCodeSigning": false
   }
 }
