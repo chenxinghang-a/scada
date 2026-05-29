@@ -1,17 +1,58 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
-*.db
-*.sqlite3
-logs/
-*.log
-.env
-venv/
+*.pyd
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
 .venv/
+venv/
+
+# Data (DB files and CSV exports)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+exports/*.csv
+
+# Logs
+logs/*.log
+logs/*.log.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# PyInstaller
+*.exe
+*.spec
+build/
+dist/
+
+# Docker
+.env
+!.env.example
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checking
+.pyright/
+
+# Backup & misc
 *.bak
 backup/
-exports/
-data/
 stderr*.txt
 stdout*.txt
-

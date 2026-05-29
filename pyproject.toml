@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "industrial-scada"
+version = "3.0.0"
+description = "Industrial SCADA System - Modbus/OPC-UA/MQTT protocol gateway with real-time monitoring"
+requires-python = ">=3.12"
+dependencies = [
+    "flask>=3.0.0",
+    "flask-socketio>=5.3.0",
+    "pymodbus>=3.6.0",
+    "asyncua>=1.0.0",
+    "paho-mqtt>=1.6.0",
+    "PyJWT>=2.8.0",
+    "bcrypt>=4.1.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
+    "loguru>=0.7.0",
+    "apscheduler>=3.10.0",
+    "openpyxl>=3.1.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pyright>=1.1",
+]
+tdengine = [
+    "taos>=3.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["配置*", "模板*", "静态资源*"]
+
+[tool.pytest.ini_options]
+testpaths = ["测试"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.pyright]
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+reportMissingImports = "warning"
+reportMissingModuleSource = "none"
+reportReturnType = "warning"
+reportArgumentType = "warning"
+reportUnknownMemberType = "none"

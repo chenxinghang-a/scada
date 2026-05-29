@@ -2,7 +2,7 @@
   "pythonPath": "C:\\Users\\cxx\\.workbuddy\\binaries\\python\\envs\\default\\Scripts\\python.exe",
   "venvPath": "C:\\Users\\cxx\\.workbuddy\\binaries\\python\\envs\\default",
   "typeCheckingMode": "basic",
-  "reportMissingImports": "none",
+  "reportMissingImports": "warning",
   "reportMissingModuleSource": "none",
   "reportConstantRedefinition": "none",
   "reportPossiblyUnboundVariable": "none",
@@ -10,9 +10,10 @@
   "reportAttributeAccessIssue": "none",
   "reportOptionalMemberAccess": "none",
   "reportCallIssue": "none",
-  "reportArgumentType": "none",
-  "reportReturnType": "none",
+  "reportArgumentType": "warning",
+  "reportReturnType": "warning",
   "reportUndefinedVariable": "none",
   "reportIndexIssue": "none",
-  "reportOperatorIssue": "none"
+  "reportOperatorIssue": "none",
+  "reportUnknownMemberType": "none"
 }
