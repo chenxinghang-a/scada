@@ -1,11 +1,35 @@
 """
 系统配置文件
+
+安全说明:
+- SECRET_KEY 和 JWT_SECRET 在生产环境中必须通过环境变量设置。
+- 未设置时会生成随机密钥并打印警告（重启后密钥会变，导致已有会话/令牌失效）。
+- 部署时请复制 .env.example 为 .env 并填入真实值。
 """
 
 import os
+import secrets
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+
+def _get_secret(name: str, env_var: str) -> str:
+    """
+    从环境变量获取密钥；未设置时生成随机值并警告。
+    生产环境必须通过环境变量提供，否则重启后密钥会变化。
+    """
+    value = os.environ.get(env_var)
+    if not value:
+        value = secrets.token_hex(32)
+        logger.warning(
+            "%s not set via %s, using random key (will change on restart!)",
+            name, env_var,
+        )
+    return value
 
 # 项目根目录（通过 paths 模块统一管理）
 try:
@@ -17,7 +41,8 @@ except ImportError:
 
 # Flask配置
 class FlaskConfig:
-    SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
+    # 生产环境必须通过 SECRET_KEY 环境变量设置，否则使用随机值（重启失效）
+    SECRET_KEY = _get_secret('SECRET_KEY', 'SECRET_KEY')
     DEBUG = os.environ.get('FLASK_DEBUG', '0') == '1'
     HOST = '127.0.0.1'  # 默认绑定本地，生产环境可改为0.0.0.0
     PORT = 5000          # 模拟模式
@@ -120,7 +145,8 @@ class ExportConfig:
 # JWT认证配置
 class AuthConfig:
     # JWT密钥
-    JWT_SECRET = os.environ.get('JWT_SECRET') or 'dev-jwt-secret-change-in-production'
+    # 生产环境必须通过 JWT_SECRET 环境变量设置，否则使用随机值（重启失效）
+    JWT_SECRET = _get_secret('JWT_SECRET', 'JWT_SECRET')
 
     # JWT算法
     JWT_ALGORITHM = 'HS256'
