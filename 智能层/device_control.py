@@ -707,38 +707,25 @@ class DeviceControlSafety:
         if self.device_manager:
             self.device_manager.set_estop_override(True)
 
-        # 向可控设备发送停机命令
+        # 停止所有设备（设置 stopped 标志 + 发 Modbus 命令）
         stopped_devices = []
         if self.device_manager:
-            # 紧急停机：优先操作可控设备，如果没有则操作所有设备
-            controllable = self._get_controllable_devices()
-            if not controllable:
-                controllable = list(self.device_manager.get_all_devices().keys())
-                logger.warning(f"紧急停机: 无标准可控设备，将尝试操作所有 {len(controllable)} 个设备")
-            for device_id in controllable:
+            all_devices = list(self.device_manager.get_all_devices().keys())
+            logger.warning(f"紧急停机: 停止 {len(all_devices)} 个设备")
+            for device_id in all_devices:
                 try:
+                    # 设置 stopped 标志（模拟层返回零值，前端显示"已停止"）
+                    self.device_manager.stop_device(device_id)
+                    stopped_devices.append(device_id)
+
+                    # 向可控设备发送 Modbus 停机命令
                     client = self.device_manager.get_client(device_id)
-                    if not client:
-                        logger.warning(f"紧急停机: 设备 {device_id} 客户端不存在")
-                        continue
-                    # 优先使用线圈写入（coil address 0 = False 表示停止）
-                    if hasattr(client, 'write_single_coil'):
-                        success = client.write_single_coil(0, False)
-                        if success:
-                            stopped_devices.append(device_id)
-                        else:
-                            logger.error(f"紧急停机: 线圈写入失败 {device_id}")
-                    # 降级：使用寄存器写入（address 100 = 0 表示停止）
-                    elif hasattr(client, 'write_single_register'):
-                        success = client.write_single_register(100, 0)
-                        if success:
-                            stopped_devices.append(device_id)
-                        else:
-                            logger.error(f"紧急停机: 寄存器写入失败 {device_id}")
-                    else:
-                        logger.warning(f"紧急停机: 设备 {device_id} 不支持写操作")
+                    if client and hasattr(client, 'write_single_coil'):
+                        client.write_single_coil(0, False)
+                    elif client and hasattr(client, 'write_single_register'):
+                        client.write_single_register(100, 0)
                 except Exception as e:
-                    logger.error(f"紧急停机命令发送失败 {device_id}: {e}", exc_info=True)
+                    logger.error(f"紧急停机失败 {device_id}: {e}")
 
         self._estop_devices = stopped_devices
 
@@ -788,9 +775,16 @@ class DeviceControlSafety:
         self._estop_time = None
         self._estop_reason = ''
 
-        # 通知设备管理器恢复（模拟层恢复机械类数据输出）
+        # 通知设备管理器恢复
         if self.device_manager:
             self.device_manager.set_estop_override(False)
+            # 启动所有之前被停止的设备
+            for device_id in getattr(self, '_estop_devices', []):
+                try:
+                    self.device_manager.start_device(device_id)
+                except Exception as e:
+                    logger.error(f"解除停机失败 {device_id}: {e}")
+            self._estop_devices = []
 
         # 复位声光报警
         if self.alarm_manager:

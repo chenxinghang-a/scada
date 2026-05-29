@@ -275,10 +275,34 @@ function updateAlarmCount() {
             const countCard = document.getElementById('alarm-count-card');
             if (countCard) countCard.textContent = count;
 
-            // 更新报警条徽章
+            // 报警条
+            const banner = document.getElementById('alarm-banner');
+            if (!banner) return;
+
+            if (count === 0) {
+                banner.style.display = 'none';
+                return;
+            }
+
+            // 有报警 → 显示报警条
             const critCount = alarms.filter(a => a.alarm_level === 'critical').length;
             const warnCount = alarms.filter(a => a.alarm_level === 'warning').length;
 
+            // 显示最新一条报警信息
+            const latest = alarms[0];
+            const textEl = document.getElementById('alarm-banner-text');
+            if (textEl && latest) {
+                const msg = latest.alarm_message || latest.alarm_id || '报警';
+                const device = latest.device_id || '';
+                const isCrit = latest.alarm_level === 'critical';
+                textEl.textContent = isCrit
+                    ? `紧急：${msg} (${device})`
+                    : `警告：${msg} (${device})`;
+                banner.style.background = isCrit ? '#fee2e2' : '#fff3cd';
+                banner.style.borderBottomColor = isCrit ? '#dc2626' : '#f59e0b';
+            }
+
+            // 更新徽章
             const critBadge = document.getElementById('alarm-banner-crit');
             const warnBadge = document.getElementById('alarm-banner-warn');
             const countBadge = document.getElementById('alarm-banner-count');
@@ -293,11 +317,7 @@ function updateAlarmCount() {
             }
             if (countBadge) countBadge.textContent = count;
 
-            // 无报警时隐藏报警条
-            const banner = document.getElementById('alarm-banner');
-            if (banner && count === 0) {
-                banner.style.display = 'none';
-            }
+            banner.style.display = 'block';
         });
 }
 
@@ -413,15 +433,18 @@ function formatNumber(value, decimals = 2) {
 document.addEventListener('DOMContentLoaded', function() {
     // 初始化WebSocket
     initWebSocket();
-    
+
     // 加载去重配置
     AlarmDedupManager.loadConfig();
-    
+
     // 加载初始数据
     loadInitialData();
+
+    // 加载报警状态（含报警条显示）
+    updateAlarmCount();
     
-    // 定时更新
-    setInterval(updateAlarmCount, 30000);  // 每30秒更新报警计数
+    // 定时更新报警（5秒，保持报警条实时）
+    setInterval(updateAlarmCount, 5000);
 });
 
 /**
