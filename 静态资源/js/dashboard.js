@@ -247,15 +247,29 @@ function updateAlarmPanel(alarms) {
         const time = new Date(a.timestamp).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
         const device = (a.device_id || '').substring(0, 12);
         const msg = a.alarm_message || a.alarm_id || '-';
-        const pv = a.actual_value != null ? `PV:${parseFloat(a.actual_value).toFixed(1)}` : '';
+
+        // 最新值（优先用last_value，其次actual_value）
+        const latestVal = a.last_value != null ? a.last_value : a.actual_value;
+        const pv = latestVal != null ? `PV:${parseFloat(latestVal).toFixed(1)}` : '';
+
+        // 触发次数
+        const count = a.trigger_count || 1;
+        const countStr = count > 1 ? `<span class="alarm-count">×${count}</span>` : '';
+
+        // 最后触发时间
+        const lastTime = a.last_trigger_time
+            ? new Date(a.last_trigger_time).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'})
+            : time;
+
         const acked = a.acknowledged;
 
         return `<div class="alarm-row ${acked ? '' : 'unacked'}">
             <span class="alarm-prio ${level}">${prioText}</span>
-            <span class="alarm-time">${time}</span>
+            <span class="alarm-time">${lastTime}</span>
             <span class="alarm-device">${device}</span>
             <span class="alarm-msg">${msg}</span>
             <span class="alarm-pv">${pv}</span>
+            ${countStr}
             ${acked ? '' : `<button class="alarm-ack-btn" onclick="ackAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}')">确认</button>`}
         </div>`;
     }).join('');

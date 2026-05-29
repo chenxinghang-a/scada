@@ -353,6 +353,16 @@ body {
     font-size: 10px;
 }
 
+.alarm-count {
+    background: var(--alarm-crit);
+    color: #fff;
+    padding: 1px 5px;
+    border-radius: 8px;
+    font-size: 9px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
 .alarm-ack-btn {
     background: none;
     border: 1px solid var(--border);
