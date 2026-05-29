@@ -38,12 +38,14 @@ def get_system_status():
 
 
 @system_bp.route('/system/database', methods=['GET'])
+@jwt_required
 def get_database_stats():
     """获取数据库统计"""
     return jsonify(current_app.database.get_database_stats())
 
 
 @system_bp.route('/system/simulation-mode', methods=['GET'])
+@jwt_required
 def get_simulation_mode():
     """获取当前模拟/真实模式状态"""
     return jsonify({
@@ -89,6 +91,7 @@ def toggle_simulation_mode():
 # ==================== 系统配置API ====================
 
 @system_bp.route('/config', methods=['GET'])
+@jwt_required
 def get_config():
     """获取系统配置"""
     config = load_yaml_config('配置/system.yaml')
