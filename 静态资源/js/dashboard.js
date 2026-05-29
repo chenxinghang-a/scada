@@ -1,491 +1,398 @@
 /**
- * 仪表盘页面JavaScript — 重写版
- * 动态图表、真实数据、设备选择
+ * SCADA 仪表盘 — ISA-101 标准
+ * 正常=灰色低调，异常=红色醒目，3秒看懂工厂状态
  */
 
-// 图表实例
 let trendChart = null;
-const gaugeCharts = {};
-
-// 数据缓存：按变量分组
-const dataBuffers = {};  // { variable_key: [{time, value}] }
-const MAX_DATA_POINTS = 120;
-
-// 设备名缓存（从API动态获取）
-let deviceNameCache = {};
-
-// 当前选中的设备（趋势图只显示该设备的变量）
 let selectedDeviceId = null;
+const deviceCache = {};     // {id: {name, connected, registers, ...}}
+const dataBuffers = {};     // {register_name: [{t, v}]}
+const MAX_POINTS = 60;
 
-/**
- * 初始化
- */
-document.addEventListener('DOMContentLoaded', function() {
+// ========== 初始化 ==========
+document.addEventListener('DOMContentLoaded', () => {
+    initClock();
     initTrendChart();
-    loadDeviceNames();
-    loadRealtimeData();
-    setInterval(loadRealtimeData, 3000);
+    loadData();
+    setInterval(loadData, 3000);
 
-    // 窗口 resize
-    window.addEventListener('resize', () => {
-        if (trendChart) trendChart.resize();
-        Object.values(gaugeCharts).forEach(g => g.resize());
-    });
+    // 用户信息
+    try {
+        const u = JSON.parse(localStorage.getItem('scada_user') || '{}');
+        setText('status-user', u.display_name || u.username || 'operator');
+    } catch(e) {}
 });
 
-/**
- * 从API加载设备名映射，填充设备选择器
- */
-async function loadDeviceNames() {
+function initClock() {
+    function tick() {
+        const el = document.getElementById('topbar-time');
+        if (el) el.textContent = new Date().toTimeString().slice(0, 8);
+    }
+    tick();
+    setInterval(tick, 1000);
+}
+
+// ========== API ==========
+async function apiFetch(url) {
+    const token = localStorage.getItem('auth_token');
+    const h = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const r = await fetch('/api' + url, { headers: h });
+    if (r.status === 401) { window.location.href = '/login'; return null; }
+    return r.json();
+}
+
+// ========== 主数据加载 ==========
+async function loadData() {
     try {
-        const resp = await apiRequest('/devices');
-        if (resp && resp.devices) {
-            const deviceIds = [];
-            resp.devices.forEach(d => {
-                const id = d.device_id || d.id;
-                deviceNameCache[id] = d.name || id;
-                deviceIds.push(id);
-            });
+        const status = await apiFetch('/system/status');
+        if (!status) return;
+        updateKPI(status);
+        updateDeviceGrid(status);
+        updateStatusBar(status);
 
-            // 默认选中第一个设备
-            if (!selectedDeviceId && deviceIds.length > 0) {
-                selectedDeviceId = deviceIds[0];
-            }
+        const data = await apiFetch('/data/realtime?limit=5000');
+        if (data && data.data) {
+            updateTrendChart(data.data);
+        }
 
-            // 填充设备选择下拉框
-            populateDeviceSelector(deviceIds);
+        const alarms = await apiFetch('/alarms?limit=50');
+        if (alarms && alarms.alarms) {
+            updateAlarmPanel(alarms.alarms);
         }
     } catch (e) {
-        console.warn('加载设备名失败，使用默认');
+        console.error('loadData:', e);
+        const dot = document.getElementById('status-dot');
+        if (dot) dot.className = 'status-dot red';
+        setText('status-text', '连接异常');
     }
 }
 
-/**
- * 填充设备选择下拉框
- */
-function populateDeviceSelector(deviceIds) {
-    const select = document.getElementById('trend-device-select');
-    if (!select) return;
+// ========== KPI 更新 ==========
+function updateKPI(stats) {
+    // 设备
+    if (stats.devices) {
+        let devs = Array.isArray(stats.devices) ? stats.devices : Object.values(stats.devices);
+        const online = devs.filter(d => d.connected).length;
+        setText('kpi-online', online);
+        setText('kpi-total', devs.length);
 
-    select.innerHTML = deviceIds.map(id =>
-        `<option value="${id}" ${id === selectedDeviceId ? 'selected' : ''}>${deviceNameCache[id] || id}</option>`
-    ).join('');
-
-    select.addEventListener('change', function() {
-        selectedDeviceId = this.value;
-        // 清空所有缓存（切换设备后重新开始收集）
-        Object.keys(dataBuffers).forEach(key => delete dataBuffers[key]);
-        if (trendChart) {
-            trendChart.clear();
+        // 更新 KPI 卡片状态色
+        const el = document.getElementById('kpi-devices');
+        if (el) {
+            el.className = 'kpi' + (online < devs.length ? ' warn' : '');
         }
-    });
-}
-
-/**
- * 获取设备显示名
- */
-function getDeviceName(deviceId) {
-    return deviceNameCache[deviceId] || deviceId;
-}
-
-/**
- * 获取寄存器中文名
- */
-function getRegisterLabel(name) {
-    const map = {
-        'temperature': '温度', 'boiler_temperature': '锅炉温度',
-        'heat_exchanger_temperature': '换热器温度', 'flue_gas_temperature': '排烟温度',
-        'extrusion_temperature': '挤出温度', 'mold_temperature': '模具温度',
-        'pressure': '压力', 'boiler_pressure': '锅炉压力',
-        'injection_pressure': '注射压力',
-        'flow': '流量', 'steam_flow': '蒸汽流量', 'cooling_water_flow': '冷却水流量',
-        'level': '液位', 'feed_water_level': '给水液位', 'hopper_level': '料斗液位',
-        'voltage': '电压', 'current': '电流', 'power': '功率',
-        'vibration': '振动', 'ph': 'pH值',
-        'oxygen_content': '含氧量', 'boiler_status': '锅炉状态',
-        'humidity': '湿度', 'energy': '电量',
-    };
-    // 先精确匹配
-    if (map[name]) return map[name];
-    // 模糊匹配
-    const lower = name.toLowerCase();
-    for (const [key, val] of Object.entries(map)) {
-        if (lower.includes(key)) return val;
     }
-    return name;
+
+    // 报警
+    if (stats.alarms) {
+        const total = stats.alarms.total_active_alarms || 0;
+        setText('kpi-alarm-count', total);
+        const el = document.getElementById('kpi-alarms');
+        if (el) el.className = 'kpi' + (total > 0 ? ' alarm' : '');
+
+        // 报警徽章
+        const byLevel = stats.alarms.by_level || {};
+        setText('badge-crit', 'CRIT: ' + (byLevel.critical || 0));
+        setText('badge-high', 'HIGH: ' + (byLevel.high || byLevel.warning || 0));
+        setText('badge-med', 'MED: ' + (byLevel.medium || 0));
+    }
+
+    // 采集
+    if (stats.collector) {
+        const c = stats.collector;
+        setText('kpi-rate', Math.floor((c.total_collections || 0) / Math.max((stats.uptime_seconds || 1) / 60, 1)));
+        const total = (c.successful_collections || 0) + (c.failed_collections || 0);
+        const q = total > 0 ? Math.round(c.successful_collections / total * 100) : 100;
+        setText('kpi-quality-val', q + '%');
+    }
+
+    // 运行时间
+    if (stats.uptime_seconds !== undefined) {
+        setText('kpi-uptime-val', formatUptime(stats.uptime_seconds));
+        setText('kpi-mode', stats.simulation_mode ? '模拟模式' : '真实设备');
+    }
+
+    // 模拟模式标记
+    const badge = document.getElementById('sim-mode-badge');
+    if (badge && stats.simulation_mode !== undefined) {
+        badge.textContent = stats.simulation_mode ? '[ 模拟 ]' : '';
+        badge.style.color = '#eab308';
+        badge.style.fontSize = '11px';
+    }
 }
 
-/**
- * 获取变量单位
- */
-function getRegisterUnit(name) {
-    const lower = name.toLowerCase();
-    if (lower.includes('temperature') || lower.includes('temp')) return '°C';
-    if (lower.includes('pressure')) return 'MPa';
-    if (lower.includes('flow')) return 't/h';
-    if (lower.includes('level')) return 'mm';
-    if (lower.includes('voltage')) return 'V';
-    if (lower.includes('current')) return 'A';
-    if (lower.includes('power')) return 'kW';
-    if (lower.includes('energy')) return 'kWh';
-    if (lower.includes('vibration')) return 'mm/s';
-    if (lower.includes('ph')) return '';
-    if (lower.includes('oxygen')) return '%';
-    if (lower.includes('humidity')) return '%';
-    return '';
+// ========== 设备卡片网格 ==========
+function updateDeviceGrid(stats) {
+    if (!stats.devices) return;
+    let devs = Array.isArray(stats.devices) ? stats.devices : Object.values(stats.devices);
+
+    // 更新缓存
+    devs.forEach(d => {
+        const id = d.device_id || d.id;
+        deviceCache[id] = d;
+    });
+
+    const grid = document.getElementById('device-grid');
+    if (!grid) return;
+
+    grid.innerHTML = devs.map(d => {
+        const id = d.device_id || d.id;
+        const name = d.name || id;
+        const online = d.connected;
+        const hasAlarm = d.status === 'fault' || d.status === 'warning';
+
+        let statusClass = 'offline';
+        if (online && hasAlarm) statusClass = 'warning';
+        else if (online) statusClass = 'online';
+
+        // 取前 2 个寄存器值
+        const regs = d.registers || [];
+        const valStr = regs.slice(0, 2).map(r => {
+            const label = getShortLabel(r.name);
+            return `<span class="dev-val"><span class="label">${label}</span> <span class="num" id="dv-${id}-${r.name}">--</span></span>`;
+        }).join('');
+
+        return `<div class="dev-card" onclick="selectDevice('${id}')" title="${name}">
+            <div class="dev-status ${statusClass}"></div>
+            <div class="dev-info">
+                <div class="dev-name">${name}</div>
+                <div class="dev-meta">${d.protocol || 'modbus_tcp'} · ${d.host || ''}</div>
+                <div class="dev-values">${valStr}</div>
+            </div>
+        </div>`;
+    }).join('');
+
+    // 填充设备选择下拉框
+    const select = document.getElementById('trend-device-select');
+    if (select && select.children.length <= 1) {
+        select.innerHTML = devs.map(d => {
+            const id = d.device_id || d.id;
+            return `<option value="${id}" ${id === selectedDeviceId ? 'selected' : ''}>${d.name || id}</option>`;
+        }).join('');
+        select.addEventListener('change', function() {
+            selectedDeviceId = this.value;
+            Object.keys(dataBuffers).forEach(k => delete dataBuffers[k]);
+            if (trendChart) trendChart.clear();
+        });
+        if (!selectedDeviceId && devs.length > 0) {
+            selectedDeviceId = devs[0].device_id || devs[0].id;
+        }
+    }
 }
 
-/**
- * 初始化趋势图
- */
+function selectDevice(id) {
+    selectedDeviceId = id;
+    const select = document.getElementById('trend-device-select');
+    if (select) select.value = id;
+    Object.keys(dataBuffers).forEach(k => delete dataBuffers[k]);
+    if (trendChart) trendChart.clear();
+}
+
+// ========== 报警面板 ==========
+function updateAlarmPanel(alarms) {
+    const list = document.getElementById('alarm-list');
+    if (!list) return;
+
+    if (!alarms || alarms.length === 0) {
+        list.innerHTML = '<div class="alarm-empty">暂无活动报警</div>';
+        return;
+    }
+
+    // 统计未确认
+    const unacked = alarms.filter(a => !a.acknowledged).length;
+    setText('kpi-unacked', unacked);
+
+    list.innerHTML = alarms.slice(0, 20).map(a => {
+        const level = a.alarm_level === 'critical' ? 'critical'
+                    : a.alarm_level === 'warning' ? 'warning' : 'low';
+        const prioText = level === 'critical' ? 'CRIT' : level === 'warning' ? 'HIGH' : 'LOW';
+        const time = new Date(a.timestamp).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+        const device = (a.device_id || '').substring(0, 12);
+        const msg = a.alarm_message || a.alarm_id || '-';
+        const pv = a.actual_value != null ? `PV:${parseFloat(a.actual_value).toFixed(1)}` : '';
+        const acked = a.acknowledged;
+
+        return `<div class="alarm-row ${acked ? '' : 'unacked'}">
+            <span class="alarm-prio ${level}">${prioText}</span>
+            <span class="alarm-time">${time}</span>
+            <span class="alarm-device">${device}</span>
+            <span class="alarm-msg">${msg}</span>
+            <span class="alarm-pv">${pv}</span>
+            ${acked ? '' : `<button class="alarm-ack-btn" onclick="ackAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}')">确认</button>`}
+        </div>`;
+    }).join('');
+}
+
+async function ackAlarm(alarmId, deviceId, regName) {
+    try {
+        await fetch(`/api/alarms/${alarmId}/acknowledge`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({ device_id: deviceId, register_name: regName, acknowledged_by: 'operator' })
+        });
+        loadData();
+    } catch (e) { console.error('ackAlarm:', e); }
+}
+
+function getAuthHeaders() {
+    const t = localStorage.getItem('auth_token');
+    return t ? { 'Authorization': `Bearer ${t}` } : {};
+}
+
+// ========== 趋势图 ==========
 function initTrendChart() {
     const dom = document.getElementById('trend-chart');
     if (!dom) return;
-
     trendChart = echarts.init(dom);
-    // 注意：后续 setOption 用 merge 模式，不要用 notMerge
 }
 
-/**
- * 主数据加载
- */
-async function loadRealtimeData() {
-    try {
-        const data = await apiRequest('/data/realtime?limit=5000');
-
-        if (data.data && data.data.length > 0) {
-            updateRealtimeTable(data.data);
-            updateTrendChart(data.data);
-            updateGaugeSection(data.data);
-
-            const statusEl = document.getElementById('data-status');
-            if (statusEl) {
-                statusEl.textContent = '实时更新中';
-                statusEl.className = 'badge bg-success';
-            }
-            const lastUpdate = document.getElementById('last-update');
-            if (lastUpdate) lastUpdate.textContent = new Date().toLocaleTimeString('zh-CN');
-        }
-
-        // 系统统计
-        const statusData = await apiRequest('/system/status');
-        updateDashboardStats(statusData);
-
-        // 设备热力图
-        if (statusData.devices) {
-            let deviceList = statusData.devices;
-            if (typeof deviceList === 'object' && !Array.isArray(deviceList)) {
-                deviceList = Object.values(deviceList);
-            }
-            updateDeviceHeatmap(deviceList);
-        }
-
-        updateHealthMetrics(statusData);
-
-    } catch (error) {
-        console.error('加载数据失败:', error);
-        const statusEl = document.getElementById('data-status');
-        if (statusEl) {
-            statusEl.textContent = '连接失败';
-            statusEl.className = 'badge bg-danger';
-        }
-    }
-}
-
-/**
- * 更新趋势图 — 只显示选中设备的变量，最多 MAX_DATA_POINTS 个点
- */
 function updateTrendChart(data) {
     if (!trendChart) return;
 
-    // 如果还没选中设备，从数据里自动选第一个
     if (!selectedDeviceId && data.length > 0) {
         selectedDeviceId = data[0].device_id;
-        console.log('自动选中设备:', selectedDeviceId);
     }
     if (!selectedDeviceId) return;
 
-    const now = new Date();
-    const timeLabel = now.toTimeString().slice(0, 8);
+    // 同步下拉框
+    const select = document.getElementById('trend-device-select');
+    if (select && select.value !== selectedDeviceId) {
+        select.value = selectedDeviceId;
+    }
 
-    // 只缓存选中设备的数据
+    const now = new Date().toTimeString().slice(0, 8);
+
+    // 缓存选中设备的数据
     let matched = 0;
     data.forEach(item => {
         if (item.device_id !== selectedDeviceId) return;
         if (item.value === null || item.value === undefined) return;
         const key = item.register_name;
         if (!dataBuffers[key]) dataBuffers[key] = [];
-        dataBuffers[key].push({ time: timeLabel, value: parseFloat(item.value) });
-        if (dataBuffers[key].length > MAX_DATA_POINTS) dataBuffers[key].shift();
+        dataBuffers[key].push({ t: now, v: parseFloat(item.value) });
+        if (dataBuffers[key].length > MAX_POINTS) dataBuffers[key].shift();
         matched++;
     });
 
     if (matched === 0) return;
 
     const keys = Object.keys(dataBuffers);
-    if (keys.length === 0) return;
-
-    // 统一时间轴：取所有变量的时间并集
     const timeSet = new Set();
-    keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.time)));
-    const times = Array.from(timeSet).sort().slice(-MAX_DATA_POINTS);
+    keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.t)));
+    const times = Array.from(timeSet).sort().slice(-MAX_POINTS);
 
-    const series = keys.map(key => {
-        const label = getRegisterLabel(key);
-        const unit = getRegisterUnit(key);
+    const colors = ['#6366f1', '#06b6d4', '#f59e0b', '#ef4444', '#22c55e', '#ec4899'];
+
+    const series = keys.slice(0, 4).map((key, i) => {
         const map = {};
-        dataBuffers[key].forEach(d => { map[d.time] = d.value; });
-
+        dataBuffers[key].forEach(d => { map[d.t] = d.v; });
         return {
-            name: unit ? `${label} (${unit})` : label,
+            name: getShortLabel(key),
             type: 'line',
             smooth: true,
             symbol: 'none',
-            lineStyle: { width: 2 },
+            lineStyle: { width: 1.5, color: colors[i % colors.length] },
             data: times.map(t => map[t] ?? null),
         };
     });
 
     trendChart.setOption({
-        tooltip: { trigger: 'axis' },
-        legend: { data: series.map(s => s.name), top: 4, type: 'scroll' },
-        grid: { left: 60, right: 20, top: 40, bottom: 30 },
-        xAxis: { type: 'category', data: times, boundaryGap: false },
-        yAxis: { type: 'value' },
-        series: series,
+        backgroundColor: 'transparent',
+        tooltip: {
+            trigger: 'axis',
+            backgroundColor: 'rgba(255,255,255,0.95)',
+            borderColor: '#e2e5ea',
+            textStyle: { color: '#1a1a2e', fontSize: 11 },
+        },
+        legend: {
+            top: 0,
+            right: 0,
+            textStyle: { color: '#666', fontSize: 11 },
+            itemWidth: 12,
+            itemHeight: 2,
+        },
+        grid: { left: 50, right: 10, top: 25, bottom: 20 },
+        xAxis: {
+            type: 'category',
+            data: times,
+            boundaryGap: false,
+            axisLine: { lineStyle: { color: '#e2e5ea' } },
+            axisLabel: { color: '#999', fontSize: 10 },
+            splitLine: { show: false },
+        },
+        yAxis: {
+            type: 'value',
+            axisLine: { show: false },
+            axisLabel: { color: '#999', fontSize: 10 },
+            splitLine: { lineStyle: { color: '#f0f0f0' } },
+        },
+        series,
     });
 }
 
-/**
- * 更新实时数据表格
- */
-function updateRealtimeTable(data) {
-    const tbody = document.getElementById('realtime-data');
-    if (!tbody) return;
-
-    // 按设备+寄存器去重取最新
-    const latest = {};
-    data.forEach(item => {
-        const key = `${item.device_id}_${item.register_name}`;
-        if (!latest[key] || new Date(item.timestamp) > new Date(latest[key].timestamp)) {
-            latest[key] = item;
-        }
-    });
-
-    tbody.innerHTML = Object.values(latest).map(item => {
-        const value = typeof item.value === 'number' ? item.value.toFixed(2) : item.value;
-        const unit = item.unit || getRegisterUnit(item.register_name);
-        const time = new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-        // 状态判断
-        let statusBadge = '<span class="badge bg-success">正常</span>';
-        if (item.value !== null && item.value !== undefined) {
-            // 根据变量类型判断异常
-            const v = parseFloat(item.value);
-            const name = item.register_name.toLowerCase();
-            if (name.includes('temperature') && v > 150) statusBadge = '<span class="badge bg-danger">超温</span>';
-            else if (name.includes('temperature') && v > 120) statusBadge = '<span class="badge bg-warning">偏高</span>';
-            else if (name.includes('pressure') && v > 1.5) statusBadge = '<span class="badge bg-danger">超压</span>';
-            else if (name.includes('pressure') && v > 1.2) statusBadge = '<span class="badge bg-warning">偏高</span>';
-        }
-
-        return `<tr>
-            <td>${getDeviceName(item.device_id)}</td>
-            <td>${getRegisterLabel(item.register_name)}</td>
-            <td><strong class="data-value">${value}</strong></td>
-            <td>${unit}</td>
-            <td>${time}</td>
-            <td>${statusBadge}</td>
-        </tr>`;
-    }).join('');
-}
-
-/**
- * 更新仪表盘区域 — 动态生成，基于实际数据
- */
-function updateGaugeSection(data) {
-    const container = document.getElementById('gauge-section');
-    if (!container) return;
-
-    // 选取前3个数值型变量做仪表盘
-    const numericItems = data.filter(item => typeof item.value === 'number').slice(0, 3);
-    if (numericItems.length === 0) return;
-
-    // 确保容器有3个gauge div
-    if (container.children.length !== numericItems.length) {
-        container.innerHTML = numericItems.map((item, i) => `
-            <div class="col-md-4">
-                <div class="gauge-card">
-                    <h6 class="mb-2"><i class="bi bi-gauge text-info"></i> ${getRegisterLabel(item.register_name)}</h6>
-                    <div class="gauge-container" id="gauge-${i}"></div>
-                    <div class="gauge-value" id="gauge-val-${i}">--</div>
-                    <div class="gauge-label">${getDeviceName(item.device_id)} · ${getRegisterUnit(item.register_name)}</div>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    numericItems.forEach((item, i) => {
-        const dom = document.getElementById(`gauge-${i}`);
-        if (!dom) return;
-
-        if (!gaugeCharts[i]) {
-            gaugeCharts[i] = echarts.init(dom);
-        }
-
-        const val = item.value;
-        const unit = getRegisterUnit(item.register_name);
-        // 动态范围：值的 ±50%，最小10
-        const absVal = Math.abs(val) || 1;
-        const max = Math.ceil(absVal * 1.5 / 10) * 10 || 100;
-
-        gaugeCharts[i].setOption({
-            series: [{
-                type: 'gauge',
-                startAngle: 200,
-                endAngle: -20,
-                min: 0,
-                max: max,
-                progress: { show: true, width: 14 },
-                pointer: { show: false },
-                axisLine: { lineStyle: { width: 14, color: [[0.6, '#00e676'], [0.8, '#ffd600'], [1, '#ff5252']] } },
-                axisTick: { show: false },
-                splitLine: { show: false },
-                axisLabel: { show: false },
-                detail: { show: false },
-                data: [{ value: val }],
-            }]
-        });
-
-        const valEl = document.getElementById(`gauge-val-${i}`);
-        if (valEl) valEl.textContent = val.toFixed(1) + ' ' + unit;
-    });
-}
-
-/**
- * 更新设备热力图
- */
-function updateDeviceHeatmap(devices) {
-    const container = document.getElementById('device-heatmap');
-    if (!devices || devices.length === 0) {
-        container.innerHTML = '<div class="col-12 text-center text-muted py-3">暂无设备</div>';
-        return;
-    }
-
-    container.innerHTML = devices.map(device => {
-        const isOnline = device.connected;
-        const hasWarning = device.status === 'warning' || device.status === 'fault';
-        let bgColor = isOnline ? (hasWarning ? '#ff9100' : '#00e676') : '#ff5252';
-        const name = (device.name || device.device_id || '').substring(0, 8);
-
-        return `<div class="col-6">
-            <div class="heatmap-cell" style="background: ${bgColor};" title="${device.name || device.device_id}">
-                <div>
-                    <div>${name}</div>
-                    <div style="font-size:0.65rem;opacity:0.8">${isOnline ? (hasWarning ? '告警' : '在线') : '离线'}</div>
-                </div>
-            </div>
-        </div>`;
-    }).join('');
-}
-
-/**
- * 更新系统健康度（真实数据）
- */
-function updateHealthMetrics(stats) {
+// ========== 设备状态栏 ==========
+function updateStatusBar(stats) {
     if (!stats) return;
 
-    // 数据库
+    const dot = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    if (dot) dot.className = 'status-dot green';
+    if (text) text.textContent = '系统运行中';
+
     if (stats.database) {
-        const dbSize = stats.database.database_size_mb || 0;
-        const el = document.getElementById('db-size');
-        if (el) el.textContent = dbSize.toFixed(1) + ' MB';
-        const bar = document.getElementById('db-bar');
-        if (bar) bar.style.width = Math.min(dbSize, 100) + '%';
-
-        const totalEl = document.getElementById('total-records');
-        if (totalEl) totalEl.textContent = (stats.database.total_records || stats.database.realtime_records || 0).toLocaleString();
-    }
-
-    // 采集
-    if (stats.collector) {
-        const rate = Math.floor((stats.collector.total_collections || 0) / Math.max((stats.uptime_seconds || 1) / 60, 1));
-        const rateEl = document.getElementById('collection-rate');
-        if (rateEl) rateEl.textContent = rate;
+        setText('status-db', `DB: ${(stats.database.total_records || 0).toLocaleString()} 条`);
     }
 }
 
-/**
- * 更新仪表盘统计
- */
-function updateDashboardStats(stats) {
-    if (!stats) return;
-
-    // 设备
-    if (stats.devices) {
-        let deviceList = stats.devices;
-        if (typeof deviceList === 'object' && !Array.isArray(deviceList)) {
-            deviceList = Object.values(deviceList);
+// ========== 设备值实时更新 ==========
+// WebSocket 更新设备值
+if (typeof io !== 'undefined') {
+    const socket = io();
+    socket.on('data_update', (data) => {
+        if (data && data.device_id && data.register_name) {
+            const el = document.getElementById(`dv-${data.device_id}-${data.register_name}`);
+            if (el && data.value !== null) {
+                el.textContent = parseFloat(data.value).toFixed(1);
+            }
         }
-        const total = deviceList.length;
-        const online = deviceList.filter(d => d.connected).length;
-
-        setText('device-count', total);
-        setText('device-online', online);
-        setText('device-offline', total - online);
-    }
-
-    // 数据
-    if (stats.collector) setText('data-count', stats.collector.total_collections || 0);
-    if (stats.database) setText('data-today', (stats.database.total_records || stats.database.realtime_records || 0).toLocaleString());
-
-    // 报警
-    if (stats.alarms) {
-        setText('alarm-count-card', stats.alarms.total_active_alarms || 0);
-        setText('alarm-critical', stats.alarms.by_level?.critical || 0);
-        setText('alarm-warning', stats.alarms.by_level?.warning || 0);
-
-        const navEl = document.getElementById('active-alarms');
-        if (navEl) navEl.textContent = stats.alarms.total_active_alarms || 0;
-    }
-
-    // 运行时间
-    if (stats.uptime_seconds !== undefined) setText('uptime', formatUptime(stats.uptime_seconds));
-
-    // 运行模式
-    if (stats.simulation_mode !== undefined) {
-        const el = document.getElementById('run-mode');
-        if (el) {
-            el.textContent = stats.simulation_mode ? '模拟模式' : '真实设备';
-            el.className = `badge ${stats.simulation_mode ? 'bg-info' : 'bg-success'}`;
-        }
-    }
+    });
+    socket.on('alarm', () => loadData());
 }
 
-/**
- * 格式化运行时间
- */
-function formatUptime(seconds) {
-    const d = Math.floor(seconds / 86400);
-    const h = Math.floor((seconds % 86400) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (d > 0) return `${d}天${h}时${m}分`;
-    if (h > 0) return `${h}时${m}分`;
-    return `${m}分${Math.floor(seconds % 60)}秒`;
-}
-
-/**
- * 格式化数字
- */
-function formatNumber(v) {
-    if (v === null || v === undefined) return '-';
-    return typeof v === 'number' ? v.toFixed(2) : v;
-}
-
-/**
- * setText helper
- */
-function setText(id, val) {
+// ========== 工具函数 ==========
+function setText(id, v) {
     const el = document.getElementById(id);
-    if (el) el.textContent = val;
+    if (el) el.textContent = v;
+}
+
+function formatUptime(s) {
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d}天${h}时`;
+    if (h > 0) return `${h}时${m}分`;
+    return `${m}分`;
+}
+
+function getShortLabel(name) {
+    const map = {
+        'boiler_temperature': '锅炉温度', 'boiler_pressure': '锅炉压力',
+        'heat_exchanger_temperature': '换热器温度', 'flue_gas_temperature': '排烟温度',
+        'steam_flow': '蒸汽流量', 'feed_water_level': '给水液位',
+        'oxygen_content': '含氧量', 'boiler_status': '锅炉状态',
+        'mold_temperature': '模具温度', 'injection_pressure': '注射压力',
+        'injection_speed': '注射速度', 'barrel_temperature': '料筒温度',
+        'spray_pressure': '喷涂压力', 'oven_temperature': '烘干温度',
+        'voltage_a': 'A相电压', 'current_a': 'A相电流',
+        'active_power': '总有功', 'frequency': '频率',
+        'temperature': '温度', 'pressure': '压力',
+        'flow': '流量', 'level': '液位',
+        'voltage': '电压', 'current': '电流', 'power': '功率',
+    };
+    if (map[name]) return map[name];
+    const lower = name.toLowerCase();
+    for (const [k, v] of Object.entries(map)) {
+        if (lower.includes(k)) return v;
+    }
+    return name.length > 6 ? name.slice(0, 6) : name;
 }

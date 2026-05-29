@@ -1,0 +1,394 @@
+/* 白色工业主题 */
+:root {
+    --bg: #f0f2f5;
+    --bg-card: #fff;
+    --bg-card-hover: #f8f9fa;
+    --border: #e2e5ea;
+    --text: #1a1a2e;
+    --text-dim: #666;
+    --text-muted: #999;
+    --normal: #9ca3af;
+    --running: #22c55e;
+    --alarm-crit: #dc2626;
+    --alarm-high: #ea580c;
+    --alarm-med: #ca8a04;
+    --alarm-low: #0891b2;
+    --accent: #4f46e5;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    overflow-x: hidden;
+}
+
+/* ========== 顶部栏 ========== */
+.topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: #fff;
+    border-bottom: 1px solid var(--border);
+    height: 44px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.topbar-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 1px;
+}
+
+.topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.topbar-time {
+    font-family: 'Consolas', monospace;
+    font-size: 14px;
+    color: var(--text);
+}
+
+/* ========== 主布局 ========== */
+.main {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    grid-template-rows: auto 1fr auto;
+    gap: 8px;
+    padding: 8px;
+    height: calc(100vh - 44px);
+}
+
+/* ========== KPI 卡片行 ========== */
+.kpi-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+}
+
+.kpi {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    position: relative;
+    overflow: hidden;
+}
+
+.kpi::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--normal);
+}
+
+.kpi.alarm::before { background: var(--alarm-crit); }
+.kpi.warn::before  { background: var(--alarm-med); }
+
+.kpi-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.kpi-value {
+    font-family: 'Consolas', monospace;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+}
+
+.kpi-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 4px;
+}
+
+.kpi-spark {
+    height: 24px;
+    margin-top: 6px;
+    opacity: 0.6;
+}
+
+/* ========== 设备卡片网格 ========== */
+.device-grid {
+    grid-column: 1 / 3;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.device-grid::-webkit-scrollbar { width: 4px; }
+.device-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.dev-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.dev-card:hover { background: var(--bg-card-hover); }
+
+.dev-status {
+    width: 6px;
+    min-height: 36px;
+    border-radius: 3px;
+    background: var(--normal);
+    flex-shrink: 0;
+}
+
+.dev-status.online  { background: var(--running); }
+.dev-status.fault   { background: var(--alarm-crit); }
+.dev-status.warning { background: var(--alarm-med); }
+.dev-status.offline { background: #444; }
+
+.dev-info { flex: 1; min-width: 0; }
+
+.dev-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dev-meta {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 2px;
+}
+
+.dev-values {
+    display: flex;
+    gap: 12px;
+    margin-top: 4px;
+}
+
+.dev-val {
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+}
+
+.dev-val .label { color: var(--text-muted); }
+.dev-val .num   { color: var(--text); font-weight: 600; }
+
+/* ========== 报警面板 ========== */
+.alarm-panel {
+    grid-column: 3 / -1;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.alarm-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.alarm-badges {
+    display: flex;
+    gap: 6px;
+}
+
+.alarm-badge {
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: 'Consolas', monospace;
+}
+
+.alarm-badge.crit  { background: rgba(239,68,68,0.2); color: var(--alarm-crit); }
+.alarm-badge.high  { background: rgba(249,115,22,0.2); color: var(--alarm-high); }
+.alarm-badge.med   { background: rgba(234,179,8,0.2); color: var(--alarm-med); }
+
+.alarm-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.alarm-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    margin-bottom: 2px;
+    transition: background 0.15s;
+}
+
+.alarm-row:hover { background: rgba(0,0,0,0.03); }
+
+.alarm-row.unacked { animation: alarmFlash 1.5s ease-in-out infinite; }
+
+@keyframes alarmFlash {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.alarm-prio {
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    flex-shrink: 0;
+    min-width: 32px;
+    text-align: center;
+}
+
+.alarm-prio.critical { background: var(--alarm-crit); color: #fff; }
+.alarm-prio.high     { background: var(--alarm-high); color: #fff; }
+.alarm-prio.warning  { background: var(--alarm-med); color: #000; }
+.alarm-prio.low      { background: var(--alarm-low); color: #000; }
+
+.alarm-time {
+    font-family: 'Consolas', monospace;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 10px;
+}
+
+.alarm-device {
+    color: var(--text-dim);
+    flex-shrink: 0;
+    max-width: 100px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.alarm-msg {
+    color: var(--text);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.alarm-pv {
+    font-family: 'Consolas', monospace;
+    color: var(--text-dim);
+    flex-shrink: 0;
+    font-size: 10px;
+}
+
+.alarm-ack-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.alarm-ack-btn:hover {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
+.alarm-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 30px;
+    font-size: 13px;
+}
+
+/* ========== 趋势图区域 ========== */
+.trend-area {
+    grid-column: 1 / -1;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    min-height: 200px;
+}
+
+.trend-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.trend-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.trend-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    outline: none;
+}
+
+.trend-select option { background: var(--bg); }
+
+#trend-chart { flex: 1; min-height: 160px; }
+
+/* ========== 底部状态栏 ========== */
+.statusbar {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 12px;
+    background: #fff;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-dim);
+    border-radius: 0 0 6px 6px;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin-right: 4px;
+}
+
+.status-dot.green { background: var(--running); box-shadow: 0 0 4px var(--running); }
+.status-dot.red   { background: var(--alarm-crit); box-shadow: 0 0 4px var(--alarm-crit); }

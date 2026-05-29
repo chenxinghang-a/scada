@@ -1,287 +1,104 @@
 {% extends "base.html" %}
 
-{% block title %}仪表盘 - 工业SCADA系统{% endblock %}
-
-{% block breadcrumb %}
-<li class="breadcrumb-item active">仪表盘</li>
-{% endblock %}
+{% block title %}SCADA 仪表盘{% endblock %}
 
 {% block extra_css %}
-<style>
-    .gauge-card {
-        background: white;
-        border-radius: 12px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
-        transition: transform 0.3s;
-    }
-    .gauge-card:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-    }
-    .gauge-container {
-        width: 180px;
-        height: 140px;
-        margin: 0 auto;
-    }
-    .gauge-label {
-        font-size: 0.85rem;
-        color: #666;
-        margin-top: 8px;
-    }
-    .gauge-value {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #1a237e;
-    }
-    .status-indicator {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        margin-right: 6px;
-    }
-    .status-online { background: #4caf50; box-shadow: 0 0 6px #4caf50; }
-    .status-offline { background: #f44336; box-shadow: 0 0 6px #f44336; }
-    .status-warning { background: #ff9800; box-shadow: 0 0 6px #ff9800; }
-    .heatmap-cell {
-        width: 100%;
-        height: 60px;
-        border-radius: 8px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-weight: 600;
-        transition: all 0.3s;
-        cursor: pointer;
-    }
-    .heatmap-cell:hover {
-        transform: scale(1.05);
-    }
-    .health-bar {
-        height: 8px;
-        border-radius: 4px;
-        background: #e0e0e0;
-        overflow: hidden;
-    }
-    .health-bar-fill {
-        height: 100%;
-        border-radius: 4px;
-        transition: width 0.5s;
-    }
-    .metric-mini {
-        padding: 12px;
-        background: #f8f9fa;
-        border-radius: 8px;
-        text-align: center;
-    }
-    .metric-mini .value {
-        font-size: 1.4rem;
-        font-weight: 700;
-        color: #1565c0;
-    }
-    .metric-mini .label {
-        font-size: 0.75rem;
-        color: #666;
-    }
-    .alarm-item {
-        padding: 10px 12px;
-        border-left: 4px solid;
-        margin-bottom: 8px;
-        border-radius: 0 8px 8px 0;
-        background: #fff;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
-    }
-    .alarm-critical { border-color: #f44336; }
-    .alarm-warning { border-color: #ff9800; }
-    .alarm-info { border-color: #2196f3; }
-</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 {% endblock %}
 
 {% block content %}
-<!-- 顶部统计卡片 -->
-<div class="row mb-4">
-    <div class="col-md-4">
-        <div class="card card-sm mb-3">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <div class="stat-label"><i class="bi bi-hdd-rack"></i> 设备</div>
-                        <div class="stat-value text-blue" id="device-count">0</div>
-                    </div>
-                    <div class="text-end">
-                        <small>在线: <span id="device-online" class="fw-bold text-green">0</span></small><br>
-                        <small>离线: <span id="device-offline" class="fw-bold text-red">0</span></small>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-md-4">
-        <div class="card card-sm mb-3">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <div class="stat-label"><i class="bi bi-bell"></i> 报警</div>
-                        <div class="stat-value text-yellow" id="alarm-count-card">0</div>
-                    </div>
-                    <div class="text-end">
-                        <small>严重: <span id="alarm-critical" class="fw-bold text-red">0</span></small><br>
-                        <small>警告: <span id="alarm-warning" class="fw-bold text-yellow">0</span></small>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-md-4">
-        <div class="card card-sm mb-3">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <div class="stat-label"><i class="bi bi-clock"></i> 运行</div>
-                        <div class="stat-value text-green" id="uptime">-</div>
-                    </div>
-                    <div class="text-end">
-                        <small>采集: <span id="data-today" class="fw-bold">0</span> 条</small><br>
-                        <small>模式: <span id="run-mode" class="badge bg-secondary-lt">-</span></small>
-                    </div>
-                </div>
-            </div>
-        </div>
+<!-- 顶部栏 -->
+<div class="topbar">
+    <div class="topbar-title">工业数据采集与监控系统</div>
+    <div class="topbar-right">
+        <span id="sim-mode-badge"></span>
+        <span class="topbar-time" id="topbar-time">--:--:--</span>
     </div>
 </div>
 
-<!-- 动态仪表盘（由JS根据实际数据生成） -->
-<div class="row mb-4" id="gauge-section">
-    <div class="col-12 text-center text-muted py-3">
-        <div class="spinner-border spinner-border-sm me-2"></div>加载中...
-    </div>
-</div>
+<!-- 主内容 -->
+<div class="main">
 
-<!-- 中间区域：实时数据 + 设备热力图 -->
-<div class="row">
-    <!-- 实时数据表格 -->
-    <div class="col-md-8">
-        <div class="card mb-3" style="border-radius: 12px;">
-            <div class="card-header bg-white" style="border-radius: 12px 12px 0 0;">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="card-title mb-0"><i class="bi bi-table"></i> 实时数据</h5>
-                    <div>
-                        <small class="text-muted me-2">最后更新: <span id="last-update">--</span></small>
-                        <span class="badge bg-success" id="data-status">实时更新中</span>
-                    </div>
-                </div>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover" id="realtime-table">
-                        <thead class="table-light">
-                            <tr>
-                                <th>设备</th>
-                                <th>参数</th>
-                                <th>当前值</th>
-                                <th>单位</th>
-                                <th>更新时间</th>
-                                <th>状态</th>
-                            </tr>
-                        </thead>
-                        <tbody id="realtime-data">
-                            <tr>
-                                <td colspan="6" class="text-center text-muted py-4">
-                                    <div class="spinner-border spinner-border-sm me-2"></div>加载数据中...
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+    <!-- KPI 卡片行 -->
+    <div class="kpi-row">
+        <div class="kpi" id="kpi-oee">
+            <div class="kpi-label">OEE 综合效率</div>
+            <div class="kpi-value" id="kpi-oee-val">--%</div>
+            <div class="kpi-sub">目标 ≥85%</div>
+        </div>
+        <div class="kpi" id="kpi-devices">
+            <div class="kpi-label">设备状态</div>
+            <div class="kpi-value"><span id="kpi-online">0</span>/<span id="kpi-total">0</span></div>
+            <div class="kpi-sub">在线/总数</div>
+        </div>
+        <div class="kpi" id="kpi-alarms">
+            <div class="kpi-label">活动报警</div>
+            <div class="kpi-value" id="kpi-alarm-count">0</div>
+            <div class="kpi-sub">未确认: <span id="kpi-unacked">0</span></div>
+        </div>
+        <div class="kpi" id="kpi-throughput">
+            <div class="kpi-label">采集吞吐</div>
+            <div class="kpi-value" id="kpi-rate">0</div>
+            <div class="kpi-sub">条/分钟</div>
+        </div>
+        <div class="kpi" id="kpi-quality">
+            <div class="kpi-label">数据质量</div>
+            <div class="kpi-value" id="kpi-quality-val">--%</div>
+            <div class="kpi-sub">成功率</div>
+        </div>
+        <div class="kpi" id="kpi-uptime">
+            <div class="kpi-label">运行时间</div>
+            <div class="kpi-value" id="kpi-uptime-val">-</div>
+            <div class="kpi-sub" id="kpi-mode">-</div>
         </div>
     </div>
-    
-    <!-- 右侧面板 -->
-    <div class="col-md-4">
-        <!-- 设备状态热力图 -->
-        <div class="card mb-3" style="border-radius: 12px;">
-            <div class="card-header bg-white" style="border-radius: 12px 12px 0 0;">
-                <h5 class="card-title mb-0"><i class="bi bi-grid-3x3"></i> 设备状态</h5>
-            </div>
-            <div class="card-body">
-                <div class="row g-2" id="device-heatmap">
-                    <!-- 热力图将通过JS动态填充 -->
-                </div>
-            </div>
-        </div>
-        
-        <!-- 系统状态 -->
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-heart-pulse"></i> 系统状态</h5>
-            </div>
-            <div class="card-body">
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between mb-1">
-                        <span>数据库大小</span>
-                        <span id="db-size">-- MB</span>
-                    </div>
-                    <div class="health-bar">
-                        <div class="health-bar-fill bg-info" id="db-bar" style="width: 0%"></div>
-                    </div>
-                </div>
-                <div class="row mt-3">
-                    <div class="col-6">
-                        <div class="metric-mini">
-                            <div class="value" id="total-records">0</div>
-                            <div class="label">总记录数</div>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="metric-mini">
-                            <div class="value" id="collection-rate">0</div>
-                            <div class="label">采集/分钟</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- 最新报警 -->
-        <div class="card mb-3" style="border-radius: 12px;">
-            <div class="card-header bg-white" style="border-radius: 12px 12px 0 0;">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="card-title mb-0"><i class="bi bi-bell"></i> 最新报警</h5>
-                    <a href="/alarms" class="btn btn-sm btn-outline-danger">查看全部</a>
-                </div>
-            </div>
-            <div class="card-body" style="max-height: 250px; overflow-y: auto;">
-                <div id="latest-alarms">
-                    <div class="text-center text-muted py-3">暂无报警</div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
 
-<!-- 趋势图表（多变量叠加） -->
-<div class="row">
-    <div class="col-12">
-        <div class="card mb-3">
-            <div class="card-header">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="card-title mb-0"><i class="bi bi-graph-up"></i> 实时趋势</h5>
-                    <select class="form-select form-select-sm" style="width: auto;" id="trend-device-select">
-                        <option>加载中...</option>
-                    </select>
-                </div>
-            </div>
-            <div class="card-body">
-                <div id="trend-chart" style="height: 350px;"></div>
-            </div>
+    <!-- 设备卡片网格 -->
+    <div class="device-grid" id="device-grid">
+        <div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px;">
+            正在加载设备...
         </div>
     </div>
+
+    <!-- 报警面板 -->
+    <div class="alarm-panel">
+        <div class="alarm-header">
+            <span>实时报警</span>
+            <div class="alarm-badges">
+                <span class="alarm-badge crit" id="badge-crit">CRIT: 0</span>
+                <span class="alarm-badge high" id="badge-high">HIGH: 0</span>
+                <span class="alarm-badge med" id="badge-med">MED: 0</span>
+            </div>
+        </div>
+        <div class="alarm-list" id="alarm-list">
+            <div class="alarm-empty">暂无活动报警</div>
+        </div>
+    </div>
+
+    <!-- 趋势图 -->
+    <div class="trend-area">
+        <div class="trend-header">
+            <span class="trend-title">实时趋势</span>
+            <select class="trend-select" id="trend-device-select">
+                <option>加载中...</option>
+            </select>
+        </div>
+        <div id="trend-chart"></div>
+    </div>
+
+    <!-- 底部状态栏 -->
+    <div class="statusbar">
+        <div>
+            <span class="status-dot green" id="status-dot"></span>
+            <span id="status-text">系统运行中</span>
+            <span style="margin-left:12px" id="status-db">-</span>
+        </div>
+        <div>
+            <span id="status-user">-</span>
+            <a href="/screen" style="color:var(--accent);margin-left:12px;text-decoration:none">大屏</a>
+        </div>
+    </div>
+
 </div>
 {% endblock %}
 
