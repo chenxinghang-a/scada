@@ -1,0 +1,140 @@
+# IEC 60870-5-104 (DL/T 634.5104) 网关配置示例
+#
+# IEC 104 是中国电力系统标准SCADA通信协议 (等同采用DL/T 634.5104)
+# 支持四遥: 遥测(模拟量)、遥信(状态量)、遥控(开关控制)、遥调(设定值)
+#
+# 常见应用场景:
+# - 变电站综合自动化
+# - 配电网SCADA
+# - 水电厂/火电厂监控
+# - 调度主站与子站通信
+
+gateway:
+  gateway_id: iec104_gateway_01
+  mqtt_broker: localhost
+  mqtt_port: 1883
+  poll_interval: 5.0
+
+devices:
+  # 变电站RTU — 典型遥测/遥信配置
+  - device_id: substation_rtu_01
+    name: 110kV变电站RTU
+    description: 变电站综合自动化终端 — 遥测电压/电流/功率、遥信断路器状态
+    host: 192.168.1.200
+    port: 2404
+    common_addr: 1        # 公共地址(站地址)
+    collection_interval: 5
+    enabled: true
+    vendor: 南瑞继保
+    device_model: RCS-9000
+    registers:
+      # 遥测 — 模拟量 (短浮点, TypeID=13 M_ME_NC_1)
+      - name: bus_voltage_a
+        ioa: 100
+        type_id: 13
+        description: A相母线电压
+        unit: kV
+      - name: bus_voltage_b
+        ioa: 101
+        type_id: 13
+        description: B相母线电压
+        unit: kV
+      - name: bus_voltage_c
+        ioa: 102
+        type_id: 13
+        description: C相母线电压
+        unit: kV
+      - name: line_current_a
+        ioa: 110
+        type_id: 13
+        description: A相线路电流
+        unit: A
+      - name: line_current_b
+        ioa: 111
+        type_id: 13
+        description: B相线路电流
+        unit: A
+      - name: line_current_c
+        ioa: 112
+        type_id: 13
+        description: C相线路电流
+        unit: A
+      - name: active_power
+        ioa: 120
+        type_id: 13
+        description: 有功功率
+        unit: MW
+      - name: reactive_power
+        ioa: 121
+        type_id: 13
+        description: 无功功率
+        unit: MVar
+      - name: power_factor
+        ioa: 122
+        type_id: 13
+        description: 功率因数
+        unit: ''
+      - name: frequency
+        ioa: 123
+        type_id: 13
+        description: 电网频率
+        unit: Hz
+      # 遥信 — 状态量 (单点, TypeID=1 M_SP_NA_1)
+      - name: breaker_501_status
+        ioa: 200
+        type_id: 1
+        description: 501断路器状态 (0=分, 1=合)
+        unit: ''
+      - name: breaker_502_status
+        ioa: 201
+        type_id: 1
+        description: 502断路器状态
+        unit: ''
+      - name: isolator_5011_status
+        ioa: 210
+        type_id: 1
+        description: 5011隔离开关状态
+        unit: ''
+      - name: protection_alarm
+        ioa: 220
+        type_id: 1
+        description: 继电保护动作信号
+        unit: ''
+
+  # 配电终端FTU
+  - device_id: distribution_ftu_01
+    name: 10kV配电终端FTU
+    description: 馈线终端 — 遥测线路参数、遥信开关状态、遥控分合闸
+    host: 192.168.1.201
+    port: 2404
+    common_addr: 2
+    collection_interval: 5
+    enabled: true
+    vendor: 许继电气
+    device_model: FDR-200
+    registers:
+      - name: load_current
+        ioa: 100
+        type_id: 13
+        description: 负荷电流
+        unit: A
+      - name: load_voltage
+        ioa: 101
+        type_id: 13
+        description: 负荷电压
+        unit: kV
+      - name: active_power
+        ioa: 110
+        type_id: 13
+        description: 有功功率
+        unit: kW
+      - name: load_switch_status
+        ioa: 200
+        type_id: 1
+        description: 负荷开关状态
+        unit: ''
+      - name: fault_indicator
+        ioa: 210
+        type_id: 1
+        description: 故障指示器
+        unit: ''

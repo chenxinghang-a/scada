@@ -194,16 +194,25 @@ class IEC104ASDU:
 
     @staticmethod
     def build_command(type_id: int, ioa: int, value: float, qual: int = 0) -> bytes:
-        """构建控制方向ASDU"""
+        """
+        构建控制方向ASDU
+
+        ASDU结构:
+          TypeID(1) + VSQ(1) + COT(1) + Originator(1) + CommonAddr(2) + IOA(3) + Data
+        """
+        ioa_lo = ioa & 0xFF
+        ioa_mid = (ioa >> 8) & 0xFF
+        ioa_hi = (ioa >> 16) & 0xFF
+        header = struct.pack('<BBBBHBBB',
+            type_id, 1, COT.ACTIVATION, 0, 0,
+            ioa_lo, ioa_mid, ioa_hi)
+
         if type_id == TypeID.C_SE_NC_1:            # 设定命令-短浮点
-            return struct.pack('<BBBBHfB',
-                type_id, 1, COT.ACTIVATION, 0, 0, ioa, value, qual)
+            return header + struct.pack('<fB', value, qual)
         elif type_id == TypeID.C_SC_NA_1:          # 单命令
-            return struct.pack('<BBBBHBB',
-                type_id, 1, COT.ACTIVATION, 0, 0, ioa, int(value) & 0x01, qual)
+            return header + struct.pack('<B', int(value) & 0x01)
         elif type_id == TypeID.C_IC_NA_1:          # 总召唤
-            return struct.pack('<BBBBHB',
-                type_id, 1, COT.ACTIVATION, 0, 0, 0x14)
+            return header + struct.pack('<B', 0x14)   # QOI = 20 (全体)
         return b''
 
 
