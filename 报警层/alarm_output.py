@@ -159,12 +159,25 @@ class AlarmOutput:
         - warning:  黄灯慢闪 + 蜂鸣器脉冲
         - info:     绿灯常亮（仅记录，无声光）
 
+        安全设计：同级别报警不重复触发灯和蜂鸣器，避免抢灯。
+
         Args:
             level: 报警级别 (critical/warning/info)
             message: 报警消息
             device_id: 设备ID
         """
         if not self.enabled:
+            return
+
+        # 同级别报警不重复触发灯控（避免抢灯）
+        if self.current_state.get('level') == level and self.current_state.get('pattern') != AlarmLightPattern.STEADY:
+            # 只更新消息，不动灯
+            self.current_state['message'] = message
+            self.current_state['device_id'] = device_id
+            return
+
+        # 手动控制模式下不自动接管灯
+        if self.current_state.get('level') == 'manual':
             return
 
         self.current_state.update({

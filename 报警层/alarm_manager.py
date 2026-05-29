@@ -26,9 +26,9 @@ class AlarmDedupConfig:
     def __init__(self, config: dict[str, Any] | None = None):
         config = config or {}
         # 冷却窗口（秒）：同一报警在此时间内只推送一次前端通知
-        self.emit_cooldown_seconds: int = config.get('emit_cooldown_seconds', 60)
+        self.emit_cooldown_seconds: int = config.get('emit_cooldown_seconds', 300)
         # 确认后抑制时间（秒）：用户确认报警后，同一报警在此时间内不再弹窗
-        self.acknowledge_suppress_seconds: int = config.get('acknowledge_suppress_seconds', 300)
+        self.acknowledge_suppress_seconds: int = config.get('acknowledge_suppress_seconds', 600)
         # 是否启用去重
         self.enabled: bool = config.get('enabled', True)
         # 最大同时显示的报警数（前端）
@@ -415,14 +415,11 @@ class AlarmManager:
         if triggered:
             # 检查是否已经在报警状态（同一规则）
             if current_state.get('alarm_id') == rule_id:
-                # 已经在报警，更新时间
+                # 已经在报警，只更新时间和数值，不重复触发声光/弹窗
                 current_state['last_trigger_time'] = timestamp
                 current_state['trigger_count'] = current_state.get('trigger_count', 0) + 1
-
-                # 去重检查：是否需要重新推送前端通知
-                if self._should_emit(rule_id, device_id, register_name):
-                    self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
-                    self._record_emit(rule_id, device_id, register_name)
+                current_state['last_value'] = value
+                # 持续报警不重复触发 — 只记录，不重发声光和弹窗
             else:
                 # 新报警（或不同规则覆盖同一设备/寄存器）
                 alarm_state = {
