@@ -1,0 +1,74 @@
+{
+  "name": "smartscada",
+  "version": "1.0.0",
+  "description": "SmartSCADA - 工业数据采集与监控系统",
+  "author": "陈星行",
+  "license": "MIT",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:build": "npm run build && electron-builder --win",
+    "electron:build:dir": "npm run build && electron-builder --win --dir"
+  },
+  "dependencies": {
+    "vue": "^3.5.0",
+    "vue-router": "^4.5.0",
+    "pinia": "^3.0.0",
+    "element-plus": "^2.9.0",
+    "@element-plus/icons-vue": "^2.3.0",
+    "echarts": "^5.6.0",
+    "socket.io-client": "^4.8.0",
+    "axios": "^1.8.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vue-tsc": "^2.2.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "concurrently": "^9.1.0",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "com.smartscada.app",
+    "productName": "SmartSCADA",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "resources/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/scada-backend.exe",
+        "to": "scada-backend.exe"
+      },
+      {
+        "from": "backend/_internal",
+        "to": "_internal"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SmartSCADA",
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "installerHeaderIcon": "resources/icon.ico"
+    }
+  }
+}

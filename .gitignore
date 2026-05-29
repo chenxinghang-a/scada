@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-test/
+release/
+backend/*.exe
+backend/_internal/
+*.log
+.DS_Store
+Thumbs.db
