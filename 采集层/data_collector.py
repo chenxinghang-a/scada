@@ -15,6 +15,20 @@ from queue import Queue
 logger = logging.getLogger(__name__)
 
 
+# --- 智能分发关键字匹配 ---
+_power_kw = ('power', 'watt', 'kw', 'kwh', 'active_power', 'reactive_power', 'apparent_power')
+_energy_kw = ('energy', 'kwh', 'consumption', 'electricity', 'water_flow', 'gas_flow')
+_spc_kw = ('temperature', 'pressure', 'humidity', 'viscosity', 'ph', 'concentration')
+_status_kw = ('status', 'state', 'running', 'fault', 'alarm', 'speed', 'rpm')
+_count_kw = ('count', 'quantity', 'output', 'production', 'yield', 'total')
+
+
+def _has_keyword(register_name: str, keywords: tuple) -> bool:
+    """检查寄存器名是否包含指定关键字"""
+    name_lower = register_name.lower()
+    return any(kw in name_lower for kw in keywords)
+
+
 class DataCollector:
     """
     数据采集器
