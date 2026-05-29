@@ -257,11 +257,14 @@
                     // 保存token和用户信息
                     localStorage.setItem('auth_token', data.token);
                     localStorage.setItem('scada_user', JSON.stringify(data.user));
-                    
+
                     if (rememberMe) {
                         localStorage.setItem('scada_refresh_token', data.refresh_token);
                     }
-                    
+
+                    // 设置cookie供服务端页面认证使用
+                    document.cookie = `token=${data.token}; path=/; SameSite=Strict`;
+
                     // 跳转到仪表盘
                     window.location.href = '/dashboard';
                 } else {

@@ -215,6 +215,8 @@
             localStorage.removeItem('auth_token');
             localStorage.removeItem('scada_user');
             localStorage.removeItem('scada_refresh_token');
+            // 清除cookie（服务端页面认证用）
+            document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict';
             window.location.href = '/login';
         }
         

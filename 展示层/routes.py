@@ -3,12 +3,14 @@ Flask路由模块
 定义Web页面路由
 """
 
-from flask import Flask, render_template, jsonify, request, redirect, url_for
+import jwt
+from flask import Flask, render_template, jsonify, request, redirect, url_for, g
 from flask_socketio import SocketIO
 
 from .api import register_api_blueprints
 from .websocket import init_socketio
 from 用户层.auth import AuthManager
+from config import AuthConfig
 
 
 def create_app(database, device_manager, alarm_manager, data_collector,
@@ -96,6 +98,42 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         # 权限策略
         response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
         return response
+
+    # 页面级认证 - 等保2.0 (GB/T 22239)
+    # 所有页面路由检查JWT，API路由已有自己的jwt_required装饰器
+    @app.before_request
+    def check_page_auth():
+        """页面级JWT认证 - 等保2.0要求"""
+        path = request.path
+
+        # 跳过API路由（已有自己的认证）、静态资源、登录页
+        if path.startswith('/api/') or path.startswith('/static/') or path == '/login':
+            return None
+
+        # 跳过favicon等非页面请求
+        last_segment = path.split('/')[-1]
+        if '.' in last_segment:
+            return None
+
+        # 检查JWT token（从cookie或Authorization header获取）
+        token = request.cookies.get('token')
+        if not token:
+            auth_header = request.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                token = auth_header[7:]
+
+        if not token:
+            return redirect('/login')
+
+        try:
+            payload = jwt.decode(token, AuthConfig.JWT_SECRET, algorithms=[AuthConfig.JWT_ALGORITHM])
+            g.current_user = payload
+        except jwt.ExpiredSignatureError:
+            return redirect('/login')
+        except jwt.InvalidTokenError:
+            return redirect('/login')
+
+        return None
 
     # 页面路由
     @app.route('/')
