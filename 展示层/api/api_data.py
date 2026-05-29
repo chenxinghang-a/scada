@@ -63,6 +63,7 @@ def get_history_data(device_id, register_name):
 # ==================== 数据导出API ====================
 
 @data_bp.route('/export/device/<device_id>', methods=['POST'])
+@_require_auth
 def export_device_data(device_id):
     """导出设备数据"""
     from 存储层.data_export import DataExport
@@ -90,6 +91,7 @@ def export_device_data(device_id):
 
 
 @data_bp.route('/export/alarms', methods=['POST'])
+@_require_auth
 def export_alarms():
     """导出报警记录"""
     from 存储层.data_export import DataExport
