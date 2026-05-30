@@ -110,15 +110,18 @@
                             <i class="bi bi-bell-fill text-warning"></i> <span id="active-alarms">0</span>
                         </span>
                     </li>
-                    <!-- 用户菜单 -->
+                    <!-- 用户管理（独立链接，避免dropdown兼容问题） -->
+                    <li class="nav-item">
+                        <a class="nav-link" href="/users" title="用户管理">
+                            <i class="bi bi-people"></i> <span id="nav-username">用户</span>
+                        </a>
+                    </li>
+                    <!-- 用户操作菜单 -->
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-person-circle"></i> <span id="nav-username">用户</span>
+                            <i class="bi bi-person-circle"></i> <span id="nav-role">-</span>
                         </a>
                         <ul class="dropdown-menu dropdown-menu-end">
-                            <li><span class="dropdown-item-text"><small class="text-muted">角色: <span id="nav-role">-</span></small></span></li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="/users"><i class="bi bi-people me-2"></i>用户管理</a></li>
                             <li><a class="dropdown-item" href="#" onclick="changePassword()"><i class="bi bi-key me-2"></i>修改密码</a></li>
                             <li><hr class="dropdown-divider"></li>
                             <li><a class="dropdown-item text-danger" href="#" onclick="logout()"><i class="bi bi-box-arrow-right me-2"></i>退出登录</a></li>
