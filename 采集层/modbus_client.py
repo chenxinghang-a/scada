@@ -8,6 +8,7 @@ import time
 import struct
 import logging
 import threading
+from enum import Enum
 from typing import Any
 from pymodbus.client import ModbusTcpClient, ModbusSerialClient
 from pymodbus.exceptions import ModbusException, ConnectionException
@@ -22,6 +23,14 @@ _PERMANENT_EXCEPTIONS = {0x01, 0x02, 0x03}  # Illegal Function/Address/Value
 _TRANSIENT_EXCEPTIONS = {0x04, 0x06, 0x08, 0x0A, 0x0B}  # Device Failure/Busy/Parity/Gateway
 
 
+class ByteOrder(Enum):
+    """Modbus字节序（32/64位浮点数的寄存器排列方式）"""
+    ABCD = 'ABCD'  # Big-endian（西门子S7-1200/1500默认）
+    BADC = 'BADC'  # Big-endian，字交换（部分Allen-Bradley）
+    CDAB = 'CDAB'  # Little-endian字序（西门子S7-300/400）
+    DCBA = 'DCBA'  # Little-endian（部分三菱）
+
+
 class ModbusClient:
     """
     Modbus客户端封装类
@@ -34,6 +43,7 @@ class ModbusClient:
         self.device_name = config.get('name')
         self.protocol = config.get('protocol', 'modbus_tcp')
         self.slave_id = config.get('slave_id', 1)
+        self.byte_order = ByteOrder(config.get('byte_order', 'ABCD'))
 
         # 客户端实例
         self.client = None
@@ -561,7 +571,7 @@ class ModbusClient:
 
     def decode_float32(self, registers: list[int]) -> float | None:
         """
-        解码32位浮点数（两个寄存器）
+        解码32位浮点数，支持4种字节序
 
         Args:
             registers: 寄存器值列表（2个）
@@ -569,16 +579,55 @@ class ModbusClient:
         Returns:
             float: 解码后的浮点数，NaN/Inf 返回 None
         """
-        raw = (registers[0] << 16) | registers[1]
-        value = struct.unpack('>f', struct.pack('>I', raw))[0]
+        if len(registers) < 2:
+            raise ValueError("需要至少2个寄存器")
+
+        w1, w2 = registers[0], registers[1]
+
+        if self.byte_order == ByteOrder.ABCD:
+            raw = (w1 << 16) | w2
+        elif self.byte_order == ByteOrder.BADC:
+            raw = (w2 << 16) | w1
+        elif self.byte_order == ByteOrder.CDAB:
+            raw = (w2 << 16) | w1
+        elif self.byte_order == ByteOrder.DCBA:
+            b1 = (w1 >> 8) & 0xFF
+            b2 = w1 & 0xFF
+            b3 = (w2 >> 8) & 0xFF
+            b4 = w2 & 0xFF
+            raw = (b4 << 24) | (b3 << 16) | (b2 << 8) | b1
+        else:
+            raw = (w1 << 16) | w2
+
+        value = struct.unpack('!f', struct.pack('!I', raw))[0]
         # 传感器断线时 PLC 返回 0xFFFF → NaN，过滤掉
         if math.isnan(value) or math.isinf(value):
             return None
         return value
 
     def decode_float64(self, registers: list[int]) -> float | None:
-        """解码64位浮点数（四个寄存器），NaN/Inf 返回 None"""
-        raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
+        """解码64位浮点数（四个寄存器），支持4种字节序，NaN/Inf 返回 None"""
+        if len(registers) < 4:
+            raise ValueError("需要至少4个寄存器")
+
+        if self.byte_order == ByteOrder.ABCD:
+            raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
+        elif self.byte_order == ByteOrder.BADC:
+            raw = struct.pack('>HHHH', registers[1], registers[0], registers[3], registers[2])
+        elif self.byte_order == ByteOrder.CDAB:
+            raw = struct.pack('>HHHH', registers[2], registers[3], registers[0], registers[1])
+        elif self.byte_order == ByteOrder.DCBA:
+            # 每个寄存器内字节交换，寄存器顺序也反转
+            def _swap16(w):
+                return ((w & 0xFF) << 8) | ((w >> 8) & 0xFF)
+            b0 = _swap16(registers[0])
+            b1 = _swap16(registers[1])
+            b2 = _swap16(registers[2])
+            b3 = _swap16(registers[3])
+            raw = struct.pack('>HHHH', b3, b2, b1, b0)
+        else:
+            raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
+
         value = struct.unpack('>d', raw)[0]
         if math.isnan(value) or math.isinf(value):
             return None

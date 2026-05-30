@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional
 from .base_client import ModbusClientInterface, PushClientInterface
 from .device_behavior_simulator import DeviceBehaviorSimulator, DeviceState, FaultType
 from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
+from .modbus_client import ByteOrder
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.connected = False
+        self.byte_order = ByteOrder(config.get('byte_order', 'ABCD'))
 
         # 创建设备行为模拟器
         self.behavior_simulator = DeviceBehaviorSimulator(
@@ -239,13 +241,51 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         return True
     
     def decode_float32(self, registers: List[int]) -> float:
-        """解码float32"""
-        raw = (registers[0] << 16) | registers[1]
-        return struct.unpack('>f', struct.pack('>I', raw))[0]
+        """解码float32，支持4种字节序"""
+        if len(registers) < 2:
+            raise ValueError("需要至少2个寄存器")
+
+        w1, w2 = registers[0], registers[1]
+
+        if self.byte_order == ByteOrder.ABCD:
+            raw = (w1 << 16) | w2
+        elif self.byte_order == ByteOrder.BADC:
+            raw = (w2 << 16) | w1
+        elif self.byte_order == ByteOrder.CDAB:
+            raw = (w2 << 16) | w1
+        elif self.byte_order == ByteOrder.DCBA:
+            b1 = (w1 >> 8) & 0xFF
+            b2 = w1 & 0xFF
+            b3 = (w2 >> 8) & 0xFF
+            b4 = w2 & 0xFF
+            raw = (b4 << 24) | (b3 << 16) | (b2 << 8) | b1
+        else:
+            raw = (w1 << 16) | w2
+
+        return struct.unpack('!f', struct.pack('!I', raw))[0]
     
     def decode_float64(self, registers: List[int]) -> float:
-        """解码float64"""
-        raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
+        """解码float64，支持4种字节序"""
+        if len(registers) < 4:
+            raise ValueError("需要至少4个寄存器")
+
+        if self.byte_order == ByteOrder.ABCD:
+            raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
+        elif self.byte_order == ByteOrder.BADC:
+            raw = struct.pack('>HHHH', registers[1], registers[0], registers[3], registers[2])
+        elif self.byte_order == ByteOrder.CDAB:
+            raw = struct.pack('>HHHH', registers[2], registers[3], registers[0], registers[1])
+        elif self.byte_order == ByteOrder.DCBA:
+            def _swap16(w):
+                return ((w & 0xFF) << 8) | ((w >> 8) & 0xFF)
+            b0 = _swap16(registers[0])
+            b1 = _swap16(registers[1])
+            b2 = _swap16(registers[2])
+            b3 = _swap16(registers[3])
+            raw = struct.pack('>HHHH', b3, b2, b1, b0)
+        else:
+            raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
+
         return struct.unpack('>d', raw)[0]
     
     def decode_uint16(self, register: int) -> int:

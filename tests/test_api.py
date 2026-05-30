@@ -121,6 +121,65 @@ class TestAuthAPI:
         assert resp.status_code in (401, 400, 403)
 
 
+class TestMetricsAPI:
+    """Tests for /metrics Prometheus endpoint"""
+
+    def test_metrics_endpoint_returns_200(self, client):
+        """GET /metrics returns 200"""
+        resp = client.get('/metrics')
+        assert resp.status_code == 200
+
+    def test_metrics_content_type(self, client):
+        """GET /metrics returns Prometheus content type"""
+        resp = client.get('/metrics')
+        assert 'text/plain' in resp.content_type
+        assert 'charset=utf-8' in resp.content_type
+
+    def test_metrics_contains_scada_info(self, client):
+        """Metrics output contains scada_info metric"""
+        resp = client.get('/metrics')
+        body = resp.data.decode('utf-8')
+        assert 'scada_info' in body
+        assert 'version' in body
+
+    def test_metrics_contains_device_gauges(self, client):
+        """Metrics output contains device gauge definitions"""
+        resp = client.get('/metrics')
+        body = resp.data.decode('utf-8')
+        assert 'scada_devices_connected' in body
+        assert 'scada_devices_fault' in body
+
+    def test_metrics_contains_alarm_gauges(self, client):
+        """Metrics output contains alarm gauge definitions"""
+        resp = client.get('/metrics')
+        body = resp.data.decode('utf-8')
+        assert 'scada_alarms_active' in body
+
+    def test_metrics_contains_queue_gauge(self, client):
+        """Metrics output contains data queue gauge"""
+        resp = client.get('/metrics')
+        body = resp.data.decode('utf-8')
+        assert 'scada_data_queue_size' in body
+
+    def test_metrics_contains_http_counters(self, client):
+        """Metrics output contains HTTP request counter definitions"""
+        resp = client.get('/metrics')
+        body = resp.data.decode('utf-8')
+        assert 'scada_http_requests_total' in body
+        assert 'scada_http_request_duration_seconds' in body
+
+    def test_metrics_endpoint_is_get_only(self, client):
+        """POST /metrics returns 405 Method Not Allowed"""
+        resp = client.post('/metrics')
+        assert resp.status_code == 405
+
+    def test_metrics_no_auth_required(self, client):
+        """GET /metrics does not require authentication"""
+        # No auth_headers passed — should still return 200
+        resp = client.get('/metrics')
+        assert resp.status_code == 200
+
+
 class TestAPIRoot:
     """Tests for general API behavior"""
 

@@ -67,11 +67,17 @@ class ModbusGateway(BaseGateway):
         # 寄存器配置缓存
         self._register_configs: dict[str, list[dict[str, Any]]] = {}
 
+        # 字节序缓存（每设备）
+        self._byte_orders: dict[str, tuple] = {}
+
         # 解析设备配置
         for device_config in self.devices_config:
             device_id = device_config.get('device_id')
             if device_id:
                 self._register_configs[device_id] = device_config.get('registers', [])
+                self._byte_orders[device_id] = self._parse_byte_order(
+                    device_config.get('byte_order', 'ABCD')
+                )
 
     def connect(self) -> bool:
         """连接所有Modbus设备"""
@@ -157,12 +163,13 @@ class ModbusGateway(BaseGateway):
             self.logger.warning(f"设备 {device_id} 无寄存器配置")
             return None
 
-        # 获取slave_id
+        # 获取slave_id和字节序
         device_config = next(
-            (d for d in self.devices_config if d.get('device_id') == device_id), 
+            (d for d in self.devices_config if d.get('device_id') == device_id),
             {}
         )
         slave_id = device_config.get('slave_id', 1)
+        byte_order = self._byte_orders.get(device_id)
 
         result = {}
 
@@ -173,7 +180,8 @@ class ModbusGateway(BaseGateway):
             data_type = reg_config.get('type', 'uint16')
 
             try:
-                value = self._read_register(client, slave_id, address, count, data_type)
+                value = self._read_register(client, slave_id, address, count, data_type,
+                                            byte_order=byte_order)
                 if value is not None:
                     result[name] = value
                 else:
@@ -183,8 +191,27 @@ class ModbusGateway(BaseGateway):
 
         return result if result else None
 
-    def _read_register(self, client, slave_id: int, address: int, 
-                       count: int, data_type: str) -> float | None:
+    @staticmethod
+    def _parse_byte_order(byte_order_str: str) -> tuple:
+        """
+        将字节序字符串转换为pymodbus的(byteorder, wordorder)元组
+
+        ABCD: Big-endian bytes, Big-endian words
+        BADC: Big-endian bytes, Little-endian words
+        CDAB: Big-endian bytes, Little-endian words (same as BADC for pymodbus)
+        DCBA: Little-endian bytes, Little-endian words
+        """
+        order_map = {
+            'ABCD': (Endian.BIG, Endian.BIG),
+            'BADC': (Endian.BIG, Endian.LITTLE),
+            'CDAB': (Endian.BIG, Endian.LITTLE),
+            'DCBA': (Endian.LITTLE, Endian.LITTLE),
+        }
+        return order_map.get(byte_order_str.upper(), (Endian.BIG, Endian.BIG))
+
+    def _read_register(self, client, slave_id: int, address: int,
+                       count: int, data_type: str,
+                       byte_order: tuple | None = None) -> float | None:
         """
         读取单个寄存器
 
@@ -218,16 +245,18 @@ class ModbusGateway(BaseGateway):
             elif data_type == 'float32':
                 if len(registers) < 2:
                     return None
+                bo, wo = byte_order or (Endian.BIG, Endian.BIG)
                 decoder = BinaryPayloadDecoder.fromRegisters(
-                    registers, byteorder=Endian.BIG, wordorder=Endian.BIG
+                    registers, byteorder=bo, wordorder=wo
                 )
                 return decoder.decode_32bit_float()
 
             elif data_type == 'float64':
                 if len(registers) < 4:
                     return None
+                bo, wo = byte_order or (Endian.BIG, Endian.BIG)
                 decoder = BinaryPayloadDecoder.fromRegisters(
-                    registers, byteorder=Endian.BIG, wordorder=Endian.BIG
+                    registers, byteorder=bo, wordorder=wo
                 )
                 return decoder.decode_64bit_float()
 
