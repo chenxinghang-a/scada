@@ -418,14 +418,12 @@ class SimulationInitializer:
 
     def initialize_all(self):
         """
-        模拟模式启动 — 自动加载预设设备
+        兼容旧接口 — 不再预设设备，仅记录日志
         """
         device_count = len(self.device_manager.get_all_devices())
-        if device_count == 0:
-            logger.info("设备数量为0，自动加载预设设备...")
-            self.add_all_presets()
-            device_count = len(self.device_manager.get_all_devices())
         logger.info(f"模拟模式启动完成: 当前设备数量={device_count}")
+        if device_count == 0:
+            logger.info("  提示: 设备数量为0，请通过前端添加预设设备或自定义设备")
 
     # ================================================================
     # 查询

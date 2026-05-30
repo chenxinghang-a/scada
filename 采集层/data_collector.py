@@ -515,7 +515,9 @@ class DataCollector:
             elif protocol == 'mqtt':
                 self._collect_mqtt(client, device_id, device_config, timestamp)
 
-            self._inc_stat('successful_collections')
+            # Modbus采集内部自行计数成功/失败，此处不重复计数
+            if protocol not in ('modbus_tcp', 'modbus_rtu'):
+                self._inc_stat('successful_collections')
             with self._stats_lock:
                 self.stats['last_collection_time'] = timestamp
             return True
@@ -566,7 +568,10 @@ class DataCollector:
         if total_count <= 125:
             all_regs = client.read_holding_registers(min_addr, total_count)
             if all_regs is None:
+                self._inc_stat('failed_collections')
+                logger.debug(f"设备 {device_id} Modbus读取返回None")
                 return
+            self._inc_stat('successful_collections')
             for reg in registers:
                 offset = reg['address'] - min_addr
                 size = reg_sizes[reg['address']]

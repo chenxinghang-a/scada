@@ -326,10 +326,11 @@ def _infer_rule_from_type(name: str, unit: str, data_type: str) -> dict[str, Any
     unit_lower = unit.lower() if unit else ''
 
     # 状态/枚举类型（通常是整数，值域小）
-    status_keywords = ['status', 'state', 'mode', 'alarm', 'code', 'flag', 'error']
+    status_keywords = ['status', 'state', 'mode', 'alarm', 'code', 'flag', 'error',
+                       'light', 'buzzer', 'relay']
     for kw in status_keywords:
         if kw in name_lower:
-            return {'kw': kw, 'base': 1, 'amp': 0, 'period': 0, 'noise': 0, 'shape': 'status'}
+            return {'kw': kw, 'base': 0, 'amp': 0, 'period': 0, 'noise': 0, 'shape': 'status'}
 
     # 计数类型（单调递增）
     count_keywords = ['count', 'total', 'sum', 'quantity', 'number', 'num']
@@ -546,32 +547,30 @@ class SimulatedModbusClient(ModbusClientInterface):
         self.stats['successful_reads'] += 1
         self.stats['last_read_time'] = time.time()
 
-        # ===== 设备级停止：所有寄存器归零（维护停机） =====
-        if is_device_stopped(self.device_id):
-            return [0] * count
+        # ===== 设备级停止：机械归零，传感器保持环境值 =====
+        device_stopped = is_device_stopped(self.device_id)
+        estop_active = _ESTOP_ACTIVE
 
-        # ===== E-STOP 处理：机械类寄存器返回 0 =====
-        if _ESTOP_ACTIVE:
-            # 检查当前地址是否属于机械类
-            is_machinery = any(
-                addr in self._machinery_addresses
-                for addr in range(address, address + count)
-            )
-            if is_machinery:
-                # 冻结或归零
-                for addr in range(address, address + count):
-                    if addr in self._machinery_addresses:
-                        key = str(addr) if isinstance(addr, int) else addr
-                        if key not in _ESTOP_FROZEN_VALUES:
-                            _ESTOP_FROZEN_VALUES[key] = 0.0
-                # 返回全零
-                if count == 1:
-                    return [0]
-                elif count == 2:
-                    return [0, 0]
-                elif count == 4:
-                    return [0, 0, 0, 0]
-                return [0] * count
+        if device_stopped or estop_active:
+            results = []
+            for i in range(count):
+                addr = address + i
+                is_mach = addr in self._machinery_addresses
+                if device_stopped or (estop_active and is_mach):
+                    # 机械寄存器归零
+                    results.append(0)
+                else:
+                    # 传感器寄存器：正常模拟（温度/压力/液位等保持环境值）
+                    rt = self._register_types.get(addr, {})
+                    rule = self._rules_cache.get(addr)
+                    if rule:
+                        value = _generate_value(rule, self.start_time, addr)
+                        scale = rt.get('scale', 1.0)
+                        raw_value = value / scale if scale != 0 else value
+                        results.append(int(round(raw_value)) & 0xFFFF)
+                    else:
+                        results.append(0)
+            return results
 
         # 检查是否有写入的值（用于回读验证）
         written_value = self._written_values.get(address)

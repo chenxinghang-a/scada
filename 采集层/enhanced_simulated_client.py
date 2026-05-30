@@ -61,10 +61,10 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
 
         # 通信故障模拟参数
         comm_cfg = config.get('communication', {})
-        self._conn_fail_rate = comm_cfg.get('connect_fail_rate', 0.05)  # 5%连接失败
+        self._conn_fail_rate = comm_cfg.get('connect_fail_rate', 0.0)  # 默认不模拟连接失败
         self._latency_ms = comm_cfg.get('latency_ms', 0)  # 通信延迟
-        self._packet_loss_rate = comm_cfg.get('packet_loss_rate', 0.01)  # 1%丢包
-        self._random_disconnect_rate = comm_cfg.get('random_disconnect_rate', 0.001)  # 0.1%随机断线
+        self._packet_loss_rate = comm_cfg.get('packet_loss_rate', 0.0)  # 默认不模拟丢包
+        self._random_disconnect_rate = comm_cfg.get('random_disconnect_rate', 0.0)  # 默认不模拟随机断线
         self._consecutive_failures = 0
 
         # 统计
@@ -79,7 +79,20 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         }
 
         logger.info(f"[增强模拟] Modbus客户端初始化: {config.get('name', 'unknown')}")
-    
+
+    @staticmethod
+    def _is_machinery(name: str) -> bool:
+        """判断寄存器名是否属于机械类（停机时归零）"""
+        import re
+        _MACHINERY_KEYWORDS = ['motor_speed', 'conveyor_speed', 'pump_speed', 'fan_speed',
+                               'spindle_speed', 'feed_rate', 'injection_speed', 'injection_force',
+                               'clamping_force', 'shot_count', 'cycle_time', 'mixer']
+        name_lower = name.lower()
+        for kw in _MACHINERY_KEYWORDS:
+            if re.search(r'(?<![a-z])' + re.escape(kw) + r'(?![a-z])', name_lower):
+                return True
+        return False
+
     def connect(self) -> bool:
         """连接设备（支持连接失败模拟）"""
         # 模拟连接失败
@@ -137,9 +150,30 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         if not self.connected:
             return None
 
-        # 停机设备返回全零（与基础模拟客户端行为一致）
-        if is_device_stopped(self.device_id) or _ESTOP_ACTIVE:
-            return [0] * count
+        # 停机/E-STOP：机械归零，传感器保持环境值
+        device_stopped = is_device_stopped(self.device_id)
+        estop_active = _ESTOP_ACTIVE
+        if device_stopped or estop_active:
+            results = []
+            for i in range(count):
+                reg_addr = address + i
+                reg_cfg = self._register_map.get(reg_addr, {})
+                reg_name = reg_cfg.get('name', '')
+                is_mach = self._is_machinery(reg_name)
+                if device_stopped or (estop_active and is_mach):
+                    results.append(0)
+                else:
+                    # 传感器：从缓存读取（行为模拟器仍在更新环境值）
+                    val = self._latest_data.get(reg_name, 25.0)
+                    scale = reg_cfg.get('scale', 1.0)
+                    raw = val / scale if scale != 0 else val
+                    dt = reg_cfg.get('data_type', 'uint16')
+                    if dt == 'float32':
+                        b = struct.pack('>f', float(raw))
+                        results.extend([struct.unpack('>H', b[0:2])[0], struct.unpack('>H', b[2:4])[0]])
+                    else:
+                        results.append(int(round(raw)) & 0xFFFF)
+            return results[:count]
 
         # 模拟通信延迟
         if self._latency_ms > 0:
@@ -193,14 +227,14 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         data_type = reg_config.get('data_type', 'uint16')
         
         if data_type == 'float32':
-            raw = struct.pack('>f', float(value))
+            raw = struct.pack('>f', float(raw_value))
             return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
         elif data_type in ('int32', 'uint32'):
             int_val = int(round(raw_value))
             raw = struct.pack('>i' if data_type == 'int32' else '>I', int_val)
             return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
         elif count >= 2:
-            raw = struct.pack('>f', float(value))
+            raw = struct.pack('>f', float(raw_value))
             return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
         else:
             return [int(round(raw_value)) & 0xFFFF]

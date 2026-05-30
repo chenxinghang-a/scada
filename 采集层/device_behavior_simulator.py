@@ -944,10 +944,12 @@ class DeviceBehaviorSimulator:
         
         重要：STOPPED状态的工作设备不产生数据（已关闭）
         """
-        # ===== 停机设备不产生数据 =====
+        # ===== 停机设备：传感器保持环境值，机械归零 =====
         if self.state == DeviceState.STOPPED and not self._is_monitoring_device:
-            # 只返回元数据，不返回实际数据值
-            return {
+            # 传感器漂移到环境值（工厂停机后温度回到室温、压力回到大气压等）
+            ambient_temp = 25.0 + random.gauss(0, 0.5)
+            ambient_pressure = 0.101 + random.gauss(0, 0.001)  # 大气压 MPa
+            stopped_params = {
                 '_device_state': self.state.name,
                 '_health_score': round(self.health.overall_score, 1),
                 '_active_fault': self.active_fault.value,
@@ -956,8 +958,52 @@ class DeviceBehaviorSimulator:
                 '_fault_count': len(self.active_faults),
                 '_operating_hours': round(self.health.operating_hours, 2),
                 '_timestamp': datetime.now().isoformat(),
-                '_stopped': True  # 标记设备已停机
+                '_stopped': True,
+                # 传感器环境值
+                'temperature': round(ambient_temp, 2),
+                'boiler_temperature': round(ambient_temp, 2),
+                'heat_exchanger_temperature': round(ambient_temp, 2),
+                'flue_gas_temperature': round(ambient_temp, 2),
+                'mold_temperature': round(ambient_temp, 2),
+                'dryer_temperature': round(ambient_temp, 2),
+                'oven_temperature': round(ambient_temp, 2),
+                'distill_temperature': round(ambient_temp, 2),
+                'ambient_temperature': round(ambient_temp, 2),
+                'pressure': round(ambient_pressure, 4),
+                'boiler_pressure': round(ambient_pressure, 4),
+                'injection_pressure': 0.0,
+                'hydraulic_pressure': 0.0,
+                'pneumatic_pressure': round(ambient_pressure, 4),
+                'line_pressure': round(ambient_pressure, 4),
+                'level': round(0.5 + random.gauss(0, 0.1), 2),
+                'tank_level': round(0.5 + random.gauss(0, 0.1), 2),
+                'ph': round(7.0 + random.gauss(0, 0.1), 2),
+                'conductivity': round(0.0, 1),
+                'turbidity': round(0.0, 1),
+                'dissolved_oxygen': round(8.0 + random.gauss(0, 0.2), 2),
+                'voltage_a': 0.0, 'voltage_b': 0.0, 'voltage_c': 0.0,
+                'current_a': 0.0, 'current_b': 0.0, 'current_c': 0.0,
+                'active_power': 0.0, 'reactive_power': 0.0, 'apparent_power': 0.0,
+                'power_factor': 0.0, 'frequency': 50.0 + random.gauss(0, 0.01),
+                'energy_consumption': round(self._total_energy_kwh, 2),
+                'motor_speed': 0.0, 'conveyor_speed': 0.0,
+                'pump_speed': 0.0, 'fan_speed': 0.0,
+                'vibration': round(0.0 + random.gauss(0, 0.01), 3),
+                'vibration_x': round(0.0 + random.gauss(0, 0.01), 3),
+                'vibration_y': round(0.0 + random.gauss(0, 0.01), 3),
+                'vibration_z': round(0.0 + random.gauss(0, 0.01), 3),
+                'spindle_speed': 0.0, 'feed_rate': 0.0,
+                'shot_count': round(self._shot_count, 0),
+                'cycle_time': 0.0, 'injection_speed': 0.0,
+                'injection_force': 0.0, 'clamping_force': 0.0,
+                'green_light': 0, 'yellow_light': 1, 'red_light': 0,
+                'blue_light': 0, 'white_light': 0, 'buzzer': 0,
+                'running_status': 0, 'status': 0,
+                'humidity': round(50.0 + random.gauss(0, 2), 1),
             }
+            # 过滤：只返回该设备实际拥有的参数
+            return {k: v for k, v in stopped_params.items()
+                    if k.startswith('_') or k in self._device_param_names}
         
         t = time.time() - self.start_time
         
