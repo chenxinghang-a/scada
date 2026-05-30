@@ -587,8 +587,12 @@ class ModbusClient:
         if self.byte_order == ByteOrder.ABCD:
             raw = (w1 << 16) | w2
         elif self.byte_order == ByteOrder.BADC:
-            raw = (w2 << 16) | w1
+            # Byte-swap within each word, then combine
+            w1_swapped = ((w1 & 0xFF) << 8) | ((w1 >> 8) & 0xFF)
+            w2_swapped = ((w2 & 0xFF) << 8) | ((w2 >> 8) & 0xFF)
+            raw = (w1_swapped << 16) | w2_swapped
         elif self.byte_order == ByteOrder.CDAB:
+            # Word swap only
             raw = (w2 << 16) | w1
         elif self.byte_order == ByteOrder.DCBA:
             b0 = (w1 >> 8) & 0xFF

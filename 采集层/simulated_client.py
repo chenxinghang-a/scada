@@ -42,7 +42,7 @@ _MACHINERY_KEYWORDS = {
 }
 
 _ESTOP_ACTIVE = False
-_ESTOP_FROZEN_VALUES: dict[str, float] = {}  # name -> frozen_value
+_ESTOP_FROZEN_VALUES: dict = {}  # key (str) -> frozen_value
 
 # 设备级停止（个体停机，区别于全局 E-STOP）
 _DEVICE_STOPPED: set[str] = set()  # device_id 集合
@@ -483,8 +483,9 @@ class SimulatedModbusClient(ModbusClientInterface):
                 # 冻结或归零
                 for addr in range(address, address + count):
                     if addr in self._machinery_addresses:
-                        if addr not in _ESTOP_FROZEN_VALUES:
-                            _ESTOP_FROZEN_VALUES[addr] = 0.0
+                        key = str(addr) if isinstance(addr, int) else addr
+                        if key not in _ESTOP_FROZEN_VALUES:
+                            _ESTOP_FROZEN_VALUES[key] = 0.0
                 # 返回全零
                 if count == 1:
                     return [0]
@@ -528,7 +529,7 @@ class SimulatedModbusClient(ModbusClientInterface):
         raw_value = value / scale if scale != 0 else value
 
         if data_type == 'float32':
-            raw = struct.pack('>f', float(value))
+            raw = struct.pack('>f', float(raw_value))
             return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
         elif data_type in ('int32', 'uint32'):
             int_val = int(round(raw_value))
@@ -536,7 +537,7 @@ class SimulatedModbusClient(ModbusClientInterface):
             return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
         elif count >= 2:
             # 兜底：未知类型但count>=2，按float32处理
-            raw = struct.pack('>f', float(value))
+            raw = struct.pack('>f', float(raw_value))
             return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
         else:
             # uint16 / int16
@@ -588,14 +589,36 @@ class SimulatedModbusClient(ModbusClientInterface):
             return None
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
-        return [random.choice([True, False]) for _ in range(count)]
+        results = []
+        for i in range(count):
+            addr = address + i
+            if _ESTOP_ACTIVE:
+                results.append(False)  # All off during E-STOP
+            elif addr == 0:
+                results.append(not is_device_stopped(self.device_id))  # Running coil
+            elif addr == 1:
+                results.append(False)  # Fault coil
+            else:
+                results.append(bool((addr * 7 + int(time.time()) // 30) % 2))  # Deterministic toggle
+        return results
 
     def read_discrete_inputs(self, address: int, count: int, slave_id: int | None = None) -> list[bool] | None:
         if not self.connected:
             return None
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
-        return [random.choice([True, False]) for _ in range(count)]
+        results = []
+        for i in range(count):
+            addr = address + i
+            if _ESTOP_ACTIVE:
+                results.append(False)
+            elif addr == 0:
+                results.append(not is_device_stopped(self.device_id))
+            elif addr == 1:
+                results.append(False)
+            else:
+                results.append(bool((addr * 7 + int(time.time()) // 30) % 2))
+        return results
 
     def read_input_registers(self, address: int, count: int, slave_id: int | None = None) -> list[int] | None:
         """读取输入寄存器（与保持寄存器逻辑相同）"""

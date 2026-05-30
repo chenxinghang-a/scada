@@ -402,7 +402,6 @@ class DataCollector:
 
     def _collect_device_data(self, device_id: str, device_config: dict[str, Any], protocol: str) -> bool:
         """采集单个轮询型设备的数据，返回是否成功"""
-        self._inc_stat('total_collections')
 
         try:
             client = self.device_manager.get_client(device_id)

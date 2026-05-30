@@ -10,8 +10,10 @@ let socket = null;
  * 初始化WebSocket连接
  */
 function initWebSocket() {
-    socket = io();
-    
+    const wsToken = localStorage.getItem('auth_token');
+    socket = io({query: {token: wsToken || ''}});
+    window.socket = socket;
+
     socket.on('connect', function() {
         console.log('WebSocket连接成功');
         updateSystemStatus('online');
@@ -234,7 +236,6 @@ function updateAlarmBanner(alarm) {
 
     // 更新计数
     updateAlarmCount();
-    updateAlarmCountSilent();
 }
 
 /**
@@ -322,6 +323,9 @@ function updateAlarmCount() {
             if (countBadge) countBadge.textContent = count;
 
             banner.style.display = 'block';
+        })
+        .catch(err => {
+            console.error('updateAlarmCount fetch error:', err);
         });
 }
 
@@ -407,20 +411,29 @@ async function apiRequest(url, options = {}) {
             ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
     };
-    
+
     const response = await fetch(`${API_BASE}${url}`, { ...defaultOptions, ...options });
-    
+
     // 处理认证失败
     if (response.status === 401) {
-        // 清除无效token
         localStorage.removeItem('auth_token');
-        // 如果不是登录页面，跳转到登录页
         if (!window.location.pathname.includes('/login')) {
             window.location.href = '/login';
         }
+        return null;
     }
-    
-    return response.json();
+
+    if (!response.ok) {
+        console.error(`API error: ${response.status} ${url}`);
+        return null;
+    }
+
+    try {
+        return await response.json();
+    } catch(e) {
+        console.error(`JSON parse error for ${url}:`, e);
+        return null;
+    }
 }
 
 /**

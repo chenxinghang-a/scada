@@ -5,6 +5,7 @@
 
 let trendChart = null;
 let selectedDeviceId = null;
+let loadGeneration = 0;
 const deviceCache = {};     // {id: {name, connected, registers, ...}}
 const dataBuffers = {};     // {register_name: [{t, v}]}
 const MAX_POINTS = 60;
@@ -37,25 +38,34 @@ async function apiFetch(url) {
     const token = localStorage.getItem('auth_token');
     const h = token ? { 'Authorization': `Bearer ${token}` } : {};
     const r = await fetch('/api' + url, { headers: h });
-    if (r.status === 401) { window.location.href = '/login'; return null; }
+    if (r.status === 401) {
+        localStorage.removeItem('auth_token');
+        window.location.href = '/login';
+        return null;
+    }
+    if (!r.ok) return null;
     return r.json();
 }
 
 // ========== 主数据加载 ==========
 async function loadData() {
+    const gen = ++loadGeneration;
     try {
         const status = await apiFetch('/system/status');
+        if (gen !== loadGeneration) return;
         if (!status) return;
         updateKPI(status);
         updateDeviceGrid(status);
         updateStatusBar(status);
 
         const data = await apiFetch('/data/realtime?limit=5000');
+        if (gen !== loadGeneration) return;
         if (data && data.data) {
             updateTrendChart(data.data);
         }
 
         const alarms = await apiFetch('/alarms?limit=50');
+        if (gen !== loadGeneration) return;
         if (alarms && alarms.alarms) {
             updateAlarmPanel(alarms.alarms);
         }
@@ -312,7 +322,7 @@ function updateTrendChart(data) {
         select.value = selectedDeviceId;
     }
 
-    const now = new Date().toTimeString().slice(0, 8);
+    const now = new Date().toTimeString().slice(0, 8) + '.' + String(new Date().getMilliseconds()).padStart(3, '0');
 
     // 缓存选中设备的数据
     let matched = 0;
@@ -327,6 +337,12 @@ function updateTrendChart(data) {
     });
 
     if (matched === 0) return;
+
+    // Prevent memory leak: limit total buffer keys
+    const allKeys = Object.keys(dataBuffers);
+    if (allKeys.length > 100) {
+        allKeys.slice(0, allKeys.length - 100).forEach(k => delete dataBuffers[k]);
+    }
 
     const keys = Object.keys(dataBuffers);
     const timeSet = new Set();
@@ -397,19 +413,39 @@ function updateStatusBar(stats) {
 }
 
 // ========== 设备值实时更新 ==========
-// WebSocket 更新设备值
-if (typeof io !== 'undefined') {
-    const socket = io();
-    socket.on('data_update', (data) => {
-        if (data && data.device_id && data.register_name) {
-            const el = document.getElementById(`dv-${data.device_id}-${data.register_name}`);
-            if (el && data.value !== null) {
-                el.textContent = parseFloat(data.value).toFixed(1);
+// WebSocket 更新设备值 — 使用 main.js 的 window.socket
+document.addEventListener('DOMContentLoaded', () => {
+    function attachSocketHandlers() {
+        const sk = window.socket;
+        if (!sk) return;
+        sk.on('data_update', (data) => {
+            if (data && data.device_id && data.register_name) {
+                const el = document.getElementById(`dv-${data.device_id}-${data.register_name}`);
+                if (el && data.value !== null) {
+                    el.textContent = parseFloat(data.value).toFixed(1);
+                }
             }
-        }
-    });
-    socket.on('alarm', () => loadData());
-}
+        });
+        sk.on('alarm', () => loadData());
+        // Subscribe to all visible devices
+        sk.on('connect', () => {
+            const select = document.getElementById('trend-device-select');
+            if (select) {
+                Array.from(select.options).forEach(opt => {
+                    if (opt.value) sk.emit('subscribe', {device_id: opt.value});
+                });
+            }
+        });
+    }
+    // main.js socket may not be ready yet; retry briefly
+    if (window.socket) {
+        attachSocketHandlers();
+    } else {
+        const timer = setInterval(() => {
+            if (window.socket) { clearInterval(timer); attachSocketHandlers(); }
+        }, 200);
+    }
+});
 
 // ========== 工具函数 ==========
 function setText(id, v) {

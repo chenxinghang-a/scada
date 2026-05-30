@@ -695,14 +695,15 @@ class DeviceBehaviorSimulator:
     def _change_state(self, new_state: DeviceState):
         """改变设备状态"""
         old_state = self.state
+        old_start = self.state_start_time  # Capture before update
         self.state = new_state
         self.state_start_time = time.time()
-        
+
         self.state_history.append({
             'from': old_state.value,
             'to': new_state.value,
             'time': datetime.now().isoformat(),
-            'duration': time.time() - self.state_start_time
+            'duration': time.time() - old_start  # Use old start time
         })
         
         # 保留最近100条状态历史

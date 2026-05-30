@@ -10,12 +10,19 @@ const MAX_POINTS = 60;
 let selectedDeviceId = null;
 let deviceNameCache = {};
 let alarmList = [];
+let loadGeneration = 0;
 
 // ========== API 请求 ==========
 async function apiFetch(url) {
     const token = localStorage.getItem('auth_token');
     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
     const resp = await fetch('/api' + url, { headers });
+    if (resp.status === 401) {
+        localStorage.removeItem('auth_token');
+        window.location.href = '/login';
+        return null;
+    }
+    if (!resp.ok) return null;
     return resp.json();
 }
 
@@ -28,9 +35,15 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(loadData, 3000);
 
     // WebSocket
-    const socket = io();
+    const wsToken = localStorage.getItem('auth_token');
+    const socket = io({query: {token: wsToken || ''}});
     socket.on('alarm', data => addAlarm(data));
-    socket.on('connect', () => console.log('WS connected'));
+    socket.on('connect', () => {
+        console.log('WS connected');
+        if (selectedDeviceId) {
+            socket.emit('subscribe', {device_id: selectedDeviceId});
+        }
+    });
 });
 
 // ========== 时钟 ==========
@@ -211,24 +224,31 @@ async function loadDeviceList() {
 
 // ========== 数据加载 ==========
 async function loadData() {
+    const gen = ++loadGeneration;
     try {
         // 系统状态
         const status = await apiFetch('/system/status');
+        if (gen !== loadGeneration) return;
         updateKPI(status);
         updateDeviceStatus(status);
         updateHealth(status);
 
         // 实时数据
         const data = await apiFetch('/data/realtime?limit=5000');
-        if (data.data && data.data.length > 0) {
+        if (gen !== loadGeneration) return;
+        if (data && data.data && data.data.length > 0) {
             updateTrendChart(data.data);
             updateEnergyChart(data.data);
             updateSPCChart(data.data);
         }
 
         // 报警
-        const alarms = await apiFetch('/alarms?limit=20');
-        if (alarms.alarms) updateAlarmList(alarms.alarms);
+        const alarms = await apiFetch('/alarms?limit=50');
+        if (gen !== loadGeneration) return;
+        if (alarms && alarms.alarms) {
+            alarmList = alarms.alarms.slice(0, 50);
+            updateAlarmList(alarmList);
+        }
 
     } catch (e) { console.error('loadData:', e); }
 }
@@ -282,7 +302,7 @@ function updateHealth(stats) {
     let devices = stats.devices;
     if (typeof devices === 'object' && !Array.isArray(devices)) devices = Object.values(devices);
     const names = devices.map(d => (d.name || d.device_id || '').substring(0, 8));
-    const scores = devices.map(d => d.connected ? Math.floor(70 + Math.random() * 30) : Math.floor(Math.random() * 30));
+    const scores = devices.map(d => d.connected ? 100 : 0);
     healthChart.setOption({
         yAxis: { data: names },
         series: [{ data: scores }],
@@ -292,7 +312,7 @@ function updateHealth(stats) {
 // ========== 趋势图 ==========
 function updateTrendChart(data) {
     if (!trendChart || !selectedDeviceId) return;
-    const now = new Date().toTimeString().slice(0, 8);
+    const now = new Date().toTimeString().slice(0, 8) + '.' + String(new Date().getMilliseconds()).padStart(3, '0');
 
     data.forEach(item => {
         if (item.device_id !== selectedDeviceId) return;
@@ -302,6 +322,12 @@ function updateTrendChart(data) {
         dataBuffers[key].push({ time: now, value: parseFloat(item.value) });
         if (dataBuffers[key].length > MAX_POINTS) dataBuffers[key].shift();
     });
+
+    // Prevent memory leak: limit total buffer keys
+    const allBufferKeys = Object.keys(dataBuffers);
+    if (allBufferKeys.length > 100) {
+        allBufferKeys.slice(0, allBufferKeys.length - 100).forEach(k => delete dataBuffers[k]);
+    }
 
     const keys = Object.keys(dataBuffers);
     if (keys.length === 0) return;
@@ -377,7 +403,7 @@ function updateAlarmList(alarms) {
 
 function addAlarm(data) {
     alarmList.unshift(data);
-    if (alarmList.length > 20) alarmList.pop();
+    if (alarmList.length > 50) alarmList.length = 50;
     updateAlarmList(alarmList);
 }
 

@@ -107,15 +107,19 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
     
     def _update_loop(self):
         """数据更新循环"""
+        last_update = time.time()
         while self.connected:
             try:
+                now = time.time()
+                dt = now - last_update
+                last_update = now
                 # 更新行为模拟器
-                data = self.behavior_simulator.update(1.0)
-                
+                data = self.behavior_simulator.update(dt)
+
                 # 更新缓存
                 with self._data_lock:
                     self._latest_data = data
-                
+
                 time.sleep(1.0)
             except Exception as e:
                 logger.error(f"[增强模拟] 更新异常: {e}")
@@ -250,8 +254,12 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         if self.byte_order == ByteOrder.ABCD:
             raw = (w1 << 16) | w2
         elif self.byte_order == ByteOrder.BADC:
-            raw = (w2 << 16) | w1
+            # Byte-swap within each word, then combine
+            w1_swapped = ((w1 & 0xFF) << 8) | ((w1 >> 8) & 0xFF)
+            w2_swapped = ((w2 & 0xFF) << 8) | ((w2 >> 8) & 0xFF)
+            raw = (w1_swapped << 16) | w2_swapped
         elif self.byte_order == ByteOrder.CDAB:
+            # Word swap only
             raw = (w2 << 16) | w1
         elif self.byte_order == ByteOrder.DCBA:
             b0 = (w1 >> 8) & 0xFF
@@ -366,7 +374,8 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
         self._data_callbacks: List[Callable] = []
         self._push_thread: Optional[threading.Thread] = None
         self._running = False
-        
+        self._data_lock = threading.RLock()
+
         # 统计
         self.stats = {
             'connected_since': None,
@@ -375,7 +384,7 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
             'errors': 0,
             'last_error': None
         }
-        
+
         logger.info(f"[增强模拟] OPC UA客户端初始化: {config.get('name', 'unknown')}")
     
     def add_data_callback(self, callback: Callable):
@@ -418,6 +427,11 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
     
     def _generate_data(self):
         """生成数据"""
+        with self._data_lock:
+            self._do_generate_data()
+
+    def _do_generate_data(self):
+        """内部生成数据（需在锁内调用）"""
         # 停机设备不产生数据
         if is_device_stopped(self.device_id):
             return
@@ -760,8 +774,8 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
             }
 
             # 更新行为模拟器的内部状态
-            if hasattr(self.behavior_simulator, '_current_values'):
-                self.behavior_simulator._current_values[name] = value
+            if hasattr(self, 'behavior_simulator') and self.behavior_simulator:
+                self.behavior_simulator.handle_write_register(name, value)
 
             logger.info(f"[增强模拟] REST {method}写入成功: {path} -> {name} = {value}")
         else:
