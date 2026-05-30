@@ -77,6 +77,10 @@ class ModbusClient:
 
         # 统计信息（线程安全）
         self._stats_lock = threading.Lock()
+
+        # 写入安全验证器 (GB/T 19582 + GB/T 35718 + GB/T 15969)
+        from core.write_safety import WriteSafetyValidator
+        self._write_safety = WriteSafetyValidator(config)
         self.stats: dict[str, Any] = {
             'total_reads': 0,
             'total_writes': 0,
@@ -98,6 +102,19 @@ class ModbusClient:
     def _inc_stat(self, key: str):
         with self._stats_lock:
             self.stats[key] = self.stats.get(key, 0) + 1
+
+    def _raw_to_engineering(self, address: int, raw_value: int) -> float:
+        """将原始寄存器值转换为工程值（用于安全验证）"""
+        profile = self._write_safety.get_register_info(address)
+        if not profile:
+            return float(raw_value)
+        # 从设备配置中查找scale和offset
+        for reg in self.config.get('registers', []):
+            if reg.get('address') == address:
+                scale = reg.get('scale', 1.0)
+                offset = reg.get('offset', 0)
+                return raw_value * scale + offset
+        return float(raw_value)
 
     def _log_operation(self, operation: str, address: int, count: int,
                        success: bool, detail: str = ''):
@@ -535,6 +552,14 @@ class ModbusClient:
             self._log_operation('write_single_register', address, 1, False, str(e))
             return False
 
+        # GB/T 19582 + GB/T 35718 + GB/T 15969 写入安全验证
+        eng_value = self._raw_to_engineering(address, value)
+        allowed, reason = self._write_safety.validate_write(address, eng_value)
+        if not allowed:
+            logger.warning(f"[写入安全] 设备 {self.device_name}: 写入被阻止 — {reason}")
+            self._log_operation('write_single_register', address, 1, False, f'安全阻止: {reason}')
+            return False
+
         if not self.connected:
             return False
 
@@ -685,6 +710,15 @@ class ModbusClient:
             self._log_operation('write_multiple_registers', address, count, False, msg)
             return False
 
+        # GB/T 19582 + GB/T 35718 写入安全验证（逐寄存器检查）
+        for i, val in enumerate(values):
+            eng_val = self._raw_to_engineering(address + i, val)
+            allowed, reason = self._write_safety.validate_write(address + i, eng_val)
+            if not allowed:
+                logger.warning(f"[写入安全] 设备 {self.device_name}: 批量写入被阻止 — {reason}")
+                self._log_operation('write_multiple_registers', address, count, False, f'安全阻止: {reason}')
+                return False
+
         if not self.connected:
             return False
 
@@ -800,6 +834,22 @@ class ModbusClient:
         Returns:
             list[int]: 读取到的寄存器值，失败返回None
         """
+        # GB/T 19582 地址范围校验
+        try:
+            self.validate_address_range(read_address, read_count, 'holding_register')
+            self.validate_address_range(write_address, len(write_values), 'holding_register')
+        except ValueError as e:
+            logger.error(str(e))
+            return None
+
+        # GB/T 19582 + GB/T 35718 写入安全验证
+        for i, val in enumerate(write_values):
+            eng_val = self._raw_to_engineering(write_address + i, val)
+            allowed, reason = self._write_safety.validate_write(write_address + i, eng_val)
+            if not allowed:
+                logger.warning(f"[写入安全] 设备 {self.device_name}: 读写操作被阻止 — {reason}")
+                return None
+
         if not self.connected:
             return None
 
