@@ -84,14 +84,14 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         response.headers['X-Content-Type-Options'] = 'nosniff'
         # XSS保护
         response.headers['X-XSS-Protection'] = '1; mode=block'
-        # 内容安全策略 - 允许CDN资源
+        # 内容安全策略 - 允许CDN资源 (GB/T 33008 + GB/T 37980)
         csp_directives = [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com" + (' ' + ' '.join(SecurityConfig.CSP_EXTRA_SCRIPTS) if SecurityConfig.CSP_EXTRA_SCRIPTS else ''),
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.socket.io" + (' ' + ' '.join(SecurityConfig.CSP_EXTRA_SCRIPTS) if SecurityConfig.CSP_EXTRA_SCRIPTS else ''),
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net",
             "img-src 'self' data: blob:",
-            "connect-src 'self' ws: wss:",
+            "connect-src 'self' ws: wss: http: https:",
             "frame-ancestors 'self'",
         ]
         response.headers['Content-Security-Policy'] = '; '.join(csp_directives)
