@@ -483,6 +483,10 @@ class AlarmManager:
                 rule_id = rule_config.get('id')
                 if rule_id:
                     self.rules[rule_id] = rule_config
+                    # 从规则配置中读取死区
+                    deadband = rule_config.get('deadband', 0)
+                    if deadband:
+                        self._deadbands[rule_id] = float(deadband)
                     logger.info(f"加载报警规则: {rule_id} - {rule_config.get('name')}")
 
             logger.info(f"共加载 {len(self.rules)} 条报警规则")
@@ -536,12 +540,15 @@ class AlarmManager:
             if alarm_key in self._shelved_alarms:
                 continue
 
-            # 检查报警条件（含死区）
+            # 检查报警条件（含非对称死区/迟滞）
+            with self._state_lock:
+                current_alarm_state = self.alarm_states.get((device_id, register_name))
             alarm_triggered = self._check_condition(
                 value=value,
                 condition=rule_config.get('condition'),
                 threshold=rule_config.get('threshold'),
-                rule_id=rule_id
+                rule_id=rule_id,
+                alarm_state=current_alarm_state
             )
 
             # 处理报警状态
@@ -556,36 +563,52 @@ class AlarmManager:
             )
 
     def _check_condition(self, value: float, condition: str, threshold: float,
-                         rule_id: str = None) -> bool:
+                         rule_id: str = None, alarm_state: dict = None) -> bool:
         """
-        检查报警条件（含死区支持）
+        检查报警条件（含非对称死区/迟滞支持）
 
         死区（Deadband）防止阈值附近信号抖动导致报警反复触发/清除。
-        例如：阈值100，死区2，则 value>102 才报警，value<98 才清除。
+        非对称逻辑：
+        - 触发（alarm not active）：精确阈值判断
+        - 清除（alarm active）：阈值 ± deadband，需要更大偏移才能清除
+
+        例如：阈值100，死区2，gt条件
+        - 触发：value > 100
+        - 清除：value < 98（需要降到 threshold - deadband 以下）
 
         Args:
             value: 实际值
             condition: 条件类型
             threshold: 阈值
             rule_id: 规则ID（用于查找死区配置）
+            alarm_state: 当前告警状态（用于区分触发/清除逻辑）
 
         Returns:
             bool: 是否触发报警
         """
         deadband = self._deadbands.get(rule_id, 0) if rule_id else 0
+        is_active = alarm_state and alarm_state.get('alarm_id') is not None
 
         if condition == 'greater_than':
-            return value > (threshold + deadband)
+            if is_active:
+                return value > threshold - deadband  # 清除需降到 threshold - deadband 以下
+            return value > threshold
         elif condition == 'less_than':
-            return value < (threshold - deadband)
+            if is_active:
+                return value < threshold + deadband  # 清除需升到 threshold + deadband 以上
+            return value < threshold
         elif condition == 'equal_to':
-            return abs(value - threshold) < (deadband if deadband > 0 else 0.0001)
+            return abs(value - threshold) <= deadband if deadband > 0 else value == threshold
         elif condition == 'not_equal_to':
-            return abs(value - threshold) >= (deadband if deadband > 0 else 0.0001)
+            return abs(value - threshold) > deadband if deadband > 0 else value != threshold
         elif condition == 'greater_equal':
-            return value >= (threshold + deadband)
+            if is_active:
+                return value >= threshold - deadband
+            return value >= threshold
         elif condition == 'less_equal':
-            return value <= (threshold - deadband)
+            if is_active:
+                return value <= threshold + deadband
+            return value <= threshold
         else:
             logger.warning(f"未知的报警条件: {condition}")
             return False

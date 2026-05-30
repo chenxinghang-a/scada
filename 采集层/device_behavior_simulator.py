@@ -493,6 +493,9 @@ class DeviceBehaviorSimulator:
         # 2. 检查是否触发故障
         self._check_fault_triggers()
         
+        # 2.5 配方驱动 - 应用配方设定值到过程模型
+        self._apply_recipe_setpoints(dt)
+
         # 3. 更新物理参数（带惯性）
         self._update_process_variables(dt)
         
@@ -515,6 +518,29 @@ class DeviceBehaviorSimulator:
         self._last_update = current_time
         return data
     
+    def _apply_recipe_setpoints(self, dt: float):
+        """应用配方设定值到过程模型"""
+        if not hasattr(self, 'recipe_simulator') or not self.recipe_simulator:
+            return
+        if not self.recipe_simulator.is_running:
+            return
+
+        setpoints = self.recipe_simulator.update(dt)
+        if not setpoints:
+            return
+
+        # 将配方设定值写入过程模型基础参数
+        for param, value in setpoints.items():
+            name_lower = param.lower()
+            if 'temperature' in name_lower or 'temp' in name_lower:
+                self.process_model.base_temperature = float(value)
+            elif 'pressure' in name_lower:
+                self.process_model.base_pressure = float(value) / 100  # 归一化
+            elif 'flow' in name_lower:
+                self.process_model.base_flow = float(value)
+            elif 'speed' in name_lower:
+                self.process_model.base_speed = float(value)
+
     def _update_health(self, dt: float):
         """更新设备健康状态（渐进式退化）"""
         if self.state == DeviceState.RUNNING:
@@ -1014,6 +1040,30 @@ class DeviceBehaviorSimulator:
     def force_state(self, state: DeviceState):
         """强制设置状态（用于测试）"""
         self._change_state(state)
+
+    def set_recipe(self, recipe_name: str) -> bool:
+        """设置当前配方"""
+        from 采集层.recipe_simulator import RecipeSimulator
+        recipe = RecipeSimulator.RECIPES.get(recipe_name)
+        if recipe:
+            self.recipe_simulator = RecipeSimulator(recipe, self)
+            self.recipe_simulator.start()
+            logger.info(f"[行为模拟] 设备 {self.device_name} 已启动配方: {recipe.name}")
+            return True
+        logger.warning(f"[行为模拟] 配方 '{recipe_name}' 不存在")
+        return False
+
+    def stop_recipe(self):
+        """停止当前配方"""
+        if hasattr(self, 'recipe_simulator') and self.recipe_simulator:
+            self.recipe_simulator.stop()
+            logger.info(f"[行为模拟] 设备 {self.device_name} 配方已停止")
+
+    def get_recipe_status(self) -> Optional[dict]:
+        """获取配方状态"""
+        if hasattr(self, 'recipe_simulator') and self.recipe_simulator:
+            return self.recipe_simulator.get_status()
+        return None
 
 
 class MultiDeviceSimulator:

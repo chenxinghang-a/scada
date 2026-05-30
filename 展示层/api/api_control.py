@@ -4,6 +4,7 @@
 """
 
 import logging
+from typing import Optional
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
@@ -463,3 +464,128 @@ def get_control_safety_status():
     if not device_control:
         return module_unavailable_response('device_control')
     return jsonify({'enabled': True, **device_control.get_full_status()})
+
+
+# ==================== 配方/批量过程控制API ====================
+
+@control_bp.route('/control/recipe/start', methods=['POST'])
+@_require_engineer
+def start_recipe():
+    """启动配方"""
+    data = request.get_json() or {}
+    recipe_name = data.get('recipe_name')
+    device_id = data.get('device_id')
+
+    if not recipe_name:
+        return jsonify({'error': '缺少 recipe_name 参数'}), 400
+
+    from 采集层.recipe_simulator import RecipeSimulator
+    if recipe_name not in RecipeSimulator.RECIPES:
+        return jsonify({
+            'error': f'配方 "{recipe_name}" 不存在',
+            'available': list(RecipeSimulator.RECIPES.keys())
+        }), 404
+
+    # 查找目标设备的行为模拟器
+    behavior_sim = _get_behavior_simulator(device_id)
+    if not behavior_sim:
+        return jsonify({'error': '未找到可用的设备行为模拟器'}), 404
+
+    success = behavior_sim.set_recipe(recipe_name)
+    if success:
+        operator = request.current_user['username']
+        get_auth_manager().log_operation(
+            operator, 'start_recipe',
+            f'设备 {behavior_sim.device_name} 启动配方: {recipe_name}')
+        return jsonify({
+            'success': True,
+            'message': f'配方 "{recipe_name}" 已启动',
+            'device': behavior_sim.device_name,
+            'status': behavior_sim.get_recipe_status()
+        })
+    return jsonify({'success': False, 'message': '配方启动失败'}), 400
+
+
+@control_bp.route('/control/recipe/stop', methods=['POST'])
+@_require_engineer
+def stop_recipe():
+    """停止配方"""
+    data = request.get_json() or {}
+    device_id = data.get('device_id')
+
+    behavior_sim = _get_behavior_simulator(device_id)
+    if not behavior_sim:
+        return jsonify({'error': '未找到可用的设备行为模拟器'}), 404
+
+    status = behavior_sim.get_recipe_status()
+    if not status:
+        return jsonify({'error': '该设备没有正在运行的配方'}), 400
+
+    behavior_sim.stop_recipe()
+    operator = request.current_user['username']
+    get_auth_manager().log_operation(
+        operator, 'stop_recipe',
+        f'设备 {behavior_sim.device_name} 停止配方: {status.get("recipe", "")}')
+    return jsonify({
+        'success': True,
+        'message': '配方已停止',
+        'device': behavior_sim.device_name
+    })
+
+
+@control_bp.route('/control/recipe/status', methods=['GET'])
+@_require_auth
+def get_recipe_status():
+    """获取配方状态"""
+    device_id = request.args.get('device_id')
+
+    behavior_sim = _get_behavior_simulator(device_id)
+    if not behavior_sim:
+        return jsonify({'error': '未找到可用的设备行为模拟器'}), 404
+
+    status = behavior_sim.get_recipe_status()
+    if not status:
+        return jsonify({'running': False, 'message': '没有正在运行的配方'})
+    return jsonify(status)
+
+
+@control_bp.route('/control/recipe/list', methods=['GET'])
+@_require_auth
+def list_recipes():
+    """获取可用配方列表"""
+    from 采集层.recipe_simulator import RecipeSimulator
+    recipes = {}
+    for key, recipe in RecipeSimulator.RECIPES.items():
+        recipes[key] = {
+            'name': recipe.name,
+            'version': recipe.version,
+            'phase_count': len(recipe.phases),
+            'phases': [p.name for p in recipe.phases],
+            'total_duration': sum(p.duration for p in recipe.phases),
+            'parameters': recipe.parameters,
+        }
+    return jsonify({'recipes': recipes, 'count': len(recipes)})
+
+
+def _get_behavior_simulator(device_id: Optional[str]):
+    """获取设备行为模拟器实例"""
+    device_manager = getattr(current_app, 'device_manager', None)
+    if not device_manager:
+        return None
+
+    # 模拟模式下查找行为模拟器
+    simulators = getattr(current_app, '_behavior_simulators', {})
+    if device_id and device_id in simulators:
+        return simulators[device_id]
+
+    # 尝试从设备管理器获取
+    if device_id:
+        client = device_manager.get_client(device_id)
+        if client and hasattr(client, 'behavior_simulator'):
+            return client.behavior_simulator
+
+    # 返回任意可用的模拟器
+    if simulators:
+        return next(iter(simulators.values()))
+
+    return None

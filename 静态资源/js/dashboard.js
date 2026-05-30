@@ -301,11 +301,11 @@ function updateAlarmPanel(alarms) {
         return `<div class="alarm-row ${acked ? '' : 'unacked'}">
             <span class="alarm-prio ${level}">${prioText}</span>
             <span class="alarm-time">${lastTime}</span>
-            <span class="alarm-device">${device}</span>
-            <span class="alarm-msg">${msg}</span>
+            <span class="alarm-device">${escapeHtml(device)}</span>
+            <span class="alarm-msg">${escapeHtml(msg)}</span>
             <span class="alarm-pv">${pv}</span>
             ${countStr}
-            ${acked ? '' : `<button class="alarm-ack-btn" onclick="ackAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}')">确认</button>`}
+            ${acked ? '' : `<button class="alarm-ack-btn" data-alarm-id="${escapeHtml(a.alarm_id)}" data-device-id="${escapeHtml(a.device_id)}" data-register="${escapeHtml(a.register_name || '')}">确认</button>`}
         </div>`;
     }).join('');
 }
@@ -319,6 +319,105 @@ async function ackAlarm(alarmId, deviceId, regName) {
         });
         loadData();
     } catch (e) { console.error('ackAlarm:', e); }
+}
+
+// 事件委托：确认按钮（防 XSS，不用 inline onclick）
+document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('alarm-ack-btn')) {
+        const alarmId = e.target.dataset.alarmId;
+        const deviceId = e.target.dataset.deviceId;
+        const register = e.target.dataset.register;
+        ackAlarm(alarmId, deviceId, register);
+    }
+});
+
+// XSS 安全转义
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/[&<>"']/g, function(c) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+}
+
+// 实时告警 DOM 插入
+function prependAlarmItem(alarm) {
+    const alarmList = document.getElementById('alarm-list');
+    if (!alarmList) return;
+
+    // 移除空状态提示
+    const empty = alarmList.querySelector('.alarm-empty');
+    if (empty) empty.remove();
+
+    const severityColors = {
+        critical: '#dc2626', high: '#ea580c',
+        medium: '#ca8a04', low: '#0891b2', info: '#4f46e5'
+    };
+    const color = severityColors[alarm.severity || alarm.alarm_level] || '#d9d9d9';
+    const prioText = (alarm.severity === 'critical' || alarm.alarm_level === 'critical') ? 'CRIT'
+        : (alarm.severity === 'high' || alarm.alarm_level === 'warning') ? 'HIGH' : 'LOW';
+    const time = alarm.timestamp
+        ? new Date(alarm.timestamp).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'})
+        : new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    const device = (alarm.device_id || '').substring(0, 12);
+    const msg = alarm.alarm_message || alarm.message || alarm.alarm_id || '-';
+    const latestVal = alarm.last_value != null ? alarm.last_value : alarm.actual_value;
+    const pv = latestVal != null ? `PV:${parseFloat(latestVal).toFixed(1)}` : '';
+
+    const html = `<div class="alarm-row unacked" style="border-left: 3px solid ${color};">
+        <span class="alarm-prio ${alarm.severity || alarm.alarm_level || 'low'}">${prioText}</span>
+        <span class="alarm-time">${time}</span>
+        <span class="alarm-device">${escapeHtml(device)}</span>
+        <span class="alarm-msg">${escapeHtml(msg)}</span>
+        <span class="alarm-pv">${pv}</span>
+        <button class="alarm-ack-btn" data-alarm-id="${escapeHtml(alarm.alarm_id || '')}" data-device-id="${escapeHtml(alarm.device_id || '')}" data-register="${escapeHtml(alarm.register_name || '')}">确认</button>
+    </div>`;
+
+    alarmList.insertAdjacentHTML('afterbegin', html);
+
+    // 保持最多 20 条
+    while (alarmList.children.length > 20) {
+        alarmList.removeChild(alarmList.lastChild);
+    }
+
+    // 更新未确认计数
+    updateAlarmCountFromDOM();
+}
+
+// 从 DOM 统计未确认数
+function updateAlarmCountFromDOM() {
+    const alarmList = document.getElementById('alarm-list');
+    if (!alarmList) return;
+    const unacked = alarmList.querySelectorAll('.alarm-row.unacked').length;
+    setText('kpi-unacked', unacked);
+}
+
+// 告警闪烁横幅
+function flashAlarmBanner(alarm) {
+    const banner = document.getElementById('alarm-banner');
+    if (!banner) return;
+    const colors = {critical: '#dc2626', high: '#ea580c', medium: '#ca8a04', warning: '#ca8a04'};
+    const sev = alarm.severity || alarm.alarm_level || 'critical';
+    banner.style.backgroundColor = colors[sev] || '#dc2626';
+    banner.style.display = 'block';
+    banner.style.opacity = '1';
+    banner.textContent = `${sev.toUpperCase()}: ${alarm.alarm_message || alarm.message || 'New alarm'}`;
+    setTimeout(() => { banner.style.opacity = '0.7'; }, 5000);
+}
+
+// 设备值更新（带质量颜色）
+function updateDeviceValue(deviceId, registerName, value, quality) {
+    const el = document.getElementById(`dv-${deviceId}-${registerName}`);
+    if (!el) return;
+    el.textContent = typeof value === 'number' ? value.toFixed(2) : value;
+    if (quality !== undefined) {
+        if (quality >= 192) {
+            el.style.color = '#52c41a';  // Good - green
+        } else if (quality >= 64) {
+            el.style.color = '#faad14';  // Uncertain - yellow
+        } else {
+            el.style.color = '#ff4d4f';  // Bad - red
+        }
+    }
 }
 
 function getAuthHeaders() {
@@ -467,7 +566,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         });
-        sk.on('alarm', () => loadData());
+        // 实时更新告警面板
+        sk.on('alarm', (data) => {
+            if (data && data.alarm_id) {
+                prependAlarmItem(data);
+                flashAlarmBanner(data);
+            } else {
+                loadData(); // fallback
+            }
+        });
         // Subscribe to all visible devices
         sk.on('connect', () => {
             const select = document.getElementById('trend-device-select');

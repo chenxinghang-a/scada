@@ -14,11 +14,62 @@ import struct
 import logging
 import threading
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, Dict
 
 from .base_client import ModbusClientInterface, PushClientInterface
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# 1/f (Pink) 噪声生成器
+# 真实传感器噪声的频谱密度遵循1/f分布
+# ============================================================
+
+class PinkNoiseGenerator:
+    """1/f (粉红)噪声生成器
+
+    真实传感器噪声的频谱密度遵循1/f分布：
+    - 低频：大振幅慢漂移（1/f）
+    - 高频：小振幅快变化（白噪声）
+
+    使用Voss-McCartney算法近似
+    """
+
+    def __init__(self, num_octaves: int = 16):
+        self.num_octaves = num_octaves
+        self._rows = [random.gauss(0, 1) for _ in range(num_octaves)]
+        self._sum = sum(self._rows)
+        self._index = 0
+
+    def next(self) -> float:
+        """生成下一个1/f噪声样本"""
+        self._index += 1
+
+        # 每次更新一个随机行
+        idx = 0
+        n = self._index
+        while n > 0 and (n & 1) == 0:
+            idx += 1
+            n >>= 1
+
+        if idx < self.num_octaves:
+            self._sum -= self._rows[idx]
+            self._rows[idx] = random.gauss(0, 1)
+            self._sum += self._rows[idx]
+
+        # 归一化到合理范围
+        return self._sum / (self.num_octaves ** 0.5)
+
+
+# 每个设备/寄存器维护一个独立的PinkNoiseGenerator实例
+_pink_noise_generators: Dict[str, PinkNoiseGenerator] = {}
+
+
+def _get_pink_noise(key: str) -> PinkNoiseGenerator:
+    if key not in _pink_noise_generators:
+        _pink_noise_generators[key] = PinkNoiseGenerator()
+    return _pink_noise_generators[key]
 
 
 # ============================================================
@@ -340,14 +391,19 @@ def _infer_rule_from_type(name: str, unit: str, data_type: str) -> dict[str, Any
         return {'kw': name_lower, 'base': 100, 'amp': 50, 'period': 60, 'noise': 5, 'shape': 'sine'}
 
 
-def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0) -> float:
+def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0,
+                    noise_key: str | None = None) -> float:
     """根据规则和时间生成模拟值
 
     增强版模拟：
     - 正弦波叠加低频漂移
-    - 高斯噪声 + 偶发尖峰
+    - 1/f粉红噪声 + 偶发尖峰
     - 日夜班次影响
     - 设备老化趋势
+
+    Args:
+        noise_key: 粉红噪声生成器的key（如 "device_id:address"），
+                   用于维护独立的1/f噪声状态。None时回退到高斯噪声。
     """
     shape = rule.get('shape', 'sine')
     base = rule['base']
@@ -370,9 +426,13 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0) -
         day_night_factor = 0.03 * math.sin((hour_of_day - 6) * math.pi / 12)
         value *= (1 + day_night_factor)
 
-        # 噪声：高斯 + 偶发尖峰
+        # 噪声：1/f粉红噪声 + 偶发尖峰
         if noise > 0:
-            value += random.gauss(0, noise)
+            if noise_key:
+                pink = _get_pink_noise(noise_key)
+                value += pink.next() * noise
+            else:
+                value += random.gauss(0, noise)
             # 2%概率出现尖峰（模拟干扰）
             if random.random() < 0.02:
                 value += random.gauss(0, noise * 3)
@@ -382,7 +442,11 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0) -
         value = base + t * rate
         # 添加微小波动（模拟计量误差）
         if noise > 0:
-            value += random.gauss(0, noise)
+            if noise_key:
+                pink = _get_pink_noise(noise_key)
+                value += pink.next() * noise
+            else:
+                value += random.gauss(0, noise)
         else:
             value += random.gauss(0, abs(base) * 0.001)
 
@@ -410,7 +474,11 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0) -
     else:
         value = base
         if noise > 0:
-            value += random.gauss(0, noise)
+            if noise_key:
+                pink = _get_pink_noise(noise_key)
+                value += pink.next() * noise
+            else:
+                value += random.gauss(0, noise)
 
     return value
 
@@ -522,7 +590,7 @@ class SimulatedModbusClient(ModbusClientInterface):
 
         # 用地址做相位偏移，避免同类型寄存器曲线完全一致
         phase = address * 0.3
-        value = _generate_value(rule, t, phase)
+        value = _generate_value(rule, t, phase, noise_key=f"{self.device_id}:{address}")
 
         # 根据data_type决定编码方式
         reg_type = self._register_types.get(address, {})
@@ -711,7 +779,7 @@ class SimulatedOPCUAClient(PushClientInterface):
             else:
                 rule = self._rules_cache.get(name)
                 if rule:
-                    value = _generate_value(rule, t, i * 0.5)
+                    value = _generate_value(rule, t, i * 0.5, noise_key=f"{self.device_id}:{name}")
                 else:
                     value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
 
@@ -843,7 +911,7 @@ class SimulatedMQTTClient(PushClientInterface):
             else:
                 rule = self._rules_cache.get(name)
                 if rule:
-                    value = _generate_value(rule, t, i * 0.7)
+                    value = _generate_value(rule, t, i * 0.7, noise_key=f"{self.device_id}:{name}")
                 else:
                     value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
 
@@ -927,7 +995,7 @@ class SimulatedRESTClient(PushClientInterface):
 
         rule = self._rules_cache.get(name)
         if rule:
-            return round(_generate_value(rule, t, hash(name) % 10 * 0.3), 2)
+            return round(_generate_value(rule, t, hash(name) % 10 * 0.3, noise_key=f"{self.device_id}:{name}"), 2)
         else:
             return round(50 + 30 * math.sin(t / 20) + random.gauss(0, 2), 2)
 
@@ -952,7 +1020,7 @@ class SimulatedRESTClient(PushClientInterface):
             else:
                 rule = self._rules_cache.get(name)
                 if rule:
-                    value = _generate_value(rule, t, i * 0.4)
+                    value = _generate_value(rule, t, i * 0.4, noise_key=f"{self.device_id}:{name}")
                 else:
                     value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
 
