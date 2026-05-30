@@ -22,10 +22,9 @@ import random
 import logging
 import threading
 from enum import Enum
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
-from collections import deque
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +91,7 @@ class ProcessModel:
 class DeviceBehaviorSimulator:
     """
     设备行为模拟器
-    
+
     模拟真实工业设备的行为，包括：
     - 物理参数关联
     - 状态转换
@@ -101,11 +100,23 @@ class DeviceBehaviorSimulator:
     - 写操作反馈（写入影响读取）
     - 设备特定输出（只生成该设备有的参数）
     """
-    
+
+    # ===== 物理极限常量（硬约束） =====
+    TEMP_MAX = 500.0          # °C - 最高温度（安全阈值）
+    TEMP_MIN = -20.0          # °C - 最低温度
+    PRESSURE_MAX = 10.0       # MPa - 最高压力
+    PRESSURE_MIN = 0.001      # MPa - 最低压力（接近真空）
+    FLOW_MAX = 200.0          # m³/h - 最大流量
+    FLOW_MIN = 0.0            # m³/h - 最小流量
+    VIBRATION_MAX = 20.0      # mm/s - 最大振动
+    CURRENT_MAX = 100.0       # A - 最大电流
+    SPEED_MAX = 3600.0        # RPM - 最大转速
+    POWER_MAX_KW = 100.0      # kW - 最大功率
+
     def __init__(self, device_id: str, device_config: Dict[str, Any]):
         """
         初始化设备行为模拟器
-        
+
         Args:
             device_id: 设备ID
             device_config: 设备配置
@@ -136,7 +147,14 @@ class DeviceBehaviorSimulator:
         self._motor_current = 0.0
         self._motor_speed = 0.0
         self._vibration = 0.0
-        
+
+        # 温度扰动尖峰（指数衰减，避免累积）
+        self._temp_spike = 0.0
+
+        # 累计生产/能源计数器（stopped状态时引用）
+        self._total_energy_kwh = 0.0
+        self._shot_count = 0.0
+
         # 故障状态（支持多故障并发和级联）
         self.active_faults: Dict[FaultType, float] = {}  # fault -> severity (0-1)
         self.fault_timers: Dict[FaultType, float] = {}   # fault -> start time
@@ -690,63 +708,111 @@ class DeviceBehaviorSimulator:
                         f"(严重度: {severity:.2f}, 当前活跃故障数: {len(self.active_faults)})")
     
     def _update_process_variables(self, dt: float):
-        """更新物理参数 - Antoine方程、质量平衡、电机特性"""
+        """更新物理参数 — 牛顿冷却、饱和蒸汽压、质量平衡、电机特性。
+
+        根据当前设备状态和物理模型更新所有过程变量：
+        - 温度：一阶惯性 + 牛顿冷却负反馈 + 冷却系统响应
+        - 压力：基于 Antoine 方程的饱和蒸汽压（20-250°C 有效区间）
+        - 流量：Q ∝ sqrt(ΔP) * f(阀门开度)
+        - 液位：质量平衡（流入-流出积分）
+        - 电机：P = V*I*cos(phi) 关联，转速-扭矩滑差特性
+        - 振动：与速度和负载相关
+        - 所有值均有硬限幅，防止数值爆炸
+
+        故障效果不在本方法中处理，由 ``_apply_fault_effects`` 统一执行。
+
+        Args:
+            dt: 时间增量（秒），由调用方根据实际帧间隔传入。
+
+        Returns:
+            None（就地更新实例属性 ``_current_temp``、``_current_pressure``
+            等）。
+
+        Side Effects:
+            - 更新 ``self._current_temp``、``self._current_pressure``、
+              ``self._current_flow``、``self._current_level`` 等物理参数。
+            - 更新 ``self._current_power_kw``、``self._motor_current``、
+              ``self._motor_speed``、``self._vibration`` 等电机参数。
+
+        Exceptions:
+            不会主动抛出异常。数值计算使用 ``max()``/``min()`` 钳位，
+            防止物理量越界。
+        """
         t = time.time() - self.start_time
 
         # 班次影响（24小时周期）
         hour_of_day = (t / 3600) % 24
         shift_factor = 1.0 + 0.05 * math.sin((hour_of_day - 6) * math.pi / 12)
 
-        # ===== 温度 - 牛顿冷却 + 过程加热 =====
-        # 物理模型: dT/dt = heating - cooling
+        # ===== 温度 - 牛顿冷却 + 过程加热 + 冷却系统负反馈 =====
+        # 物理模型: dT/dt = heating - cooling - cooling_system
         #   heating = 过程热输入（运行时正弦波动 + 扰动）
-        #   cooling = h*(T - T_ambient)  牛顿冷却定律，温度越高散热越快
+        #   cooling = h*(T - T_ambient)  牛顿冷却定律
+        #   cooling_system = 主动冷却响应（温度越高冷却越强）
         target_temp = self.process_model.base_temperature * shift_factor
         if self.state == DeviceState.RUNNING:
             target_temp += 20 * math.sin(t / 300)
-            # 偶发扰动：用指数衰减尖峰代替直接累加（自限幅）
+            # 偶发扰动：指数衰减尖峰（自限幅，不会累积）
             if random.random() < 0.001:
                 self._temp_spike = random.uniform(10, 30)
                 logger.debug(f"[扰动] {self.device_name} 温度尖峰 +{self._temp_spike:.1f}°C")
-            if hasattr(self, '_temp_spike') and self._temp_spike > 0.1:
+            if self._temp_spike > 0.1:
                 target_temp += self._temp_spike
-                self._temp_spike *= 0.95  # 尖峰指数衰减，不会累积
+                self._temp_spike *= 0.95  # 尖峰指数衰减
         elif self.state == DeviceState.IDLE:
             target_temp = self.process_model.base_temperature - 10
         elif self.state == DeviceState.FAULT:
-            pass
+            pass  # 故障温度偏移由 _apply_fault_effects 处理
         else:
             target_temp = self.process_model.base_temperature - 30
 
-        # 一阶惯性 + 牛顿冷却负反馈（温差越大冷却越快）
+        # 一阶惯性（热惯性时间常数决定温度响应速度）
         alpha_temp = 1 - math.exp(-dt / self.process_model.thermal_time_constant)
         self._current_temp += (target_temp - self._current_temp) * alpha_temp
         self._current_temp += random.gauss(0, 0.3)
-        # 牛顿冷却：超出环境温度越多，散热越快（物理真实性）
+
+        # 牛顿冷却负反馈：超出环境温度越多，散热越快
         ambient = self.process_model.base_temperature - 20
         if self._current_temp > ambient:
             self._current_temp -= 0.01 * (self._current_temp - ambient) * dt
 
-        # ===== 压力 - Antoine方程（带物理约束） =====
-        # 原始公式: P = A * exp(B*T)，仅在20-200°C有效
-        # 超出范围时用线性外推代替指数外推，防止数值爆炸
+        # 冷却系统负反馈：温度超过阈值时冷却系统介入（一阶响应）
+        cooling_threshold = self.process_model.base_temperature + 30
+        if self._current_temp > cooling_threshold:
+            cooling_power = 0.02 * (self._current_temp - cooling_threshold)
+            self._current_temp -= cooling_power * dt
+
+        # 硬限幅
+        self._current_temp = max(self.TEMP_MIN, min(self.TEMP_MAX, self._current_temp))
+
+        # ===== 压力 - 基于温度的饱和蒸汽压模型 =====
+        # Antoine方程: log10(P) = A - B/(C+T)，T为°C，P为mmHg
+        # 工业常用简化: P_sat ≈ 0.00001 * exp(0.0464 * T) (MPa, 20-200°C)
+        # 超出范围用线性外推（防止指数爆炸）
         T = self._current_temp
-        if 0 < T <= 200:
-            target_pressure = 0.00001 * math.exp(0.05 * T)
+        if 20 <= T <= 200:
+            target_pressure = 0.00001 * math.exp(0.0464 * T)
         elif T > 200:
-            # 线性外推：200°C时约0.22MPa，每°C增加0.01MPa
-            target_pressure = 0.22 + 0.01 * (T - 200)
+            # 200°C时约0.19 MPa，用线性外推（每°C增加0.008 MPa）
+            p_at_200 = 0.00001 * math.exp(0.0464 * 200)
+            target_pressure = p_at_200 + 0.008 * (T - 200)
         else:
-            target_pressure = 0.1
+            target_pressure = 0.101  # 大气压
+
+        # 设备基础压力叠加（锅炉/化工等有独立压力源）
+        target_pressure = max(target_pressure, self.process_model.base_pressure * 0.5)
+        target_pressure += (self.process_model.base_pressure - target_pressure) * 0.3
 
         # 故障对压力的影响由 _apply_fault_effects 统一处理
 
         alpha_pressure = 1 - math.exp(-dt / self.process_model.pressure_time_constant)
         self._current_pressure += (target_pressure - self._current_pressure) * alpha_pressure
         self._current_pressure += random.gauss(0, 0.005)
-        self._current_pressure = max(0.01, self._current_pressure)
 
-        # ===== 流量 - Q ∝ sqrt(ΔP) * f(T) =====
+        # 硬限幅
+        self._current_pressure = max(self.PRESSURE_MIN, min(self.PRESSURE_MAX, self._current_pressure))
+
+        # ===== 流量 - Q ∝ sqrt(ΔP) * f(阀门/泵状态) =====
         pressure_factor = math.sqrt(max(0, self._current_pressure - 0.1))
         temp_factor = 1 + 0.01 * (self._current_temp - self.process_model.base_temperature)
         state_flow_factor = 1.0 if self.state == DeviceState.RUNNING else 0.1
@@ -757,7 +823,9 @@ class DeviceBehaviorSimulator:
         alpha_flow = 1 - math.exp(-dt / self.process_model.flow_time_constant)
         self._current_flow += (target_flow - self._current_flow) * alpha_flow
         self._current_flow += random.gauss(0, 0.1)
-        self._current_flow = max(0, self._current_flow)
+
+        # 硬限幅
+        self._current_flow = max(self.FLOW_MIN, min(self.FLOW_MAX, self._current_flow))
 
         # ===== 液位 - 质量平衡（流入-流出积分） =====
         flow_balance = self._current_flow - self.process_model.base_flow
@@ -765,74 +833,118 @@ class DeviceBehaviorSimulator:
         self._current_level = max(0, min(100, self._current_level))
         self._current_level += random.gauss(0, 0.1)
 
-        # ===== 电机参数关联 =====
+        # ===== 累计能源和产量（用于stopped状态显示） =====
         if self.state == DeviceState.RUNNING:
-            # 功率跟踪过程负载
-            self._current_power_kw = self.process_model.base_power_kw * \
-                (self._current_flow / max(0.1, self.process_model.base_flow)) * \
-                (1 + random.gauss(0, 0.05))
+            self._total_energy_kwh += self._current_power_kw * dt / 3600.0
+            self._shot_count += dt * 0.1  # 约每10秒一个产品
+
+        # ===== 电机参数关联（V*I*cos(phi) 物理一致性） =====
+        if self.state == DeviceState.RUNNING:
+            # 负载比 = 当前流量 / 基准流量（反映过程负载）
+            load_ratio = self._current_flow / max(0.1, self.process_model.base_flow)
+            load_ratio = max(0.1, min(3.0, load_ratio))  # 限幅，防止异常负载比
 
             # 电机电流 ∝ 负载扭矩 ∝ 流量
-            load_ratio = self._current_flow / max(0.1, self.process_model.base_flow)
             self._motor_current = self.process_model.base_current * load_ratio * \
                                   (1 + random.gauss(0, 0.05))
-            # 电机速度略降（滑差特性）
-            self._motor_speed = self.process_model.base_speed * (1 - 0.03 * (load_ratio - 1))
-        else:
-            self._current_power_kw = random.gauss(0, 0.2)
-            self._motor_current = random.gauss(0, 0.1)
-            self._motor_speed = 0
 
-        # 振动 - 与速度和负载相关
-        if self.state == DeviceState.RUNNING:
-            self._vibration = 1.5 + 0.5 * (self._motor_current / max(0.1, self.process_model.base_current)) + \
+            # 功率由 V*I*cos(phi) 关联（物理一致性）
+            # P = sqrt(3) * V_line * I * cos(phi)，简化为 P ∝ I * load
+            self._current_power_kw = self.process_model.base_power_kw * load_ratio * \
+                                     (1 + random.gauss(0, 0.03))
+
+            # 电机速度略降（感应电机滑差特性：负载越大转速越低）
+            self._motor_speed = self.process_model.base_speed * (1 - 0.03 * (load_ratio - 1))
+
+            # 振动 ∝ 速度 + 负载（物理关联）
+            speed_ratio = self._motor_speed / max(1, self.process_model.base_speed)
+            self._vibration = 1.5 * speed_ratio + 0.5 * (load_ratio - 1) + \
                               random.gauss(0, 0.2)
         else:
-            self._vibration = random.gauss(0, 0.05)
+            # 非运行状态：电机参数归零或接近零
+            self._current_power_kw = max(0, random.gauss(0, 0.2))
+            self._motor_current = max(0, random.gauss(0, 0.1))
+            self._motor_speed = 0
+            self._vibration = max(0, random.gauss(0, 0.05))
+
+        # 硬限幅电机参数
+        self._motor_current = max(0, min(self.CURRENT_MAX, self._motor_current))
+        self._motor_speed = max(0, min(self.SPEED_MAX, self._motor_speed))
+        self._current_power_kw = max(0, min(self.POWER_MAX_KW, self._current_power_kw))
+        self._vibration = max(0, min(self.VIBRATION_MAX, self._vibration))
 
         # 故障影响由 _apply_fault_effects 统一处理
 
     def _apply_fault_effects(self):
         """应用所有活跃故障的效果（多故障并发 + 级联扩散）
 
-        注意：故障效果只修改 target（目标偏移），不直接累加 current 值
-        防止每个周期叠加导致数值爆炸
+        设计原则：所有故障效果使用一阶惯性逼近退化目标，
+        而非逐tick乘法/加法累加。这确保：
+        - 数值不会爆炸
+        - 退化是渐进的、有界的
+        - 恢复时也能平滑回落
         """
         if not self.active_faults:
             return
 
         for fault_type, severity in list(self.active_faults.items()):
             if fault_type == FaultType.SENSOR_DRIFT:
-                # 传感器漂移：叠加一个慢变偏移量（不累积）
+                # 传感器漂移：叠加一个慢变偏移量（振幅与严重度成正比）
                 t = time.time() - self.start_time
                 drift = 5 * severity * math.sin(t / 10)
-                self._current_temp += drift * self._dt  # 乘dt变成微分量
+                # 用一阶惯性逼近偏移目标（不会跳变）
+                alpha = 1 - math.exp(-self._dt / 3)  # 3秒时间常数
+                self._current_temp += drift * alpha
 
             elif fault_type == FaultType.OVERHEATING:
-                # 过热：温度向高温目标偏移（一阶惯性，不会爆炸）
+                # 过热：温度向退化目标偏移（一阶惯性，有界）
                 overheat_target = self.process_model.base_temperature + 80 * severity
                 alpha = 1 - math.exp(-self._dt / 10)  # 10秒时间常数
                 self._current_temp += (overheat_target - self._current_temp) * alpha * 0.1
+                # 硬限幅
+                self._current_temp = min(self.TEMP_MAX, self._current_temp)
                 self._check_cascade(fault_type, severity)
 
             elif fault_type == FaultType.PRESSURE_LEAK:
-                self._current_pressure *= (1 - 0.3 * severity * self._dt)
-                self._current_flow += 2 * severity * self._dt
+                # 压力泄漏：压力向低压目标偏移（一阶惯性，不会降到零）
+                leak_target = self._current_pressure * (1 - 0.4 * severity)
+                leak_target = max(self.PRESSURE_MIN, leak_target)
+                alpha = 1 - math.exp(-self._dt / 5)  # 5秒时间常数
+                self._current_pressure += (leak_target - self._current_pressure) * alpha
+                # 泄漏导致流量小幅增加（有界）
+                flow_boost_target = self._current_flow * (1 + 0.3 * severity)
+                alpha_flow = 1 - math.exp(-self._dt / 5)
+                self._current_flow += (flow_boost_target - self._current_flow) * alpha_flow
+                # 硬限幅
+                self._current_pressure = max(self.PRESSURE_MIN, self._current_pressure)
+                self._current_flow = min(self.FLOW_MAX, self._current_flow)
                 self._check_cascade(fault_type, severity)
 
             elif fault_type == FaultType.MOTOR_WEAR:
-                self._motor_current *= (1 + 0.05 * severity * self._dt)
-                self._vibration += 0.5 * severity * self._dt
+                # 电机磨损：电流增加、振动增加（一阶惯性逼近目标，有界）
+                wear_current_target = self._motor_current * (1 + 0.2 * severity)
+                wear_current_target = min(self.CURRENT_MAX, wear_current_target)
+                alpha = 1 - math.exp(-self._dt / 10)  # 10秒时间常数
+                self._motor_current += (wear_current_target - self._motor_current) * alpha
+
+                wear_vib_target = self._vibration + 3 * severity
+                wear_vib_target = min(self.VIBRATION_MAX, wear_vib_target)
+                alpha_vib = 1 - math.exp(-self._dt / 8)
+                self._vibration += (wear_vib_target - self._vibration) * alpha_vib
                 self._check_cascade(fault_type, severity)
 
             elif fault_type == FaultType.COMMUNICATION:
-                pass
+                pass  # 通信故障不影响物理参数
 
             elif fault_type == FaultType.POWER_FLUCTUATION:
+                # 电源波动：功率围绕基准值小幅振荡（有界）
                 voltage_factor = 1 + 0.02 * severity * math.sin(time.time() * 5)
-                self._current_power_kw *= voltage_factor
+                fluctuation_target = self._current_power_kw * voltage_factor
+                fluctuation_target = max(0, min(self.POWER_MAX_KW, fluctuation_target))
+                alpha = 1 - math.exp(-self._dt / 2)  # 2秒时间常数
+                self._current_power_kw += (fluctuation_target - self._current_power_kw) * alpha
 
-        # 故障严重度随时间增长
+        # 故障严重度随时间增长（缓慢）
         for fault_type in list(self.active_faults.keys()):
             growth_rate = 0.01 if fault_type != FaultType.COMMUNICATION else -0.05
             self.active_faults[fault_type] = min(1.0,
@@ -843,6 +955,14 @@ class DeviceBehaviorSimulator:
                 del self.active_faults[fault_type]
                 del self.fault_timers[fault_type]
                 logger.info(f"[行为模拟] 设备 {self.device_name} 通信故障自行恢复")
+
+        # 最终硬限幅（防止任何叠加情况超出物理极限）
+        self._current_temp = max(self.TEMP_MIN, min(self.TEMP_MAX, self._current_temp))
+        self._current_pressure = max(self.PRESSURE_MIN, min(self.PRESSURE_MAX, self._current_pressure))
+        self._current_flow = max(self.FLOW_MIN, min(self.FLOW_MAX, self._current_flow))
+        self._motor_current = max(0, min(self.CURRENT_MAX, self._motor_current))
+        self._vibration = max(0, min(self.VIBRATION_MAX, self._vibration))
+        self._current_power_kw = max(0, min(self.POWER_MAX_KW, self._current_power_kw))
 
         # 更新兼容旧接口：取最严重的故障作为主视图
         if self.active_faults:
@@ -954,13 +1074,33 @@ class DeviceBehaviorSimulator:
             self.stats['total_cycles'] += 1
     
     def _generate_output_data(self) -> Dict[str, Any]:
-        """
-        生成输出数据
-        
-        优化：只生成该设备拥有的参数，避免不相关的数据污染
-        例如：锅炉设备不会生成振动数据，水质设备不会生成注射压力
-        
-        重要：STOPPED状态的工作设备不产生数据（已关闭）
+        """生成当前周期的设备输出数据。
+
+        根据设备状态生成完整的参数字典，包括过程变量（温度、压力、
+        流量等）、电气参数（三相电压/电流/功率）、生产参数（计数、
+        周期时间等）和元数据（健康评分、故障状态等）。
+
+        优化：只生成该设备配置中声明的参数，避免不相关的数据污染。
+        例如：锅炉设备不会生成振动数据，水质设备不会生成注射压力。
+
+        特殊处理：
+        - STOPPED 状态的工作设备：传感器漂移到环境值，机械参数归零。
+        - 监测设备（传感器/分析仪）：不受停机影响，始终输出数据。
+
+        Args:
+            无（使用实例属性 ``self.state``、``self._current_temp`` 等）。
+
+        Returns:
+            Dict[str, Any]: 设备参数字典。键为参数名（str），值为数值
+            （float/int）或元数据（以 ``_`` 前缀标识）。只包含该设备
+            配置中声明的参数 + 元数据字段。
+
+        Side Effects:
+            无（纯计算方法，不修改实例状态）。
+
+        Exceptions:
+            不会主动抛出异常。所有数值均经过 ``round()`` 和 ``max()``/
+            ``min()`` 钳位处理。
         """
         # ===== 停机设备：传感器保持环境值，机械归零 =====
         if self.state == DeviceState.STOPPED and not self._is_monitoring_device:
@@ -1067,18 +1207,12 @@ class DeviceBehaviorSimulator:
                     if k.startswith('_') or k in self._device_param_names}
         
         t = time.time() - self.start_time
-        
-        # 状态影响因子
-        state_temp_factor = 1.0
-        state_pressure_factor = 1.0
-        state_flow_factor = 1.0
-        if self.state == DeviceState.IDLE:
-            state_temp_factor = 0.6
-            state_pressure_factor = 0.5
-            state_flow_factor = 0.1
-        elif self.state == DeviceState.FAULT:
-            state_flow_factor = 0.3
-        
+
+        # 电机速度比（用于关联生产参数）
+        speed_ratio = self._motor_speed / max(1, self.process_model.base_speed)
+        load_ratio = self._current_flow / max(0.1, self.process_model.base_flow)
+        load_ratio = max(0.1, min(3.0, load_ratio))
+
         # ===== 三相电功率物理关联 V*I*cos(phi) =====
         state_factor = 1.0 if self.state == DeviceState.RUNNING else 0.1
 
@@ -1179,20 +1313,20 @@ class DeviceBehaviorSimulator:
             'vibration_x': round(self._vibration + random.gauss(0, 0.1), 2),
             'vibration_y': round(self._vibration + random.gauss(0, 0.1), 2),
             'vibration_z': round(self._vibration + random.gauss(0, 0.1), 2),
-            'clamping_force': round(1500 + 500 * math.sin(t / 30) + random.gauss(0, 20), 2),
+            'clamping_force': round(1500 * load_ratio + random.gauss(0, 20), 2),
             
-            # 生产参数
-            'cycle_time': round(4.5 + 1.0 * math.sin(t / 120) + random.gauss(0, 0.1), 2),
-            'shot_count': int(500 + t * 0.1),
-            'label_count': int(800 + t * 0.15),
-            'palletizing_count': int(200 + t * 0.05),
-            'reject_count': int(5 + t * 0.002),
-            'painted_count': int(300 + t * 0.08),
-            'batch_count': int(15 + t * 0.001),
-            'packaging_speed': int(120 + 20 * math.sin(t / 60) + random.gauss(0, 2)),
-            'conveyor_speed': round(12 + 5 * math.sin(t / 60) + random.gauss(0, 0.3), 2),
-            'spray_speed': round(8 + 3 * math.sin(t / 45) + random.gauss(0, 0.2), 2),
-            'injection_speed': round(80 + 30 * math.sin(t / 30) + random.gauss(0, 1), 2),
+            # 生产参数 - 与电机速度和负载关联（物理一致性）
+            'cycle_time': round(4.5 / max(0.3, speed_ratio) + random.gauss(0, 0.1), 2),
+            'shot_count': int(self._shot_count),
+            'label_count': int(self._shot_count * 1.6),
+            'palletizing_count': int(self._shot_count * 0.4),
+            'reject_count': int(self._shot_count * 0.01),
+            'painted_count': int(self._shot_count * 0.6),
+            'batch_count': int(self._shot_count * 0.03),
+            'packaging_speed': int(120 * speed_ratio + random.gauss(0, 2)),
+            'conveyor_speed': round(12 * speed_ratio + random.gauss(0, 0.3), 2),
+            'spray_speed': round(8 * speed_ratio + random.gauss(0, 0.2), 2),
+            'injection_speed': round(80 * speed_ratio + random.gauss(0, 1), 2),
             
             # 环境参数
             'humidity': round(62 + 10 * math.sin(t / 600) + random.gauss(0, 1.5), 2),
@@ -1207,7 +1341,7 @@ class DeviceBehaviorSimulator:
             'conductivity': round(500 + 100 * math.sin(t / 300) + random.gauss(0, 10), 2),
             
             # 能源参数
-            'electricity_consumption': round(5000 + t * 0.5, 2),
+            'electricity_consumption': round(5000 + self._total_energy_kwh, 2),
             'water_consumption': round(500 + t * 0.01, 2),
             'steam_consumption': round(50 + t * 0.01, 2),
             'compressed_air': round(200 + t * 0.005, 2),
@@ -1216,8 +1350,8 @@ class DeviceBehaviorSimulator:
             'oee': round(85 + 5 * math.sin(t / 600) + random.gauss(0, 0.5), 2),
             'quality_rate': round(97 + 2 * math.sin(t / 600) + random.gauss(0, 0.3), 2),
             'defect_rate': round(1.5 + 1.0 * math.sin(t / 300) + random.gauss(0, 0.2), 2),
-            'planned_quantity': int(1000 + t * 0.1),
-            'actual_quantity': int(970 + t * 0.097),
+            'planned_quantity': int(1000 + self._shot_count),
+            'actual_quantity': int(970 + self._shot_count * 0.97),
             
             # 状态
             'boiler_status': self.state.value,

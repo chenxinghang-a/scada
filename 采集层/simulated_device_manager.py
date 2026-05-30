@@ -51,7 +51,7 @@ class SimulatedDeviceManager(IDeviceManager):
         
         logger.info("模拟设备管理器初始化完成")
 
-    def load_config(self):
+    def load_config(self) -> None:
         """加载设备配置文件"""
         try:
             config_file = Path(self.config_path)
@@ -135,7 +135,7 @@ class SimulatedDeviceManager(IDeviceManager):
             return False
         return client.connect()
 
-    def set_estop_override(self, active: bool):
+    def set_estop_override(self, active: bool) -> None:
         """设置紧急停机覆盖（模拟客户端停止机械类数据）"""
         set_estop_state(active)
         logger.info(f"[模拟] E-STOP override: {'激活' if active else '已解除'}")
@@ -186,7 +186,7 @@ class SimulatedDeviceManager(IDeviceManager):
         logger.info(f"[模拟] 设备 {device_id} 调节 {register_name} = {value}")
         return {'success': True, 'message': f'{register_name} 设置为 {value}（模拟）'}
 
-    def disconnect_device(self, device_id: str):
+    def disconnect_device(self, device_id: str) -> None:
         """断开设备连接"""
         client = self.clients.get(device_id)
         if client:
@@ -202,7 +202,7 @@ class SimulatedDeviceManager(IDeviceManager):
                 results[device_id] = None  # 跳过禁用设备
         return results
 
-    def disconnect_all(self):
+    def disconnect_all(self) -> None:
         """断开所有设备连接"""
         for device_id in list(self.clients.keys()):
             self.disconnect_device(device_id)
@@ -321,7 +321,7 @@ class SimulatedDeviceManager(IDeviceManager):
             }
         return {'success': True, 'message': '当前已是模拟模式'}
 
-    def _save_config(self):
+    def _save_config(self) -> None:
         """保存设备配置到文件"""
         try:
             config = {'devices': list(self.devices.values())}

@@ -52,6 +52,7 @@ class Database:
         conn.execute('PRAGMA wal_autocheckpoint=4000')
         conn.execute('PRAGMA busy_timeout=10000')  # 10秒超时（不卡太久）
         conn.execute('PRAGMA temp_store=MEMORY')   # 临时表放内存
+        conn.execute('PRAGMA mmap_size=268435456')  # 256MB 内存映射I/O（读密集场景提速2-5倍）
         conn.close()
 
     @contextmanager
@@ -213,16 +214,18 @@ class Database:
 
             logger.info("数据库初始化完成")
 
+    # 预构建迁移SQL（避免f-string拼接，消除SQL注入风险）
+    _MIGRATE_SQL = [
+        ('trigger_count', 'ALTER TABLE alarm_records ADD COLUMN trigger_count INTEGER DEFAULT 1'),
+        ('last_trigger_time', 'ALTER TABLE alarm_records ADD COLUMN last_trigger_time DATETIME'),
+        ('last_value', 'ALTER TABLE alarm_records ADD COLUMN last_value REAL'),
+    ]
+
     def _migrate_alarm_table(self, cursor):
         """给alarm_records表添加新列（兼容旧数据库）"""
-        new_columns = [
-            ('trigger_count', 'INTEGER DEFAULT 1'),
-            ('last_trigger_time', 'DATETIME'),
-            ('last_value', 'REAL'),
-        ]
-        for col_name, col_type in new_columns:
+        for col_name, sql in self._MIGRATE_SQL:
             try:
-                cursor.execute(f'ALTER TABLE alarm_records ADD COLUMN {col_name} {col_type}')
+                cursor.execute(sql)
                 logger.info(f"数据库迁移: 添加列 alarm_records.{col_name}")
             except Exception:
                 pass  # 列已存在，忽略
@@ -257,11 +260,32 @@ class Database:
             ''', (device_id, register_name, value, unit, timestamp))
 
     def insert_data_batch(self, batch: list[dict]):
-        """
-        批量插入数据（单事务，性能比逐条快10-50倍）
+        """批量插入数据（单事务，性能比逐条快 10-50 倍）。
+
+        在单个事务中将数据同时写入 ``realtime_data``（UPSERT，每个设备
+        +寄存器只保留最新一条）和 ``history_data``（INSERT，保留全量历史）。
+        无效记录（缺少必需字段）会被跳过并记录警告日志。
 
         Args:
-            batch: [{'device_id', 'register_name', 'value', 'timestamp', 'unit'}, ...]
+            batch: 数据记录列表，每条记录为字典，需包含以下字段：
+                - ``device_id`` (str): 设备 ID。
+                - ``register_name`` (str): 寄存器名称。
+                - ``value`` (float): 数据值。
+                - ``timestamp`` (datetime): 时间戳。
+                - ``unit`` (str, optional): 单位，默认空字符串。
+
+        Returns:
+            None
+
+        Side Effects:
+            - 向 ``realtime_data`` 表 UPSERT 数据。
+            - 向 ``history_data`` 表 INSERT 数据。
+            - 提交数据库事务。
+            - 跳过无效记录时记录 ``logger.warning``。
+
+        Exceptions:
+            ``batch`` 为空时直接返回，不执行任何操作。
+            单条记录字段缺失不影响其他记录的插入。
         """
         if not batch:
             return
@@ -437,18 +461,36 @@ class Database:
     def get_history_data(self, device_id: str, register_name: str | None,
                          start_time: datetime, end_time: datetime,
                          interval: str = '1min') -> list[dict[str, Any]]:
-        """
-        获取历史数据
+        """获取历史数据（支持时间聚合）。
+
+        从 ``history_data`` 表查询指定设备和时间范围内的历史数据，
+        并按指定时间间隔进行聚合（平均值、最小值、最大值、采样数）。
 
         Args:
-            device_id: 设备ID
-            register_name: 寄存器名称（None 表示查询全部）
-            start_time: 开始时间
-            end_time: 结束时间
-            interval: 时间间隔（1min, 5min, 1hour, 1day）
+            device_id: 设备 ID。
+            register_name: 寄存器名称。为 ``None`` 时查询该设备所有寄存器。
+            start_time: 查询起始时间（含）。
+            end_time: 查询结束时间（含）。
+            interval: 时间聚合间隔，支持以下值：
+                - ``'1min'``: 按分钟聚合。
+                - ``'5min'``: 按 5 分钟聚合。
+                - ``'1hour'``: 按小时聚合。
+                - ``'1day'``: 按天聚合。
+                - 其他值: 不聚合，返回原始时间戳。
 
         Returns:
-            list[dict[str, Any]]: 历史数据列表
+            list[dict[str, Any]]: 聚合后的历史数据列表，每条记录包含：
+                - ``time_bucket`` (str): 时间桶（格式取决于 interval）。
+                - ``avg_value`` (float): 平均值。
+                - ``min_value`` (float): 最小值。
+                - ``max_value`` (float): 最大值。
+                - ``sample_count`` (int): 采样数。
+
+        Side Effects:
+            无（只读查询，使用 ``readonly=True`` 连接）。
+
+        Exceptions:
+            不会主动抛出异常。空结果返回空列表。
         """
         with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
@@ -662,11 +704,25 @@ class Database:
             return [dict(row) for row in cursor.fetchall()]
 
     def cleanup_old_data(self, retention_days: int = 30):
-        """
-        清理旧数据
+        """清理超过保留期限的历史数据。
+
+        删除 ``history_data`` 表中时间戳早于 ``retention_days`` 天前的记录。
+        ``realtime_data`` 作为最新值缓存不按时间清理（仅在
+        ``delete_device_data`` 时清理）。
 
         Args:
-            retention_days: 数据保留天数
+            retention_days: 数据保留天数，默认 30 天。
+
+        Returns:
+            None
+
+        Side Effects:
+            - 删除 ``history_data`` 表中的过期记录。
+            - 提交数据库事务。
+            - 记录清理结果的日志。
+
+        Exceptions:
+            不会主动抛出异常。数据库错误会被连接上下文管理器捕获并回滚。
         """
         cutoff_date = datetime.now() - timedelta(days=retention_days)
 
@@ -892,10 +948,13 @@ class Database:
             db_name = Path(self.db_path).stem
             backup_file = backup_path / f"{db_name}_{timestamp}.db"
 
-            # 使用SQLite的VACUUM INTO进行热备份
-            safe_path = str(backup_file).replace("'", "''")
-            with self.get_connection() as conn:
-                conn.execute(f"VACUUM INTO '{safe_path}'")
+            # 使用 sqlite3.Connection.backup() API（零SQL注入风险，热备份）
+            with self.get_connection() as src_conn:
+                dst_conn = sqlite3.connect(str(backup_file))
+                try:
+                    src_conn.backup(dst_conn)
+                finally:
+                    dst_conn.close()
 
             logger.info(f"数据库备份成功: {backup_file}")
 
@@ -924,6 +983,16 @@ class Database:
         except Exception as e:
             logger.warning(f"清理旧备份失败: {e}")
 
+    # 白名单预构建查询（消除f-string SQL拼接）
+    _TABLE_SIZE_QUERIES = {
+        'realtime_data': 'SELECT COUNT(*) FROM realtime_data',
+        'history_data': 'SELECT COUNT(*) FROM history_data',
+        'alarm_records': 'SELECT COUNT(*) FROM alarm_records',
+        'history_archive': 'SELECT COUNT(*) FROM history_archive',
+        'users': 'SELECT COUNT(*) FROM users',
+        'operation_logs': 'SELECT COUNT(*) FROM operation_logs',
+    }
+
     def get_table_sizes(self) -> dict[str, int]:
         """
         获取各表的记录数
@@ -931,17 +1000,13 @@ class Database:
         Returns:
             dict[str, int]: 表名 -> 记录数
         """
-        allowed_tables = {'realtime_data', 'history_data', 'alarm_records',
-                          'history_archive', 'users', 'operation_logs'}
         result = {}
 
         with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
-            for table in allowed_tables:
-                if not table.isidentifier():
-                    continue
+            for table, query in self._TABLE_SIZE_QUERIES.items():
                 try:
-                    cursor.execute(f'SELECT COUNT(*) FROM [{table}]')
+                    cursor.execute(query)
                     result[table] = cursor.fetchone()[0]
                 except Exception:
                     result[table] = 0

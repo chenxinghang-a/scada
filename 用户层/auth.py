@@ -10,7 +10,6 @@ import logging
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Any
-from pathlib import Path
 from flask import request, jsonify, current_app
 
 logger = logging.getLogger(__name__)
@@ -317,14 +316,32 @@ class AuthManager:
         }
 
     def verify_token(self, token: str) -> dict[str, Any] | None:
-        """
-        验证JWT令牌（含黑名单检查 - GB/T 35718 令牌撤销机制）
+        """验证 JWT 令牌的有效性（含黑名单检查 — GB/T 35718 令牌撤销机制）。
+
+        解码并验证 JWT 令牌，检查以下条件：
+        1. 令牌签名和有效期是否合法。
+        2. 令牌是否在黑名单中（已撤销的令牌）。
+        3. 对应用户是否仍然活跃（未被禁用）。
 
         Args:
-            token: JWT令牌
+            token: JWT 令牌字符串（不含 ``Bearer`` 前缀）。
 
         Returns:
-            dict[str, Any]: 用户信息（验证失败返回None）
+            dict[str, Any] | None: 验证成功时返回用户信息字典，包含：
+                - ``username`` (str): 用户名。
+                - ``role`` (str): 角色名。
+                - ``display_name`` (str): 显示名称。
+                - ``permissions`` (list[str]): 权限列表。
+            验证失败时返回 ``None``（令牌过期、无效、被撤销或用户不存在）。
+
+        Side Effects:
+            - 查询 ``jwt_blacklist`` 表检查令牌是否被撤销。
+            - 查询 ``users`` 表验证用户状态。
+            - 令牌过期或无效时记录警告日志。
+
+        Exceptions:
+            不会主动抛出异常。``jwt.ExpiredSignatureError`` 和
+            ``jwt.InvalidTokenError`` 均被捕获并返回 ``None``。
         """
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -426,14 +443,30 @@ class AuthManager:
             pass  # 非HTTP上下文时忽略
 
     def refresh_token(self, refresh_token: str) -> dict[str, Any] | None:
-        """
-        刷新JWT令牌
+        """使用刷新令牌获取新的访问令牌。
+
+        验证刷新令牌的有效性（签名、类型、黑名单、用户状态），
+        检查密码是否在令牌签发后被修改（防止旧令牌被滥用），
+        验证通过后签发新的访问令牌。
 
         Args:
-            refresh_token: 刷新令牌
+            refresh_token: JWT 刷新令牌字符串（``type='refresh'``）。
 
         Returns:
-            dict[str, Any]: 新的令牌信息
+            dict[str, Any] | None: 刷新成功时返回字典，包含：
+                - ``success`` (bool): 始终为 ``True``。
+                - ``token`` (str): 新的访问令牌。
+                - ``user`` (dict): 用户信息（username、role 等）。
+            刷新失败时返回 ``None``（令牌无效、被撤销、密码已变更或
+            用户不存在）。
+
+        Side Effects:
+            - 查询 ``jwt_blacklist`` 表检查令牌是否被撤销。
+            - 查询 ``users`` 表验证用户状态和密码变更时间。
+            - 令牌被撤销或密码已变更时记录警告日志。
+
+        Exceptions:
+            不会主动抛出异常。所有异常均被捕获并返回 ``None``。
         """
         try:
             payload = jwt.decode(refresh_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -492,16 +525,32 @@ class AuthManager:
             return None
 
     def change_password(self, username: str, old_password: str, new_password: str) -> dict[str, Any]:
-        """
-        修改密码
+        """修改用户密码（需要验证旧密码）。
+
+        验证旧密码正确后更新密码哈希，并撤销该用户的所有活跃 JWT
+        令牌（GB/T 35718 要求：密码变更后旧令牌立即失效）。
+
+        新密码需满足等保 2.0 强度要求：至少 8 位，包含大写字母、
+        小写字母和数字。
 
         Args:
-            username: 用户名
-            old_password: 旧密码
-            new_password: 新密码
+            username: 用户名。
+            old_password: 旧密码（明文，用于验证）。
+            new_password: 新密码（明文，将被哈希存储）。
 
         Returns:
-            dict[str, Any]: 修改结果
+            dict[str, Any]: 操作结果，包含：
+                - ``success`` (bool): 是否成功。
+                - ``message`` (str): 结果描述。
+
+        Side Effects:
+            - 更新 ``users`` 表中的 ``password_hash`` 和
+              ``password_changed_at`` 字段。
+            - 调用 ``_blacklist_user_tokens`` 撤销当前令牌。
+            - 记录操作日志到 ``operation_logs`` 表。
+
+        Exceptions:
+            不会主动抛出异常。用户不存在或旧密码错误返回失败结果。
         """
         valid, msg = self._validate_password_strength(new_password)
         if not valid:

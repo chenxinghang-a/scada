@@ -40,8 +40,10 @@ _count_kw = ('count', 'quantity', 'output', 'production', 'yield', 'total')
 # --- 命名常量（替代魔法数字） ---
 BACKOFF_CEILING_S = 60              # 退避上限
 SENSOR_STUCK_WINDOW_S = 300         # 传感器卡死窗口
-BATCH_MAX = 200                     # 批处理最大条数
+BATCH_MAX = 500                     # 批处理最大条数（WAL模式下500条事务开销最优）
 BATCH_TIMEOUT_S = 0.5               # 批处理超时
+CIRCUIT_BREAKER_THRESHOLD = 10      # 断路器：连续失败阈值
+CIRCUIT_BREAKER_COOLDOWN_S = 300    # 断路器：冷却时间（秒）
 
 
 def _has_keyword(register_name: str, keywords: tuple) -> bool:
@@ -233,6 +235,9 @@ class DataCollector:
         # 失败计数器（用于退避）
         self._failure_counts = {}  # device_id -> consecutive_failures
 
+        # 断路器状态（防止对已知死设备无限轮询）
+        self._circuit_state = {}  # device_id -> {'opened_at': float}
+
         # 数据质量跟踪（用于检测传感器卡死等）
         self._last_values = {}   # "device_id:register_name" -> last_value
         self._last_times = {}   # "device_id:register_name" -> last_time
@@ -376,9 +381,31 @@ class DataCollector:
         for k in stale_keys:
             self._last_values.pop(k, None)
             self._last_times.pop(k, None)
+        # 清理断路器状态
+        self._circuit_state.pop(device_id, None)
 
     def _setup_push_device(self, device_id: str, device_config: dict[str, Any]):
-        """设置推送型设备（OPC UA / MQTT）"""
+        """设置推送型设备（OPC UA / MQTT）的回调和连接。
+
+        为推送型协议（OPC UA、MQTT）注册数据回调函数，当设备主动推送
+        数据时自动入队。队列满时丢弃最旧数据以避免阻塞回调线程。
+
+        Args:
+            device_id: 设备唯一标识符。
+            device_config: 设备配置字典，至少包含 ``protocol`` 字段。
+
+        Returns:
+            None
+
+        Side Effects:
+            - 调用 ``client.add_data_callback()`` 注册回调。
+            - 调用 ``client.connect()`` 建立连接。
+            - 向 ``self.data_queue`` 写入数据项。
+            - 记录连接成功或失败的日志。
+
+        Exceptions:
+            不会主动抛出异常；连接失败时记录错误日志并静默返回。
+        """
         protocol = device_config.get('protocol', 'modbus_tcp')
         client = self.device_manager.get_client(device_id)
         if not client:
@@ -428,20 +455,41 @@ class DataCollector:
             if not self.running:
                 return
 
+            # 断路器检查：冷却期内跳过采集，避免对已知死设备无限轮询
+            cb = self._circuit_state.get(device_id)
+            if cb and cb.get('opened_at'):
+                elapsed = time.time() - cb['opened_at']
+                if elapsed < CIRCUIT_BREAKER_COOLDOWN_S:
+                    remaining = CIRCUIT_BREAKER_COOLDOWN_S - elapsed
+                    with self._tasks_lock:
+                        if self.running:
+                            timer = threading.Timer(remaining, collect_task)
+                            timer.daemon = True
+                            timer.start()
+                            self.tasks[device_id] = timer
+                    return
+                # 冷却期结束，允许一次试探（half-open）
+
             success = self._collect_device_data(device_id, device_config, protocol)
 
             if not self.running:
                 return
 
-            # 失败退避：连续失败越多，间隔越长（1s→2s→4s→8s→...→60s）
+            # 失败退避 + 断路器
             if success:
                 self._failure_counts[device_id] = 0
+                self._circuit_state.pop(device_id, None)  # 恢复成功，关闭断路器
                 interval = self._get_dynamic_interval(device_id, base_interval)
             else:
                 failures = self._failure_counts.get(device_id, 0) + 1
                 self._failure_counts[device_id] = failures
-                interval = min(2 ** failures, BACKOFF_CEILING_S)
-                logger.debug(f"设备 {device_id} 连续失败 {failures} 次，{interval}s 后重试")
+                if failures >= CIRCUIT_BREAKER_THRESHOLD:
+                    self._circuit_state[device_id] = {'opened_at': time.time()}
+                    interval = CIRCUIT_BREAKER_COOLDOWN_S
+                    logger.warning(f"设备 {device_id} 连续失败 {failures} 次，断路器打开，{CIRCUIT_BREAKER_COOLDOWN_S}s 后重试")
+                else:
+                    interval = min(2 ** failures, BACKOFF_CEILING_S)
+                    logger.debug(f"设备 {device_id} 连续失败 {failures} 次，{interval}s 后重试")
 
             with self._tasks_lock:
                 if self.running:
@@ -546,12 +594,34 @@ class DataCollector:
             self._inc_stat('failed_collections')
             return False
 
-    def _collect_modbus(self, client, device_id: str, device_config: dict[str, Any], timestamp):
-        """
-        采集Modbus设备的寄存器数据（批量读取优化）
+    def _collect_modbus(self, client, device_id: str, device_config: dict[str, Any], timestamp: datetime):
+        """采集Modbus设备的寄存器数据（批量读取优化）。
 
-        按 Modbus 规范：FC03 单次最多读 125 个寄存器。
-        将连续地址范围合并为一次请求，减少网络往返。
+        按 GB/T 19582 Modbus 规范：FC03 单次最多读 125 个寄存器。
+        将连续地址范围合并为一次请求，减少网络往返。对于超过 125
+        个寄存器的设备自动分段读取，并在块边界预留重叠区防止多寄存器
+        值被截断。
+
+        Args:
+            client: Modbus 客户端实例，需支持 ``read_holding_registers()``
+                和 ``decode_*()`` 方法。
+            device_id: 设备唯一标识符。
+            device_config: 设备配置字典，需包含 ``registers`` 列表，
+                每个寄存器需有 ``address``、``name`` 字段，可选
+                ``data_type``、``scale``、``offset``、``unit``。
+            timestamp: 本次采集的时间戳。
+
+        Returns:
+            None
+
+        Side Effects:
+            - 通过 ``client.read_holding_registers()`` 发起网络请求。
+            - 将解码后的数据项写入 ``self.data_queue``。
+            - 更新 ``self.stats['successful_collections']`` 或
+              ``self.stats['failed_collections']`` 计数器。
+
+        Exceptions:
+            不会主动抛出异常。读取失败时记录调试日志并更新失败计数。
         """
         registers = device_config.get('registers', [])
         if not registers:
@@ -742,7 +812,31 @@ class DataCollector:
             return None
 
     def _process_data(self):
-        """数据处理线程 — 批量写DB + 报警检查，智能层异步分发"""
+        """数据处理主循环（在独立守护线程中运行）。
+
+        从 ``self.data_queue`` 中批量取出数据，依次执行以下操作：
+        1. 数据质量评估（OPC UA 质量码标准）；
+        2. 批量写入数据库（单事务，比逐条快 10-50 倍）；
+        3. 报警规则检查；
+        4. TDengine 实时桥接（非阻塞）；
+        5. 智能层异步分发（预测性维护、SPC、OEE 等）。
+
+        Args:
+            无（使用实例属性 ``self.data_queue``、``self.database`` 等）。
+
+        Returns:
+            None
+
+        Side Effects:
+            - 批量插入数据库记录（``self.database.insert_data_batch``）。
+            - 触发报警检查（``self.alarm_manager.check_alarm``）。
+            - 向 TDengine 桥接器推送数据。
+            - 更新 ``self.stats`` 统计信息。
+            - 清除磁盘持久化文件（``self.data_queue.clear_persistence``）。
+
+        Exceptions:
+            主循环内部捕获所有异常并记录错误日志，不会终止线程。
+        """
         # 智能层分发队列（独立线程处理，不阻塞主循环）
         intel_queue = Queue(maxsize=10000)
 
@@ -796,30 +890,34 @@ class DataCollector:
 
             try:
                 # === 数据质量评估（OPC UA标准） ===
+                # 按设备缓存状态，避免同一批次内重复查询（500条/10设备 → 10次而非500次）
+                _device_status_cache = {}
                 for data in batch:
                     device_id = data.get('device_id', '')
                     register_name = data.get('register_name', '')
                     value = data.get('value')
                     key = f"{device_id}:{register_name}"
 
-                    # 获取设备状态
-                    try:
-                        device_info = self.device_manager.get_device_status(device_id)
-                        device_status = 'unknown'
-                        if isinstance(device_info, dict):
-                            if not device_info.get('connected', True):
-                                device_status = 'offline'
-                            elif device_info.get('stopped'):
-                                device_status = 'stopped'
-                            elif device_info.get('error'):
-                                device_status = 'fault'
-                    except Exception:
-                        device_status = 'unknown'
+                    # 获取设备状态（缓存）
+                    if device_id not in _device_status_cache:
+                        try:
+                            device_info = self.device_manager.get_device_status(device_id)
+                            device_status = 'unknown'
+                            if isinstance(device_info, dict):
+                                if not device_info.get('connected', True):
+                                    device_status = 'offline'
+                                elif device_info.get('stopped'):
+                                    device_status = 'stopped'
+                                elif device_info.get('error'):
+                                    device_status = 'fault'
+                        except Exception:
+                            device_status = 'unknown'
+                        _device_status_cache[device_id] = device_status
 
                     quality = DataQualityAssessor.assess(
                         value=value,
                         register_name=register_name,
-                        device_status=device_status,
+                        device_status=_device_status_cache[device_id],
                         last_value=self._last_values.get(key),
                         last_time=self._last_times.get(key)
                     )
@@ -831,7 +929,26 @@ class DataCollector:
                         self._last_times[key] = time.time()
 
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
-                self.database.insert_data_batch(batch)
+                try:
+                    self.database.insert_data_batch(batch)
+                except Exception as e:
+                    logger.warning(f"批量写入数据库失败 ({len(batch)} 条): {e}")
+                    # 失败数据重新入队（标记 _db_retry 防止无限重试）
+                    retried = 0
+                    for item in batch:
+                        if item.get('_db_retry'):
+                            continue  # 已重试过一次，丢弃
+                        item['_db_retry'] = True
+                        try:
+                            if not self.data_queue.full():
+                                self.data_queue.put_nowait(item)
+                                retried += 1
+                            else:
+                                break
+                        except queue.Full:
+                            break
+                    if retried:
+                        logger.info(f"已重新入队 {retried} 条数据等待重试")
 
                 # === 报警检查（每条都要检查） ===
                 if self.alarm_manager:

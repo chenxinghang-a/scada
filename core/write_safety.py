@@ -16,8 +16,7 @@ Modbus写入安全验证器
 """
 
 import logging
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -189,7 +188,7 @@ class WriteSafetyValidator:
             f"其中 {sum(1 for p in self._profiles.values() if p.requires_confirm)} 个需要二次确认"
         )
 
-    def _build_profiles(self, registers: list[dict]):
+    def _build_profiles(self, registers: list[dict]) -> None:
         """从设备寄存器配置构建安全档案"""
         for reg in registers:
             addr = reg.get('address')

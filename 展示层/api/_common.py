@@ -11,7 +11,7 @@ from flask import current_app
 logger = logging.getLogger(__name__)
 
 
-def get_auth_manager():
+def get_auth_manager() -> Any:
     """获取认证管理器"""
     return current_app.auth_manager
 
