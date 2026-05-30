@@ -320,7 +320,7 @@ class HealthChecker:
                 from 报警层.alarm_manager import AlarmManager
                 # 通过ModuleRegistry获取alarm_manager实例
                 from core.module_registry import ModuleRegistry
-                alarm_manager = ModuleRegistry.get('alarm_manager')
+                alarm_manager = ModuleRegistry.get_instance('alarm_manager')
                 if alarm_manager:
                     for check_name in unhealthy:
                         alarm_manager._emit_websocket_alarm({
@@ -398,11 +398,16 @@ def _check_devices(dm):
     """检查设备状态"""
     try:
         status = dm.get_all_status()
-        total = len(status)
+        # get_all_status() may return list or dict
+        if isinstance(status, dict):
+            status_list = list(status.values())
+        else:
+            status_list = list(status)
+        total = len(status_list)
         if total == 0:
             return {'status': HealthStatus.HEALTHY, 'message': '无设备配置'}
-        connected = sum(1 for s in status.values() if s.get('connected'))
-        fault = sum(1 for s in status.values() if s.get('status') == 'fault')
+        connected = sum(1 for s in status_list if s.get('connected'))
+        fault = sum(1 for s in status_list if s.get('status') == 'fault')
 
         if fault > 0:
             return {'status': HealthStatus.DEGRADED, 'message': f'{fault}/{total}设备故障', 'details': {'fault': fault}}

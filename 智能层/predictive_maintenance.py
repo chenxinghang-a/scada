@@ -93,6 +93,8 @@ class PredictiveMaintenance:
             value: 数值
             timestamp: 时间戳
         """
+        if value is None:
+            return
         key = f"{device_id}:{register_name}"
         ts = timestamp or datetime.now()
         if isinstance(ts, str):

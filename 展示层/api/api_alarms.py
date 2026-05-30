@@ -267,7 +267,7 @@ def update_alarm_rule(rule_id):
     found = False
     for i, r in enumerate(rules):
         if r.get('id') == rule_id:
-            rules[i].update(data)
+            rules[i].update({k: v for k, v in data.items() if k != 'id'})
             found = True
             break
 

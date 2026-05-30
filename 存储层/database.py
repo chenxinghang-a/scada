@@ -261,30 +261,31 @@ class Database:
         if not batch:
             return
 
+        # Validate each record individually to avoid losing entire batch on one bad record
+        valid_rows = []
+        for d in batch:
+            try:
+                valid_rows.append((d['device_id'], d['register_name'], d['value'], d.get('unit', ''), d['timestamp']))
+            except (KeyError, TypeError) as e:
+                logger.warning(f"跳过无效记录: {e}")
+
+        if not valid_rows:
+            return
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
             # realtime_data: 批量UPSERT
-            realtime_rows = [
-                (d['device_id'], d['register_name'], d['value'],
-                 d.get('unit', ''), d['timestamp'])
-                for d in batch
-            ]
             cursor.executemany('''
                 INSERT OR REPLACE INTO realtime_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
-            ''', realtime_rows)
+            ''', valid_rows)
 
             # history_data: 批量INSERT
-            history_rows = [
-                (d['device_id'], d['register_name'], d['value'],
-                 d.get('unit', ''), d['timestamp'])
-                for d in batch
-            ]
             cursor.executemany('''
                 INSERT INTO history_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
-            ''', history_rows)
+            ''', valid_rows)
 
     def delete_device_data(self, device_id: str):
         """

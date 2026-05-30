@@ -48,7 +48,8 @@ class RealDeviceManager(IDeviceManager):
         self.devices: dict[str, dict[str, Any]] = {}
         self.clients: dict[str, IDeviceClient] = {}
         self._stopped_devices: set[str] = set()  # 单独停止的设备
-        
+        self._estop_active = False
+
         # 连接失败跟踪：device_id -> {'retry_count': int, 'last_retry': timestamp}
         self._connection_failures: dict[str, dict[str, Any]] = {}
         

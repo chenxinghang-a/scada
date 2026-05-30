@@ -521,6 +521,8 @@ class AlarmManager:
             value: 数据值
             timestamp: 时间戳
         """
+        if value is None:
+            return
         # 用索引快速查找匹配的规则（避免遍历所有规则）
         rules_key = (device_id, register_name)
         matched_rules = self._rules_index.get(rules_key)

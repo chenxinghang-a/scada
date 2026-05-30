@@ -167,8 +167,9 @@ class DiskBackedQueue:
                     if line:
                         try:
                             item = json.loads(line)
-                            self._queue.put_nowait(item)
-                            recovered += 1
+                            if item.get('value') is not None:
+                                self._queue.put_nowait(item)
+                                recovered += 1
                         except (json.JSONDecodeError, queue.Full):
                             break
         except Exception as e:
@@ -368,6 +369,14 @@ class DataCollector:
             return
 
         def on_data(device_id, name, value, unit):
+            if value is None:
+                return
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                return
+            if math.isnan(value) or math.isinf(value):
+                return
             # 队列满时丢弃最旧数据，绝不阻塞回调线程
             if self.data_queue.full():
                 try:
@@ -797,12 +806,15 @@ class DataCollector:
                 # === 报警检查（每条都要检查） ===
                 if self.alarm_manager:
                     for data in batch:
-                        self.alarm_manager.check_alarm(
-                            device_id=data['device_id'],
-                            register_name=data['register_name'],
-                            value=data['value'],
-                            timestamp=data['timestamp']
-                        )
+                        try:
+                            self.alarm_manager.check_alarm(
+                                device_id=data['device_id'],
+                                register_name=data['register_name'],
+                                value=data['value'],
+                                timestamp=data['timestamp']
+                            )
+                        except Exception as e:
+                            logger.error(f"报警检查异常: {e}")
 
                 # === TDengine桥接（非阻塞） ===
                 if self.realtime_bridge:
@@ -818,12 +830,15 @@ class DataCollector:
                                 gateway_id=data.get('gateway_id', '')
                             )
                         except Exception as e:
-                            logger.debug(f"智能分发异常: {e}")
+                            logger.error(f"TDengine桥接异常: {e}")
 
                 # === 智能层：扔进异步队列 ===
                 for data in batch:
-                    if not intel_queue.full():
-                        intel_queue.put_nowait(data)
+                    try:
+                        if not intel_queue.full():
+                            intel_queue.put_nowait(data)
+                    except Exception as e:
+                        logger.error(f"智能分发异常: {e}")
 
                 with self._stats_lock:
                     self.stats['queue_size'] = self.data_queue.qsize()
@@ -871,7 +886,11 @@ class DataCollector:
         if self.oee_calculator:
             if _has_keyword(name_lower, _status_kw):
                 status_map = {0: 'stopped', 1: 'idle', 2: 'running', 3: 'fault', 4: 'maintenance', 5: 'setup'}
-                status = status_map.get(int(value), 'stopped')
+                try:
+                    status_int = int(value)
+                except (ValueError, OverflowError, TypeError):
+                    status_int = 0
+                status = status_map.get(status_int, 'stopped')
                 self.oee_calculator.update_device_state(device_id, status)
             elif _has_keyword(name_lower, _count_kw):
                 good_kw = frozenset(['good', 'ok', 'pass', 'qualified'])
