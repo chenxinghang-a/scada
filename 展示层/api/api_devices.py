@@ -114,7 +114,16 @@ def update_device(device_id):
     try:
         for key in ('name', 'description', 'enabled', 'collection_interval', 'protocol'):
             if key in data:
-                device_config[key] = _safe_int(data[key], key) if key == 'collection_interval' else data[key]
+                if key == 'collection_interval':
+                    device_config[key] = _safe_int(data[key], key)
+                elif key == 'enabled':
+                    # 布尔字段：字符串 "false"/"0" 也应视为 False
+                    v = data[key]
+                    if isinstance(v, str):
+                        v = v.lower() not in ('false', '0', 'no', '')
+                    device_config[key] = v
+                else:
+                    device_config[key] = data[key]
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -148,7 +157,7 @@ def delete_device(device_id):
     initializer = _get_simulation_initializer()
     if initializer is not None:
         result = initializer.remove_device(device_id)
-        if result['success']:
+        if result and result.get('success'):
             get_auth_manager().log_operation(
                 request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
             return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})

@@ -506,7 +506,7 @@ class DataCollector:
 
             timestamp = datetime.now()
 
-            if protocol in ('modbus_tcp', 'modbus_rtu'):
+            if protocol in ('modbus_tcp', 'modbus_rtu', 'mc', 'fins'):
                 self._collect_modbus(client, device_id, device_config, timestamp)
             elif protocol == 'rest':
                 self._collect_rest(client, device_id, device_config, timestamp)
@@ -514,9 +514,13 @@ class DataCollector:
                 self._collect_opcua(client, device_id, device_config, timestamp)
             elif protocol == 'mqtt':
                 self._collect_mqtt(client, device_id, device_config, timestamp)
+            else:
+                logger.warning(f"设备 {device_id} 不支持的协议: {protocol}")
+                self._inc_stat('failed_collections')
+                return False
 
             # Modbus采集内部自行计数成功/失败，此处不重复计数
-            if protocol not in ('modbus_tcp', 'modbus_rtu'):
+            if protocol not in ('modbus_tcp', 'modbus_rtu', 'mc', 'fins'):
                 self._inc_stat('successful_collections')
             with self._stats_lock:
                 self.stats['last_collection_time'] = timestamp
@@ -588,8 +592,12 @@ class DataCollector:
                         'unit': reg.get('unit', '')
                     })
         else:
-            for start in range(min_addr, max_end, 125):
-                count = min(125, max_end - start)
+            # 分块读取，块边界预留重叠区防止多寄存器值被截断
+            max_reg_size = max(reg_sizes.values()) if reg_sizes else 1
+            chunk_size = 125
+            step = chunk_size - (max_reg_size - 1)  # 重叠区 = 最大寄存器宽度-1
+            for start in range(min_addr, max_end, step):
+                count = min(chunk_size, max_end - start)
                 chunk = client.read_holding_registers(start, count)
                 if chunk is None:
                     continue
@@ -809,6 +817,9 @@ class DataCollector:
 
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
                 self.database.insert_data_batch(batch)
+                # 批量入库成功，清空持久化文件防崩溃恢复重复
+                if hasattr(self.data_queue, 'clear_persistence'):
+                    self.data_queue.clear_persistence()
 
                 # === 报警检查（每条都要检查） ===
                 if self.alarm_manager:

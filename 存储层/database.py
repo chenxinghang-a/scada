@@ -462,9 +462,9 @@ class Database:
             elif interval == '5min':
                 # 5分钟聚合：将分钟数除以5取整
                 cursor.execute(f'''
-                    SELECT 
-                        strftime('%%Y-%%m-%%d %%H:', timestamp) || 
-                        printf('%%02d', (CAST(strftime('%%M', timestamp) AS INTEGER) / 5) * 5) || ':00' as time_bucket,
+                    SELECT
+                        strftime('%Y-%m-%d %H:', timestamp) ||
+                        printf('%02d', (CAST(strftime('%M', timestamp) AS INTEGER) / 5) * 5) || ':00' as time_bucket,
                         AVG(value) as avg_value,
                         MIN(value) as min_value,
                         MAX(value) as max_value,

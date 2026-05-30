@@ -191,10 +191,10 @@ def write_endpoint(device_id):
     success = False
     if method == 'PUT' and hasattr(client, 'put_endpoint'):
         result = client.put_endpoint(endpoint_config, {'value': value})
-        success = result.get('success', False)
+        success = (result or {}).get('success', False)
     elif method == 'POST' and hasattr(client, 'post_endpoint'):
         result = client.post_endpoint(endpoint_config, {'value': value})
-        success = result.get('success', False)
+        success = (result or {}).get('success', False)
     elif hasattr(client, 'write_endpoint'):
         success = client.write_endpoint(endpoint_config, value, method=method)
 
@@ -465,8 +465,9 @@ def batch_control():
     success_count = sum(1 for r in results.values() if r.get('success'))
     total = len(results)
 
+    target_desc = f'{len(device_ids)}台设备' if device_ids else '所有设备'
     get_auth_manager().log_operation(
-        operator, f'batch_{action}', f'批量{action}所有设备: {success_count}/{total} 成功')
+        operator, f'batch_{action}', f'批量{action}{target_desc}: {success_count}/{total} 成功')
     return jsonify({
         'success': success_count > 0,
         'message': f'批量{action}完成: {success_count}/{total} 成功',
