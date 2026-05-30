@@ -10,7 +10,9 @@ const deviceCache = {};     // {id: {name, connected, registers, ...}}
 const dataBuffers = {};     // {register_name: [{t, v}]}
 const lastDeviceValues = {}; // {"device_id:register_name": "formatted_value"}
 const lastDeviceQuality = {}; // {"device_id:register_name": quality_code}
-const MAX_POINTS = 60;
+const MAX_CHART_POINTS = 200;
+const lastDeviceSnapshot = {};  // Virtual DOM diff: last device state snapshot
+let deviceGridDirty = true;     // Whether device grid needs full rebuild
 
 // ========== 初始化 ==========
 document.addEventListener('DOMContentLoaded', () => {
@@ -49,15 +51,35 @@ async function apiFetch(url) {
     return r.json();
 }
 
-// ========== 主数据加载 ==========
+// ========== 主数据加载（防抖 + rAF 批处理） ==========
+let loadDataInProgress = false;
+let pendingUpdateData = null;
+let rafScheduled = false;
+
+function scheduleUpdate(status) {
+    pendingUpdateData = status;
+    if (!rafScheduled) {
+        rafScheduled = true;
+        requestAnimationFrame(() => {
+            if (pendingUpdateData) {
+                updateDeviceGrid(pendingUpdateData);
+                pendingUpdateData = null;
+            }
+            rafScheduled = false;
+        });
+    }
+}
+
 async function loadData() {
+    if (loadDataInProgress) return;
+    loadDataInProgress = true;
     const gen = ++loadGeneration;
     try {
         const status = await apiFetch('/system/status');
         if (gen !== loadGeneration) return;
         if (!status) return;
         updateKPI(status);
-        updateDeviceGrid(status);
+        scheduleUpdate(status);
         updateStatusBar(status);
 
         const data = await apiFetch('/data/realtime?limit=5000');
@@ -93,6 +115,8 @@ async function loadData() {
         const dot = document.getElementById('status-dot');
         if (dot) dot.className = 'status-dot red';
         setText('status-text', '连接异常');
+    } finally {
+        loadDataInProgress = false;
     }
 }
 
@@ -150,7 +174,7 @@ function updateKPI(stats) {
     }
 }
 
-// ========== 设备卡片网格 ==========
+// ========== 设备卡片网格（Virtual DOM Diff） ==========
 function updateDeviceGrid(stats) {
     if (!stats.devices) return;
     let devs = Array.isArray(stats.devices) ? stats.devices : Object.values(stats.devices);
@@ -160,6 +184,26 @@ function updateDeviceGrid(stats) {
         const id = d.device_id || d.id;
         deviceCache[id] = d;
     });
+
+    // 构建当前快照，检测设备列表是否变化
+    const snapshot = {};
+    devs.forEach(d => {
+        const id = d.device_id || d.id;
+        snapshot[id] = JSON.stringify(d);
+    });
+
+    const snapshotChanged = JSON.stringify(snapshot) !== JSON.stringify(lastDeviceSnapshot);
+
+    if (!snapshotChanged && !deviceGridDirty) {
+        // 设备列表未变化，只更新数值（不重建DOM）
+        devs.forEach(d => updateDeviceValues(d));
+        return;
+    }
+
+    // 设备列表变化或首次加载，全量重建
+    Object.keys(lastDeviceSnapshot).forEach(k => delete lastDeviceSnapshot[k]);
+    Object.assign(lastDeviceSnapshot, snapshot);
+    deviceGridDirty = false;
 
     const grid = document.getElementById('device-grid');
     if (!grid) return;
@@ -230,6 +274,48 @@ function updateDeviceGrid(stats) {
             selectedDeviceId = devs[0].device_id || devs[0].id;
         }
     }
+}
+
+// 只更新设备数值，不重建DOM
+function updateDeviceValues(device) {
+    const id = device.device_id || device.id;
+    const regs = device.registers || [];
+
+    // 更新状态指示器
+    const cardEl = document.querySelector(`.dev-card[onclick*="${id}"]`);
+    if (cardEl) {
+        const statusEl = cardEl.querySelector('.dev-status');
+        const stateTag = cardEl.querySelector('.dev-state-tag');
+        if (statusEl && stateTag) {
+            const online = device.connected;
+            const stopped = device.stopped;
+            const hasAlarm = device.status === 'fault' || device.status === 'warning';
+            let statusClass = 'offline';
+            let statusText = '离线';
+            if (online && stopped) { statusClass = 'stopped'; statusText = '已停止'; }
+            else if (online && hasAlarm) { statusClass = 'warning'; statusText = '告警'; }
+            else if (online) { statusClass = 'online'; statusText = '运行中'; }
+            statusEl.className = `dev-status ${statusClass}`;
+            stateTag.className = `dev-state-tag ${statusClass}`;
+            stateTag.textContent = statusText;
+        }
+    }
+
+    // 更新寄存器数值
+    regs.slice(0, 2).forEach(r => {
+        const el = document.getElementById(`dv-${id}-${r.name}`);
+        if (!el) return;
+        const key = `${id}:${r.name}`;
+        const val = lastDeviceValues[key];
+        if (val !== undefined) {
+            el.textContent = typeof val === 'number' ? val.toFixed(2) : val;
+        }
+        const quality = lastDeviceQuality[key];
+        if (quality != null) {
+            el.style.color = getQualityColor(quality);
+            el.title = `Quality: ${getQualityLabel(quality)} (${quality})`;
+        }
+    });
 }
 
 function selectDevice(id) {
@@ -456,7 +542,7 @@ function updateTrendChart(data) {
         const key = item.register_name;
         if (!dataBuffers[key]) dataBuffers[key] = [];
         dataBuffers[key].push({ t: now, v: parseFloat(item.value) });
-        if (dataBuffers[key].length > MAX_POINTS) dataBuffers[key].shift();
+        if (dataBuffers[key].length > MAX_CHART_POINTS) dataBuffers[key].shift();
         matched++;
     });
 
@@ -471,7 +557,7 @@ function updateTrendChart(data) {
     const keys = Object.keys(dataBuffers);
     const timeSet = new Set();
     keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.t)));
-    const times = Array.from(timeSet).sort().slice(-MAX_POINTS);
+    const times = Array.from(timeSet).sort().slice(-MAX_CHART_POINTS);
 
     const colors = ['#6366f1', '#06b6d4', '#f59e0b', '#ef4444', '#22c55e', '#ec4899'];
 

@@ -6,7 +6,7 @@
 // ========== 全局状态 ==========
 let trendChart, oeeChart, energyChart, spcChart, healthChart, deviceStatusChart;
 const dataBuffers = {};
-const MAX_POINTS = 60;
+const MAX_CHART_POINTS = 200;
 let selectedDeviceId = null;
 let deviceNameCache = {};
 let alarmList = [];
@@ -216,8 +216,30 @@ async function loadDeviceList() {
     } catch (e) { console.warn('loadDeviceList:', e); }
 }
 
-// ========== 数据加载 ==========
+// ========== 数据加载（防抖 + rAF 批处理） ==========
+let loadDataInProgress = false;
+let pendingChartData = null;
+let chartRafScheduled = false;
+
+function scheduleChartUpdate(data) {
+    pendingChartData = data;
+    if (!chartRafScheduled) {
+        chartRafScheduled = true;
+        requestAnimationFrame(() => {
+            if (pendingChartData) {
+                updateTrendChart(pendingChartData);
+                updateEnergyChart(pendingChartData);
+                updateSPCChart(pendingChartData);
+                pendingChartData = null;
+            }
+            chartRafScheduled = false;
+        });
+    }
+}
+
 async function loadData() {
+    if (loadDataInProgress) return;
+    loadDataInProgress = true;
     const gen = ++loadGeneration;
     try {
         // 系统状态
@@ -239,9 +261,7 @@ async function loadData() {
                         ? item.value.toFixed(1) : String(item.value);
                 }
             });
-            updateTrendChart(data.data);
-            updateEnergyChart(data.data);
-            updateSPCChart(data.data);
+            scheduleChartUpdate(data.data);
         }
 
         // 报警
@@ -253,6 +273,9 @@ async function loadData() {
         }
 
     } catch (e) { console.error('loadData:', e); }
+    finally {
+        loadDataInProgress = false;
+    }
 }
 
 // ========== KPI 更新 ==========
@@ -322,7 +345,7 @@ function updateTrendChart(data) {
         const key = item.register_name;
         if (!dataBuffers[key]) dataBuffers[key] = [];
         dataBuffers[key].push({ time: now, value: parseFloat(item.value) });
-        if (dataBuffers[key].length > MAX_POINTS) dataBuffers[key].shift();
+        if (dataBuffers[key].length > MAX_CHART_POINTS) dataBuffers[key].shift();
     });
 
     // Prevent memory leak: limit total buffer keys
@@ -336,7 +359,7 @@ function updateTrendChart(data) {
 
     const timeSet = new Set();
     keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.time)));
-    const times = Array.from(timeSet).sort().slice(-MAX_POINTS);
+    const times = Array.from(timeSet).sort().slice(-MAX_CHART_POINTS);
 
     const series = keys.map(key => {
         const map = {};
