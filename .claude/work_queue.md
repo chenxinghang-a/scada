@@ -18,7 +18,7 @@
 5. [x] IEC 60870-5-104协议网关(模拟器+客户端+物模型转换)
 6. [x] Modbus字节序配置：支持ABCD/BADC/CDAB/DCBA
 7. [x] 结构化日志：loguru配置JSON格式输出
-8. [ ] 配置schema验证：用jsonschema验证YAML配置
+8. [x] 配置schema验证：用jsonschema验证YAML配置
 
 ### 批次3：测试与监控
 9. [ ] 扩展测试覆盖：采集层/智能层/用户层单元测试(目标>80%)
