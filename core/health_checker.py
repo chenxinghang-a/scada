@@ -396,9 +396,8 @@ class HealthChecker:
 def _check_database(db):
     """检查数据库连接"""
     try:
-        conn = db.get_connection()
-        conn.execute("SELECT 1")
-        conn.close()
+        with db.get_connection() as conn:
+            conn.execute("SELECT 1")
         return {'status': HealthStatus.HEALTHY, 'message': '数据库连接正常'}
     except Exception as e:
         return {'status': HealthStatus.UNHEALTHY, 'message': f'数据库连接失败: {e}'}
