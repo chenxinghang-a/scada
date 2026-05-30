@@ -9,6 +9,7 @@ let loadGeneration = 0;
 const deviceCache = {};     // {id: {name, connected, registers, ...}}
 const dataBuffers = {};     // {register_name: [{t, v}]}
 const lastDeviceValues = {}; // {"device_id:register_name": "formatted_value"}
+const lastDeviceQuality = {}; // {"device_id:register_name": quality_code}
 const MAX_POINTS = 60;
 
 // ========== 初始化 ==========
@@ -440,7 +441,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!sk) return;
         sk.on('data_update', (data) => {
             if (!data) return;
-            // 服务器发送格式: {register_name: {device_id, register_name, value, ...}, ...}
+            // 服务器发送格式: {register_name: {device_id, register_name, value, quality, ...}, ...}
             Object.entries(data).forEach(([regName, info]) => {
                 if (!info || typeof info !== 'object') return;
                 const devId = info.device_id;
@@ -450,7 +451,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 const formatted = typeof val === 'number' ? val.toFixed(1) : String(val);
                 lastDeviceValues[key] = formatted;
                 const el = document.getElementById(`dv-${devId}-${regName}`);
-                if (el) el.textContent = formatted;
+                if (el) {
+                    el.textContent = formatted;
+                    // OPC UA quality color indicator
+                    const quality = info.quality;
+                    if (quality != null) {
+                        lastDeviceQuality[key] = quality;
+                        el.style.color = getQualityColor(quality);
+                        el.title = `Quality: ${getQualityLabel(quality)} (${quality})`;
+                    }
+                }
             });
         });
         sk.on('alarm', () => loadData());
@@ -487,6 +497,19 @@ function formatUptime(s) {
     if (d > 0) return `${d}天${h}时`;
     if (h > 0) return `${h}时${m}分`;
     return `${m}分`;
+}
+
+// ========== OPC UA 数据质量标志 ==========
+function getQualityColor(quality) {
+    if (quality >= 192) return '#52c41a';  // Good - green
+    if (quality >= 64) return '#faad14';   // Uncertain - yellow
+    return '#ff4d4f';                       // Bad - red
+}
+
+function getQualityLabel(quality) {
+    if (quality >= 192) return 'Good';
+    if (quality >= 64) return 'Uncertain';
+    return 'Bad';
 }
 
 function getShortLabel(name) {

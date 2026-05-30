@@ -11,6 +11,7 @@ let selectedDeviceId = null;
 let deviceNameCache = {};
 let alarmList = [];
 let loadGeneration = 0;
+let lastDeviceValues = {};
 
 // ========== API 请求 ==========
 async function apiFetch(url) {
@@ -33,17 +34,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDeviceList();
     loadData();
     setInterval(loadData, 3000);
-
-    // WebSocket
-    const wsToken = localStorage.getItem('auth_token');
-    const socket = io({query: {token: wsToken || ''}});
-    socket.on('alarm', data => addAlarm(data));
-    socket.on('connect', () => {
-        console.log('WS connected');
-        if (selectedDeviceId) {
-            socket.emit('subscribe', {device_id: selectedDeviceId});
-        }
-    });
 });
 
 // ========== 时钟 ==========
@@ -215,6 +205,10 @@ async function loadDeviceList() {
                 select.addEventListener('change', function() {
                     selectedDeviceId = this.value;
                     Object.keys(dataBuffers).forEach(k => delete dataBuffers[k]);
+                    Object.keys(lastDeviceValues).forEach(k => delete lastDeviceValues[k]);
+                    if (window.socket) {
+                        window.socket.emit('subscribe', {device_id: selectedDeviceId});
+                    }
                     trendChart.clear();
                 });
             }
@@ -237,6 +231,14 @@ async function loadData() {
         const data = await apiFetch('/data/realtime?limit=5000');
         if (gen !== loadGeneration) return;
         if (data && data.data && data.data.length > 0) {
+            // Populate lastDeviceValues cache from API data
+            data.data.forEach(item => {
+                if (item.device_id && item.register_name && item.value != null) {
+                    const key = `${item.device_id}:${item.register_name}`;
+                    lastDeviceValues[key] = typeof item.value === 'number'
+                        ? item.value.toFixed(1) : String(item.value);
+                }
+            });
             updateTrendChart(data.data);
             updateEnergyChart(data.data);
             updateSPCChart(data.data);

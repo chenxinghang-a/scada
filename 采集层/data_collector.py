@@ -5,6 +5,7 @@
 """
 
 import json
+import math
 import time
 import queue
 import logging
@@ -29,6 +30,61 @@ def _has_keyword(register_name: str, keywords: tuple) -> bool:
     """检查寄存器名是否包含指定关键字"""
     name_lower = register_name.lower()
     return any(kw in name_lower for kw in keywords)
+
+
+class DataQualityAssessor:
+    """数据质量评估器 - OPC UA质量码"""
+
+    # 质量码定义 (OPC UA标准)
+    GOOD = 192           # 0xC0 - 好
+    UNCERTAIN = 104      # 0x68 - 不确定
+    BAD = 0              # 0x00 - 坏
+    BAD_SENSOR_FAILURE = 4      # 传感器故障
+    BAD_COMM_FAILURE = 6        # 通信故障
+    BAD_OUT_OF_SERVICE = 8      # 停用
+    UNCERTAIN_SENSOR_CAL = 80   # 传感器需要校准
+    UNCERTAIN_LAST_USABLE = 64  # 最后可用值
+
+    @staticmethod
+    def assess(value: float, register_name: str, device_status: str,
+               last_value: float = None, last_time: float = None) -> int:
+        """评估数据质量
+
+        Args:
+            value: 数据值
+            register_name: 寄存器名称
+            device_status: 设备状态 ('offline', 'disconnected', 'fault', etc.)
+            last_value: 上一次的值（用于检测传感器卡死）
+            last_time: 上一次的时间戳（用于检测传感器卡死）
+
+        Returns:
+            OPC UA质量码 (int)
+        """
+
+        # 设备断开 = BAD_COMM_FAILURE
+        if device_status in ('offline', 'disconnected'):
+            return DataQualityAssessor.BAD_COMM_FAILURE
+
+        # 设备故障 = BAD_SENSOR_FAILURE
+        if device_status == 'fault':
+            return DataQualityAssessor.BAD_SENSOR_FAILURE
+
+        # 值为None/NaN = BAD
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return DataQualityAssessor.BAD
+
+        # 值超出合理范围 = BAD_SENSOR_FAILURE
+        if isinstance(value, (int, float)):
+            if abs(value) > 1e10:  # 超大值可能是传感器故障
+                return DataQualityAssessor.BAD_SENSOR_FAILURE
+
+        # 值长时间不变 = UNCERTAIN（可能传感器卡死）
+        if last_value is not None and last_time is not None:
+            if abs(value - last_value) < 0.001 and time.time() - last_time > 300:
+                return DataQualityAssessor.UNCERTAIN_LAST_USABLE
+
+        # 正常
+        return DataQualityAssessor.GOOD
 
 
 class DiskBackedQueue:
@@ -153,6 +209,10 @@ class DataCollector:
 
         # 失败计数器（用于退避）
         self._failure_counts = {}  # device_id -> consecutive_failures
+
+        # 数据质量跟踪（用于检测传感器卡死等）
+        self._last_values = {}   # "device_id:register_name" -> last_value
+        self._last_times = {}   # "device_id:register_name" -> last_time
 
         # 数据队列（磁盘持久化，崩溃恢复）
         self.data_queue = DiskBackedQueue(maxsize=50000)
@@ -675,6 +735,41 @@ class DataCollector:
                 continue
 
             try:
+                # === 数据质量评估（OPC UA标准） ===
+                for data in batch:
+                    device_id = data.get('device_id', '')
+                    register_name = data.get('register_name', '')
+                    value = data.get('value')
+                    key = f"{device_id}:{register_name}"
+
+                    # 获取设备状态
+                    try:
+                        device_info = self.device_manager.get_device_status(device_id)
+                        device_status = 'unknown'
+                        if isinstance(device_info, dict):
+                            if not device_info.get('connected', True):
+                                device_status = 'offline'
+                            elif device_info.get('stopped'):
+                                device_status = 'stopped'
+                            elif device_info.get('error'):
+                                device_status = 'fault'
+                    except Exception:
+                        device_status = 'unknown'
+
+                    quality = DataQualityAssessor.assess(
+                        value=value,
+                        register_name=register_name,
+                        device_status=device_status,
+                        last_value=self._last_values.get(key),
+                        last_time=self._last_times.get(key)
+                    )
+                    data['quality'] = quality
+
+                    # 更新跟踪状态
+                    if value is not None and not (isinstance(value, float) and math.isnan(value)):
+                        self._last_values[key] = value
+                        self._last_times[key] = time.time()
+
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
                 self.database.insert_data_batch(batch)
 

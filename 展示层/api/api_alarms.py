@@ -496,6 +496,14 @@ def update_broadcast_config():
 
 # ==================== 报警去重配置API ====================
 
+@alarms_bp.route('/alarms/flood-status', methods=['GET'])
+@_require_auth
+def get_flood_status():
+    """获取告警洪水检测状态（ISA-18.2）"""
+    alarm_manager = current_app.alarm_manager
+    return jsonify(alarm_manager._flood_detector.get_status())
+
+
 @alarms_bp.route('/alarms/dedup-config', methods=['GET'])
 @_require_auth
 def get_dedup_config():

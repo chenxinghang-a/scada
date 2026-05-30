@@ -91,6 +91,94 @@ class AlarmShelveState:
         }
 
 
+class AlarmFloodDetector:
+    """告警洪水检测器 - ISA-18.2
+
+    当告警频率超过阈值时自动抑制低优先级告警，
+    防止操作员被大量告警淹没（工业安全关键）
+    """
+
+    SEVERITY_ORDER = {'critical': 5, 'high': 4, 'medium': 3, 'low': 2, 'info': 1}
+
+    def __init__(self,
+                 window_seconds: int = 60,
+                 threshold: int = 10,
+                 suppress_below: str = 'high'):
+        """
+        Args:
+            window_seconds: 滑动窗口时长（秒）
+            threshold: 窗口内告警数达到此值即触发洪水抑制
+            suppress_below: 抑制此严重度以下的告警（critical > high > medium > low > info）
+        """
+        self.window = window_seconds
+        self.threshold = threshold
+        self.suppress_below = suppress_below
+        self._timestamps: list = []
+        self._lock = threading.Lock()
+        self._flood_active = False
+        self._suppressed_count = 0
+        self._flood_start = None
+
+    def record_alarm(self, severity: str) -> tuple[bool, str]:
+        """记录一条告警，返回 (should_emit, reason)"""
+        with self._lock:
+            now = time.time()
+            self._timestamps.append(now)
+
+            # 清理窗口外的时间戳
+            cutoff = now - self.window
+            self._timestamps = [t for t in self._timestamps if t > cutoff]
+
+            count = len(self._timestamps)
+
+            # 检查是否进入洪水状态
+            if count >= self.threshold and not self._flood_active:
+                self._flood_active = True
+                self._flood_start = now
+                logger.warning(f"告警洪水检测: {count}/{self.threshold}条/{self.window}秒, 激活抑制")
+
+            # 洪水状态下的抑制逻辑
+            if self._flood_active:
+                sev_val = self.SEVERITY_ORDER.get(severity, 0)
+                suppress_val = self.SEVERITY_ORDER.get(self.suppress_below, 3)
+
+                if sev_val >= suppress_val:
+                    return True, "flood_active_but_critical"
+                else:
+                    self._suppressed_count += 1
+                    return False, "suppressed_by_flood_detector"
+
+            return True, "normal"
+
+    def check_flood_end(self):
+        """检查洪水是否结束（由后台定时器调用）"""
+        with self._lock:
+            if not self._flood_active:
+                return
+
+            now = time.time()
+            cutoff = now - self.window
+            recent = [t for t in self._timestamps if t > cutoff]
+
+            if len(recent) < self.threshold // 2:
+                self._flood_active = False
+                duration = now - self._flood_start if self._flood_start else 0
+                logger.info(f"告警洪水结束: 持续{duration:.0f}秒, 抑制了{self._suppressed_count}条告警")
+                self._suppressed_count = 0
+                self._flood_start = None
+
+    def get_status(self) -> dict:
+        """获取洪水检测器状态"""
+        with self._lock:
+            return {
+                'flood_active': self._flood_active,
+                'recent_count': len(self._timestamps),
+                'threshold': self.threshold,
+                'suppressed_count': self._suppressed_count,
+                'window': self.window,
+            }
+
+
 class AlarmPriorityMatrix:
     """
     ISA-18.2 报警优先级矩阵
@@ -182,6 +270,9 @@ class AlarmManager:
         # ISA-18.2: 报警统计分析器（延迟初始化）
         self._alarm_statistics = None
 
+        # ISA-18.2: 告警洪水检测器
+        self._flood_detector = AlarmFloodDetector()
+
         # 去重状态：记录每个报警的最后推送时间
         # key: (alarm_id, device_id, register_name) -> last_emit_timestamp
         self._emit_history: dict[tuple, float] = {}
@@ -210,11 +301,18 @@ class AlarmManager:
         self._escalation_timer: threading.Timer | None = None
         self._escalation_interval = 30  # 每30秒检查一次升级
 
+        # 告警洪水检查定时器
+        self._flood_timer: threading.Timer | None = None
+        self._flood_check_interval = 15  # 每15秒检查一次洪水是否结束
+
         # 加载报警配置
         self.load_config()
 
         # 启动报警升级自动检查定时器
         self._start_escalation_timer()
+
+        # 启动告警洪水检查定时器
+        self._start_flood_timer()
 
     def _start_escalation_timer(self):
         """启动报警升级后台检查定时器"""
@@ -247,6 +345,37 @@ class AlarmManager:
             self._escalation_timer.cancel()
             self._escalation_timer = None
             logger.info("报警升级定时器已停止")
+
+    def _start_flood_timer(self):
+        """启动告警洪水检查后台定时器"""
+        if self._flood_timer is not None:
+            self._flood_timer.cancel()
+
+        def _flood_tick():
+            try:
+                self._flood_detector.check_flood_end()
+            except Exception as e:
+                logger.error(f"告警洪水检查异常: {e}")
+            finally:
+                self._flood_timer = threading.Timer(
+                    self._flood_check_interval, _flood_tick
+                )
+                self._flood_timer.daemon = True
+                self._flood_timer.start()
+
+        self._flood_timer = threading.Timer(
+            self._flood_check_interval, _flood_tick
+        )
+        self._flood_timer.daemon = True
+        self._flood_timer.start()
+        logger.info(f"告警洪水检查定时器已启动（间隔{self._flood_check_interval}秒）")
+
+    def stop_flood_timer(self):
+        """停止告警洪水检查定时器"""
+        if self._flood_timer is not None:
+            self._flood_timer.cancel()
+            self._flood_timer = None
+            logger.info("告警洪水检查定时器已停止")
 
     def set_websocket_emit(self, emit_func: Callable[..., Any]):
         """注入WebSocket emit函数（由run.py启动时调用）"""
@@ -596,6 +725,13 @@ class AlarmManager:
             timestamp: 时间戳
         """
         rule_id = rule_config.get('id')
+
+        # ISA-18.2: 告警洪水检测 — 抑制低优先级告警
+        severity = rule_config.get('level', 'medium')
+        should_emit, reason = self._flood_detector.record_alarm(severity)
+        if not should_emit:
+            logger.debug(f"告警被洪水检测器抑制: {rule_id} ({device_id}/{register_name})")
+            return
         alarm_level = rule_config.get('level', 'warning')
         alarm_message = rule_config.get('name', '未知报警')
         threshold = rule_config.get('threshold', 0)
