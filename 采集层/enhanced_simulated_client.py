@@ -467,15 +467,16 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
                     callback(self.device_id, name, round(float(value), 2), unit)
                 except Exception as e:
                     logger.error(f"[增强模拟] OPC UA回调异常: {e}")
-    
+
     def get_latest_data(self) -> Dict[str, Dict[str, Any]]:
         """获取最新数据"""
-        if self.connected:
-            self._generate_data()
-        # 停机设备返回空数据
-        if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
-            return {}
-        return dict(self.latest_data)
+        with self._data_lock:
+            if self.connected:
+                self._do_generate_data()
+            # 停机设备返回空数据
+            if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
+                return {}
+            return dict(self.latest_data)
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""

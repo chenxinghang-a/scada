@@ -387,16 +387,20 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0) -
             value += random.gauss(0, abs(base) * 0.001)
 
     elif shape == 'status':
-        # 更真实的设备状态：运行(90%) - 空闲(5%) - 故障(3%) - 维护(2%)
-        cycle = int(t) % 100
-        if cycle < 90:
-            value = 1  # 运行
-        elif cycle < 95:
-            value = 0  # 空闲/待机
-        elif cycle < 98:
-            value = 2  # 故障
-        else:
-            value = 3  # 维护中
+        # Random state transitions based on probabilities
+        if not hasattr(_generate_value, '_status_state'):
+            _generate_value._status_state = 1  # Start running
+            _generate_value._status_timer = time.time()
+
+        elapsed = time.time() - _generate_value._status_timer
+        if _generate_value._status_state == 1 and elapsed > random.uniform(60, 300):
+            if random.random() < 0.1:
+                _generate_value._status_state = random.choice([0, 2, 3])
+                _generate_value._status_timer = time.time()
+        elif _generate_value._status_state != 1 and elapsed > random.uniform(5, 30):
+            _generate_value._status_state = 1
+            _generate_value._status_timer = time.time()
+        value = _generate_value._status_state
 
     elif shape == 'constant':
         value = base

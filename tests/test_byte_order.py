@@ -53,8 +53,9 @@ def _encode_float32(value: float, byte_order: ByteOrder) -> list[int]:
         w1 = (b0 << 8) | b1
         w2 = (b2 << 8) | b3
     elif byte_order == ByteOrder.BADC:
-        w1 = (b2 << 8) | b3
-        w2 = (b0 << 8) | b1
+        # Byte-swap within each word
+        w1 = (b1 << 8) | b0
+        w2 = (b3 << 8) | b2
     elif byte_order == ByteOrder.CDAB:
         w1 = (b2 << 8) | b3
         w2 = (b0 << 8) | b1
