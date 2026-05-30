@@ -16,6 +16,7 @@ venv/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/queue/
 exports/*.csv
 
 # Logs
