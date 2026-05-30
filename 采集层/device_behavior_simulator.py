@@ -83,6 +83,11 @@ class ProcessModel:
     pressure_time_constant: float = 30.0    # 压力响应时间常数
     flow_time_constant: float = 15.0        # 流量响应时间常数
 
+    # 电气/电机参数
+    base_power_kw: float = 10.0             # 基础功率(kW)
+    base_current: float = 20.0              # 基础电机电流(A)
+    base_speed: float = 1500.0              # 基础电机转速(RPM)
+
 
 class DeviceBehaviorSimulator:
     """
@@ -125,6 +130,12 @@ class DeviceBehaviorSimulator:
         self._current_pressure = self.process_model.base_pressure
         self._current_flow = self.process_model.base_flow
         self._current_level = self.process_model.base_level
+
+        # 电气/电机参数
+        self._current_power_kw = self.process_model.base_power_kw
+        self._motor_current = 0.0
+        self._motor_speed = 0.0
+        self._vibration = 0.0
         
         # 故障状态
         self.active_fault = FaultType.NONE
@@ -576,67 +587,93 @@ class DeviceBehaviorSimulator:
         logger.warning(f"[行为模拟] 设备 {self.device_name} 触发故障: {fault_type.value} (严重度: {severity:.2f})")
     
     def _update_process_variables(self, dt: float):
-        """更新物理参数（带惯性和关联性）"""
-        # 计算时间因子（用于正弦波）
+        """更新物理参数 - Antoine方程、质量平衡、电机特性"""
         t = time.time() - self.start_time
-        
+
         # 班次影响（24小时周期）
         hour_of_day = (t / 3600) % 24
         shift_factor = 1.0 + 0.05 * math.sin((hour_of_day - 6) * math.pi / 12)
-        
-        # 温度更新（带惯性）
+
+        # ===== 温度 - 一阶惯性 =====
         target_temp = self.process_model.base_temperature * shift_factor
         if self.state == DeviceState.RUNNING:
-            # 运行时温度升高
-            target_temp += 20 + 10 * math.sin(t / 90)
+            target_temp += 20 * math.sin(t / 300)
+        elif self.state == DeviceState.IDLE:
+            target_temp = self.process_model.base_temperature - 10
         elif self.state == DeviceState.FAULT and self.active_fault == FaultType.OVERHEATING:
-            # 过热故障
             target_temp += 50 * self.fault_severity
-        
-        # 一阶惯性
+        else:
+            target_temp = self.process_model.base_temperature - 30
+
         alpha_temp = 1 - math.exp(-dt / self.process_model.thermal_time_constant)
         self._current_temp += (target_temp - self._current_temp) * alpha_temp
+        self._current_temp += random.gauss(0, 0.3)
 
-        # 添加噪声
-        self._current_temp += random.gauss(0, 0.5)
-
-        # 偶发过程扰动（约每20分钟一次短暂尖峰，模拟真实工况）
+        # 偶发过程扰动
         if random.random() < 0.001 and self.state == DeviceState.RUNNING:
             spike = random.uniform(10, 30)
             self._current_temp += spike
             logger.debug(f"[扰动] {self.device_name} 温度尖峰 +{spike:.1f}°C")
-        
-        # 压力更新（与温度关联）
-        temp_effect = (self._current_temp - self.process_model.base_temperature) * self.process_model.temp_pressure_coeff
-        target_pressure = self.process_model.base_pressure + temp_effect
-        
+
+        # ===== 压力 - Antoine方程近似（饱和蒸汽压） =====
+        # P(MPa) ~ 0.00001 * exp(0.05 * T) for 20-200°C range
+        if self._current_temp > 0:
+            target_pressure = 0.00001 * math.exp(0.05 * self._current_temp)
+        else:
+            target_pressure = 0.1
+
         if self.state == DeviceState.FAULT and self.active_fault == FaultType.PRESSURE_LEAK:
             target_pressure *= (1 - 0.3 * self.fault_severity)
-        
+
         alpha_pressure = 1 - math.exp(-dt / self.process_model.pressure_time_constant)
         self._current_pressure += (target_pressure - self._current_pressure) * alpha_pressure
-        self._current_pressure += random.gauss(0, 0.01)
-        
-        # 流量更新（与压力和温度关联）
-        pressure_effect = (self._current_pressure - self.process_model.base_pressure) * self.process_model.pressure_flow_coeff
-        temp_flow_effect = (self._current_temp - self.process_model.base_temperature) * self.process_model.temp_flow_coeff
-        target_flow = self.process_model.base_flow + pressure_effect + temp_flow_effect
-        
-        if self.state == DeviceState.IDLE:
-            target_flow *= 0.1  # 空闲时流量很小
-        elif self.state == DeviceState.STOPPED:
-            target_flow = 0
-        
+        self._current_pressure += random.gauss(0, 0.005)
+        self._current_pressure = max(0.01, self._current_pressure)
+
+        # ===== 流量 - Q ∝ sqrt(ΔP) * f(T) =====
+        pressure_factor = math.sqrt(max(0, self._current_pressure - 0.1))
+        temp_factor = 1 + 0.01 * (self._current_temp - self.process_model.base_temperature)
+        state_flow_factor = 1.0 if self.state == DeviceState.RUNNING else 0.1
+        if self.state == DeviceState.STOPPED:
+            state_flow_factor = 0.0
+        target_flow = self.process_model.base_flow * pressure_factor * temp_factor * state_flow_factor
+
         alpha_flow = 1 - math.exp(-dt / self.process_model.flow_time_constant)
         self._current_flow += (target_flow - self._current_flow) * alpha_flow
-        self._current_flow += random.gauss(0, 0.3)
-        
-        # 液位更新（与流量关联）
-        level_change = (self._current_flow - self.process_model.base_flow) * 0.01
-        self._current_level += level_change * dt
+        self._current_flow += random.gauss(0, 0.1)
+        self._current_flow = max(0, self._current_flow)
+
+        # ===== 液位 - 质量平衡（流入-流出积分） =====
+        flow_balance = self._current_flow - self.process_model.base_flow
+        self._current_level += flow_balance * 0.001 * dt
         self._current_level = max(0, min(100, self._current_level))
-        self._current_level += random.gauss(0, 0.2)
-        
+        self._current_level += random.gauss(0, 0.1)
+
+        # ===== 电机参数关联 =====
+        if self.state == DeviceState.RUNNING:
+            # 功率跟踪过程负载
+            self._current_power_kw = self.process_model.base_power_kw * \
+                (self._current_flow / max(0.1, self.process_model.base_flow)) * \
+                (1 + random.gauss(0, 0.05))
+
+            # 电机电流 ∝ 负载扭矩 ∝ 流量
+            load_ratio = self._current_flow / max(0.1, self.process_model.base_flow)
+            self._motor_current = self.process_model.base_current * load_ratio * \
+                                  (1 + random.gauss(0, 0.05))
+            # 电机速度略降（滑差特性）
+            self._motor_speed = self.process_model.base_speed * (1 - 0.03 * (load_ratio - 1))
+        else:
+            self._current_power_kw = random.gauss(0, 0.2)
+            self._motor_current = random.gauss(0, 0.1)
+            self._motor_speed = 0
+
+        # 振动 - 与速度和负载相关
+        if self.state == DeviceState.RUNNING:
+            self._vibration = 1.5 + 0.5 * (self._motor_current / max(0.1, self.process_model.base_current)) + \
+                              random.gauss(0, 0.2)
+        else:
+            self._vibration = random.gauss(0, 0.05)
+
         # 故障影响
         if self.active_fault == FaultType.SENSOR_DRIFT:
             self._current_temp += 5 * self.fault_severity * math.sin(t / 10)
@@ -758,6 +795,40 @@ class DeviceBehaviorSimulator:
         elif self.state == DeviceState.FAULT:
             state_flow_factor = 0.3
         
+        # ===== 三相电功率物理关联 V*I*cos(phi) =====
+        state_factor = 1.0 if self.state == DeviceState.RUNNING else 0.1
+
+        # 三相电压 - 基于负载的平衡系统
+        voltage_base = 220 + 5 * math.sin(t / 60)
+        voltage_imbalance = random.gauss(0, 0.5)
+        voltage_a = voltage_base + voltage_imbalance + random.gauss(0, 1)
+        voltage_b = voltage_base + voltage_imbalance * 0.5 + random.gauss(0, 1)
+        voltage_c = voltage_base + voltage_imbalance * 0.3 + random.gauss(0, 1)
+
+        # 功率因数 - 随负载变化
+        power_factor = 0.85 + 0.1 * math.sin(t / 120) + random.gauss(0, 0.02)
+        power_factor = max(0.6, min(0.98, power_factor))
+
+        # 电流 - 由功率和电压推导
+        load_power = self._current_power_kw * 1000  # W
+        if voltage_a > 0:
+            current_base = load_power / (3 * voltage_a * power_factor)
+        else:
+            current_base = 0
+
+        current_a = current_base * state_factor + random.gauss(0, 0.5)
+        current_b = current_base * state_factor * (1 + random.gauss(0, 0.02)) + random.gauss(0, 0.5)
+        current_c = current_base * state_factor * (1 + random.gauss(0, 0.02)) + random.gauss(0, 0.5)
+
+        # 有功功率 - 由V*I*cos(phi)计算
+        active_power = (voltage_a * current_a + voltage_b * current_b + voltage_c * current_c) * power_factor / 1000
+
+        # 无功功率
+        reactive_power = active_power * math.tan(math.acos(min(0.999, power_factor)))
+
+        # 视在功率
+        apparent_power = math.sqrt(active_power**2 + reactive_power**2)
+
         # 生成所有可能的参数值
         all_params = {
             # 温度相关
@@ -800,26 +871,28 @@ class DeviceBehaviorSimulator:
             'water_level': round(self._current_level / 100 * 3, 2),
             'feed_water_level': round(self._current_level * 30, 2),  # mm
             
-            # 电气参数
-            'voltage_a': round(220 + 15 * math.sin(t / 120) + random.gauss(0, 3) + (random.uniform(10, 25) if random.random() < 0.002 else 0), 2),
-            'voltage_b': round(220 + 10 * math.sin(t / 120 + 2.094) + random.gauss(0, 2), 2),
-            'voltage_c': round(220 + 10 * math.sin(t / 120 + 4.189) + random.gauss(0, 2), 2),
-            'current_a': round(30 + 15 * math.sin(t / 60) + random.gauss(0, 1), 2),
-            'current_b': round(30 + 15 * math.sin(t / 60 + 2.094) + random.gauss(0, 1), 2),
-            'current_c': round(30 + 15 * math.sin(t / 60 + 4.189) + random.gauss(0, 1), 2),
-            'active_power': round(50 + 30 * math.sin(t / 45) + random.gauss(0, 2), 2),
+            # 电气参数 - 三相电功率物理关联 V*I*cos(phi)
+            'voltage_a': round(voltage_a, 1),
+            'voltage_b': round(voltage_b, 1),
+            'voltage_c': round(voltage_c, 1),
+            'current_a': round(max(0, current_a), 2),
+            'current_b': round(max(0, current_b), 2),
+            'current_c': round(max(0, current_c), 2),
+            'active_power': round(max(0, active_power), 2),
+            'reactive_power': round(max(0, reactive_power), 2),
+            'apparent_power': round(max(0, apparent_power), 2),
             'frequency': round(50 + 0.3 * math.sin(t / 30) + random.gauss(0, 0.05), 2),
-            'power_factor': round(0.92 + 0.05 * math.sin(t / 90) + random.gauss(0, 0.01), 3),
+            'power_factor': round(power_factor, 3),
             'thd_voltage': round(3.5 + 2.0 * math.sin(t / 120) + random.gauss(0, 0.1), 2),
             
-            # 电机参数
-            'speed': round(1500 + 500 * math.sin(t / 30) + random.gauss(0, 10), 2),
-            'motor_speed': round(1500 + 500 * math.sin(t / 30) + random.gauss(0, 10), 2),
-            'motor_current': round(20 + 10 * math.sin(t / 25) + random.gauss(0, 0.5), 2),
-            'torque': round(18 + 4 * math.sin(t / 30) + random.gauss(0, 0.5), 2),
-            'vibration_x': round(2.5 + 1.0 * math.sin(t / 20) + random.gauss(0, 0.2), 2),
-            'vibration_y': round(2.5 + 1.0 * math.sin(t / 20 + 1) + random.gauss(0, 0.2), 2),
-            'vibration_z': round(2.5 + 1.0 * math.sin(t / 20 + 2) + random.gauss(0, 0.2), 2),
+            # 电机参数 - 与物理过程关联
+            'speed': round(self._motor_speed, 2),
+            'motor_speed': round(self._motor_speed, 2),
+            'motor_current': round(max(0, self._motor_current), 2),
+            'torque': round(self._motor_current * 0.9 + random.gauss(0, 0.3), 2),
+            'vibration_x': round(self._vibration + random.gauss(0, 0.1), 2),
+            'vibration_y': round(self._vibration + random.gauss(0, 0.1), 2),
+            'vibration_z': round(self._vibration + random.gauss(0, 0.1), 2),
             'clamping_force': round(1500 + 500 * math.sin(t / 30) + random.gauss(0, 20), 2),
             
             # 生产参数
