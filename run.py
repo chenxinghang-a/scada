@@ -229,6 +229,22 @@ def main():
         )
         HealthChecker.start_periodic_checks(interval=30)
 
+        # 初始化高可用管理器
+        logger.info("初始化高可用管理器...")
+        import os
+        from core.ha_manager import HAManager, HARole
+        ha_manager = HAManager(
+            node_id=os.environ.get('HA_NODE_ID', f'node-{os.getpid()}'),
+            priority=int(os.environ.get('HA_PRIORITY', '100')),
+            heartbeat_interval=float(os.environ.get('HA_HEARTBEAT_INTERVAL', '2')),
+            heartbeat_timeout=float(os.environ.get('HA_HEARTBEAT_TIMEOUT', '10')),
+            peer_address=os.environ.get('HA_PEER_ADDRESS', ''),
+            peer_port=int(os.environ.get('HA_PEER_PORT', '9999')),
+        )
+        ha_manager.set_on_role_change(lambda old, new: logger.info(f"HA角色: {old.value} -> {new.value}"))
+        ha_manager.start()
+        app.ha_manager = ha_manager
+
         # ---- 后台连接设备 + 启动采集（不阻塞Web服务启动） ----
         def _background_start():
             """后台线程：连接设备 → 启动采集"""

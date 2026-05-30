@@ -100,6 +100,37 @@ def get_config():
     return jsonify({'config': config})
 
 
+# ==================== 高可用API ====================
+
+@system_bp.route('/system/ha-status', methods=['GET'])
+@jwt_required
+def get_ha_status():
+    """获取高可用状态"""
+    ha_manager = getattr(current_app, 'ha_manager', None)
+    if not ha_manager:
+        return jsonify({'enabled': False, 'message': 'HA未启用'}), 200
+    return jsonify({'enabled': True, **ha_manager.get_status()})
+
+
+@system_bp.route('/system/ha-force-role', methods=['POST'])
+@role_required('admin')
+def ha_force_role():
+    """强制切换HA角色"""
+    ha_manager = getattr(current_app, 'ha_manager', None)
+    if not ha_manager:
+        return jsonify({'success': False, 'message': 'HA未启用'}), 400
+
+    data = request.get_json() or {}
+    role_str = data.get('role', '').lower()
+
+    if role_str not in ('primary', 'standby'):
+        return jsonify({'success': False, 'message': 'role必须是primary或standby'}), 400
+
+    from core.ha_manager import HARole
+    ha_manager.force_role(HARole(role_str))
+    return jsonify({'success': True, 'message': f'角色已切换为{role_str}', **ha_manager.get_status()})
+
+
 @system_bp.route('/config', methods=['PUT'])
 @role_required('admin', 'engineer')
 def update_config():
