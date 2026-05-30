@@ -31,6 +31,15 @@ class Database:
         self._init_pragmas()
         self._init_database()
 
+    def close_thread_connection(self):
+        """关闭当前线程的数据库连接"""
+        if hasattr(self._local, 'connection') and self._local.connection:
+            try:
+                self._local.connection.close()
+            except Exception:
+                pass
+            self._local.connection = None
+
     def _init_pragmas(self):
         """初始化全局 PRAGMA（只需执行一次）"""
         conn = sqlite3.connect(self.db_path, timeout=30)
@@ -43,9 +52,12 @@ class Database:
         conn.close()
 
     @contextmanager
-    def get_connection(self):
+    def get_connection(self, readonly=False):
         """
         获取数据库连接（线程本地复用）
+
+        Args:
+            readonly: True表示只读操作，不提交事务
 
         Yields:
             sqlite3.Connection: 数据库连接
@@ -60,9 +72,11 @@ class Database:
 
         try:
             yield conn
-            conn.commit()
+            if not readonly:
+                conn.commit()
         except Exception as e:
-            conn.rollback()
+            if not readonly:
+                conn.rollback()
             raise e
 
     def _init_database(self):
@@ -282,7 +296,7 @@ class Database:
             cursor.execute('DELETE FROM history_data WHERE device_id = ?', (device_id,))
             logger.info(f"已清除设备 {device_id} 的数据库数据")
 
-    def get_realtime_data(self, device_id: str | None = None, 
+    def get_realtime_data(self, device_id: str | None = None,
                           limit: int = 100) -> list[dict[str, Any]]:
         """
         获取实时数据
@@ -294,7 +308,7 @@ class Database:
         Returns:
             list[dict[str, Any]]: 数据列表
         """
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
 
             if device_id:
@@ -325,12 +339,12 @@ class Database:
         Returns:
             dict[str, Any]: 最新数据（单个寄存器返回dict，所有寄存器返回{register_name: dict}）
         """
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
 
             if register_name:
                 cursor.execute('''
-                    SELECT * FROM realtime_data 
+                    SELECT * FROM realtime_data
                     WHERE device_id = ? AND register_name = ?
                     ORDER BY timestamp DESC 
                     LIMIT 1
@@ -367,7 +381,7 @@ class Database:
         Returns:
             {device_id: {register_name: {value, timestamp, unit, ...}}}
         """
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT r1.* FROM realtime_data r1
@@ -399,11 +413,11 @@ class Database:
         Returns:
             list[str]: 寄存器名称列表
         """
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT DISTINCT register_name 
-                FROM history_data 
+                SELECT DISTINCT register_name
+                FROM history_data
                 WHERE device_id = ?
                 ORDER BY register_name
             ''', (device_id,))
@@ -425,7 +439,7 @@ class Database:
         Returns:
             list[dict[str, Any]]: 历史数据列表
         """
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
 
             # 构造动态 WHERE：register_name 为 None 时不限制
@@ -548,7 +562,7 @@ class Database:
         Returns:
             list[dict[str, Any]]: 报警记录列表
         """
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
 
             query = 'SELECT * FROM alarm_records WHERE 1=1'
@@ -621,11 +635,11 @@ class Database:
         Returns:
             list[dict[str, Any]]: 设备摘要列表
         """
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
 
             cursor.execute('''
-                SELECT 
+                SELECT
                     device_id,
                     COUNT(DISTINCT register_name) as register_count,
                     MAX(timestamp) as last_update,
@@ -674,7 +688,7 @@ class Database:
         Returns:
             dict[str, Any]: 统计信息
         """
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
 
             # 实时数据统计
@@ -792,7 +806,7 @@ class Database:
         Returns:
             list[dict[str, Any]]: 归档数据列表
         """
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT * FROM history_archive
@@ -913,16 +927,19 @@ class Database:
         获取各表的记录数
 
         Returns:
-            dict[str, Any]: 表名 -> 记录数
+            dict[str, int]: 表名 -> 记录数
         """
-        tables = ['realtime_data', 'history_data', 'alarm_records', 'history_archive', 'users', 'operation_logs']
+        allowed_tables = {'realtime_data', 'history_data', 'alarm_records',
+                          'history_archive', 'users', 'operation_logs'}
         result = {}
 
-        with self.get_connection() as conn:
+        with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
-            for table in tables:
+            for table in allowed_tables:
+                if not table.isidentifier():
+                    continue
                 try:
-                    cursor.execute(f'SELECT COUNT(*) FROM {table}')
+                    cursor.execute(f'SELECT COUNT(*) FROM [{table}]')
                     result[table] = cursor.fetchone()[0]
                 except Exception:
                     result[table] = 0

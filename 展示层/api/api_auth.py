@@ -4,6 +4,7 @@
 """
 
 import logging
+from functools import wraps
 from flask import Blueprint, jsonify, request
 
 from 用户层.auth import jwt_required, role_required
@@ -18,9 +19,26 @@ _require_auth = jwt_required
 _require_admin = role_required('admin')
 
 
+def api_error_handler(f):
+    """API错误处理装饰器"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        except PermissionError as e:
+            return jsonify({'error': str(e)}), 403
+        except Exception as e:
+            logger.error(f"API error in {f.__name__}: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+    return decorated
+
+
 # ==================== 认证相关API ====================
 
 @auth_bp.route('/auth/login', methods=['POST'])
+@api_error_handler
 def login():
     """用户登录"""
     data = request.get_json()
@@ -45,6 +63,7 @@ def login():
 
 
 @auth_bp.route('/auth/register', methods=['POST'])
+@api_error_handler
 def register():
     """用户注册（仅管理员，或首个用户直接注册admin）"""
     token = None
@@ -82,15 +101,19 @@ def register():
 
 @auth_bp.route('/auth/verify', methods=['GET'])
 @_require_auth
+@api_error_handler
 def verify_token():
     """验证令牌有效性"""
     return jsonify({'valid': True, 'user': request.current_user})
 
 
 @auth_bp.route('/auth/refresh', methods=['POST'])
+@api_error_handler
 def refresh_token():
     """刷新令牌"""
     data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请提供刷新令牌'}), 400
     rtoken = data.get('refresh_token')
 
     if not rtoken:
@@ -107,9 +130,12 @@ def refresh_token():
 
 @auth_bp.route('/auth/change-password', methods=['POST'])
 @_require_auth
+@api_error_handler
 def change_password():
     """修改密码"""
     data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请提供改密信息'}), 400
     auth_manager = get_auth_manager()
     result = auth_manager.change_password(
         username=request.current_user['username'],
@@ -120,6 +146,7 @@ def change_password():
 
 
 @auth_bp.route('/auth/force-change-password', methods=['POST'])
+@api_error_handler
 def force_change_password():
     """首次登录强制改密（不需要旧密码，需要有效token）"""
     data = request.get_json()
@@ -157,6 +184,7 @@ def force_change_password():
 
 @auth_bp.route('/auth/users', methods=['GET'])
 @_require_admin
+@api_error_handler
 def get_users():
     """获取用户列表（仅管理员）"""
     auth_manager = get_auth_manager()
@@ -165,15 +193,19 @@ def get_users():
 
 @auth_bp.route('/auth/users/<username>', methods=['PUT'])
 @_require_admin
+@api_error_handler
 def update_user(username):
     """更新用户信息（仅管理员）"""
     data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请提供更新数据'}), 400
     auth_manager = get_auth_manager()
     return jsonify(auth_manager.update_user(username, **data))
 
 
 @auth_bp.route('/auth/users/<username>', methods=['DELETE'])
 @_require_admin
+@api_error_handler
 def delete_user(username):
     """删除用户（仅管理员）"""
     auth_manager = get_auth_manager()
@@ -182,6 +214,7 @@ def delete_user(username):
 
 @auth_bp.route('/auth/logs', methods=['GET'])
 @_require_admin
+@api_error_handler
 def get_operation_logs():
     """获取操作日志（仅管理员）"""
     auth_manager = get_auth_manager()

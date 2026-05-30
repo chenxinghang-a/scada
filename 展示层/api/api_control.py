@@ -19,6 +19,22 @@ _require_auth = jwt_required
 _require_engineer = role_required('admin', 'engineer')
 
 
+def _safe_int(val, name='value'):
+    """安全整数转换"""
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        raise ValueError(f'Invalid {name}: must be integer')
+
+
+def _safe_float(val, name='value'):
+    """安全浮点转换"""
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        raise ValueError(f'Invalid {name}: must be number')
+
+
 # ==================== 设备控制API ====================
 
 @control_bp.route('/devices/<device_id>/write-register', methods=['POST'])
@@ -36,11 +52,17 @@ def write_register(device_id):
 
     operator = request.current_user['username']
 
+    try:
+        address = _safe_int(address, 'address')
+        value = _safe_int(value, 'value')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
     # 工厂级安全校验
     device_control = getattr(current_app, 'device_control', None)
     if device_control:
         result = device_control.write_with_verification(
-            device_id, int(address), int(value), operator)
+            device_id, address, value, operator)
         if not result['success']:
             return jsonify(result), 403
         return jsonify(result)
@@ -52,7 +74,7 @@ def write_register(device_id):
     if not client.connected:
         return jsonify({'error': f'设备 {device_id} 未连接'}), 400
 
-    success = client.write_single_register(int(address), int(value))
+    success = client.write_single_register(address, value)
     if success:
         get_auth_manager().log_operation(
             operator, 'write_register',
@@ -76,11 +98,16 @@ def write_coil(device_id):
 
     operator = request.current_user['username']
 
+    try:
+        address = _safe_int(address, 'address')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
     # 工厂级安全校验
     device_control = getattr(current_app, 'device_control', None)
     if device_control:
         result = device_control.write_with_verification(
-            device_id, int(address), 1 if value else 0, operator)
+            device_id, address, 1 if value else 0, operator)
         if not result['success']:
             return jsonify(result), 403
         return jsonify(result)
@@ -92,7 +119,7 @@ def write_coil(device_id):
     if not client.connected:
         return jsonify({'error': f'设备 {device_id} 未连接'}), 400
 
-    success = client.write_single_coil(int(address), bool(value))
+    success = client.write_single_coil(address, bool(value))
     if success:
         get_auth_manager().log_operation(
             operator, 'write_coil',
@@ -114,8 +141,13 @@ def adjust_device(device_id):
     if register_name is None or value is None:
         return jsonify({'error': '缺少 register_name 或 value 参数'}), 400
 
+    try:
+        value = _safe_float(value, 'value')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
     operator = request.current_user['username']
-    result = current_app.device_manager.adjust_device(device_id, register_name, float(value))
+    result = current_app.device_manager.adjust_device(device_id, register_name, value)
 
     if result['success']:
         get_auth_manager().log_operation(

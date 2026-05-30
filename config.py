@@ -211,5 +211,5 @@ class TDengineConfig:
     HOST = os.environ.get('TDENGINE_HOST', 'localhost')
     PORT = int(os.environ.get('TDENGINE_PORT', 6041))
     USER = os.environ.get('TDENGINE_USER', 'root')
-    PASSWORD = os.environ.get('TDENGINE_PASSWORD', 'taosdata')
+    PASSWORD = os.environ.get('TDENGINE_PASSWORD', '')
     DATABASE = os.environ.get('TDENGINE_DATABASE', 'scada')

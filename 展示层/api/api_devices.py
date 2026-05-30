@@ -18,6 +18,14 @@ _require_auth = jwt_required
 _require_engineer = role_required('admin', 'engineer')
 
 
+def _safe_int(val, name='value'):
+    """安全整数转换"""
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        raise ValueError(f'Invalid {name}: must be integer')
+
+
 # ==================== 设备管理API ====================
 
 @devices_bp.route('/devices', methods=['GET'])
@@ -61,7 +69,11 @@ def add_device():
         return jsonify({'error': '设备配置验证失败，请检查必填字段'}), 400
 
     # 构建设备配置
-    device_config = _build_device_config(protocol, data)
+    try:
+        device_config = _build_device_config(protocol, data)
+    except ValueError as e:
+        logger.warning(f"设备配置类型错误: {e}")
+        return jsonify({'error': str(e)}), 400
 
     success = current_app.device_manager.add_device(device_config)
     if success:
@@ -99,12 +111,18 @@ def update_device(device_id):
     protocol = data.get('protocol', device_config.get('protocol', 'modbus_tcp'))
 
     # 通用字段
-    for key in ('name', 'description', 'enabled', 'collection_interval', 'protocol'):
-        if key in data:
-            device_config[key] = int(data[key]) if key == 'collection_interval' else data[key]
+    try:
+        for key in ('name', 'description', 'enabled', 'collection_interval', 'protocol'):
+            if key in data:
+                device_config[key] = _safe_int(data[key], key) if key == 'collection_interval' else data[key]
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
 
     # 协议专属字段
-    _update_protocol_fields(protocol, device_config, data)
+    try:
+        _update_protocol_fields(protocol, device_config, data)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
 
     device_manager._save_config()
     get_auth_manager().log_operation(
@@ -147,6 +165,7 @@ def delete_device(device_id):
 
 
 @devices_bp.route('/devices/<device_id>/connect', methods=['POST'])
+@_require_auth
 def connect_device(device_id):
     """连接设备"""
     device_manager = current_app.device_manager
@@ -162,6 +181,7 @@ def connect_device(device_id):
 
 
 @devices_bp.route('/devices/<device_id>/disconnect', methods=['POST'])
+@_require_auth
 def disconnect_device(device_id):
     """断开设备连接"""
     device_manager = current_app.device_manager
@@ -782,16 +802,16 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         'protocol': protocol,
         'device_category': data.get('device_category', 'instrument'),
         'enabled': data.get('enabled', True),
-        'collection_interval': int(data.get('collection_interval', 5))
+        'collection_interval': _safe_int(data.get('collection_interval', 5), 'collection_interval')
     }
 
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         config['host'] = data['host']
-        config['port'] = int(data['port'])
-        config['slave_id'] = int(data.get('slave_id', 1))
+        config['port'] = _safe_int(data['port'], 'port')
+        config['slave_id'] = _safe_int(data.get('slave_id', 1), 'slave_id')
         config['registers'] = data.get('registers', [])
         if protocol == 'modbus_rtu':
-            config['baudrate'] = int(data.get('baudrate', 115200))
+            config['baudrate'] = _safe_int(data.get('baudrate', 115200), 'baudrate')
     elif protocol == 'opcua':
         config['endpoint'] = data['endpoint']
         config['security_mode'] = data.get('security_mode', 'None')
@@ -801,14 +821,14 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         config['nodes'] = data['nodes']
     elif protocol == 'mqtt':
         config['host'] = data['host']
-        config['port'] = int(data['port'])
+        config['port'] = _safe_int(data['port'], 'port')
         if data.get('username'):
             config['username'] = data['username']
             config['password'] = data.get('password', '')
         config['topics'] = data['topics']
     elif protocol == 'rest':
         config['base_url'] = data['base_url']
-        config['poll_interval'] = int(data.get('poll_interval', 10))
+        config['poll_interval'] = _safe_int(data.get('poll_interval', 10), 'poll_interval')
         auth_type = data.get('auth_type', 'none')
         if auth_type != 'none':
             config['auth_type'] = auth_type
@@ -820,13 +840,13 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         config['endpoints'] = data['endpoints']
     elif protocol == 'mc':
         config['host'] = data['host']
-        config['port'] = int(data['port'])
-        config['network'] = int(data.get('network', 0))
-        config['pc'] = int(data.get('pc', 0xFF))
+        config['port'] = _safe_int(data['port'], 'port')
+        config['network'] = _safe_int(data.get('network', 0), 'network')
+        config['pc'] = _safe_int(data.get('pc', 0xFF), 'pc')
         config['registers'] = data.get('registers', [])
     elif protocol == 'fins':
         config['host'] = data['host']
-        config['port'] = int(data['port'])
+        config['port'] = _safe_int(data['port'], 'port')
         config['registers'] = data.get('registers', [])
 
     return config
@@ -834,30 +854,37 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
 
 def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: dict[str, Any]):
     """更新协议专属字段"""
+    _int_keys_map = {
+        'modbus_tcp': ('port', 'slave_id'),
+        'modbus_rtu': ('port', 'slave_id'),
+        'mqtt': ('port',),
+        'rest': ('poll_interval',),
+        'mc': ('port', 'network', 'pc'),
+        'fins': ('port',),
+    }
+    int_keys = _int_keys_map.get(protocol, ())
+
     if protocol in ('modbus_tcp', 'modbus_rtu'):
-        for key in ('host', 'port', 'slave_id', 'registers', 'baudrate'):
-            if key in data:
-                device_config[key] = int(data[key]) if key in ('port', 'slave_id') else data[key]
+        fields = ('host', 'port', 'slave_id', 'registers', 'baudrate')
     elif protocol == 'opcua':
-        for key in ('endpoint', 'security_mode', 'username', 'password', 'nodes'):
-            if key in data:
-                device_config[key] = data[key]
+        fields = ('endpoint', 'security_mode', 'username', 'password', 'nodes')
     elif protocol == 'mqtt':
-        for key in ('host', 'port', 'username', 'password', 'topics'):
-            if key in data:
-                device_config[key] = int(data[key]) if key == 'port' else data[key]
+        fields = ('host', 'port', 'username', 'password', 'topics')
     elif protocol == 'rest':
-        for key in ('base_url', 'poll_interval', 'auth_type', 'auth_token', 'auth_username', 'auth_password', 'endpoints'):
-            if key in data:
-                device_config[key] = int(data[key]) if key == 'poll_interval' else data[key]
+        fields = ('base_url', 'poll_interval', 'auth_type', 'auth_token', 'auth_username', 'auth_password', 'endpoints')
     elif protocol == 'mc':
-        for key in ('host', 'port', 'network', 'pc', 'registers'):
-            if key in data:
-                device_config[key] = int(data[key]) if key in ('port', 'network', 'pc') else data[key]
+        fields = ('host', 'port', 'network', 'pc', 'registers')
     elif protocol == 'fins':
-        for key in ('host', 'port', 'registers'):
-            if key in data:
-                device_config[key] = int(data[key]) if key == 'port' else data[key]
+        fields = ('host', 'port', 'registers')
+    else:
+        return
+
+    for key in fields:
+        if key in data:
+            if key in int_keys:
+                device_config[key] = _safe_int(data[key], key)
+            else:
+                device_config[key] = data[key]
 
 
 # ==================== 模拟设备预设API ====================
@@ -923,6 +950,7 @@ def _get_simulation_initializer():
 
 
 @devices_bp.route('/devices/presets', methods=['GET'])
+@_require_auth
 def get_simulation_presets():
     """获取所有模拟设备预设列表"""
     initializer = _get_simulation_initializer()
@@ -935,6 +963,7 @@ def get_simulation_presets():
 
 
 @devices_bp.route('/devices/presets/<preset_id>', methods=['GET'])
+@_require_auth
 def get_preset_detail(preset_id):
     """获取单个预设详情"""
     initializer = _get_simulation_initializer()

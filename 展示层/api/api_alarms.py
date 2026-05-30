@@ -4,6 +4,7 @@
 """
 
 import logging
+from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
@@ -18,10 +19,27 @@ _require_auth = jwt_required
 _require_engineer = role_required('admin', 'engineer')
 
 
+def api_error_handler(f):
+    """API错误处理装饰器"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        except PermissionError as e:
+            return jsonify({'error': str(e)}), 403
+        except Exception as e:
+            logger.error(f"API error in {f.__name__}: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+    return decorated
+
+
 # ==================== 报警相关API ====================
 
 @alarms_bp.route('/alarms', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_alarms():
     """获取报警记录"""
     device_id = request.args.get('device_id')
@@ -40,6 +58,7 @@ def get_alarms():
 
 @alarms_bp.route('/alarms/active', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_active_alarms():
     """获取活动报警"""
     return jsonify({'alarms': current_app.alarm_manager.get_active_alarms()})
@@ -47,9 +66,10 @@ def get_active_alarms():
 
 @alarms_bp.route('/alarms/<alarm_id>/acknowledge', methods=['POST'])
 @_require_auth
+@api_error_handler
 def acknowledge_alarm(alarm_id):
     """确认报警"""
-    data = request.get_json()
+    data = request.get_json() or {}
     success = current_app.alarm_manager.acknowledge_alarm(
         alarm_id=alarm_id,
         device_id=data.get('device_id'),
@@ -61,6 +81,7 @@ def acknowledge_alarm(alarm_id):
 
 @alarms_bp.route('/alarms/statistics', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_alarm_statistics():
     """获取报警统计（含声光输出+广播系统状态）"""
     return jsonify(current_app.alarm_manager.get_alarm_statistics())
@@ -70,6 +91,7 @@ def get_alarm_statistics():
 
 @alarms_bp.route('/alarm-output/status', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_alarm_output_status():
     """获取声光报警器和广播系统状态"""
     result = {}
@@ -89,6 +111,7 @@ def get_alarm_output_status():
 
 @alarms_bp.route('/alarm-output/acknowledge', methods=['POST'])
 @_require_auth
+@api_error_handler
 def alarm_output_acknowledge():
     """消音 — 关闭蜂鸣器，报警灯保持闪烁"""
     alarm_manager = current_app.alarm_manager
@@ -102,6 +125,7 @@ def alarm_output_acknowledge():
 
 @alarms_bp.route('/alarm-output/reset', methods=['POST'])
 @_require_auth
+@api_error_handler
 def alarm_output_reset():
     """复位 — 全部清零，恢复绿灯正常状态"""
     alarm_manager = current_app.alarm_manager
@@ -114,6 +138,7 @@ def alarm_output_reset():
 @alarms_bp.route('/alarm-output/manual', methods=['POST'])
 @_require_auth
 @_require_engineer
+@api_error_handler
 def alarm_output_manual():
     """手动控制报警灯和蜂鸣器（调试/巡检用）"""
     data = request.get_json() or {}
@@ -140,6 +165,7 @@ def alarm_output_manual():
 
 @alarms_bp.route('/broadcast/speak', methods=['POST'])
 @_require_auth
+@api_error_handler
 def broadcast_speak():
     """手动广播喊话"""
     data = request.get_json()
@@ -164,6 +190,7 @@ def broadcast_speak():
 
 @alarms_bp.route('/broadcast/areas', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_broadcast_areas():
     """获取广播区域列表"""
     alarm_manager = current_app.alarm_manager
@@ -174,6 +201,7 @@ def get_broadcast_areas():
 
 @alarms_bp.route('/broadcast/history', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_broadcast_history():
     """获取广播历史"""
     limit = request.args.get('limit', 50, type=int)

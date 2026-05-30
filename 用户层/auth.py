@@ -3,6 +3,7 @@
 实现JWT令牌认证、角色权限控制
 """
 
+import os
 import jwt
 import bcrypt
 import logging
@@ -42,6 +43,9 @@ JWT_SECRET = AuthConfig.JWT_SECRET
 JWT_ALGORITHM = AuthConfig.JWT_ALGORITHM
 JWT_EXPIRATION_HOURS = AuthConfig.JWT_EXPIRATION_HOURS
 JWT_REFRESH_DAYS = AuthConfig.JWT_REFRESH_DAYS
+
+# 默认管理员密码（可通过环境变量覆盖）
+DEFAULT_ADMIN_PASSWORD = os.environ.get('SCADA_ADMIN_PASSWORD', 'admin123')
 
 
 class AuthManager:
@@ -121,12 +125,12 @@ class AuthManager:
             cursor = conn.cursor()
             cursor.execute('SELECT COUNT(*) FROM users WHERE username = ?', ('admin',))
             if cursor.fetchone()[0] == 0:
-                password_hash = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt())
+                password_hash = bcrypt.hashpw(DEFAULT_ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt())
                 cursor.execute('''
                     INSERT INTO users (username, password_hash, role, display_name, must_change_password)
                     VALUES (?, ?, ?, ?, 1)
                 ''', ('admin', password_hash.decode('utf-8'), 'admin', '系统管理员'))
-                logger.info("已创建默认管理员账户: admin/admin123")
+                logger.info("已创建默认管理员账户 (密码通过 SCADA_ADMIN_PASSWORD 环境变量配置)")
 
     def _validate_password_strength(self, password: str) -> tuple[bool, str]:
         """验证密码强度 - 等保2.0要求"""
@@ -484,11 +488,13 @@ class AuthManager:
 
     def update_user(self, username: str, **kwargs) -> dict[str, Any]:
         """更新用户信息"""
-        allowed_fields = ['role', 'display_name', 'email', 'phone', 'is_active']
-        updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
-
-        if not updates:
+        allowed_fields = {'role', 'display_name', 'email', 'phone', 'is_active'}
+        # Only keep allowed fields and validate they are safe identifiers
+        safe_updates = {k: v for k, v in kwargs.items()
+                        if k in allowed_fields and k.isidentifier() and v is not None}
+        if not safe_updates:
             return {'success': False, 'message': '没有可更新的字段'}
+        updates = safe_updates
 
         if 'role' in updates and updates['role'] not in ROLES:
             return {'success': False, 'message': f'无效角色: {updates["role"]}'}
