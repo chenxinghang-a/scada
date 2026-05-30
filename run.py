@@ -213,45 +213,15 @@ def main():
         # 将启动时间传递给app
         app.system_start_time = SYSTEM_START_TIME
 
-        # 注册健康检查
+        # 注册健康检查（内置检查 + 周期自动扫描）
         logger.info("注册健康检查...")
         from core.health_checker import HealthChecker
-
-        def check_database():
-            try:
-                stats = database.get_database_stats()
-                return {'status': 'healthy', 'message': f'数据库正常，{stats.get("total_records", 0)}条记录'}
-            except Exception as e:
-                return {'status': 'unhealthy', 'message': f'数据库异常: {e}'}
-
-        def check_collector():
-            try:
-                stats = data_collector.get_stats()
-                running = stats.get('running', False)
-                if running:
-                    return {'status': 'healthy', 'message': f'采集器运行中，队列{stats.get("queue_size", 0)}条'}
-                else:
-                    return {'status': 'unhealthy', 'message': '采集器未运行'}
-            except Exception as e:
-                return {'status': 'unhealthy', 'message': f'采集器异常: {e}'}
-
-        def check_device_connections():
-            try:
-                all_status = device_manager.get_all_status()
-                total = len(all_status)
-                connected = sum(1 for s in all_status if s.get('connected', False))
-                if connected == total:
-                    return {'status': 'healthy', 'message': f'全部{total}个设备已连接'}
-                elif connected > 0:
-                    return {'status': 'degraded', 'message': f'{connected}/{total}个设备已连接'}
-                else:
-                    return {'status': 'unhealthy', 'message': f'无设备连接'}
-            except Exception as e:
-                return {'status': 'unhealthy', 'message': f'设备连接检查异常: {e}'}
-
-        HealthChecker.register('database', check_database, interval=60)
-        HealthChecker.register('collector', check_collector, interval=30)
-        HealthChecker.register('devices', check_device_connections, interval=60)
+        HealthChecker.register_default_checks(
+            database=database,
+            device_manager=device_manager,
+            data_collector=data_collector,
+        )
+        HealthChecker.start_periodic_checks(interval=30)
 
         # ---- 后台连接设备 + 启动采集（不阻塞Web服务启动） ----
         def _background_start():

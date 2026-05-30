@@ -45,3 +45,6 @@ prometheus_client>=0.19.0
 
 # Development
 python-dotenv>=1.0.0
+
+# Config validation
+jsonschema>=4.20.0

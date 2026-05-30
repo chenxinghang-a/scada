@@ -254,3 +254,204 @@ class HealthChecker:
             cls._checks.clear()
             cls._global_status = HealthStatus.UNKNOWN
         logger.debug("清除所有健康检查")
+
+    # ================================================================
+    # 自动周期健康检查
+    # ================================================================
+
+    _periodic_thread: threading.Thread | None = None
+    _stop_event: threading.Event | None = None
+
+    @classmethod
+    def start_periodic_checks(cls, interval: int = 30):
+        """
+        启动自动周期健康检查
+
+        Args:
+            interval: 检查间隔（秒），默认30秒
+        """
+        if hasattr(cls, '_periodic_thread') and cls._periodic_thread and cls._periodic_thread.is_alive():
+            logger.warning("周期健康检查已在运行，忽略重复启动")
+            return
+
+        cls._stop_event = threading.Event()
+
+        def _periodic_loop():
+            while not cls._stop_event.wait(interval):
+                try:
+                    result = cls.check()
+                    # 如果有新的不健康项，触发告警
+                    checks = result.get('checks', {})
+                    unhealthy = [name for name, r in checks.items() if r.get('status') == HealthStatus.UNHEALTHY]
+                    degraded = [name for name, r in checks.items() if r.get('status') == HealthStatus.DEGRADED]
+                    if unhealthy or degraded:
+                        result['unhealthy_checks'] = unhealthy
+                        result['degraded_checks'] = degraded
+                        cls._emit_health_alert(result)
+                except Exception as e:
+                    logger.error(f"周期健康检查异常: {e}")
+
+        cls._periodic_thread = threading.Thread(target=_periodic_loop, daemon=True, name="health-checker")
+        cls._periodic_thread.start()
+        logger.info(f"健康检查已启动，间隔 {interval}s")
+
+    @classmethod
+    def stop_periodic_checks(cls):
+        """停止周期检查"""
+        if hasattr(cls, '_stop_event') and cls._stop_event:
+            cls._stop_event.set()
+            cls._periodic_thread = None
+            logger.info("周期健康检查已停止")
+
+    @classmethod
+    def _emit_health_alert(cls, result: dict):
+        """健康降级时触发告警（最佳努力通知）"""
+        try:
+            degraded = result.get('degraded_checks', [])
+            unhealthy = result.get('unhealthy_checks', [])
+
+            if unhealthy:
+                logger.error(f"系统不健康项: {unhealthy}")
+            if degraded:
+                logger.warning(f"系统降级项: {degraded}")
+
+            # 尝试通过报警管理器发送告警
+            try:
+                from 报警层.alarm_manager import AlarmManager
+                # 通过ModuleRegistry获取alarm_manager实例
+                from core.module_registry import ModuleRegistry
+                alarm_manager = ModuleRegistry.get('alarm_manager')
+                if alarm_manager:
+                    for check_name in unhealthy:
+                        alarm_manager._emit_websocket_alarm({
+                            'alarm_id': f'health_{check_name}',
+                            'device_id': 'system',
+                            'register_name': 'health',
+                            'alarm_level': 'critical',
+                            'alarm_message': f'健康检查不健康: {check_name}',
+                            'threshold': 0,
+                            'actual_value': 0,
+                            'timestamp': datetime.now().isoformat(),
+                            'area': 'system',
+                            'dedup_key': f'health:{check_name}:unhealthy',
+                        })
+                    for check_name in degraded:
+                        alarm_manager._emit_websocket_alarm({
+                            'alarm_id': f'health_{check_name}',
+                            'device_id': 'system',
+                            'register_name': 'health',
+                            'alarm_level': 'warning',
+                            'alarm_message': f'健康检查降级: {check_name}',
+                            'threshold': 0,
+                            'actual_value': 0,
+                            'timestamp': datetime.now().isoformat(),
+                            'area': 'system',
+                            'dedup_key': f'health:{check_name}:degraded',
+                        })
+            except Exception as inner_e:
+                logger.debug(f"报警管理器通知跳过: {inner_e}")
+        except Exception as e:
+            logger.error(f"健康告警发送失败: {e}")
+
+    # ================================================================
+    # 内置健康检查
+    # ================================================================
+
+    @classmethod
+    def register_default_checks(cls, database=None, device_manager=None, data_collector=None):
+        """
+        注册默认健康检查项
+
+        Args:
+            database: 数据库实例
+            device_manager: 设备管理器实例
+            data_collector: 数据采集器实例
+        """
+        if database:
+            cls.register('database', lambda: _check_database(database), interval=30)
+
+        if device_manager:
+            cls.register('devices', lambda: _check_devices(device_manager), interval=15)
+
+        if data_collector:
+            cls.register('collector', lambda: _check_collector(data_collector), interval=10)
+
+        cls.register('disk', _check_disk_space, interval=60)
+        cls.register('memory', _check_memory, interval=30)
+
+        logger.info(f"默认健康检查已注册: database={database is not None}, "
+                     f"devices={device_manager is not None}, collector={data_collector is not None}")
+
+
+def _check_database(db):
+    """检查数据库连接"""
+    try:
+        conn = db.get_connection()
+        conn.execute("SELECT 1")
+        conn.close()
+        return {'status': HealthStatus.HEALTHY, 'message': '数据库连接正常'}
+    except Exception as e:
+        return {'status': HealthStatus.UNHEALTHY, 'message': f'数据库连接失败: {e}'}
+
+
+def _check_devices(dm):
+    """检查设备状态"""
+    try:
+        status = dm.get_all_status()
+        total = len(status)
+        if total == 0:
+            return {'status': HealthStatus.HEALTHY, 'message': '无设备配置'}
+        connected = sum(1 for s in status.values() if s.get('connected'))
+        fault = sum(1 for s in status.values() if s.get('status') == 'fault')
+
+        if fault > 0:
+            return {'status': HealthStatus.DEGRADED, 'message': f'{fault}/{total}设备故障', 'details': {'fault': fault}}
+        elif connected < total * 0.5:
+            return {'status': HealthStatus.DEGRADED, 'message': f'仅{connected}/{total}设备在线'}
+        return {'status': HealthStatus.HEALTHY, 'message': f'{connected}/{total}设备在线'}
+    except Exception as e:
+        return {'status': HealthStatus.UNHEALTHY, 'message': f'设备检查失败: {e}'}
+
+
+def _check_collector(dc):
+    """检查数据采集器"""
+    try:
+        stats = dc.get_stats()
+        running = stats.get('running', False)
+        queue_size = stats.get('queue_size', 0)
+        if not running:
+            return {'status': HealthStatus.UNHEALTHY, 'message': '采集器未运行'}
+        if queue_size > 10000:
+            return {'status': HealthStatus.DEGRADED, 'message': f'数据队列积压: {queue_size}'}
+        return {'status': HealthStatus.HEALTHY, 'message': f'采集正常, 队列: {queue_size}'}
+    except Exception as e:
+        return {'status': HealthStatus.UNHEALTHY, 'message': f'采集器检查失败: {e}'}
+
+
+def _check_disk_space():
+    """检查磁盘空间"""
+    import shutil
+    try:
+        usage = shutil.disk_usage('.')
+        free_gb = usage.free / (1024**3)
+        if free_gb < 1:
+            return {'status': HealthStatus.UNHEALTHY, 'message': f'磁盘空间不足: {free_gb:.1f}GB'}
+        elif free_gb < 5:
+            return {'status': HealthStatus.DEGRADED, 'message': f'磁盘空间偏低: {free_gb:.1f}GB'}
+        return {'status': HealthStatus.HEALTHY, 'message': f'磁盘空间充足: {free_gb:.1f}GB'}
+    except Exception as e:
+        return {'status': HealthStatus.UNKNOWN, 'message': f'磁盘检查失败: {e}'}
+
+
+def _check_memory():
+    """检查内存使用"""
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        if mem.percent > 95:
+            return {'status': HealthStatus.UNHEALTHY, 'message': f'内存使用率: {mem.percent}%'}
+        elif mem.percent > 85:
+            return {'status': HealthStatus.DEGRADED, 'message': f'内存使用率偏高: {mem.percent}%'}
+        return {'status': HealthStatus.HEALTHY, 'message': f'内存使用率: {mem.percent}%'}
+    except ImportError:
+        return {'status': HealthStatus.HEALTHY, 'message': 'psutil未安装，跳过内存检查'}
