@@ -34,6 +34,7 @@ from .modbus_gateway import ModbusGateway
 from .s7_gateway import S7Gateway
 from .opcua_gateway import OPCUAGateway
 from .iec104_gateway import IEC104Gateway
+from .dnp3_gateway import DNP3Gateway
 from .mqtt_subscriber import MQTTSubscriber, MQTTDataDistributor
 
 __version__ = "2.2.0"
@@ -59,6 +60,7 @@ __all__ = [
     'S7Gateway',
     'OPCUAGateway',
     'IEC104Gateway',
+    'DNP3Gateway',
 
     # MQTT订阅
     'MQTTSubscriber',
