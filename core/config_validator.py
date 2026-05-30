@@ -23,7 +23,7 @@ DEVICE_SCHEMA = {
                 "properties": {
                     "id": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$"},
                     "name": {"type": "string", "minLength": 1, "maxLength": 100},
-                    "protocol": {"type": "string", "enum": ["modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest", "s7", "iec104"]},
+                    "protocol": {"type": "string", "enum": ["modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest", "s7", "iec104", "fins", "mc", "dnp3"]},
                     "host": {"type": "string"},
                     "port": {"type": "integer", "minimum": 1, "maximum": 65535},
                     "unit_id": {"type": "integer", "minimum": 0, "maximum": 255},
@@ -61,12 +61,12 @@ ALARM_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["id", "device_id", "register", "condition", "threshold"],
+                "required": ["id", "device_id", "condition", "threshold"],
                 "properties": {
                     "id": {"type": "string"},
                     "device_id": {"type": "string"},
                     "register": {"type": "string"},
-                    "condition": {"type": "string", "enum": ["gt", "lt", "eq", "ne", "gte", "lte", "in_range", "out_of_range"]},
+                    "condition": {"type": "string", "enum": ["gt", "lt", "eq", "ne", "gte", "lte", "in_range", "out_of_range", "greater_than", "less_than", "equal", "not_equal"]},
                     "threshold": {"type": "number"},
                     "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]},
                     "message": {"type": "string"},
