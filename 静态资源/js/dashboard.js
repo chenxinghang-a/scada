@@ -8,6 +8,7 @@ let selectedDeviceId = null;
 let loadGeneration = 0;
 const deviceCache = {};     // {id: {name, connected, registers, ...}}
 const dataBuffers = {};     // {register_name: [{t, v}]}
+const lastDeviceValues = {}; // {"device_id:register_name": "formatted_value"}
 const MAX_POINTS = 60;
 
 // ========== 初始化 ==========
@@ -61,7 +62,24 @@ async function loadData() {
         const data = await apiFetch('/data/realtime?limit=5000');
         if (gen !== loadGeneration) return;
         if (data && data.data) {
+            // 用API返回的最新数据填充缓存
+            data.data.forEach(item => {
+                if (item.device_id && item.register_name && item.value != null) {
+                    const key = `${item.device_id}:${item.register_name}`;
+                    lastDeviceValues[key] = typeof item.value === 'number'
+                        ? item.value.toFixed(1) : String(item.value);
+                }
+            });
             updateTrendChart(data.data);
+        }
+
+        // 首次加载后，订阅所有设备的WebSocket推送
+        if (window.socket && status.devices) {
+            const devs = Array.isArray(status.devices) ? status.devices : Object.values(status.devices);
+            devs.forEach(d => {
+                const id = d.device_id || d.id;
+                window.socket.emit('subscribe', {device_id: id});
+            });
         }
 
         const alarms = await apiFetch('/alarms?limit=50');
@@ -166,11 +184,13 @@ function updateDeviceGrid(stats) {
             statusText = '运行中';
         }
 
-        // 取前 2 个寄存器值
+        // 取前 2 个寄存器值（用缓存值，不显示"--"）
         const regs = d.registers || [];
         const valStr = regs.slice(0, 2).map(r => {
             const label = getShortLabel(r.name);
-            return `<span class="dev-val"><span class="label">${label}</span> <span class="num" id="dv-${id}-${r.name}">--</span></span>`;
+            const cacheKey = `${id}:${r.name}`;
+            const cached = lastDeviceValues[cacheKey] ?? '--';
+            return `<span class="dev-val"><span class="label">${label}</span> <span class="num" id="dv-${id}-${r.name}">${cached}</span></span>`;
         }).join('');
 
         // 机械类设备显示启停按钮
@@ -419,12 +439,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const sk = window.socket;
         if (!sk) return;
         sk.on('data_update', (data) => {
-            if (data && data.device_id && data.register_name) {
-                const el = document.getElementById(`dv-${data.device_id}-${data.register_name}`);
-                if (el && data.value !== null) {
-                    el.textContent = parseFloat(data.value).toFixed(1);
-                }
-            }
+            if (!data) return;
+            // 服务器发送格式: {register_name: {device_id, register_name, value, ...}, ...}
+            Object.entries(data).forEach(([regName, info]) => {
+                if (!info || typeof info !== 'object') return;
+                const devId = info.device_id;
+                const val = info.value;
+                if (!devId || val == null) return;
+                const key = `${devId}:${regName}`;
+                const formatted = typeof val === 'number' ? val.toFixed(1) : String(val);
+                lastDeviceValues[key] = formatted;
+                const el = document.getElementById(`dv-${devId}-${regName}`);
+                if (el) el.textContent = formatted;
+            });
         });
         sk.on('alarm', () => loadData());
         // Subscribe to all visible devices
