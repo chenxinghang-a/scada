@@ -63,17 +63,12 @@ def setup_logging(
             "<level>{message}</level>\n"
         )
 
-    # 控制台输出（人类可读）
+    # 控制台输出（人类可读，无颜色标记避免环境兼容问题）
     logger.add(
         sys.stderr,
-        format=(
-            "<green>{time:HH:mm:ss}</green> | "
-            "<level>{level: <8}</level> | "
-            "<cyan>{module}</cyan>:<line> | "
-            "<level>{message}</level>"
-        ),
+        format="{time:HH:mm:ss} | {level: <8} | {module}:{line} | {message}",
         level=log_level,
-        colorize=True
+        colorize=False
     )
 
     # 应用日志文件（JSON格式）

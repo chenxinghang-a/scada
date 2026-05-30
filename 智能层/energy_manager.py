@@ -75,7 +75,7 @@ class EnergyManager:
         """
         self.database = database
         self.config_path = Path(config_path)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # 加载配置（YAML文件 -> 默认值 -> 外部config覆盖）
         self._load_config(config)
@@ -363,8 +363,8 @@ class EnergyManager:
                 self.energy_accumulated[device_id]['energy_kwh'] += delta_kwh
                 self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
             elif energy_kwh is not None:
-                # 直接使用累积电量
-                self.energy_accumulated[device_id]['energy_kwh'] = energy_kwh
+                # 直接累加电量增量
+                self.energy_accumulated[device_id]['energy_kwh'] += energy_kwh
 
     def feed_water_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
         """喂入水表数据"""
@@ -515,6 +515,18 @@ class EnergyManager:
             'factor_kg_per_kwh': self.carbon_factor,
             'equivalent_trees': round(summary['carbon_emission_kg'] / 21.77, 1),
         }
+
+    def calculate_carbon_emission(self, energy_kwh: float) -> float:
+        """
+        计算碳排放量
+
+        Args:
+            energy_kwh: 电量 (kWh)
+
+        Returns:
+            碳排放量 (kgCO2)
+        """
+        return energy_kwh * self.carbon_factor
 
     def get_energy_efficiency(self, production_count: int = 0,
                                 production_value: float = 0) -> dict[str, Any]:

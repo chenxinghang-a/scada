@@ -77,6 +77,8 @@ class FFTResult:
 
     def to_dict(self) -> dict:
         return {
+            'frequencies': self.frequencies,
+            'amplitudes': self.amplitudes,
             'dominant_frequency_hz': round(self.dominant_freq, 2),
             'dominant_amplitude': round(self.dominant_amp, 4),
             'frequency_bands': self._get_band_energies()
