@@ -7,7 +7,7 @@ from pathlib import Path as _Path
 _BASE_DIR = _Path(__file__).resolve().parent.parent  # industrial_scada/
 
 import jwt
-from flask import Flask, render_template, jsonify, request, redirect, url_for, g
+from flask import Flask, render_template, jsonify, request, redirect, url_for, g, current_app
 from flask_socketio import SocketIO
 
 from .api import register_api_blueprints
@@ -95,7 +95,7 @@ def create_app(database, device_manager, alarm_manager, data_collector,
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net",
             "img-src 'self' data: blob:",
-            "connect-src 'self' ws: wss: http: https:",
+            "connect-src 'self' ws: wss:",
             "frame-ancestors 'self'",
         ]
         response.headers['Content-Security-Policy'] = '; '.join(csp_directives)
@@ -135,11 +135,13 @@ def create_app(database, device_manager, alarm_manager, data_collector,
             return redirect('/login')
 
         try:
-            payload = jwt.decode(token, AuthConfig.JWT_SECRET, algorithms=[AuthConfig.JWT_ALGORITHM])
+            # Use full verification including blacklist check
+            auth_manager = current_app.auth_manager
+            payload = auth_manager.verify_token(token)
+            if not payload:
+                return redirect('/login')
             g.current_user = payload
-        except jwt.ExpiredSignatureError:
-            return redirect('/login')
-        except jwt.InvalidTokenError:
+        except Exception:
             return redirect('/login')
 
         return None

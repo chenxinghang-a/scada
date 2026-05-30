@@ -1289,3 +1289,16 @@
 {"timestamp": "2026-05-30T20:47:59.918325", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
 {"timestamp": "2026-05-30T20:47:59.918834", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 3f51cf1d, 联锁 rule1, 原因: Not safe"}
 {"timestamp": "2026-05-30T20:47:59.920851", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}
+{"timestamp": "2026-05-30T21:42:43.287303", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test reason，影响设备: []"}
+{"timestamp": "2026-05-30T21:42:43.288689", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test，影响设备: []"}
+{"timestamp": "2026-05-30T21:42:43.289093", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-30T21:42:43.290699", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-30T21:42:43.294679", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-30T21:42:43.317918", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-30T21:42:43.318469", "action": "interlock_restore", "operator": "operator1", "detail": "恢复联锁 rule1"}
+{"timestamp": "2026-05-30T21:42:43.320053", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-30T21:42:43.321481", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-30T21:42:43.321957", "action": "bypass_approved", "operator": "approver1", "detail": "审批旁路请求 5e3160a4, 联锁 rule1, 进度 1/2"}
+{"timestamp": "2026-05-30T21:42:43.323376", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-30T21:42:43.323863", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 4e922592, 联锁 rule1, 原因: Not safe"}
+{"timestamp": "2026-05-30T21:42:43.326063", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}

@@ -88,7 +88,13 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
             logger.warning(f"[增强模拟] 设备 {self.device_name} 连接失败（模拟通信故障）")
             return False
 
+        # 防止重复connect()产生多个更新线程
+        if hasattr(self, '_update_thread') and self._update_thread and self._update_thread.is_alive():
+            self._running = False
+            self._update_thread.join(timeout=2)
+
         self.connected = True
+        self._running = True
         self._consecutive_failures = 0
         self.behavior_simulator.start()
 
@@ -691,6 +697,15 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
         }
         
         logger.info(f"[增强模拟] REST客户端初始化: {config.get('name', 'unknown')}")
+
+    def _resolve_endpoint_address(self, name: str) -> int | None:
+        """从端点名称反查寄存器地址（用于写操作反馈到行为模拟器）"""
+        if not hasattr(self, 'behavior_simulator') or not self.behavior_simulator:
+            return None
+        for addr, reg_info in self.behavior_simulator._register_address_map.items():
+            if reg_info.get('name') == name:
+                return addr
+        return None
     
     def add_data_callback(self, callback: Callable):
         """添加数据回调"""
@@ -774,9 +789,11 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
                 'method': method
             }
 
-            # 更新行为模拟器的内部状态
+            # 更新行为模拟器的内部状态（通过名称反查寄存器地址）
             if hasattr(self, 'behavior_simulator') and self.behavior_simulator:
-                self.behavior_simulator.handle_write_register(name, value)
+                addr = self._resolve_endpoint_address(name)
+                if addr is not None:
+                    self.behavior_simulator.handle_write_register(addr, int(value) if isinstance(value, (int, float)) else 0)
 
             logger.info(f"[增强模拟] REST {method}写入成功: {path} -> {name} = {value}")
         else:

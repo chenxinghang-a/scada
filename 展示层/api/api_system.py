@@ -93,11 +93,20 @@ def toggle_simulation_mode():
 @system_bp.route('/config', methods=['GET'])
 @jwt_required
 def get_config():
-    """获取系统配置"""
+    """获取系统配置（过滤敏感字段）"""
     config = load_yaml_config('配置/system.yaml')
     if not config:
         return jsonify({'error': '配置文件不存在'}), 404
-    return jsonify({'config': config})
+    # 移除敏感字段，防止密钥泄露
+    sensitive_keys = {'secret_key', 'jwt_secret', 'password', 'token', 'api_key'}
+    def _sanitize(obj, depth=0):
+        if isinstance(obj, dict):
+            return {k: ('***' if k.lower() in sensitive_keys and depth > 0 else _sanitize(v, depth+1))
+                    for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [_sanitize(i, depth+1) for i in obj]
+        return obj
+    return jsonify({'config': _sanitize(config)})
 
 
 # ==================== 高可用API ====================

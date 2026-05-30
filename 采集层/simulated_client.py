@@ -95,6 +95,9 @@ _MACHINERY_KEYWORDS = {
 _ESTOP_ACTIVE = False
 _ESTOP_FROZEN_VALUES: dict = {}  # key (str) -> frozen_value
 
+# Per-register status state tracking (keyed by register dict id)
+_status_states: dict[int, dict] = {}
+
 # 设备级停止（个体停机，区别于全局 E-STOP）
 _DEVICE_STOPPED: set[str] = set()  # device_id 集合
 
@@ -114,9 +117,11 @@ def is_device_stopped(device_id: str) -> bool:
 
 def _is_machinery(name: str) -> bool:
     """判断寄存器名称是否属于机械类"""
+    import re
     name_lower = name.lower()
     for kw in _MACHINERY_KEYWORDS:
-        if kw in name_lower:
+        # Word-boundary match to avoid false positives like 'position' matching in 'temperature_position'
+        if re.search(r'(?<![a-z])' + re.escape(kw) + r'(?![a-z])', name_lower):
             return True
     return False
 
@@ -451,20 +456,21 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0,
             value += random.gauss(0, abs(base) * 0.001)
 
     elif shape == 'status':
-        # Random state transitions based on probabilities
-        if not hasattr(_generate_value, '_status_state'):
-            _generate_value._status_state = 1  # Start running
-            _generate_value._status_timer = time.time()
+        # Per-register state transitions (each register has independent state)
+        _reg_key = id(rule)
+        if _reg_key not in _status_states:
+            _status_states[_reg_key] = {'state': 1, 'timer': time.time()}
 
-        elapsed = time.time() - _generate_value._status_timer
-        if _generate_value._status_state == 1 and elapsed > random.uniform(60, 300):
+        st = _status_states[_reg_key]
+        elapsed = time.time() - st['timer']
+        if st['state'] == 1 and elapsed > random.uniform(60, 300):
             if random.random() < 0.1:
-                _generate_value._status_state = random.choice([0, 2, 3])
-                _generate_value._status_timer = time.time()
-        elif _generate_value._status_state != 1 and elapsed > random.uniform(5, 30):
-            _generate_value._status_state = 1
-            _generate_value._status_timer = time.time()
-        value = _generate_value._status_state
+                st['state'] = random.choice([0, 2, 3])
+                st['timer'] = time.time()
+        elif st['state'] != 1 and elapsed > random.uniform(5, 30):
+            st['state'] = 1
+            st['timer'] = time.time()
+        value = st['state']
 
     elif shape == 'constant':
         value = base
@@ -613,7 +619,7 @@ class SimulatedModbusClient(ModbusClientInterface):
             return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
         else:
             # uint16 / int16
-            return [int(round(value)) & 0xFFFF]
+            return [int(round(raw_value)) & 0xFFFF]
 
     def decode_float32(self, registers: list[int]) -> float:
         raw = (registers[0] << 16) | registers[1]

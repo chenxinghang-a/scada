@@ -140,7 +140,7 @@
                 <span class="badge bg-danger" id="alarm-banner-crit" style="display:none">紧急 0</span>
                 <span class="badge bg-warning text-dark" id="alarm-banner-warn" style="display:none">警告 0</span>
                 <span class="badge bg-secondary" id="alarm-banner-count">0</span>
-                <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation();document.getElementById('alarm-banner').style.display='none'" title="关闭">×</button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation();document.getElementById('alarm-banner').style.display='none';if(typeof AlarmDedupManager!=='undefined')AlarmDedupManager.recordDismiss(window._lastAlarmData||{})" title="关闭">×</button>
             </div>
         </div>
     </div>
@@ -316,6 +316,13 @@
             checkAuth();
             updateNavUserInfo();
             updateSimModeIndicator();
+
+            // 兜底：确保Bootstrap dropdown正常工作（Tabler/Bootstrap共存兼容）
+            document.querySelectorAll('[data-bs-toggle="dropdown"]').forEach(function(el) {
+                if (!bootstrap.Dropdown.getInstance(el)) {
+                    new bootstrap.Dropdown(el);
+                }
+            });
         });
     </script>
     

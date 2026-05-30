@@ -180,10 +180,17 @@ function handleDataUpdate(data) {
  * 处理报警
  */
 function handleAlarm(data) {
+    // 去重检查：冷却窗口内同一报警不重复显示
+    if (!AlarmDedupManager.shouldShow(data)) return;
+    AlarmDedupManager.recordShow(data);
+    // 保存最近报警数据，供dismiss按钮调用recordDismiss
+    window._lastAlarmData = data;
     // 更新顶部报警条（不弹窗，不打断操作）
     updateAlarmBanner(data);
     // 更新导航栏计数
     updateAlarmCount();
+    // 播放报警声音
+    playAlarmSound(data);
 }
 
 /**

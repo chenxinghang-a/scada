@@ -658,7 +658,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sk.on('alarm', (data) => {
             if (data && data.alarm_id) {
                 prependAlarmItem(data);
-                flashAlarmBanner(data);
+                // flashAlarmBanner 已由 main.js handleAlarm -> updateAlarmBanner 统一处理，避免重复闪烁
             } else {
                 loadData(); // fallback
             }

@@ -72,7 +72,7 @@ def login():
 
     token = result.get('token', '')
     if token:
-        resp.set_cookie('token', token, path='/', samesite='Lax', httponly=False)
+        resp.set_cookie('token', token, path='/', samesite='Lax', httponly=True)
     return resp
 
 
