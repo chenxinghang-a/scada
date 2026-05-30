@@ -263,7 +263,7 @@
                     }
 
                     // 设置cookie供服务端页面认证使用
-                    document.cookie = `token=${data.token}; path=/; SameSite=Strict`;
+                    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
 
                     // 跳转到仪表盘
                     window.location.href = '/dashboard';

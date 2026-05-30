@@ -62,9 +62,18 @@ def login():
 
     if not result['success']:
         return jsonify(result), 401
+
+    # 构建响应并在服务端设置cookie（GB/T 33008: 令牌安全传递）
+    from flask import make_response
     if result.get('status') == 'must_change_password':
-        return jsonify(result), 403
-    return jsonify(result), 200
+        resp = make_response(jsonify(result), 403)
+    else:
+        resp = make_response(jsonify(result), 200)
+
+    token = result.get('token', '')
+    if token:
+        resp.set_cookie('token', token, path='/', samesite='Lax', httponly=False)
+    return resp
 
 
 @auth_bp.route('/auth/logout', methods=['POST'])
