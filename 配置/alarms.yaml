@@ -1,224 +1,176 @@
-# 报警配置文件
-# 配置报警规则和通知方式
-
-# 报警级别
-# - critical: 严重报警，需要立即处理
-# - warning: 警告报警，需要关注
-# - info: 信息提示，仅记录
-
-alarm_rules:
-  # 温度报警规则 — 西门子S7-1500锅炉温度
-  # devices.yaml: siemens_1500_01 -> boiler_temperature (float32, °C)
-  - id: temp_high
-    name: "锅炉温度过高"
-    description: "锅炉出口温度超过上限"
-    device_id: siemens_1500_01
-    register_name: "boiler_temperature"
-    condition: "greater_than"
-    threshold: 180.0
-    level: "critical"
-    enabled: true
-    delay: 0
-    
-  - id: temp_low
-    name: "锅炉温度过低"
-    description: "锅炉出口温度低于下限"
-    device_id: siemens_1500_01
-    register_name: "boiler_temperature"
-    condition: "less_than"
-    threshold: 50.0
-    level: "warning"
-    enabled: true
-    delay: 0
-
-  # 温度报警 — 和利时LK蒸馏塔温度
-  - id: env_temp_high
-    name: "蒸馏塔温度过高"
-    description: "蒸馏塔顶温度超过上限"
-    device_id: hollysys_lk_01
-    register_name: "distill_temperature"
-    condition: "greater_than"
-    threshold: 120.0
-    level: "warning"
-    enabled: true
-    delay: 0
-    
-  # 压力报警规则 — 西门子S7-1500锅炉压力
-  # devices.yaml: siemens_1500_01 -> boiler_pressure (float32, MPa)
-  - id: pressure_high
-    name: "锅炉压力过高"
-    description: "锅炉压力超过上限"
-    device_id: siemens_1500_01
-    register_name: "boiler_pressure"
-    condition: "greater_than"
-    threshold: 1.2
-    level: "critical"
-    enabled: true
-    delay: 0
-    
-  - id: pressure_low
-    name: "锅炉压力过低"
-    description: "锅炉压力低于下限"
-    device_id: siemens_1500_01
-    register_name: "boiler_pressure"
-    condition: "less_than"
-    threshold: 0.2
-    level: "warning"
-    enabled: true
-    delay: 0
-    
-  # 电力报警规则 — ABB M4M A相电压/电流
-  # devices.yaml: abb_m4m_01 -> voltage_a (float32, V), current_a (float32, A)
-  - id: voltage_high
-    name: "A相电压过高"
-    description: "A相电压超过上限"
-    device_id: abb_m4m_01
-    register_name: "voltage_a"
-    condition: "greater_than"
-    threshold: 242.0
-    level: "critical"
-    enabled: true
-    delay: 0
-    
-  - id: voltage_low
-    name: "A相电压过低"
-    description: "A相电压低于下限"
-    device_id: abb_m4m_01
-    register_name: "voltage_a"
-    condition: "less_than"
-    threshold: 198.0
-    level: "warning"
-    enabled: true
-    delay: 0
-    
-  - id: current_high
-    name: "A相电流过高"
-    description: "A相电流超过上限"
-    device_id: abb_m4m_01
-    register_name: "current_a"
-    condition: "greater_than"
-    threshold: 100.0
-    level: "critical"
-    enabled: true
-    delay: 0
-
-  # 锅炉报警 — 已由上方 pressure_high/pressure_low 覆盖，不重复定义
-
-  # 水质报警 — 施耐德M340 pH值
-  - id: ph_low
-    name: "出水pH过低"
-    description: "出水pH值低于下限"
-    device_id: schneider_m340_01
-    register_name: "ph_value"
-    condition: "less_than"
-    threshold: 6.5
-    level: "warning"
-    enabled: true
-    delay: 0
-
-  - id: ph_high
-    name: "出水pH过高"
-    description: "出水pH值超过上限"
-    device_id: schneider_m340_01
-    register_name: "ph_value"
-    condition: "greater_than"
-    threshold: 8.5
-    level: "warning"
-    enabled: true
-    delay: 0
-
-# ==================== 报警去重配置 ====================
-# 防止同一报警重复弹窗
-dedup:
-  enabled: true                    # 是否启用去重
-  emit_cooldown_seconds: 300       # 冷却窗口（秒）：同一报警在此时间内只推送一次
-  acknowledge_suppress_seconds: 600 # 确认后抑制时间（秒）：用户确认后不再弹窗
-  max_visible_toasts: 3            # 前端最大同时显示的toast数
-  critical_toast_duration: 30      # 严重报警toast自动消失时间（秒）
-  warning_toast_duration: 10       # 普通警告toast自动消失时间（秒）
-
-# 通知配置
-notification:
-  # 邮件通知
-  email:
-    enabled: false
-    smtp_server: "smtp.example.com"
-    smtp_port: 587
-    username: ""
-    password: ""
-    recipients:
-      - "admin@example.com"
-      - "engineer@example.com"
-    
-  # 短信通知（示例）
-  sms:
-    enabled: false
-    provider: "aliyun"
-    access_key: ""
-    secret_key: ""
-    sign_name: ""
-    template_code: ""
-    phone_numbers:
-      - "13800138000"
-    
-  # 声音报警
-  sound:
-    enabled: true
-    critical_sound: "alarm_critical.mp3"
-    warning_sound: "alarm_warning.mp3"
-
-# ==================== 声光报警输出设备配置 ====================
-# 关联devices.yaml中的灯控和蜂鸣器设备
 alarm_output:
   enabled: true
-
-  # 主报警灯塔 — Patlite LR7信号灯塔 (1号线)
-  signal_tower:
-    device_id: "signal_tower_01"
-    protocol: modbus_tcp
-    host: "192.168.1.70"
-    port: 502
-    slave_id: 1
-    # 寄存器地址映射（对应devices.yaml中的定义）
-    do_mapping:
-      red_light: 0       # 红色灯 — 故障/紧急停止
-      yellow_light: 1    # 黄色灯 — 警告/待料
-      green_light: 2     # 绿色灯 — 正常运行
-      blue_light: 3      # 蓝色灯 — 待机/呼叫
-      white_light: 4     # 白色灯 — 维护模式
-      buzzer: 5          # 蜂鸣器 — 报警/呼叫
-      flash_interval: 6  # 闪烁周期 (ms)
-      buzzer_volume: 7   # 蜂鸣器音量 (%)
-
-  # 备用报警输出 — 研华ADAM-6060继电器模块
   relay_output:
-    device_id: "relay_output_01"
-    protocol: modbus_tcp
-    host: "192.168.1.72"
+    device_id: relay_output_01
+    do_mapping:
+      buzzer: 1
+      red_light: 0
+      solenoid_valve: 4
+      spare: 5
+      spare_buzzer: 3
+      yellow_light: 2
+    host: 192.168.1.72
     port: 502
+    protocol: modbus_tcp
     slave_id: 1
-    # 继电器映射
+  signal_tower:
+    device_id: signal_tower_01
     do_mapping:
-      red_light: 0       # 继电器1 — 主报警红灯
-      buzzer: 1          # 继电器2 — 主报警蜂鸣器
-      yellow_light: 2    # 继电器3 — 备用报警黄灯
-      spare_buzzer: 3    # 继电器4 — 备用蜂鸣器
-      solenoid_valve: 4  # 继电器5 — 电磁阀控制
-      spare: 5           # 继电器6 — 备用输出
-
-  # 工位级报警 — 微雪8路继电器模块
-  station_output:
-    device_id: "relay_output_02"
-    protocol: modbus_tcp
-    host: "192.168.1.73"
+      blue_light: 3
+      buzzer: 5
+      buzzer_volume: 7
+      flash_interval: 6
+      green_light: 2
+      red_light: 0
+      white_light: 4
+      yellow_light: 1
+    host: 192.168.1.70
     port: 502
-    slave_id: 2
+    protocol: modbus_tcp
+    slave_id: 1
+  station_output:
+    device_id: relay_output_02
     do_mapping:
-      station_a_buzzer: 0   # 工位A蜂鸣器
-      station_a_red: 1      # 工位A红灯
-      station_a_green: 2    # 工位A绿灯
-      station_b_buzzer: 3   # 工位B蜂鸣器
-      station_b_red: 4      # 工位B红灯
-      station_b_green: 5    # 工位B绿灯
-      corridor_light: 6     # 走廊警灯
-      master_buzzer: 7      # 总蜂鸣器
+      corridor_light: 6
+      master_buzzer: 7
+      station_a_buzzer: 0
+      station_a_green: 2
+      station_a_red: 1
+      station_b_buzzer: 3
+      station_b_green: 5
+      station_b_red: 4
+    host: 192.168.1.73
+    port: 502
+    protocol: modbus_tcp
+    slave_id: 2
+alarm_rules:
+- condition: greater_than
+  delay: 0
+  description: 锅炉出口温度超过上限
+  device_id: siemens_1500_01
+  enabled: true
+  id: temp_high
+  level: critical
+  name: 锅炉温度过高
+  register_name: boiler_temperature
+  threshold: 180.0
+- condition: less_than
+  delay: 0
+  description: 锅炉出口温度低于下限
+  device_id: siemens_1500_01
+  enabled: true
+  id: temp_low
+  level: warning
+  name: 锅炉温度过低
+  register_name: boiler_temperature
+  threshold: 50.0
+- condition: greater_than
+  delay: 0
+  description: 蒸馏塔顶温度超过上限
+  device_id: hollysys_lk_01
+  enabled: true
+  id: env_temp_high
+  level: warning
+  name: 蒸馏塔温度过高
+  register_name: distill_temperature
+  threshold: 120.0
+- condition: greater_than
+  delay: 0
+  description: 锅炉压力超过上限
+  device_id: siemens_1500_01
+  enabled: true
+  id: pressure_high
+  level: critical
+  name: 锅炉压力过高
+  register_name: boiler_pressure
+  threshold: 1.2
+- condition: less_than
+  delay: 0
+  description: 锅炉压力低于下限
+  device_id: siemens_1500_01
+  enabled: true
+  id: pressure_low
+  level: warning
+  name: 锅炉压力过低
+  register_name: boiler_pressure
+  threshold: 0.2
+- condition: greater_than
+  delay: 0
+  description: A相电压超过上限
+  device_id: abb_m4m_01
+  enabled: true
+  id: voltage_high
+  level: critical
+  name: A相电压过高
+  register_name: voltage_a
+  threshold: 242.0
+- condition: less_than
+  delay: 0
+  description: A相电压低于下限
+  device_id: abb_m4m_01
+  enabled: true
+  id: voltage_low
+  level: warning
+  name: A相电压过低
+  register_name: voltage_a
+  threshold: 198.0
+- condition: greater_than
+  delay: 0
+  description: A相电流超过上限
+  device_id: abb_m4m_01
+  enabled: true
+  id: current_high
+  level: critical
+  name: A相电流过高
+  register_name: current_a
+  threshold: 100.0
+- condition: less_than
+  delay: 0
+  description: 出水pH值低于下限
+  device_id: schneider_m340_01
+  enabled: true
+  id: ph_low
+  level: warning
+  name: 出水pH过低
+  register_name: ph_value
+  threshold: 6.5
+- condition: greater_than
+  delay: 0
+  description: 出水pH值超过上限
+  device_id: schneider_m340_01
+  enabled: true
+  id: ph_high
+  level: warning
+  name: 出水pH过高
+  register_name: ph_value
+  threshold: 8.5
+dedup:
+  acknowledge_suppress_seconds: 600
+  critical_toast_duration: 30
+  emit_cooldown_seconds: 60
+  enabled: true
+  max_visible_toasts: 3
+  warning_toast_duration: 10
+notification:
+  email:
+    enabled: false
+    password: ''
+    recipients:
+    - admin@example.com
+    - engineer@example.com
+    smtp_port: 587
+    smtp_server: smtp.example.com
+    username: ''
+  sms:
+    access_key: ''
+    enabled: false
+    phone_numbers:
+    - '13800138000'
+    provider: aliyun
+    secret_key: ''
+    sign_name: ''
+    template_code: ''
+  sound:
+    critical_sound: alarm_critical.mp3
+    enabled: true
+    warning_sound: alarm_warning.mp3

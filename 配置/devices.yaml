@@ -33,7 +33,8 @@ devices:
   poll_interval: 5
   protocol: rest
   vendor: 西门子
-- collection_interval: 2
+- byte_order: ABCD
+  collection_interval: 2
   description: 主产线控制PLC — 锅炉/换热器/反应釜群
   device_model: S7-1516-3 PN/DP (6ES7516-3AN02-0AB0)
   enabled: true
@@ -43,7 +44,6 @@ devices:
   name: 西门子S7-1500 PLC
   port: 502
   protocol: modbus_tcp
-  byte_order: ABCD
   registers:
   - address: 0
     data_type: float32
@@ -111,7 +111,8 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 西门子
-- collection_interval: 5
+- byte_order: CDAB
+  collection_interval: 5
   description: 水处理车间控制 — 进水/加药/沉淀
   device_model: BMX P34 2020 + BMX NOE 0100
   enabled: true
@@ -121,7 +122,6 @@ devices:
   name: 施耐德M340 PLC
   port: 502
   protocol: modbus_tcp
-  byte_order: CDAB
   registers:
   - address: 0
     data_type: float32
@@ -189,7 +189,8 @@ devices:
     unit: RPM
   slave_id: 1
   vendor: 施耐德电气
-- collection_interval: 5
+- byte_order: BADC
+  collection_interval: 5
   description: 车间配电柜 — 电力质量监测
   device_model: M4M 20
   enabled: true
@@ -198,7 +199,6 @@ devices:
   name: ABB M4M电力分析仪
   port: 502
   protocol: modbus_tcp
-  byte_order: BADC
   registers:
   - address: 0
     data_type: float32
@@ -358,7 +358,8 @@ devices:
     unit: 个
   slave_id: 1
   vendor: 和利时
-- collection_interval: 2
+- byte_order: DCBA
+  collection_interval: 2
   description: 注塑车间控制 — 注塑机/模具/脱模
   device_model: FX5U-64M
   enabled: true
@@ -368,7 +369,6 @@ devices:
   name: 三菱FX5U PLC
   port: 502
   protocol: modbus_tcp
-  byte_order: DCBA
   registers:
   - address: 0
     data_type: float32
@@ -1123,9 +1123,6 @@ devices:
   name: 温度传感器RTU
   parity: N
   protocol: modbus_rtu
-  serial_port: COM3
-  slave_id: 1
-  stopbits: 1
   registers:
   - address: 0
     data_type: float32
@@ -1175,4 +1172,62 @@ devices:
     offset: 0
     scale: 1
     unit: 次
+  serial_port: COM3
+  slave_id: 1
+  stopbits: 1
   vendor: 微雪电子 (Waveshare)
+- endpoint: opc.tcp://localhost:4840
+  id: opc1
+  name: OPC
+  nodes:
+  - name: temp
+    node_id: ns=2;s=Temp
+    unit: C
+  protocol: opcua
+- host: 127.0.0.1
+  id: mqtt1
+  name: MQTT
+  port: 1883
+  protocol: mqtt
+  topics:
+  - name: temp
+    topic: test/temp
+    unit: C
+- base_url: http://localhost/api
+  endpoints:
+  - name: temp
+    path: /temp
+    unit: C
+  id: rest1
+  name: REST
+  protocol: rest
+- host: 127.0.0.1
+  id: mc1
+  name: MC
+  port: 5000
+  protocol: mc
+  registers:
+  - address: 0
+    name: temp
+    type: float
+    unit: C
+- host: 127.0.0.1
+  id: fins1
+  name: FINS
+  port: 9600
+  protocol: fins
+  registers:
+  - address: 0
+    name: temp
+    type: float
+    unit: C
+- host: 127.0.0.1
+  id: dev1
+  name: Test
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    name: temp
+    type: float
+    unit: C
