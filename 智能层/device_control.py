@@ -34,6 +34,28 @@ class SafetyLevel:
     EMERGENCY = 'emergency' # 紧急（立即停机）
 
 
+@dataclass
+class BypassRequest:
+    """联锁旁路审批请求（IEC 61511 合规）"""
+    request_id: str
+    interlock_id: str
+    requested_by: str
+    requested_at: float
+    expires_at: float  # 超时自动过期
+    reason: str
+    approvals: list = field(default_factory=list)
+    required_approvals: int = 2  # 至少2人审批
+    status: str = 'pending'  # pending/approved/rejected/expired
+
+    @property
+    def is_approved(self) -> bool:
+        return len(self.approvals) >= self.required_approvals and self.status == 'pending'
+
+    @property
+    def is_expired(self) -> bool:
+        return time.time() > self.expires_at
+
+
 class DeviceControlSafety:
     """
     工厂级设备控制安全管理器
