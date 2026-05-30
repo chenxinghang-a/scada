@@ -39,12 +39,13 @@ class DIContainer:
         """
         if lifecycle not in ('transient', 'singleton', 'scoped'):
             raise ValueError(f"不支持的生命周期: {lifecycle}")
-        
-        cls._services[name] = {
-            'factory': factory,
-            'lifecycle': lifecycle,
-            'dependencies': dependencies or []
-        }
+
+        with cls._lock:
+            cls._services[name] = {
+                'factory': factory,
+                'lifecycle': lifecycle,
+                'dependencies': dependencies or []
+            }
         logger.debug(f"注册服务: {name} (lifecycle={lifecycle})")
     
     @classmethod
@@ -140,24 +141,23 @@ class DIContainer:
     def get_registered_services(cls) -> Dict[str, str]:
         """
         获取所有已注册的服务
-        
+
         Returns:
             服务名称到生命周期的映射
         """
-        result = {}
-        for name, service in cls._services.items():
-            result[name] = service['lifecycle']
-        return result
-    
+        with cls._lock:
+            return {name: service['lifecycle'] for name, service in cls._services.items()}
+
     @classmethod
     def is_registered(cls, name: str) -> bool:
         """
         检查服务是否已注册
-        
+
         Args:
             name: 服务名称
-            
+
         Returns:
             是否已注册
         """
-        return name in cls._services or name in cls._singletons
+        with cls._lock:
+            return name in cls._services or name in cls._singletons

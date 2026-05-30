@@ -129,7 +129,8 @@ class ModuleRegistry:
         with cls._lock:
             module_info.instance = instance
             module_info.status = ModuleStatus.INITIALIZED
-            cls._initialization_order.append(name)
+            if name not in cls._initialization_order:
+                cls._initialization_order.append(name)
         logger.info(f"模块 '{name}' 初始化成功")
         return True
     

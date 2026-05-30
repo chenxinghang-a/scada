@@ -459,8 +459,8 @@ def batch_control():
                 'message': f'{action}操作{"成功" if success else "失败"}'
             }
         except Exception as e:
-            results[device_id] = {'success': False, 'message': str(e)}
-            logger.error(f"批量控制设备 {device_id} 失败: {e}")
+            logger.error(f"批量控制设备 {device_id} 失败: {e}", exc_info=True)
+            results[device_id] = {'success': False, 'message': f'设备 {device_id} 操作失败'}
 
     success_count = sum(1 for r in results.values() if r.get('success'))
     total = len(results)

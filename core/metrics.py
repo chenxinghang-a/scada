@@ -4,6 +4,9 @@ Prometheus指标导出 - 工业SCADA监控
 """
 from prometheus_client import Counter, Gauge, Histogram, Info, generate_latest, CONTENT_TYPE_LATEST
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 系统信息
 SCADA_INFO = Info('scada', 'SCADA系统信息')
@@ -88,23 +91,23 @@ class MetricsCollector:
             DEVICES_FAULT.set(fault)
             for proto, count in protocols.items():
                 DEVICES_TOTAL.labels(protocol=proto, status='total').set(count)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"设备指标更新失败: {e}")
 
     def update_alarm_metrics(self, alarm_manager):
         """从告警管理器收集指标"""
         try:
             active = alarm_manager.get_active_alarms()
             ALARMS_ACTIVE.set(len(active))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"告警指标更新失败: {e}")
 
     def update_queue_metrics(self, data_collector):
         """从数据采集器收集指标"""
         try:
             QUEUE_SIZE.set(data_collector.data_queue.qsize())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"队列指标更新失败: {e}")
 
     def get_metrics(self) -> bytes:
         """获取所有指标（Prometheus格式）"""

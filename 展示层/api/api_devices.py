@@ -165,7 +165,7 @@ def delete_device(device_id):
 
 
 @devices_bp.route('/devices/<device_id>/connect', methods=['POST'])
-@_require_auth
+@_require_engineer
 def connect_device(device_id):
     """连接设备"""
     device_manager = current_app.device_manager
@@ -181,7 +181,7 @@ def connect_device(device_id):
 
 
 @devices_bp.route('/devices/<device_id>/disconnect', methods=['POST'])
-@_require_auth
+@_require_engineer
 def disconnect_device(device_id):
     """断开设备连接"""
     device_manager = current_app.device_manager

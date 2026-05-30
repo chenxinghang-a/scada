@@ -83,7 +83,8 @@ class CSRFProtection:
             ).hexdigest()
 
             return hmac.compare_digest(hmac_value, expected)
-        except Exception:
+        except (ValueError, TypeError) as e:
+            logger.debug(f"CSRF token验证异常: {e}")
             return False
 
     def generate_token(self) -> str:

@@ -111,6 +111,8 @@ class ConnectionPool:
                         if self._health_check and not self._health_check(conn.client):
                             conn.healthy = False
                             logger.warning(f"连接池 {self._name}: 连接 {key} 健康检查失败")
+                            # 销毁不健康连接，避免资源泄漏
+                            self._destroy_connection(key, conn)
                         else:
                             conn.in_use = True
                             conn.last_used = time.time()
@@ -192,8 +194,8 @@ class ConnectionPool:
                 conn.client.disconnect()
             elif hasattr(conn.client, 'close'):
                 conn.client.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"连接池 {self._name}: 销毁连接 {key} 时清理失败: {e}")
         if key in self._pool:
             del self._pool[key]
         self._stats['destroyed'] += 1
@@ -255,6 +257,9 @@ class ConnectionPool:
     def shutdown(self) -> None:
         """关闭连接池，销毁所有连接"""
         self._running = False
+        # 等待清理线程退出
+        if self._cleanup_thread and self._cleanup_thread.is_alive():
+            self._cleanup_thread.join(timeout=5)
         with self._lock:
             for key in list(self._pool.keys()):
                 self._destroy_connection(key, self._pool[key])

@@ -26,9 +26,11 @@ def api_error_handler(f):
         try:
             return f(*args, **kwargs)
         except ValueError as e:
-            return jsonify({'error': str(e)}), 400
+            logger.warning(f"Validation error in {f.__name__}: {e}")
+            return jsonify({'error': '请求参数验证失败'}), 400
         except PermissionError as e:
-            return jsonify({'error': str(e)}), 403
+            logger.warning(f"Permission denied in {f.__name__}: {e}")
+            return jsonify({'error': '权限不足'}), 403
         except Exception as e:
             from werkzeug.exceptions import HTTPException
             if isinstance(e, HTTPException):

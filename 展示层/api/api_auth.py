@@ -26,9 +26,11 @@ def api_error_handler(f):
         try:
             return f(*args, **kwargs)
         except ValueError as e:
-            return jsonify({'error': str(e)}), 400
+            logger.warning(f"Validation error in {f.__name__}: {e}")
+            return jsonify({'error': '请求参数验证失败'}), 400
         except PermissionError as e:
-            return jsonify({'error': str(e)}), 403
+            logger.warning(f"Permission denied in {f.__name__}: {e}")
+            return jsonify({'error': '权限不足'}), 403
         except Exception as e:
             from werkzeug.exceptions import HTTPException
             if isinstance(e, HTTPException):
@@ -232,8 +234,11 @@ def update_user(username):
     data = request.get_json()
     if not data:
         return jsonify({'success': False, 'message': '请提供更新数据'}), 400
+    # 字段白名单过滤，防止越权修改
+    allowed = {'display_name', 'email', 'phone', 'role', 'is_active'}
+    filtered = {k: v for k, v in data.items() if k in allowed}
     auth_manager = get_auth_manager()
-    return jsonify(auth_manager.update_user(username, **data))
+    return jsonify(auth_manager.update_user(username, **filtered))
 
 
 @auth_bp.route('/auth/users/<username>', methods=['DELETE'])

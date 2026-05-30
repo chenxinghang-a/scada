@@ -89,7 +89,8 @@ class SimulationInitializer:
             with open(PRESETS_PATH, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
             return data.get('categories', [])
-        except Exception:
+        except Exception as e:
+            logger.warning(f"加载预设分类失败: {e}")
             return []
 
     def get_preset_detail(self, preset_id: str) -> Optional[dict]:
@@ -367,15 +368,17 @@ class SimulationInitializer:
                 if self.predictive_maintenance is not None:
                     try:
                         self.predictive_maintenance.feed_data(device_id, var_name, value, ts)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if i == 0:  # 只记录一次，避免刷屏
+                            logger.warning(f"  {device_id} 预测性维护feed_data失败({var_name}): {e}")
 
                 # 喂入SPC
                 if self.spc_analyzer is not None:
                     try:
                         self.spc_analyzer.feed_data(device_id, var_name, value)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if i == 0:  # 只记录一次，避免刷屏
+                            logger.warning(f"  {device_id} SPC feed_data失败({var_name}): {e}")
 
                 total_points += 1
 
@@ -406,8 +409,8 @@ class SimulationInitializer:
                     self.spc_analyzer.set_spec_limits(key, usl=9.0, lsl=5.0, target=7.0)
                 elif 'vibration' in name_lower:
                     self.spc_analyzer.set_spec_limits(key, usl=10.0, lsl=0.0, target=3.0)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"  SPC规格限设置失败({key}): {e}")
 
     # ================================================================
     # 兼容旧接口

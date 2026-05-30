@@ -310,6 +310,8 @@ class HealthChecker:
         """停止周期检查"""
         if hasattr(cls, '_stop_event') and cls._stop_event:
             cls._stop_event.set()
+            if cls._periodic_thread and cls._periodic_thread.is_alive():
+                cls._periodic_thread.join(timeout=30)
             cls._periodic_thread = None
             logger.info("周期健康检查已停止")
 
@@ -327,8 +329,6 @@ class HealthChecker:
 
             # 尝试通过报警管理器发送告警
             try:
-                from 报警层.alarm_manager import AlarmManager
-                # 通过ModuleRegistry获取alarm_manager实例
                 from core.module_registry import ModuleRegistry
                 alarm_manager = ModuleRegistry.get_instance('alarm_manager')
                 if alarm_manager:
