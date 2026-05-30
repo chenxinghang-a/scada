@@ -5,34 +5,91 @@
 // 全局变量
 const API_BASE = '/api';
 let socket = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 50;
+const BASE_RECONNECT_DELAY = 1000;  // 1秒
 
 /**
- * 初始化WebSocket连接
+ * 初始化WebSocket连接（带断连重连 + 指数退避）
  */
 function initWebSocket() {
     const wsToken = localStorage.getItem('auth_token');
-    socket = io({query: {token: wsToken || ''}});
-    window.socket = socket;
+    if (!wsToken) return;
 
-    socket.on('connect', function() {
-        console.log('WebSocket连接成功');
+    socket = io({
+        query: {token: wsToken},
+        reconnection: true,
+        reconnectionAttempts: MAX_RECONNECT_ATTEMPTS,
+        reconnectionDelay: BASE_RECONNECT_DELAY,
+        reconnectionDelayMax: 30000,  // 最大30秒
+        timeout: 10000,
+    });
+
+    window.socket = socket;  // 暴露给其他JS文件
+
+    socket.on('connect', () => {
+        console.log('WebSocket connected');
+        reconnectAttempts = 0;
         updateSystemStatus('online');
+        updateConnectionStatus('connected');
+
+        // 重新订阅所有设备
+        resubscribeAll();
     });
-    
-    socket.on('disconnect', function() {
-        console.log('WebSocket断开');
+
+    socket.on('disconnect', (reason) => {
+        console.log('WebSocket disconnected:', reason);
         updateSystemStatus('offline');
+        updateConnectionStatus('disconnected');
+
+        if (reason === 'io server disconnect') {
+            // 服务器主动断开，需要手动重连
+            setTimeout(() => socket.connect(), BASE_RECONNECT_DELAY);
+        }
+        // 其他情况socket.io自动重连
     });
-    
-    socket.on('data_update', function(data) {
+
+    socket.on('connect_error', (error) => {
+        console.error('WebSocket connection error:', error.message);
+        reconnectAttempts++;
+        updateConnectionStatus('error');
+
+        // Token过期，跳转登录
+        if (error.message.includes('401') || error.message.includes('auth')) {
+            localStorage.removeItem('auth_token');
+            window.location.href = '/login';
+            return;
+        }
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+        console.log(`WebSocket reconnected after ${attemptNumber} attempts`);
+        updateSystemStatus('online');
+        updateConnectionStatus('connected');
+    });
+
+    socket.on('reconnect_failed', () => {
+        console.error('WebSocket reconnection failed after max attempts');
+        updateConnectionStatus('failed');
+    });
+
+    // 数据事件处理
+    setupSocketHandlers(socket);
+}
+
+/**
+ * 设置WebSocket数据事件处理器
+ */
+function setupSocketHandlers(sock) {
+    sock.on('data_update', function(data) {
         handleDataUpdate(data);
     });
-    
-    socket.on('alarm', function(data) {
+
+    sock.on('alarm', function(data) {
         handleAlarm(data);
     });
-    
-    socket.on('system_status', function(data) {
+
+    sock.on('system_status', function(data) {
         updateSystemStats(data);
     });
 }
@@ -49,6 +106,53 @@ function updateSystemStatus(status) {
             statusElement.innerHTML = '<i class="bi bi-circle-fill text-danger"></i> 连接断开';
         }
     }
+}
+
+/**
+ * 更新WebSocket连接状态指示器（右下角小圆点）
+ */
+function updateConnectionStatus(status) {
+    const indicator = document.getElementById('ws-status');
+    if (!indicator) return;
+
+    const states = {
+        'connected': {color: '#52c41a', text: '已连接'},
+        'disconnected': {color: '#ff4d4f', text: '已断开'},
+        'error': {color: '#faad14', text: '连接错误'},
+        'reconnecting': {color: '#1890ff', text: '重连中...'},
+        'failed': {color: '#ff4d4f', text: '连接失败'},
+    };
+
+    const state = states[status] || states['disconnected'];
+    indicator.style.color = state.color;
+    indicator.textContent = '● ' + state.text;
+    indicator.title = `WebSocket: ${state.text}`;
+}
+
+/**
+ * 重连后重新订阅所有设备
+ */
+function resubscribeAll() {
+    if (!socket || !socket.connected) return;
+
+    // 从设备下拉框获取设备列表
+    const deviceSelect = document.getElementById('trend-device-select');
+    if (deviceSelect) {
+        Array.from(deviceSelect.options).forEach(opt => {
+            if (opt.value) {
+                socket.emit('subscribe', {device_id: opt.value});
+            }
+        });
+    }
+
+    // 从设备网格获取设备列表
+    const deviceCards = document.querySelectorAll('[data-device-id]');
+    deviceCards.forEach(card => {
+        const deviceId = card.dataset.deviceId;
+        if (deviceId) {
+            socket.emit('subscribe', {device_id: deviceId});
+        }
+    });
 }
 
 /**
