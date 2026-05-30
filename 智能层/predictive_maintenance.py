@@ -95,6 +95,11 @@ class PredictiveMaintenance:
         """
         key = f"{device_id}:{register_name}"
         ts = timestamp or datetime.now()
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts)
+            except (ValueError, TypeError):
+                ts = datetime.now()
 
         with self._lock:
             self.data_windows[key].append({

@@ -18,6 +18,18 @@ from queue import Queue
 logger = logging.getLogger(__name__)
 
 
+def _normalize_timestamp(ts):
+    """确保timestamp是datetime对象（DiskBackedQueue恢复时可能是字符串）"""
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            return datetime.now()
+    if isinstance(ts, datetime):
+        return ts
+    return datetime.now()
+
+
 # --- 智能分发关键字匹配 ---
 _power_kw = ('power', 'watt', 'kw', 'kwh', 'active_power', 'reactive_power', 'apparent_power')
 _energy_kw = ('energy', 'kwh', 'consumption', 'electricity', 'water_flow', 'gas_flow')
@@ -737,6 +749,11 @@ class DataCollector:
 
             if not batch:
                 continue
+
+            # 修复从磁盘恢复的时间戳（字符串→datetime）
+            for item in batch:
+                if 'timestamp' in item:
+                    item['timestamp'] = _normalize_timestamp(item['timestamp'])
 
             try:
                 # === 数据质量评估（OPC UA标准） ===
