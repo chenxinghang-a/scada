@@ -16,6 +16,7 @@
 """
 
 import json
+import ssl
 import time
 import logging
 import threading
@@ -199,6 +200,30 @@ class BaseGateway(ABC):
             self.mqtt_client.on_connect = self._on_mqtt_connect
             self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
             self.mqtt_client.on_publish = self._on_mqtt_publish
+
+            # TLS/SSL配置
+            tls_config = self.config.get('mqtt_tls', {})
+            if tls_config.get('enabled', False):
+                tls_context = ssl.create_default_context()
+
+                ca_cert = tls_config.get('ca_cert')
+                if ca_cert:
+                    tls_context.load_verify_locations(ca_cert)
+                else:
+                    tls_context.check_hostname = False
+                    tls_context.verify_mode = ssl.CERT_NONE
+
+                client_cert = tls_config.get('client_cert')
+                client_key = tls_config.get('client_key')
+                if client_cert and client_key:
+                    tls_context.load_cert_chain(client_cert, client_key)
+
+                if tls_config.get('insecure', False):
+                    tls_context.check_hostname = False
+                    tls_context.verify_mode = ssl.CERT_NONE
+
+                self.mqtt_client.tls_set_context(tls_context)
+                self.logger.info("MQTT TLS已启用")
 
             self.logger.info(f"连接MQTT Broker: {self.mqtt_broker}:{self.mqtt_port}")
             self.mqtt_client.connect(self.mqtt_broker, self.mqtt_port, keepalive=60)

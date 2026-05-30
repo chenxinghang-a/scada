@@ -189,6 +189,13 @@ class MQTTConfig:
     # 主题前缀
     TOPIC_PREFIX = 'scada/'
 
+    # TLS/SSL配置
+    TLS_ENABLED = os.environ.get('MQTT_TLS_ENABLED', 'false').lower() == 'true'
+    CA_CERT = os.environ.get('MQTT_CA_CERT', '')
+    CLIENT_CERT = os.environ.get('MQTT_CLIENT_CERT', '')
+    CLIENT_KEY = os.environ.get('MQTT_CLIENT_KEY', '')
+    TLS_INSECURE = os.environ.get('MQTT_TLS_INSECURE', 'false').lower() == 'true'
+
 # 安全配置 - 等保2.0
 class SecurityConfig:
     """安全配置 - 等保2.0 (GB/T 22239)"""

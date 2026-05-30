@@ -4,6 +4,7 @@ MQTT数据采集模块
 """
 
 import json
+import ssl
 import logging
 import threading
 from typing import Any, Callable
@@ -49,6 +50,7 @@ class MQTTClient:
 
         Args:
             config: 设备配置字典（推荐方式，与其他协议一致）
+                    支持TLS配置键: tls_enabled, ca_cert, client_cert, client_key, tls_insecure
             **kwargs: 兼容旧的独立参数方式 (broker_host, broker_port, username, password)
         """
         if not MQTT_AVAILABLE:
@@ -64,6 +66,12 @@ class MQTTClient:
             username = config.get('username')
             password = config.get('password')
             self.topics_config = config.get('topics', [])
+            # TLS参数
+            self.tls_enabled = config.get('tls_enabled', False)
+            self.ca_cert = config.get('ca_cert')
+            self.client_cert = config.get('client_cert')
+            self.client_key = config.get('client_key')
+            self.tls_insecure = config.get('tls_insecure', False)
         else:
             # 兼容旧的独立参数方式
             self.config = kwargs
@@ -74,6 +82,12 @@ class MQTTClient:
             username = kwargs.get('username')
             password = kwargs.get('password')
             self.topics_config = []
+            # TLS参数
+            self.tls_enabled = kwargs.get('tls_enabled', False)
+            self.ca_cert = kwargs.get('ca_cert')
+            self.client_cert = kwargs.get('client_cert')
+            self.client_key = kwargs.get('client_key')
+            self.tls_insecure = kwargs.get('tls_insecure', False)
 
         self.client_id = f'scada_{self.device_id}'
 
@@ -139,6 +153,26 @@ class MQTTClient:
             bool: connect()调用是否成功（不代表MQTT握手完成）
         """
         try:
+            # TLS/SSL配置
+            if self.tls_enabled:
+                tls_context = ssl.create_default_context()
+
+                if self.ca_cert:
+                    tls_context.load_verify_locations(self.ca_cert)
+                else:
+                    tls_context.check_hostname = False
+                    tls_context.verify_mode = ssl.CERT_NONE
+
+                if self.client_cert and self.client_key:
+                    tls_context.load_cert_chain(self.client_cert, self.client_key)
+
+                if self.tls_insecure:
+                    tls_context.check_hostname = False
+                    tls_context.verify_mode = ssl.CERT_NONE
+
+                self.client.tls_set_context(tls_context)
+                logger.info("MQTT TLS已启用")
+
             logger.info(f"正在连接MQTT Broker: {self.broker_host}:{self.broker_port}")
             self.client.connect(self.broker_host, self.broker_port, keepalive=60)
             self.client.loop_start()

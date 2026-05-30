@@ -12,6 +12,7 @@ MQTT订阅客户端 (MQTT Subscriber)
 """
 
 import json
+import ssl
 import time
 import logging
 import threading
@@ -39,7 +40,10 @@ class MQTTSubscriber:
     """
 
     def __init__(self, broker_host: str = "localhost", broker_port: int = 1883,
-                 client_id: str | None = None):
+                 client_id: str | None = None,
+                 tls_enabled: bool = False, ca_cert: str | None = None,
+                 client_cert: str | None = None, client_key: str | None = None,
+                 tls_insecure: bool = False):
         """
         初始化MQTT订阅客户端
 
@@ -47,10 +51,21 @@ class MQTTSubscriber:
             broker_host: MQTT Broker地址
             broker_port: MQTT端口
             client_id: 客户端ID（可选）
+            tls_enabled: 是否启用TLS
+            ca_cert: CA证书路径
+            client_cert: 客户端证书路径
+            client_key: 客户端密钥路径
+            tls_insecure: 是否跳过主机名验证
         """
         self.broker_host = broker_host
         self.broker_port = broker_port
         self.client_id = client_id or f"scada_subscriber_{int(time.time())}"
+        # TLS参数
+        self.tls_enabled = tls_enabled
+        self.ca_cert = ca_cert
+        self.client_cert = client_cert
+        self.client_key = client_key
+        self.tls_insecure = tls_insecure
 
         self.logger = logging.getLogger("MQTTSubscriber")
 
@@ -97,6 +112,26 @@ class MQTTSubscriber:
             self._client.on_connect = self._on_connect
             self._client.on_disconnect = self._on_disconnect
             self._client.on_message = self._on_message
+
+            # TLS/SSL配置
+            if self.tls_enabled:
+                tls_context = ssl.create_default_context()
+
+                if self.ca_cert:
+                    tls_context.load_verify_locations(self.ca_cert)
+                else:
+                    tls_context.check_hostname = False
+                    tls_context.verify_mode = ssl.CERT_NONE
+
+                if self.client_cert and self.client_key:
+                    tls_context.load_cert_chain(self.client_cert, self.client_key)
+
+                if self.tls_insecure:
+                    tls_context.check_hostname = False
+                    tls_context.verify_mode = ssl.CERT_NONE
+
+                self._client.tls_set_context(tls_context)
+                self.logger.info("MQTT TLS已启用")
 
             # 连接Broker
             self._client.connect(self.broker_host, self.broker_port, keepalive=60)
