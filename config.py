@@ -212,6 +212,9 @@ class SecurityConfig:
     RATE_LIMIT_ENABLED = os.environ.get('RATE_LIMIT_ENABLED', 'true').lower() == 'true'
     RATE_LIMIT_DEFAULT = os.environ.get('RATE_LIMIT_DEFAULT', '200 per minute')
     RATE_LIMIT_LOGIN = os.environ.get('RATE_LIMIT_LOGIN', '5 per minute')
+    # CSRF配置 (GB/T 37980)
+    CSRF_ENABLED = os.environ.get('CSRF_ENABLED', 'true').lower() == 'true'
+    CSRF_SECRET = os.environ.get('CSRF_SECRET', secrets.token_hex(32))
 
 # TDengine时序数据库配置
 class TDengineConfig:

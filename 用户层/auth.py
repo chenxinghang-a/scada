@@ -4,6 +4,7 @@
 """
 
 import jwt
+import uuid
 import bcrypt
 import logging
 from datetime import datetime, timedelta
@@ -108,12 +109,30 @@ class AuthManager:
 
             # 创建索引
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_users_username 
+                CREATE INDEX IF NOT EXISTS idx_users_username
                 ON users(username)
             ''')
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_operation_logs_user 
+                CREATE INDEX IF NOT EXISTS idx_operation_logs_user
                 ON operation_logs(username, timestamp)
+            ''')
+
+            # 创建JWT黑名单表 (GB/T 35718: 令牌撤销机制)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS jwt_blacklist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_jti TEXT UNIQUE NOT NULL,
+                    blacklisted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    reason TEXT
+                )
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_jwt_blacklist_jti
+                ON jwt_blacklist(token_jti)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_jwt_blacklist_time
+                ON jwt_blacklist(blacklisted_at)
             ''')
 
             logger.info("用户表初始化完成")
@@ -292,7 +311,7 @@ class AuthManager:
 
     def verify_token(self, token: str) -> dict[str, Any] | None:
         """
-        验证JWT令牌
+        验证JWT令牌（含黑名单检查 - GB/T 35718 令牌撤销机制）
 
         Args:
             token: JWT令牌
@@ -303,11 +322,21 @@ class AuthManager:
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
 
+            # 检查令牌是否在黑名单中 (GB/T 35718)
+            jti = payload.get('jti')
+            if jti:
+                with self.database.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT 1 FROM jwt_blacklist WHERE token_jti = ?', (jti,))
+                    if cursor.fetchone():
+                        logger.warning(f"JWT令牌已被撤销: jti={jti}")
+                        return None
+
             # 检查用户是否仍然活跃
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT username, role, display_name, is_active 
+                    SELECT username, role, display_name, is_active
                     FROM users WHERE username = ?
                 ''', (payload.get('username'),))
                 user = cursor.fetchone()
@@ -328,6 +357,66 @@ class AuthManager:
         except jwt.InvalidTokenError as e:
             logger.warning(f"无效JWT令牌: {e}")
             return None
+
+    def blacklist_token(self, token: str, reason: str = 'logout') -> bool:
+        """
+        将JWT令牌加入黑名单 (GB/T 35718: 令牌撤销)
+
+        Args:
+            token: JWT令牌字符串
+            reason: 黑名单原因
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            jti = payload.get('jti')
+            if not jti:
+                return False
+
+            with self.database.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'INSERT OR IGNORE INTO jwt_blacklist (token_jti, reason) VALUES (?, ?)',
+                    (jti, reason)
+                )
+            logger.info(f"JWT令牌已加入黑名单: jti={jti}, reason={reason}")
+            return True
+        except jwt.InvalidTokenError:
+            return False
+        except Exception as e:
+            logger.error(f"令牌黑名单操作失败: {e}")
+            return False
+
+    def cleanup_expired_blacklist(self):
+        """清理过期的黑名单条目（7天前的记录）"""
+        try:
+            cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+            with self.database.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM jwt_blacklist WHERE blacklisted_at < ?', (cutoff,))
+                deleted = cursor.rowcount
+            if deleted > 0:
+                logger.info(f"清理了 {deleted} 条过期黑名单记录")
+        except Exception as e:
+            logger.error(f"清理黑名单失败: {e}")
+
+    def _blacklist_user_tokens(self, username: str, reason: str = 'user_action'):
+        """
+        将用户当前请求的令牌加入黑名单
+        注意：无法枚举所有活跃令牌，仅标记当前操作的令牌
+        依赖verify_token中的黑名单检查来拒绝已撤销的令牌
+        """
+        # 从Flask request上下文获取当前令牌
+        try:
+            from flask import request as flask_request
+            auth_header = flask_request.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                token = auth_header[7:]
+                self.blacklist_token(token, reason)
+        except Exception:
+            pass  # 非HTTP上下文时忽略
 
     def refresh_token(self, refresh_token: str) -> dict[str, Any] | None:
         """
@@ -407,6 +496,9 @@ class AuthManager:
                 UPDATE users SET password_hash = ?, updated_at = ?
                 WHERE username = ?
             ''', (new_hash.decode('utf-8'), datetime.now(), username))
+
+        # GB/T 35718: 密码修改后撤销该用户的所有活跃令牌
+        self._blacklist_user_tokens(username, 'password_changed')
 
         self._log_operation(username, 'change_password', None, '修改密码成功')
         return {'success': True, 'message': '密码修改成功'}
@@ -555,6 +647,7 @@ class AuthManager:
             'username': user['username'],
             'role': user['role'],
             'type': 'access',
+            'jti': str(uuid.uuid4()),
             'iat': datetime.utcnow(),
             'exp': datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
         }
@@ -565,6 +658,7 @@ class AuthManager:
         payload = {
             'username': user['username'],
             'type': 'refresh',
+            'jti': str(uuid.uuid4()),
             'iat': datetime.utcnow(),
             'exp': datetime.utcnow() + timedelta(days=JWT_REFRESH_DAYS)
         }

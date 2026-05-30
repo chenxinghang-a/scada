@@ -68,13 +68,20 @@ def login():
 @auth_bp.route('/auth/logout', methods=['POST'])
 @jwt_required
 def logout():
-    """服务端登出 - 记录登出时间 (GB/T 33008: 登出记录)"""
+    """服务端登出 - 记录登出时间 + 撤销令牌 (GB/T 33008 + GB/T 35718)"""
     try:
         user = getattr(request, 'current_user', {})
         username = user.get('username', 'unknown')
 
-        # Record logout
         auth_manager = get_auth_manager()
+
+        # GB/T 35718: 撤销当前JWT令牌
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]
+            auth_manager.blacklist_token(token, 'logout')
+
+        # 记录登出
         auth_manager.log_operation(
             username=username,
             action='logout',

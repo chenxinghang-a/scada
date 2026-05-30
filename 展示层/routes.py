@@ -207,6 +207,14 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     #     """图表自选页面"""
     #     return render_template('charts.html')
 
+    # CSRF令牌端点 (GB/T 37980)
+    @app.route('/api/csrf-token', methods=['GET'])
+    def get_csrf_token():
+        """获取CSRF令牌"""
+        from core.csrf_protection import csrf
+        token = csrf.generate_token()
+        return jsonify({'csrf_token': token})
+
     # 错误处理
     @app.errorhandler(404)
     def not_found(error):

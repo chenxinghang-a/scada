@@ -219,6 +219,10 @@ def main():
         # 将启动时间传递给app
         app.system_start_time = SYSTEM_START_TIME
 
+        # 初始化CSRF防护 (GB/T 37980)
+        from core.csrf_protection import csrf
+        csrf.init_app(app)
+
         # 注册健康检查（内置检查 + 周期自动扫描）
         logger.info("注册健康检查...")
         from core.health_checker import HealthChecker
