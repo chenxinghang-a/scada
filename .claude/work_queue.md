@@ -1,44 +1,70 @@
 # SCADA v3.0.0 工业级改造 - 自主工作队列
 
-## 规则
-- 每项：读代码 → 改代码 → 跑测试 → 修到全过 → commit → push
-- 测试命令：C:\Users\cxx\AppData\Local\Programs\Python\Python313\python.exe -m pytest tests/ -q --tb=short
-- Git: C:\Users\cxx\WorkBuddy\Claw\tools\mingit\cmd\git.exe
-- 项目路径：C:\Users\cxx\WorkBuddy\Claw\industrial_scada
-- 当前测试：860 passed, 46% coverage
+## 当前状态
+- 测试：1298 passed, 0 failed
+- 覆盖率：60%
+- Git提交：约60个commit（今天）
+- Bug修复：60+个
 
 ## 已完成 ✅ (全部)
+
+### 安全
 - [x] TDengine SQL注入修复
 - [x] 安全响应头
 - [x] 页面级认证
-- [x] API端点认证
+- [x] API端点认证（全部）
+- [x] WebSocket CORS + JWT
+- [x] SSRF防护
+- [x] XSS修复
+- [x] API速率限制（flask-limiter）
+- [x] 可配置admin密码
+
+### 协议
 - [x] IEC 60870-5-104协议网关
 - [x] Modbus字节序配置
+- [x] MQTT TLS/SSL
+
+### 架构
 - [x] 结构化日志
 - [x] 配置schema验证
 - [x] Prometheus指标
-- [x] 健康检查增强
-- [x] 安全联锁多人审批
-- [x] 数据持久化保障
-- [x] 审计日志增强
-- [x] OpenAPI/Swagger文档
+- [x] OpenAPI/Swagger
 - [x] 连接池管理
-- [x] 前端设备值实时显示
+- [x] 崩溃恢复队列
+- [x] 审计日志SHA256+备份
+- [x] 健康检查自动监控
+- [x] 安全联锁多人审批
 - [x] 告警洪水检测
-- [x] 批量过程模拟
 - [x] 数据质量标志
-- [x] 1/f噪声模型
-- [x] 告警死区
-- [x] 前端WebSocket全面修复
-- [x] 模拟器物理模型改进
-- [x] 测试覆盖率提升(860测试,46%)
+- [x] 配方/批量过程模拟
+- [x] WebSocket断连重连
+
+### 前端
+- [x] WebSocket认证+房间订阅
+- [x] 数据缓存+竞态修复
+- [x] 告警实时更新+闪烁
+- [x] 数据质量颜色指示
+- [x] XSS修复（事件委托）
+- [x] 性能优化（虚拟DOM diff）
+- [x] 连接状态指示器
+
+### 模拟器
+- [x] 物理模型关联（V*I*cos(phi)、Antoine方程）
+- [x] 1/f粉红噪声
+- [x] 故障级联
+- [x] 配方模拟
+- [x] 10个bug修复
+
+### 测试
+- [x] 1298个测试
+- [x] 60%覆盖率
+- [x] GitHub Actions CI/CD
 - [x] CHANGELOG.md
-- [x] 45+个bug修复
+- [x] API输入验证
+- [x] 错误处理装饰器
+- [x] 数据库安全
 
 ## 待完成
-- [ ] MQTT TLS/SSL加密通信
+- [ ] 覆盖率提升到80%+
 - [ ] 冗余/高可用框架
 - [ ] DNP3协议支持
-- [ ] 覆盖率提升到80%+
-- [ ] 前端页面性能优化(大设备列表)
-- [ ] 模拟器故障级联
