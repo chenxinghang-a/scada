@@ -99,8 +99,8 @@ def create_app(database, device_manager, alarm_manager, data_collector,
             "frame-ancestors 'self'",
         ]
         response.headers['Content-Security-Policy'] = '; '.join(csp_directives)
-        # 严格传输安全 (仅在HTTPS时启用)
-        if request.is_secure:
+        # 严格传输安全 (HTTPS时启用，或配置强制启用TLS时)
+        if request.is_secure or SecurityConfig.TLS_ENABLED:
             response.headers['Strict-Transport-Security'] = f'max-age={SecurityConfig.HSTS_MAX_AGE}; includeSubDomains'
         # 引荐来源策略
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'

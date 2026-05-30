@@ -328,14 +328,31 @@ def main():
 
         # 使用routes.py中已创建的SocketIO实例（init_socketio在create_app中已调用）
         from 展示层.websocket import socketio
-        from config import WebConfig
+        from config import WebConfig, SecurityConfig
         host = WebConfig.HOST
         port = WebConfig.REAL_PORT if not simulation_mode else WebConfig.PORT
+
+        # TLS/HTTPS 支持 (GB/T 35718 + GB/T 37980)
+        ssl_context = None
+        if SecurityConfig.TLS_ENABLED:
+            import ssl
+            cert_file = SecurityConfig.TLS_CERT_FILE
+            key_file = SecurityConfig.TLS_KEY_FILE
+            if os.path.exists(cert_file) and os.path.exists(key_file):
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ssl_context.load_cert_chain(cert_file, key_file)
+                ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+                logger.info(f"TLS 已启用: cert={cert_file}, min_version=TLSv1.2")
+            else:
+                logger.warning(f"TLS 证书文件不存在: cert={cert_file}, key={key_file}")
+                logger.warning("回退到 HTTP 模式，请生成证书: python -m core.generate_certs")
+
         if socketio is None:
             logger.warning("SocketIO未初始化，使用普通Flask服务器")
-            app.run(host=host, port=port, debug=False)
+            app.run(host=host, port=port, debug=False, ssl_context=ssl_context)
         else:
-            socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+            socketio.run(app, host=host, port=port, debug=False,
+                        allow_unsafe_werkzeug=True, ssl_context=ssl_context)
 
     except KeyboardInterrupt:
         logger.info("系统正在关闭...")

@@ -215,6 +215,10 @@ class SecurityConfig:
     # CSRF配置 (GB/T 37980)
     CSRF_ENABLED = os.environ.get('CSRF_ENABLED', 'true').lower() == 'true'
     CSRF_SECRET = os.environ.get('CSRF_SECRET', secrets.token_hex(32))
+    # TLS/HTTPS 配置 (GB/T 35718 + GB/T 37980)
+    TLS_ENABLED = os.environ.get('SCADA_TLS_ENABLED', 'false').lower() == 'true'
+    TLS_CERT_FILE = os.environ.get('SCADA_TLS_CERT', str(BASE_DIR / 'certs' / 'server.crt'))
+    TLS_KEY_FILE = os.environ.get('SCADA_TLS_KEY', str(BASE_DIR / 'certs' / 'server.key'))
 
 # TDengine时序数据库配置
 class TDengineConfig:
