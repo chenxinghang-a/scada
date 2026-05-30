@@ -137,7 +137,13 @@ class DeviceBehaviorSimulator:
         self._motor_speed = 0.0
         self._vibration = 0.0
         
-        # 故障状态
+        # 故障状态（支持多故障并发和级联）
+        self.active_faults: Dict[FaultType, float] = {}  # fault -> severity (0-1)
+        self.fault_timers: Dict[FaultType, float] = {}   # fault -> start time
+        self._fault_cascade_rules: Dict[FaultType, List[tuple]] = {}
+        self._setup_cascade_rules()
+
+        # 兼容旧接口：单故障视图
         self.active_fault = FaultType.NONE
         self.fault_start_time = 0.0
         self.fault_severity = 0.0  # 0-1
@@ -145,6 +151,7 @@ class DeviceBehaviorSimulator:
         # 运行参数
         self.start_time = time.time()
         self._last_update = time.time()
+        self._dt = 1.0  # default dt, updated each cycle
         self._running = True
         
         # ===== 设备角色：监测设备 vs 工作设备 =====
@@ -180,6 +187,25 @@ class DeviceBehaviorSimulator:
         
         device_role = "监测" if self._is_monitoring_device else "工作"
         logger.info(f"[行为模拟] 设备 {self.device_name} 初始化完成, 角色: {device_role}, 参数: {len(self._device_param_names)} 个")
+
+    def _setup_cascade_rules(self):
+        """设置故障级联规则
+
+        真实工业场景：一个故障会引发连锁反应
+        过热 → 电机磨损 → 传感器漂移
+        压力泄漏 → 过热
+        """
+        self._fault_cascade_rules = {
+            FaultType.OVERHEATING: [
+                (0.5, FaultType.MOTOR_WEAR, 10),    # 过热50%时触发电机磨损（10秒延迟）
+            ],
+            FaultType.MOTOR_WEAR: [
+                (0.3, FaultType.SENSOR_DRIFT, 15),  # 磨损30%导致传感器漂移（15秒延迟）
+            ],
+            FaultType.PRESSURE_LEAK: [
+                (0.4, FaultType.OVERHEATING, 20),   # 压力泄漏40%导致过热（20秒延迟）
+            ],
+        }
 
     @property
     def is_monitoring_device(self) -> bool:
@@ -356,10 +382,12 @@ class DeviceBehaviorSimulator:
         # 通用约定：地址101 = 复位命令
         if address == 101:
             if value == 1:
+                self.active_faults.clear()
+                self.fault_timers.clear()
                 self.active_fault = FaultType.NONE
                 self.fault_severity = 0
                 self._change_state(DeviceState.IDLE)
-                logger.info(f"[行为模拟] 设备 {self.device_name} 收到复位命令，状态→IDLE")
+                logger.info(f"[行为模拟] 设备 {self.device_name} 收到复位命令，清除所有故障，状态→IDLE")
             return
         
         # ===== 按寄存器名影响物理参数 =====
@@ -442,10 +470,12 @@ class DeviceBehaviorSimulator:
         
         # 线圈1 = 复位
         if address == 1 and value:
+            self.active_faults.clear()
+            self.fault_timers.clear()
             self.active_fault = FaultType.NONE
             self.fault_severity = 0
             self._change_state(DeviceState.IDLE)
-            logger.info(f"[行为模拟] 设备 {self.device_name} 线圈复位，状态→IDLE")
+            logger.info(f"[行为模拟] 设备 {self.device_name} 线圈复位，清除所有故障，状态→IDLE")
     
     def get_written_register_value(self, address: int) -> Optional[int]:
         """获取写入的寄存器值（用于回读验证）"""
@@ -484,8 +514,9 @@ class DeviceBehaviorSimulator:
         """
         if not self._running:
             return {}
-        
+
         current_time = time.time()
+        self._dt = dt  # store for fault probability calculations
         
         # 1. 更新设备健康（退化）
         self._update_health(dt)
@@ -498,7 +529,10 @@ class DeviceBehaviorSimulator:
 
         # 3. 更新物理参数（带惯性）
         self._update_process_variables(dt)
-        
+
+        # 3.5 应用所有活跃故障效果（多故障并发 + 级联）
+        self._apply_fault_effects()
+
         # 4. 更新状态机
         self._update_state_machine(dt)
         
@@ -542,25 +576,25 @@ class DeviceBehaviorSimulator:
                 self.process_model.base_speed = float(value)
 
     def _update_health(self, dt: float):
-        """更新设备健康状态（渐进式退化）"""
+        """更新设备健康状态（渐进式退化 + 多故障叠加惩罚）"""
         if self.state == DeviceState.RUNNING:
             # 运行时健康退化
             hours = dt / 3600.0
             self.health.operating_hours += hours
-            
+
             # 机械磨损（缓慢）
             self.health.mechanical_health -= 0.001 * hours
-            
+
             # 电气退化
             self.health.electrical_health -= 0.0005 * hours
-            
+
             # 热退化（与温度相关）
             temp_factor = max(0, (self._current_temp - 80) / 100)
             self.health.thermal_health -= 0.002 * temp_factor * hours
-            
+
             # 振动退化
             self.health.vibration_health -= 0.0008 * hours
-            
+
             # 计算总体健康
             self.health.overall_score = (
                 self.health.mechanical_health * 0.3 +
@@ -568,7 +602,30 @@ class DeviceBehaviorSimulator:
                 self.health.thermal_health * 0.25 +
                 self.health.vibration_health * 0.2
             )
-            
+
+            # 多故障叠加惩罚
+            fault_penalty = 0
+            for fault_type, severity in self.active_faults.items():
+                penalty = {
+                    FaultType.SENSOR_DRIFT: 10,
+                    FaultType.OVERHEATING: 30,
+                    FaultType.PRESSURE_LEAK: 20,
+                    FaultType.MOTOR_WEAR: 25,
+                    FaultType.COMMUNICATION: 15,
+                    FaultType.POWER_FLUCTUATION: 20,
+                }.get(fault_type, 10)
+                fault_penalty += penalty * severity
+
+            self.health.overall_score -= fault_penalty
+
+            # 温度异常扣分
+            if self._current_temp > 200:
+                self.health.overall_score -= (self._current_temp - 200) * 0.5
+
+            # 振动异常扣分
+            if self._vibration > 5:
+                self.health.overall_score -= (self._vibration - 5) * 2
+
             # 限制在0-100
             self.health.overall_score = max(0, min(100, self.health.overall_score))
             
@@ -580,37 +637,57 @@ class DeviceBehaviorSimulator:
             self.health.vibration_health = min(100, self.health.vibration_health + 0.1)
     
     def _check_fault_triggers(self):
-        """检查是否触发故障"""
+        """检查是否触发新故障（允许并发，多种故障独立检查）"""
         health = self.health.overall_score
 
-        # 健康度过低直接触发故障
-        if health < 30 and self.active_fault == FaultType.NONE:
+        # 健康度过低直接触发故障（不检查已有故障）
+        if health < 30 and FaultType.MOTOR_WEAR not in self.active_faults:
             self._trigger_fault(FaultType.MOTOR_WEAR, severity=0.8)
 
-        # 温度过高触发过热故障（概率随健康度下降而上升）
-        if self._current_temp > 150 and self.active_fault == FaultType.NONE:
+        # 温度过高触发过热故障
+        if self._current_temp > 150 and FaultType.OVERHEATING not in self.active_faults:
             temp_prob = 0.01 * math.exp((100 - health) / 30)
             if random.random() < temp_prob:
                 self._trigger_fault(FaultType.OVERHEATING, severity=0.6)
 
-        # 随机故障：概率与健康度挂钩，健康越差越容易触发
-        if self.active_fault == FaultType.NONE:
-            base_prob = 0.0001
-            fault_prob = base_prob * math.exp((100 - health) / 20)
-            if random.random() < fault_prob:
-                fault_types = [FaultType.SENSOR_DRIFT, FaultType.COMMUNICATION, FaultType.POWER_FLUCTUATION]
-                self._trigger_fault(random.choice(fault_types), severity=0.3)
+        # 每种故障独立概率检查（不再互斥）
+        fault_checks = [
+            (FaultType.SENSOR_DRIFT, 0.001, 70),
+            (FaultType.OVERHEATING, 0.0005, 50),
+            (FaultType.PRESSURE_LEAK, 0.0008, 60),
+            (FaultType.MOTOR_WEAR, 0.0003, 40),
+            (FaultType.COMMUNICATION, 0.001, 80),
+            (FaultType.POWER_FLUCTUATION, 0.0005, 75),
+        ]
+
+        for fault_type, base_prob, health_threshold in fault_checks:
+            if fault_type in self.active_faults:
+                continue  # 已有此故障，跳过
+
+            if health < health_threshold:
+                fault_prob = base_prob * math.exp((health_threshold - health) / 20)
+                if random.random() < fault_prob * self._dt:
+                    self._trigger_fault(fault_type, severity=0.1)
     
     def _trigger_fault(self, fault_type: FaultType, severity: float = 0.5):
-        """触发故障"""
+        """触发故障（支持多故障并发）"""
+        if fault_type == FaultType.NONE:
+            return
+
+        self.active_faults[fault_type] = min(1.0, severity)
+        self.fault_timers[fault_type] = time.time()
+
+        # 兼容旧接口：维护单故障视图
         self.active_fault = fault_type
         self.fault_start_time = time.time()
         self.fault_severity = severity
+
         self.state = DeviceState.FAULT
         self.state_start_time = time.time()
         self.stats['fault_count'] += 1
-        
-        logger.warning(f"[行为模拟] 设备 {self.device_name} 触发故障: {fault_type.value} (严重度: {severity:.2f})")
+
+        logger.warning(f"[行为模拟] 设备 {self.device_name} 触发故障: {fault_type.value} "
+                        f"(严重度: {severity:.2f}, 当前活跃故障数: {len(self.active_faults)})")
     
     def _update_process_variables(self, dt: float):
         """更新物理参数 - Antoine方程、质量平衡、电机特性"""
@@ -626,8 +703,9 @@ class DeviceBehaviorSimulator:
             target_temp += 20 * math.sin(t / 300)
         elif self.state == DeviceState.IDLE:
             target_temp = self.process_model.base_temperature - 10
-        elif self.state == DeviceState.FAULT and self.active_fault == FaultType.OVERHEATING:
-            target_temp += 50 * self.fault_severity
+        elif self.state == DeviceState.FAULT:
+            # 故障效果由 _apply_fault_effects 统一处理
+            pass
         else:
             target_temp = self.process_model.base_temperature - 30
 
@@ -648,8 +726,7 @@ class DeviceBehaviorSimulator:
         else:
             target_pressure = 0.1
 
-        if self.state == DeviceState.FAULT and self.active_fault == FaultType.PRESSURE_LEAK:
-            target_pressure *= (1 - 0.3 * self.fault_severity)
+        # 故障对压力的影响由 _apply_fault_effects 统一处理
 
         alpha_pressure = 1 - math.exp(-dt / self.process_model.pressure_time_constant)
         self._current_pressure += (target_pressure - self._current_pressure) * alpha_pressure
@@ -700,10 +777,80 @@ class DeviceBehaviorSimulator:
         else:
             self._vibration = random.gauss(0, 0.05)
 
-        # 故障影响
-        if self.active_fault == FaultType.SENSOR_DRIFT:
-            self._current_temp += 5 * self.fault_severity * math.sin(t / 10)
-    
+        # 故障影响由 _apply_fault_effects 统一处理
+
+    def _apply_fault_effects(self):
+        """应用所有活跃故障的效果（多故障并发 + 级联扩散）"""
+        if not self.active_faults:
+            return
+
+        for fault_type, severity in list(self.active_faults.items()):
+            if fault_type == FaultType.SENSOR_DRIFT:
+                t = time.time() - self.start_time
+                self._current_temp += 5 * severity * math.sin(t / 10)
+
+            elif fault_type == FaultType.OVERHEATING:
+                self._current_temp += 50 * severity
+                # 级联检查：过热导致电机磨损
+                self._check_cascade(fault_type, severity)
+
+            elif fault_type == FaultType.PRESSURE_LEAK:
+                self._current_pressure *= (1 - 0.3 * severity)
+                self._current_flow += 2 * severity  # 泄漏增加流量
+                # 级联检查：压力泄漏导致过热
+                self._check_cascade(fault_type, severity)
+
+            elif fault_type == FaultType.MOTOR_WEAR:
+                self._motor_current *= (1 + 0.2 * severity)  # 磨损增加电流
+                self._vibration += 3 * severity  # 磨损增加振动
+                # 级联检查：电机磨损导致传感器漂移
+                self._check_cascade(fault_type, severity)
+
+            elif fault_type == FaultType.COMMUNICATION:
+                # 通信故障不影响物理参数，但影响数据质量
+                pass
+
+            elif fault_type == FaultType.POWER_FLUCTUATION:
+                voltage_factor = 1 + 0.1 * severity * math.sin(time.time() * 5)
+                self._current_power_kw *= voltage_factor
+
+        # 故障严重度随时间增长
+        for fault_type in list(self.active_faults.keys()):
+            growth_rate = 0.01 if fault_type != FaultType.COMMUNICATION else -0.05
+            self.active_faults[fault_type] = min(1.0,
+                self.active_faults[fault_type] + growth_rate * self._dt)
+
+            # 通信故障会自行恢复（间歇性）
+            if fault_type == FaultType.COMMUNICATION and random.random() < 0.01:
+                del self.active_faults[fault_type]
+                del self.fault_timers[fault_type]
+                logger.info(f"[行为模拟] 设备 {self.device_name} 通信故障自行恢复")
+
+        # 更新兼容旧接口：取最严重的故障作为主视图
+        if self.active_faults:
+            worst_fault = max(self.active_faults, key=self.active_faults.get)
+            self.active_fault = worst_fault
+            self.fault_severity = self.active_faults[worst_fault]
+            self.fault_start_time = self.fault_timers.get(worst_fault, time.time())
+        else:
+            self.active_fault = FaultType.NONE
+            self.fault_severity = 0
+            # 无活跃故障时恢复正常状态
+            if self.state == DeviceState.FAULT:
+                self._change_state(DeviceState.RUNNING)
+
+    def _check_cascade(self, parent_fault: FaultType, severity: float):
+        """检查是否触发级联故障"""
+        rules = self._fault_cascade_rules.get(parent_fault, [])
+        for trigger_severity, new_fault, delay in rules:
+            if severity >= trigger_severity and new_fault not in self.active_faults:
+                # 检查延迟：从父故障触发开始计算
+                elapsed = time.time() - self.fault_timers.get(parent_fault, time.time())
+                if elapsed >= delay:
+                    self._trigger_fault(new_fault, severity=0.1)
+                    logger.warning(f"[行为模拟] 设备 {self.device_name} 级联故障: "
+                                    f"{parent_fault.value} → {new_fault.value}")
+
     def _update_state_machine(self, dt: float):
         """更新状态机
         
@@ -737,8 +884,10 @@ class DeviceBehaviorSimulator:
         
         elif self.state == DeviceState.FAULT:
             # 故障一段时间后尝试恢复或进入维护
-            if state_duration > 300:  # 5分钟后（原10分钟，更快速）
-                if random.random() < 0.4:  # 40%概率自动恢复（原30%）
+            if state_duration > 300:  # 5分钟后
+                if random.random() < 0.4:  # 40%概率自动恢复
+                    self.active_faults.clear()
+                    self.fault_timers.clear()
                     self.active_fault = FaultType.NONE
                     self.fault_severity = 0
                     self._change_state(DeviceState.RUNNING)
@@ -803,6 +952,8 @@ class DeviceBehaviorSimulator:
                 '_health_score': round(self.health.overall_score, 1),
                 '_active_fault': self.active_fault.value,
                 '_fault_severity': round(self.fault_severity, 2),
+                '_active_faults': {f.value: round(s, 2) for f, s in self.active_faults.items()},
+                '_fault_count': len(self.active_faults),
                 '_operating_hours': round(self.health.operating_hours, 2),
                 '_timestamp': datetime.now().isoformat(),
                 '_stopped': True  # 标记设备已停机
@@ -1001,6 +1152,8 @@ class DeviceBehaviorSimulator:
             '_health_score': round(self.health.overall_score, 1),
             '_active_fault': self.active_fault.value,
             '_fault_severity': round(self.fault_severity, 2),
+            '_active_faults': {f.value: round(s, 2) for f, s in self.active_faults.items()},
+            '_fault_count': len(self.active_faults),
             '_operating_hours': round(self.health.operating_hours, 2),
             '_timestamp': datetime.now().isoformat()
         }
@@ -1020,7 +1173,7 @@ class DeviceBehaviorSimulator:
         return all_params
     
     def get_status(self) -> Dict[str, Any]:
-        """获取设备状态"""
+        """获取设备状态（含所有活跃故障）"""
         return {
             'device_id': self.device_id,
             'device_name': self.device_name,
@@ -1029,6 +1182,8 @@ class DeviceBehaviorSimulator:
             'health_score': round(self.health.overall_score, 1),
             'active_fault': self.active_fault.value,
             'fault_severity': round(self.fault_severity, 2),
+            'active_faults': {f.value: round(s, 2) for f, s in self.active_faults.items()},
+            'fault_count': len(self.active_faults),
             'operating_hours': round(self.health.operating_hours, 2),
             'stats': self.stats.copy()
         }
