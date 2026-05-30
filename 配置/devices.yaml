@@ -43,6 +43,7 @@ devices:
   name: 西门子S7-1500 PLC
   port: 502
   protocol: modbus_tcp
+  byte_order: ABCD
   registers:
   - address: 0
     data_type: float32
@@ -120,6 +121,7 @@ devices:
   name: 施耐德M340 PLC
   port: 502
   protocol: modbus_tcp
+  byte_order: CDAB
   registers:
   - address: 0
     data_type: float32
@@ -196,6 +198,7 @@ devices:
   name: ABB M4M电力分析仪
   port: 502
   protocol: modbus_tcp
+  byte_order: BADC
   registers:
   - address: 0
     data_type: float32
@@ -365,6 +368,7 @@ devices:
   name: 三菱FX5U PLC
   port: 502
   protocol: modbus_tcp
+  byte_order: DCBA
   registers:
   - address: 0
     data_type: float32

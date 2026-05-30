@@ -43,7 +43,7 @@ class ModbusClient:
         self.device_name = config.get('name')
         self.protocol = config.get('protocol', 'modbus_tcp')
         self.slave_id = config.get('slave_id', 1)
-        self.byte_order = ByteOrder(config.get('byte_order', 'ABCD'))
+        self.byte_order = ByteOrder(config.get('byte_order', 'ABCD').upper())
 
         # 客户端实例
         self.client = None
@@ -591,11 +591,11 @@ class ModbusClient:
         elif self.byte_order == ByteOrder.CDAB:
             raw = (w2 << 16) | w1
         elif self.byte_order == ByteOrder.DCBA:
-            b1 = (w1 >> 8) & 0xFF
-            b2 = w1 & 0xFF
-            b3 = (w2 >> 8) & 0xFF
-            b4 = w2 & 0xFF
-            raw = (b4 << 24) | (b3 << 16) | (b2 << 8) | b1
+            b0 = (w1 >> 8) & 0xFF
+            b1 = w1 & 0xFF
+            b2 = (w2 >> 8) & 0xFF
+            b3 = w2 & 0xFF
+            raw = (b3 << 24) | (b2 << 16) | (b1 << 8) | b0
         else:
             raw = (w1 << 16) | w2
 
