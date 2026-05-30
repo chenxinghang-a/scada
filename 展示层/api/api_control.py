@@ -272,6 +272,82 @@ def restore_interlock(rule_id):
     return jsonify({'success': success, 'message': f'联锁 {rule_id} 已恢复' if success else '恢复失败'})
 
 
+@control_bp.route('/control/interlocks/bypass-request', methods=['POST'])
+@_require_engineer
+def create_bypass_request():
+    """创建联锁旁路请求（需多人审批）"""
+    data = request.get_json() or {}
+    interlock_id = data.get('interlock_id')
+    reason = data.get('reason', '')
+    timeout_minutes = data.get('timeout_minutes', 30)
+
+    if not interlock_id:
+        return jsonify({'error': '缺少 interlock_id 参数'}), 400
+
+    operator = request.current_user['username']
+    device_control = getattr(current_app, 'device_control', None)
+    if not device_control:
+        return jsonify({'error': '设备控制安全模块未启用'}), 503
+
+    request_id = device_control.request_bypass(interlock_id, operator, reason, timeout_minutes)
+    return jsonify({
+        'success': True,
+        'request_id': request_id,
+        'message': f'旁路请求已创建，等待2人审批，{timeout_minutes}分钟内有效'
+    })
+
+
+@control_bp.route('/control/interlocks/bypass-approve', methods=['POST'])
+@_require_engineer
+def approve_bypass_request():
+    """审批联锁旁路请求"""
+    data = request.get_json() or {}
+    request_id = data.get('request_id')
+
+    if not request_id:
+        return jsonify({'error': '缺少 request_id 参数'}), 400
+
+    approver = request.current_user['username']
+    device_control = getattr(current_app, 'device_control', None)
+    if not device_control:
+        return jsonify({'error': '设备控制安全模块未启用'}), 503
+
+    success, message = device_control.approve_bypass(request_id, approver)
+    return jsonify({'success': success, 'message': message}), (200 if success else 400)
+
+
+@control_bp.route('/control/interlocks/bypass-reject', methods=['POST'])
+@_require_engineer
+def reject_bypass_request():
+    """拒绝联锁旁路请求"""
+    data = request.get_json() or {}
+    request_id = data.get('request_id')
+    reason = data.get('reason', '')
+
+    if not request_id:
+        return jsonify({'error': '缺少 request_id 参数'}), 400
+
+    rejector = request.current_user['username']
+    device_control = getattr(current_app, 'device_control', None)
+    if not device_control:
+        return jsonify({'error': '设备控制安全模块未启用'}), 503
+
+    success, message = device_control.reject_bypass(request_id, rejector, reason)
+    return jsonify({'success': success, 'message': message}), (200 if success else 400)
+
+
+@control_bp.route('/control/interlocks/bypass-pending', methods=['GET'])
+@_require_auth
+def get_pending_bypasses():
+    """获取待审批的旁路请求"""
+    device_control = getattr(current_app, 'device_control', None)
+    if not device_control:
+        return jsonify({'error': '设备控制安全模块未启用'}), 503
+
+    pending = device_control.get_pending_bypasses()
+    return jsonify({'pending': pending, 'count': len(pending)})
+
+
 @control_bp.route('/control/health', methods=['GET'])
 @_require_auth
 def get_device_health():

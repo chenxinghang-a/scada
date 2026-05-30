@@ -26,11 +26,17 @@ setup_logging(
 )
 logger = get_logger(__name__)
 
+# 配置Schema验证
+from core.config_validator import validate_startup_configs
+
 
 def main():
     """主函数"""
     try:
         logger.info("正在启动工业数据采集与监控系统...")
+
+        # 启动时验证配置文件Schema
+        validate_startup_configs()
 
         from 存储层.database import Database
         from 采集层.real_device_manager import RealDeviceManager

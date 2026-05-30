@@ -79,6 +79,11 @@ class DeviceControlSafety:
         self._interlock_bypass: Set[str] = set()  # 被旁路的联锁ID
         self._lock = threading.Lock()
 
+        # ===== 联锁旁路审批（IEC 61511） =====
+        self._bypass_requests: dict[str, BypassRequest] = {}
+        self._active_bypasses: Set[str] = set()  # 已批准且激活的旁路
+        self._bypass_lock = threading.Lock()
+
         # ===== 写操作安全配置 =====
         # 设备写操作白名单：device_id -> {register_address: (min_value, max_value)}
         self._write_limits: dict[str, dict[str, Any]] = {}
@@ -476,22 +481,161 @@ class DeviceControlSafety:
         return False
 
     def bypass_interlock(self, rule_id: str, operator: str, reason: str) -> bool:
-        """旁路联锁（维护时临时禁用，需记录审计）"""
+        """[已废弃] 旁路联锁 — 请使用 request_bypass + approve_bypass 流程
+
+        .. deprecated::
+            单人旁路违反 IEC 61511 职责分离要求，保留仅为向后兼容。
+        """
+        import warnings
+        warnings.warn(
+            "bypass_interlock() 已废弃，请使用 request_bypass() + approve_bypass() 多人审批流程",
+            DeprecationWarning, stacklevel=2
+        )
+        logger.warning(f"[DEPRECATED] bypass_interlock() 被调用，请迁移至审批流程")
         if rule_id not in self._interlock_rules:
             return False
         with self._lock:
             self._interlock_bypass.add(rule_id)
-        self._audit('interlock_bypass', operator, f'旁路联锁 {rule_id}: {reason}')
-        logger.warning(f"联锁已旁路: {rule_id} by {operator} — {reason}")
+        self._audit('interlock_bypass_deprecated', operator, f'[废弃]旁路联锁 {rule_id}: {reason}')
+        logger.warning(f"联锁已旁路(废弃流程): {rule_id} by {operator} — {reason}")
         return True
 
     def restore_interlock(self, rule_id: str, operator: str) -> bool:
         """恢复联锁"""
         with self._lock:
             self._interlock_bypass.discard(rule_id)
+            self._active_bypasses.discard(rule_id)
         self._audit('interlock_restore', operator, f'恢复联锁 {rule_id}')
         logger.info(f"联锁已恢复: {rule_id} by {operator}")
         return True
+
+    # ==================== 联锁旁路审批流程（IEC 61511） ====================
+
+    def request_bypass(self, interlock_id: str, requested_by: str, reason: str,
+                       timeout_minutes: int = 30) -> str:
+        """请求联锁旁路（需要多人审批）
+
+        Args:
+            interlock_id: 联锁规则ID
+            requested_by: 请求者用户名
+            reason: 旁路原因
+            timeout_minutes: 旁路超时时间（分钟），超时自动恢复
+
+        Returns:
+            request_id: 请求ID，用于后续审批
+        """
+        request_id = str(uuid.uuid4())[:8]
+
+        request = BypassRequest(
+            request_id=request_id,
+            interlock_id=interlock_id,
+            requested_by=requested_by,
+            requested_at=time.time(),
+            expires_at=time.time() + timeout_minutes * 60,
+            reason=reason,
+            required_approvals=2
+        )
+
+        with self._bypass_lock:
+            self._bypass_requests[request_id] = request
+
+        self._audit('bypass_requested', requested_by, f'联锁旁路请求: {interlock_id}, 原因: {reason}')
+        logger.warning(f"联锁旁路请求: {interlock_id} by {requested_by}, 等待审批")
+        return request_id
+
+    def approve_bypass(self, request_id: str, approver: str) -> tuple[bool, str]:
+        """审批联锁旁路（需2人不同审批人）
+
+        Args:
+            request_id: 请求ID
+            approver: 审批人用户名
+
+        Returns:
+            (success, message): 是否成功及说明
+        """
+        with self._bypass_lock:
+            request = self._bypass_requests.get(request_id)
+            if not request:
+                return False, "请求不存在"
+            if request.is_expired:
+                request.status = 'expired'
+                return False, "请求已过期"
+            if request.status != 'pending':
+                return False, f"请求状态: {request.status}"
+            if approver == request.requested_by:
+                return False, "不能自己审批自己的请求"  # 职责分离
+            if approver in request.approvals:
+                return False, "已经审批过了"
+
+            request.approvals.append(approver)
+
+            self._audit('bypass_approved', approver, f'审批旁路请求 {request_id}, 联锁 {request.interlock_id}, 进度 {len(request.approvals)}/{request.required_approvals}')
+
+            if request.is_approved:
+                request.status = 'approved'
+                self._activate_bypass(request)
+                return True, f"已批准（{len(request.approvals)}/{request.required_approvals}），旁路已激活"
+
+            return True, f"已审批（{len(request.approvals)}/{request.required_approvals}）"
+
+    def _activate_bypass(self, request: BypassRequest):
+        """激活旁路（带自动超时恢复）"""
+        with self._lock:
+            self._interlock_bypass.add(request.interlock_id)
+        with self._bypass_lock:
+            self._active_bypasses.add(request.interlock_id)
+
+        # 设置超时自动恢复
+        delay = request.expires_at - time.time()
+        if delay > 0:
+            timer = threading.Timer(delay, self._auto_restore_bypass, args=[request.interlock_id, request.request_id])
+            timer.daemon = True
+            timer.start()
+            logger.info(f"旁路已激活: {request.interlock_id}, {delay / 60:.0f}分钟后自动恢复")
+
+    def _auto_restore_bypass(self, interlock_id: str, request_id: str):
+        """超时自动恢复旁路"""
+        with self._lock:
+            self._interlock_bypass.discard(interlock_id)
+        with self._bypass_lock:
+            self._active_bypasses.discard(interlock_id)
+            req = self._bypass_requests.get(request_id)
+            if req:
+                req.status = 'expired'
+
+        self._audit('bypass_auto_restored', 'system', f'旁路超时自动恢复: {interlock_id}')
+        logger.warning(f"旁路超时自动恢复: {interlock_id}")
+
+    def reject_bypass(self, request_id: str, rejector: str, reason: str = '') -> tuple[bool, str]:
+        """拒绝旁路请求"""
+        with self._bypass_lock:
+            request = self._bypass_requests.get(request_id)
+            if not request:
+                return False, "请求不存在"
+            if request.status != 'pending':
+                return False, f"请求状态: {request.status}"
+            request.status = 'rejected'
+
+        self._audit('bypass_rejected', rejector, f'拒绝旁路请求 {request_id}, 联锁 {request.interlock_id}, 原因: {reason}')
+        return True, "已拒绝"
+
+    def get_pending_bypasses(self) -> list[dict[str, Any]]:
+        """获取待审批的旁路请求"""
+        with self._bypass_lock:
+            now = time.time()
+            pending = []
+            for req in self._bypass_requests.values():
+                if req.status == 'pending' and not req.is_expired:
+                    pending.append({
+                        'request_id': req.request_id,
+                        'interlock_id': req.interlock_id,
+                        'requested_by': req.requested_by,
+                        'reason': req.reason,
+                        'approvals': len(req.approvals),
+                        'required': req.required_approvals,
+                        'expires_in': int(req.expires_at - now)
+                    })
+            return pending
 
     def check_interlocks(self, device_id: str, register_name: str, value: float):
         """
