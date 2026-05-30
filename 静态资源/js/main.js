@@ -218,7 +218,10 @@ const AlarmDedupManager = {
      */
     async loadConfig() {
         try {
-            const resp = await fetch(`${API_BASE}/alarms/dedup-config`);
+            const _token = localStorage.getItem('auth_token');
+            const resp = await fetch(`${API_BASE}/alarms/dedup-config`, {
+                headers: _token ? { 'Authorization': `Bearer ${_token}` } : {}
+            });
             if (resp.ok) {
                 const data = await resp.json();
                 if (data.config) {
@@ -376,7 +379,10 @@ function playAlarmSound() {
  * 更新报警计数
  */
 function updateAlarmCount() {
-    fetch(`${API_BASE}/alarms/active`)
+    const token = localStorage.getItem('auth_token');
+    fetch(`${API_BASE}/alarms/active`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+    })
         .then(response => response.json())
         .then(data => {
             const alarms = data.alarms || [];
@@ -443,7 +449,10 @@ function updateAlarmCount() {
  * 静默更新报警计数（不弹窗）
  */
 function updateAlarmCountSilent() {
-    fetch(`${API_BASE}/alarms/active`)
+    const token = localStorage.getItem('auth_token');
+    fetch(`${API_BASE}/alarms/active`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+    })
         .then(response => response.json())
         .then(data => {
             const count = data.alarms ? data.alarms.length : 0;
