@@ -3,6 +3,9 @@ Flask路由模块
 定义Web页面路由
 """
 
+from pathlib import Path as _Path
+_BASE_DIR = _Path(__file__).resolve().parent.parent  # industrial_scada/
+
 import jwt
 from flask import Flask, render_template, jsonify, request, redirect, url_for, g
 from flask_socketio import SocketIO
@@ -38,8 +41,9 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         Flask: Flask应用实例
     """
     app = Flask(__name__,
-                template_folder='../模板',
-                static_folder='../静态资源')
+                template_folder=str(_BASE_DIR / '模板'),
+                static_folder=str(_BASE_DIR / '静态资源'),
+                static_url_path='/static')
 
     from config import FlaskConfig, SecurityConfig
     app.config['SECRET_KEY'] = FlaskConfig.SECRET_KEY
