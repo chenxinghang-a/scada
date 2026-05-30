@@ -3,7 +3,6 @@
 实现JWT令牌认证、角色权限控制
 """
 
-import os
 import jwt
 import bcrypt
 import logging
@@ -44,8 +43,8 @@ JWT_ALGORITHM = AuthConfig.JWT_ALGORITHM
 JWT_EXPIRATION_HOURS = AuthConfig.JWT_EXPIRATION_HOURS
 JWT_REFRESH_DAYS = AuthConfig.JWT_REFRESH_DAYS
 
-# 默认管理员密码（可通过环境变量覆盖）
-DEFAULT_ADMIN_PASSWORD = os.environ.get('SCADA_ADMIN_PASSWORD', 'admin123')
+# 默认管理员密码（可通过环境变量 SCADA_ADMIN_PASSWORD 覆盖）
+DEFAULT_ADMIN_PASSWORD = AuthConfig.SCADA_ADMIN_PASSWORD
 
 
 class AuthManager:

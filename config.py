@@ -172,6 +172,9 @@ class AuthConfig:
     # 密码最小长度
     MIN_PASSWORD_LENGTH = 6
 
+    # 默认管理员密码（首次创建admin账户时使用，可通过环境变量覆盖）
+    SCADA_ADMIN_PASSWORD = os.environ.get('SCADA_ADMIN_PASSWORD', 'admin123')
+
 # MQTT配置
 class MQTTConfig:
     # MQTT Broker地址

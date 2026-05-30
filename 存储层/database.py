@@ -31,7 +31,7 @@ class Database:
         self._init_pragmas()
         self._init_database()
 
-    def close_thread_connection(self):
+    def close(self):
         """关闭当前线程的数据库连接"""
         if hasattr(self._local, 'connection') and self._local.connection:
             try:
@@ -39,6 +39,9 @@ class Database:
             except Exception:
                 pass
             self._local.connection = None
+
+    # 向后兼容别名
+    close_thread_connection = close
 
     def _init_pragmas(self):
         """初始化全局 PRAGMA（只需执行一次）"""
