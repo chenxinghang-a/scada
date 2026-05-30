@@ -31,6 +31,94 @@ def _has_keyword(register_name: str, keywords: tuple) -> bool:
     return any(kw in name_lower for kw in keywords)
 
 
+class DiskBackedQueue:
+    """磁盘持久化队列 - 崩溃恢复"""
+
+    def __init__(self, maxsize: int = 50000, persist_dir: str = 'data/queue'):
+        self.maxsize = maxsize
+        self._queue = queue.Queue(maxsize=maxsize)
+        self._persist_dir = Path(persist_dir)
+        self._persist_dir.mkdir(parents=True, exist_ok=True)
+        self._persist_file = self._persist_dir / 'pending_data.jsonl'
+        self._lock = threading.Lock()
+        # 启动时恢复
+        self._recover_from_disk()
+
+    def put(self, item, block=True, timeout=None):
+        """入队（同时写磁盘）"""
+        self._queue.put(item, block=block, timeout=timeout)
+        self._persist_item(item)
+
+    def get(self, block=True, timeout=None):
+        """出队"""
+        return self._queue.get(block=block, timeout=timeout)
+
+    def get_nowait(self):
+        """非阻塞出队"""
+        return self._queue.get_nowait()
+
+    def put_nowait(self, item):
+        """非阻塞入队"""
+        self._queue.put_nowait(item)
+        self._persist_item(item)
+
+    def qsize(self):
+        return self._queue.qsize()
+
+    def empty(self):
+        return self._queue.empty()
+
+    def full(self):
+        return self._queue.full()
+
+    def _persist_item(self, item):
+        """持久化单条数据"""
+        try:
+            with self._lock:
+                with open(self._persist_file, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(item, default=str, ensure_ascii=False) + '\n')
+        except Exception:
+            pass  # 持久化失败不影响主流程
+
+    def _recover_from_disk(self):
+        """从磁盘恢复未处理的数据"""
+        if not self._persist_file.exists():
+            return
+
+        recovered = 0
+        try:
+            with open(self._persist_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            item = json.loads(line)
+                            self._queue.put_nowait(item)
+                            recovered += 1
+                        except (json.JSONDecodeError, queue.Full):
+                            break
+        except Exception:
+            pass
+
+        # 清空已恢复的文件
+        if recovered > 0:
+            try:
+                self._persist_file.unlink()
+            except Exception:
+                pass
+
+        if recovered > 0:
+            logger.info(f"从磁盘恢复 {recovered} 条未处理数据")
+
+    def clear_persistence(self):
+        """清除持久化文件（正常关闭时调用）"""
+        try:
+            if self._persist_file.exists():
+                self._persist_file.unlink()
+        except Exception:
+            pass
+
+
 class DataCollector:
     """
     数据采集器
@@ -66,8 +154,8 @@ class DataCollector:
         # 失败计数器（用于退避）
         self._failure_counts = {}  # device_id -> consecutive_failures
 
-        # 数据队列（大容量，防丢数据）
-        self.data_queue = Queue(maxsize=50000)
+        # 数据队列（磁盘持久化，崩溃恢复）
+        self.data_queue = DiskBackedQueue(maxsize=50000)
 
         # 动态采集频率配置
         self._dynamic_interval_config = {
@@ -149,6 +237,9 @@ class DataCollector:
                 break
         if drained > 0:
             logger.info(f"排空数据队列: {drained} 条数据已丢弃")
+
+        # 正常关闭，清除磁盘持久化文件
+        self.data_queue.clear_persistence()
 
         self.device_manager.disconnect_all()
         logger.info("数据采集器已停止")

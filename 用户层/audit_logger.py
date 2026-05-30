@@ -35,9 +35,11 @@
 
 import csv
 import json
+import shutil
 import sqlite3
 import hashlib
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -50,6 +52,7 @@ class AuditLogger:
 
     def __init__(self, db_path: str = "data/audit.db"):
         self.db_path = db_path
+        self._chain_lock = threading.Lock()
         self._init_db()
         logger.info(f"审计日志初始化: {db_path}")
 
@@ -94,7 +97,7 @@ class AuditLogger:
 
         使用 SHA-256 对记录内容计算哈希，链式校验。
         """
-        return hashlib.sha256(data.encode('utf-8')).hexdigest()[:16]
+        return hashlib.sha256(data.encode('utf-8')).hexdigest()
 
     def log_operation(self, user: str, action: str, target: str,
                       value: Any = None, reason: str = '',
@@ -114,36 +117,37 @@ class AuditLogger:
             role: 操作人角色
             ip_address: 操作人 IP
         """
-        now = datetime.now()
-        timestamp = now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        with self._chain_lock:
+            now = datetime.now()
+            timestamp = now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-        # 序列化 value
-        if value is not None:
-            if isinstance(value, (dict, list)):
-                value_str = json.dumps(value, ensure_ascii=False, default=str)
+            # 序列化 value
+            if value is not None:
+                if isinstance(value, (dict, list)):
+                    value_str = json.dumps(value, ensure_ascii=False, default=str)
+                else:
+                    value_str = str(value)
             else:
-                value_str = str(value)
-        else:
-            value_str = ''
+                value_str = ''
 
-        # 计算校验和（链式：包含上一条记录的 ID）
-        last_id = self._get_last_id()
-        check_input = f"{last_id}:{timestamp}:{user}:{action}:{target}:{value_str}:{result}"
-        checksum = self._compute_checksum(check_input)
+            # 计算校验和（链式：包含上一条记录的 ID）
+            last_id = self._get_last_id()
+            check_input = f"{last_id}:{timestamp}:{user}:{action}:{target}:{value_str}:{result}"
+            checksum = self._compute_checksum(check_input)
 
-        conn = sqlite3.connect(self.db_path)
-        try:
-            conn.execute("""
-                INSERT INTO audit_log
-                (timestamp, user_name, user_role, action, target, value, reason, result, detail, ip_address, checksum, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (timestamp, user, role, action, target, value_str, reason, result, detail, ip_address, checksum, now.timestamp()))
-            conn.commit()
-            logger.info(f"[审计] {user} {action} {target} = {value_str} -> {result}")
-        except Exception as e:
-            logger.error(f"审计日志写入失败: {e}")
-        finally:
-            conn.close()
+            conn = sqlite3.connect(self.db_path)
+            try:
+                conn.execute("""
+                    INSERT INTO audit_log
+                    (timestamp, user_name, user_role, action, target, value, reason, result, detail, ip_address, checksum, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (timestamp, user, role, action, target, value_str, reason, result, detail, ip_address, checksum, now.timestamp()))
+                conn.commit()
+                logger.info(f"[审计] {user} {action} {target} = {value_str} -> {result}")
+            except Exception as e:
+                logger.error(f"审计日志写入失败: {e}")
+            finally:
+                conn.close()
 
     def _get_last_id(self) -> int:
         """获取最后一条记录的 ID（用于链式校验）"""
@@ -152,6 +156,13 @@ class AuditLogger:
         row = cursor.fetchone()
         conn.close()
         return row[0] if row and row[0] else 0
+
+    def _backup_log(self):
+        """备份审计日志到安全目录"""
+        backup_dir = Path('data/audit_backup')
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        shutil.copy2(self.db_path, backup_dir / f'audit_{timestamp}.db')
 
     def query(self, start_time: datetime = None, end_time: datetime = None,
               user: str = None, action: str = None, target: str = None,
