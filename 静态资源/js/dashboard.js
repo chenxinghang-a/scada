@@ -191,7 +191,11 @@ function updateDeviceGrid(stats) {
             const label = getShortLabel(r.name);
             const cacheKey = `${id}:${r.name}`;
             const cached = lastDeviceValues[cacheKey] ?? '--';
-            return `<span class="dev-val"><span class="label">${label}</span> <span class="num" id="dv-${id}-${r.name}">${cached}</span></span>`;
+            const quality = lastDeviceQuality[cacheKey];
+            const qualityDot = quality != null
+                ? `<span class="quality-dot" style="background:${getQualityColor(quality)}" title="${getQualityLabel(quality)}"></span>`
+                : '';
+            return `<span class="dev-val"><span class="label">${label}</span> <span class="num" id="dv-${id}-${r.name}">${cached}</span>${qualityDot}</span>`;
         }).join('');
 
         // 机械类设备显示启停按钮

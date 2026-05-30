@@ -6,10 +6,11 @@ import pytest
 import queue
 import threading
 import time
+import math
 from datetime import datetime
 from unittest.mock import MagicMock, patch, PropertyMock
 
-from 采集层.data_collector import DataCollector, _has_keyword
+from 采集层.data_collector import DataCollector, DataQualityAssessor, _has_keyword
 
 
 # ============================================================
@@ -378,3 +379,165 @@ class TestDeviceTaskManagement:
         collector.remove_device_task('d1')
         timer.cancel.assert_called_once()
         assert 'd1' not in collector.tasks
+
+
+# ============================================================
+# DataQualityAssessor Tests (OPC UA Standard)
+# ============================================================
+
+class TestDataQualityAssessor:
+
+    def test_good_quality_normal_value(self):
+        """Normal value with running device returns GOOD"""
+        q = DataQualityAssessor.assess(
+            value=25.0, register_name='temperature',
+            device_status='running'
+        )
+        assert q == DataQualityAssessor.GOOD
+
+    def test_good_quality_default_status(self):
+        """Unknown device status with normal value returns GOOD"""
+        q = DataQualityAssessor.assess(
+            value=100.0, register_name='pressure',
+            device_status='unknown'
+        )
+        assert q == DataQualityAssessor.GOOD
+
+    def test_bad_comm_failure_offline(self):
+        """Offline device returns BAD_COMM_FAILURE"""
+        q = DataQualityAssessor.assess(
+            value=25.0, register_name='temperature',
+            device_status='offline'
+        )
+        assert q == DataQualityAssessor.BAD_COMM_FAILURE
+
+    def test_bad_comm_failure_disconnected(self):
+        """Disconnected device returns BAD_COMM_FAILURE"""
+        q = DataQualityAssessor.assess(
+            value=25.0, register_name='temperature',
+            device_status='disconnected'
+        )
+        assert q == DataQualityAssessor.BAD_COMM_FAILURE
+
+    def test_bad_sensor_failure_fault(self):
+        """Faulty device returns BAD_SENSOR_FAILURE"""
+        q = DataQualityAssessor.assess(
+            value=25.0, register_name='temperature',
+            device_status='fault'
+        )
+        assert q == DataQualityAssessor.BAD_SENSOR_FAILURE
+
+    def test_bad_none_value(self):
+        """None value returns BAD"""
+        q = DataQualityAssessor.assess(
+            value=None, register_name='temperature',
+            device_status='running'
+        )
+        assert q == DataQualityAssessor.BAD
+
+    def test_bad_nan_value(self):
+        """NaN value returns BAD"""
+        q = DataQualityAssessor.assess(
+            value=float('nan'), register_name='temperature',
+            device_status='running'
+        )
+        assert q == DataQualityAssessor.BAD
+
+    def test_bad_sensor_failure_out_of_range(self):
+        """Extremely large value returns BAD_SENSOR_FAILURE"""
+        q = DataQualityAssessor.assess(
+            value=1e11, register_name='temperature',
+            device_status='running'
+        )
+        assert q == DataQualityAssessor.BAD_SENSOR_FAILURE
+
+    def test_bad_sensor_failure_negative_out_of_range(self):
+        """Extremely large negative value returns BAD_SENSOR_FAILURE"""
+        q = DataQualityAssessor.assess(
+            value=-1e11, register_name='temperature',
+            device_status='running'
+        )
+        assert q == DataQualityAssessor.BAD_SENSOR_FAILURE
+
+    def test_uncertain_stale_data(self):
+        """Unchanged value for >300s returns UNCERTAIN_LAST_USABLE"""
+        q = DataQualityAssessor.assess(
+            value=25.0, register_name='temperature',
+            device_status='running',
+            last_value=25.0,
+            last_time=time.time() - 301
+        )
+        assert q == DataQualityAssessor.UNCERTAIN_LAST_USABLE
+
+    def test_good_recent_same_value(self):
+        """Same value within 300s returns GOOD"""
+        q = DataQualityAssessor.assess(
+            value=25.0, register_name='temperature',
+            device_status='running',
+            last_value=25.0,
+            last_time=time.time() - 100
+        )
+        assert q == DataQualityAssessor.GOOD
+
+    def test_good_changed_value(self):
+        """Changed value returns GOOD even if old value is stale"""
+        q = DataQualityAssessor.assess(
+            value=26.0, register_name='temperature',
+            device_status='running',
+            last_value=25.0,
+            last_time=time.time() - 400
+        )
+        assert q == DataQualityAssessor.GOOD
+
+    def test_good_no_last_value(self):
+        """No previous value returns GOOD"""
+        q = DataQualityAssessor.assess(
+            value=25.0, register_name='temperature',
+            device_status='running',
+            last_value=None,
+            last_time=None
+        )
+        assert q == DataQualityAssessor.GOOD
+
+    def test_quality_code_values(self):
+        """Quality codes match OPC UA standard values"""
+        assert DataQualityAssessor.GOOD == 192
+        assert DataQualityAssessor.UNCERTAIN == 104
+        assert DataQualityAssessor.BAD == 0
+        assert DataQualityAssessor.BAD_SENSOR_FAILURE == 4
+        assert DataQualityAssessor.BAD_COMM_FAILURE == 6
+        assert DataQualityAssessor.BAD_OUT_OF_SERVICE == 8
+        assert DataQualityAssessor.UNCERTAIN_SENSOR_CAL == 80
+        assert DataQualityAssessor.UNCERTAIN_LAST_USABLE == 64
+
+    def test_offline_takes_precedence_over_none(self):
+        """Offline status takes precedence over None value"""
+        q = DataQualityAssessor.assess(
+            value=None, register_name='temperature',
+            device_status='offline'
+        )
+        assert q == DataQualityAssessor.BAD_COMM_FAILURE
+
+    def test_fault_takes_precedence_over_nan(self):
+        """Fault status takes precedence over NaN value"""
+        q = DataQualityAssessor.assess(
+            value=float('nan'), register_name='temperature',
+            device_status='fault'
+        )
+        assert q == DataQualityAssessor.BAD_SENSOR_FAILURE
+
+    def test_integer_value(self):
+        """Integer value is handled correctly"""
+        q = DataQualityAssessor.assess(
+            value=100, register_name='count',
+            device_status='running'
+        )
+        assert q == DataQualityAssessor.GOOD
+
+    def test_zero_value(self):
+        """Zero value returns GOOD (valid for many sensors)"""
+        q = DataQualityAssessor.assess(
+            value=0.0, register_name='pressure',
+            device_status='running'
+        )
+        assert q == DataQualityAssessor.GOOD

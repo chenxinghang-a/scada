@@ -243,6 +243,16 @@ body {
 .dev-val .label { color: var(--text-muted); }
 .dev-val .num   { color: var(--text); font-weight: 600; }
 
+/* OPC UA 数据质量指示点 */
+.quality-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-left: 3px;
+    vertical-align: middle;
+}
+
 /* ========== 报警面板 ========== */
 .alarm-panel {
     grid-column: 3 / -1;

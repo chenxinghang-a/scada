@@ -439,3 +439,43 @@ function getLabel(name) {
     }
     return name;
 }
+
+// ========== WebSocket 实时更新 ==========
+document.addEventListener('DOMContentLoaded', () => {
+    function attachSocketHandlers() {
+        const sk = window.socket;
+        if (!sk) return;
+        sk.on('data_update', (data) => {
+            if (!data) return;
+            Object.entries(data).forEach(([regName, info]) => {
+                if (!info || typeof info !== 'object') return;
+                const devId = info.device_id;
+                const val = info.value;
+                if (!devId || val == null) return;
+                const key = `${devId}:${regName}`;
+                const formatted = typeof val === 'number' ? val.toFixed(1) : String(val);
+                lastDeviceValues[key] = formatted;
+            });
+        });
+        sk.on('alarm', () => loadData());
+        // Subscribe to all visible devices on connect
+        sk.on('connect', () => {
+            console.log('WS connected (screen)');
+            const select = document.getElementById('trend-device-select');
+            if (select) {
+                Array.from(select.options).forEach(opt => {
+                    if (opt.value) sk.emit('subscribe', {device_id: opt.value});
+                });
+            } else if (selectedDeviceId) {
+                sk.emit('subscribe', {device_id: selectedDeviceId});
+            }
+        });
+    }
+    if (window.socket) {
+        attachSocketHandlers();
+    } else {
+        const timer = setInterval(() => {
+            if (window.socket) { clearInterval(timer); attachSocketHandlers(); }
+        }, 200);
+    }
+});
