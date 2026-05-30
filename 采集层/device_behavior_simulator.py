@@ -998,8 +998,51 @@ class DeviceBehaviorSimulator:
                 'injection_force': 0.0, 'clamping_force': 0.0,
                 'green_light': 0, 'yellow_light': 1, 'red_light': 0,
                 'blue_light': 0, 'white_light': 0, 'buzzer': 0,
-                'running_status': 0, 'status': 0,
+                'running_status': 0, 'status': 0, 'boiler_status': 0,
+                'packing_status': 0, 'line_status': 0,
                 'humidity': round(50.0 + random.gauss(0, 2), 1),
+                # 涂装车间（inovance_h5u_01）
+                'spray_pressure': round(ambient_pressure, 4),
+                'spray_speed': 0.0,
+                'coating_thickness': 0.0,
+                'painted_count': round(self._shot_count, 0),
+                # 水处理（schneider_m340_01）
+                'ph_value': round(7.0 + random.gauss(0, 0.1), 2),
+                'pump_speed': 0.0,
+                'inlet_flow': 0.0, 'outlet_flow': 0.0,
+                'water_level': round(0.5 + random.gauss(0, 0.1), 2),
+                # 电力分析仪（abb_m4m_01）
+                'thd_voltage': round(random.gauss(0, 0.1), 2),
+                'electricity_consumption': round(self._total_energy_kwh, 2),
+                # IO-Link传感器（turck_iolink_01）— 监测类，停机仍读数
+                'iol_temperature_1': round(ambient_temp, 2),
+                'iol_pressure_1': round(ambient_pressure, 4),
+                'iol_pressure_2': round(ambient_pressure, 4),
+                'iol_flow_1': 0.0,
+                'iol_distance_1': round(0.0 + random.gauss(0, 0.5), 1),
+                'iol_vacuum': round(random.gauss(0, 10), 1),
+                # 蒸馏/干燥（hollysys_lk_01）
+                'distill_pressure': round(101.3 + random.gauss(0, 0.5), 2),
+                'dryer_humidity': round(50.0 + random.gauss(0, 2), 1),
+                'reflux_ratio': 0.0,
+                # 注塑机（mitsubishi_fx5u_01）
+                'cushion_position': 0.0,
+                'barrel_temperature': round(ambient_temp, 2),
+                # 包装线（delta_dvp_01）
+                'label_count': round(self._shot_count, 0),
+                'palletizing_count': round(self._shot_count * 0.9, 0),
+                'reject_count': round(self._shot_count * 0.01, 0),
+                'sealing_temperature': round(ambient_temp, 2),
+                # 继电器（relay_output_01）
+                'relay_1': 0, 'relay_2': 0, 'relay_3': 0,
+                'relay_4': 0, 'relay_5': 0, 'relay_6': 0,
+                # MES指标
+                'oee': 0.0, 'quality_rate': 0.0, 'defect_rate': 0.0,
+                'planned_quantity': 0, 'actual_quantity': 0,
+                # OPC UA
+                'motor_speed': 0.0,
+                # 通用
+                'co2': round(400 + random.gauss(0, 10), 0),
             }
             # 过滤：只返回该设备实际拥有的参数
             return {k: v for k, v in stopped_params.items()
