@@ -697,32 +697,45 @@ class DeviceBehaviorSimulator:
         hour_of_day = (t / 3600) % 24
         shift_factor = 1.0 + 0.05 * math.sin((hour_of_day - 6) * math.pi / 12)
 
-        # ===== 温度 - 一阶惯性 =====
+        # ===== 温度 - 牛顿冷却 + 过程加热 =====
+        # 物理模型: dT/dt = heating - cooling
+        #   heating = 过程热输入（运行时正弦波动 + 扰动）
+        #   cooling = h*(T - T_ambient)  牛顿冷却定律，温度越高散热越快
         target_temp = self.process_model.base_temperature * shift_factor
         if self.state == DeviceState.RUNNING:
             target_temp += 20 * math.sin(t / 300)
+            # 偶发扰动：用指数衰减尖峰代替直接累加（自限幅）
+            if random.random() < 0.001:
+                self._temp_spike = random.uniform(10, 30)
+                logger.debug(f"[扰动] {self.device_name} 温度尖峰 +{self._temp_spike:.1f}°C")
+            if hasattr(self, '_temp_spike') and self._temp_spike > 0.1:
+                target_temp += self._temp_spike
+                self._temp_spike *= 0.95  # 尖峰指数衰减，不会累积
         elif self.state == DeviceState.IDLE:
             target_temp = self.process_model.base_temperature - 10
         elif self.state == DeviceState.FAULT:
-            # 故障效果由 _apply_fault_effects 统一处理
             pass
         else:
             target_temp = self.process_model.base_temperature - 30
 
+        # 一阶惯性 + 牛顿冷却负反馈（温差越大冷却越快）
         alpha_temp = 1 - math.exp(-dt / self.process_model.thermal_time_constant)
         self._current_temp += (target_temp - self._current_temp) * alpha_temp
         self._current_temp += random.gauss(0, 0.3)
+        # 牛顿冷却：超出环境温度越多，散热越快（物理真实性）
+        ambient = self.process_model.base_temperature - 20
+        if self._current_temp > ambient:
+            self._current_temp -= 0.01 * (self._current_temp - ambient) * dt
 
-        # 偶发过程扰动
-        if random.random() < 0.001 and self.state == DeviceState.RUNNING:
-            spike = random.uniform(10, 30)
-            self._current_temp += spike
-            logger.debug(f"[扰动] {self.device_name} 温度尖峰 +{spike:.1f}°C")
-
-        # ===== 压力 - Antoine方程近似（饱和蒸汽压） =====
-        # P(MPa) ~ 0.00001 * exp(0.05 * T) for 20-200°C range
-        if self._current_temp > 0:
-            target_pressure = 0.00001 * math.exp(0.05 * self._current_temp)
+        # ===== 压力 - Antoine方程（带物理约束） =====
+        # 原始公式: P = A * exp(B*T)，仅在20-200°C有效
+        # 超出范围时用线性外推代替指数外推，防止数值爆炸
+        T = self._current_temp
+        if 0 < T <= 200:
+            target_pressure = 0.00001 * math.exp(0.05 * T)
+        elif T > 200:
+            # 线性外推：200°C时约0.22MPa，每°C增加0.01MPa
+            target_pressure = 0.22 + 0.01 * (T - 200)
         else:
             target_pressure = 0.1
 
@@ -780,38 +793,43 @@ class DeviceBehaviorSimulator:
         # 故障影响由 _apply_fault_effects 统一处理
 
     def _apply_fault_effects(self):
-        """应用所有活跃故障的效果（多故障并发 + 级联扩散）"""
+        """应用所有活跃故障的效果（多故障并发 + 级联扩散）
+
+        注意：故障效果只修改 target（目标偏移），不直接累加 current 值
+        防止每个周期叠加导致数值爆炸
+        """
         if not self.active_faults:
             return
 
         for fault_type, severity in list(self.active_faults.items()):
             if fault_type == FaultType.SENSOR_DRIFT:
+                # 传感器漂移：叠加一个慢变偏移量（不累积）
                 t = time.time() - self.start_time
-                self._current_temp += 5 * severity * math.sin(t / 10)
+                drift = 5 * severity * math.sin(t / 10)
+                self._current_temp += drift * self._dt  # 乘dt变成微分量
 
             elif fault_type == FaultType.OVERHEATING:
-                self._current_temp += 50 * severity
-                # 级联检查：过热导致电机磨损
+                # 过热：温度向高温目标偏移（一阶惯性，不会爆炸）
+                overheat_target = self.process_model.base_temperature + 80 * severity
+                alpha = 1 - math.exp(-self._dt / 10)  # 10秒时间常数
+                self._current_temp += (overheat_target - self._current_temp) * alpha * 0.1
                 self._check_cascade(fault_type, severity)
 
             elif fault_type == FaultType.PRESSURE_LEAK:
-                self._current_pressure *= (1 - 0.3 * severity)
-                self._current_flow += 2 * severity  # 泄漏增加流量
-                # 级联检查：压力泄漏导致过热
+                self._current_pressure *= (1 - 0.3 * severity * self._dt)
+                self._current_flow += 2 * severity * self._dt
                 self._check_cascade(fault_type, severity)
 
             elif fault_type == FaultType.MOTOR_WEAR:
-                self._motor_current *= (1 + 0.2 * severity)  # 磨损增加电流
-                self._vibration += 3 * severity  # 磨损增加振动
-                # 级联检查：电机磨损导致传感器漂移
+                self._motor_current *= (1 + 0.05 * severity * self._dt)
+                self._vibration += 0.5 * severity * self._dt
                 self._check_cascade(fault_type, severity)
 
             elif fault_type == FaultType.COMMUNICATION:
-                # 通信故障不影响物理参数，但影响数据质量
                 pass
 
             elif fault_type == FaultType.POWER_FLUCTUATION:
-                voltage_factor = 1 + 0.1 * severity * math.sin(time.time() * 5)
+                voltage_factor = 1 + 0.02 * severity * math.sin(time.time() * 5)
                 self._current_power_kw *= voltage_factor
 
         # 故障严重度随时间增长
@@ -1075,12 +1093,14 @@ class DeviceBehaviorSimulator:
         power_factor = 0.85 + 0.1 * math.sin(t / 120) + random.gauss(0, 0.02)
         power_factor = max(0.6, min(0.98, power_factor))
 
-        # 电流 - 由功率和电压推导
+        # 电流 - 由功率和电压推导（物理约束：功率不能超过额定3倍）
+        self._current_power_kw = max(0, min(self.process_model.base_power_kw * 3, self._current_power_kw))
         load_power = self._current_power_kw * 1000  # W
-        if voltage_a > 0:
+        if voltage_a > 10:  # 电压不能太小，防止除零
             current_base = load_power / (3 * voltage_a * power_factor)
         else:
             current_base = 0
+        current_base = min(current_base, self.process_model.base_current * 3)  # 电流上限
 
         current_a = current_base * state_factor + random.gauss(0, 0.5)
         current_b = current_base * state_factor * (1 + random.gauss(0, 0.02)) + random.gauss(0, 0.5)
