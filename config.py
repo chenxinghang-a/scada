@@ -123,13 +123,19 @@ class BroadcastConfig:
 # 日志配置
 class LogConfig:
     # 日志级别
-    LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
+    LEVEL = os.environ.get('SCADA_LOG_LEVEL', 'INFO')
 
     # 日志文件路径
-    LOG_DIR = BASE_DIR / 'logs'
+    LOG_DIR = os.environ.get('SCADA_LOG_DIR', str(BASE_DIR / 'logs'))
 
-    # 日志保留天数
-    RETENTION_DAYS = 30
+    # 是否输出JSON格式（用于SIEM集成）
+    LOG_JSON = os.environ.get('SCADA_LOG_JSON', 'true').lower() == 'true'
+
+    # 日志轮转大小
+    LOG_ROTATION = os.environ.get('SCADA_LOG_ROTATION', '100 MB')
+
+    # 日志保留时间
+    LOG_RETENTION = os.environ.get('SCADA_LOG_RETENTION', '30 days')
 
 # Web服务器配置（兼容别名）
 WebConfig = FlaskConfig

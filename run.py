@@ -14,17 +14,17 @@ paths.setup()
 
 SYSTEM_START_TIME = datetime.now()
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(str(paths.LOG_DIR / 'scada.log'), encoding='utf-8')
-    ]
+# 配置结构化日志（等保2.0 GB/T 22239）
+from core.structured_logging import setup_logging, get_logger
+from config import LogConfig
+setup_logging(
+    log_dir=str(LogConfig.LOG_DIR),
+    log_level=LogConfig.LEVEL,
+    json_format=LogConfig.LOG_JSON,
+    rotation=LogConfig.LOG_ROTATION,
+    retention=LogConfig.LOG_RETENTION,
 )
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def main():
