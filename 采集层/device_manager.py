@@ -12,6 +12,8 @@ import threading
 from typing import Any
 from pathlib import Path
 
+from core.connection_pool import ConnectionPool
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,8 +116,17 @@ class DeviceManager:
         self.simulation_mode = simulation_mode
         self.use_enhanced_simulation = use_enhanced_simulation
         self.devices = {}  # device_id -> device_config
-        self.clients = {}  # device_id -> protocol client
+        self.clients = {}  # device_id -> protocol client (legacy, kept for backward compat)
         self._lock = threading.Lock()
+
+        # 连接池 - 复用连接，避免频繁创建/销毁
+        self._connection_pool = ConnectionPool(
+            factory=self._create_client_for_pool,
+            max_size=50,
+            max_idle_time=300,  # 5分钟空闲回收
+            max_lifetime=3600,  # 1小时最大生命周期
+            name="modbus",
+        )
 
         # 加载设备配置
         self.load_config()
@@ -175,14 +186,22 @@ class DeviceManager:
         """获取所有设备配置"""
         return self.devices.copy()
 
+    def _create_client_for_pool(self, device_id: str):
+        """连接池工厂方法 - 根据 device_id 创建对应的协议客户端"""
+        device_config = self.devices.get(device_id)
+        if not device_config:
+            logger.error(f"设备 {device_id} 配置不存在")
+            return None
+        return _create_client(device_config, self.simulation_mode, self.use_enhanced_simulation)
+
     def get_client(self, device_id: str):
         """
-        获取设备客户端（懒创建）
+        获取设备客户端（懒创建，通过连接池复用）
 
         Returns:
             协议客户端实例（ModbusClient / OPCUAClient / MQTTClient / RESTDeviceClient）
         """
-        # 无锁快速路径
+        # 无锁快速路径 - 先查 legacy 缓存
         client = self.clients.get(device_id)
         if client is not None:
             return client
@@ -193,15 +212,17 @@ class DeviceManager:
             if client is not None:
                 return client
 
+            # 从连接池获取（池会自动创建或复用）
             device_config = self.devices.get(device_id)
             if not device_config:
                 logger.error(f"设备 {device_id} 配置不存在")
                 return None
 
-            client = _create_client(device_config, self.simulation_mode, self.use_enhanced_simulation)
+            client = self._connection_pool.acquire(device_id)
             if client is None:
                 return None
 
+            # 同步到 legacy 缓存，保持向后兼容
             self.clients[device_id] = client
 
         return client
@@ -214,10 +235,13 @@ class DeviceManager:
         return client.connect()
 
     def disconnect_device(self, device_id: str):
-        """断开设备连接"""
+        """断开设备连接（同时从连接池中移除）"""
         client = self.clients.get(device_id)
         if client:
             client.disconnect()
+        # 从连接池中移除
+        self._connection_pool.remove(device_id)
+        self.clients.pop(device_id, None)
 
     def connect_all(self) -> dict[str, bool]:
         """连接所有设备"""
@@ -233,6 +257,9 @@ class DeviceManager:
         """断开所有设备连接"""
         for device_id in list(self.clients.keys()):
             self.disconnect_device(device_id)
+        # 关闭连接池
+        self._connection_pool.shutdown()
+        self.clients.clear()
 
     def switch_simulation_mode(self, new_mode: bool) -> dict[str, Any]:
         """
@@ -255,16 +282,25 @@ class DeviceManager:
 
         logger.info(f"切换模式: {'模拟' if old_mode else '真实'} → {'模拟' if new_mode else '真实'}")
 
-        # 1. 断开所有现有连接
+        # 1. 断开所有现有连接并关闭连接池
         self.disconnect_all()
 
         # 2. 清除客户端缓存（下次get_client时会用新模式创建）
         self.clients.clear()
 
-        # 3. 更新模式标志
+        # 3. 重建连接池（使用新模式的工厂方法）
+        self._connection_pool = ConnectionPool(
+            factory=self._create_client_for_pool,
+            max_size=50,
+            max_idle_time=300,
+            max_lifetime=3600,
+            name="modbus",
+        )
+
+        # 4. 更新模式标志
         self.simulation_mode = new_mode
 
-        # 4. 重新连接所有设备
+        # 5. 重新连接所有设备
         results = self.connect_all()
         connected = sum(1 for v in results.values() if v is True)
         failed = sum(1 for v in results.values() if v is False)
@@ -355,6 +391,7 @@ class DeviceManager:
                 self.disconnect_device(device_id)
                 if device_id in self.clients:
                     del self.clients[device_id]
+                self._connection_pool.remove(device_id)
 
             self.devices[device_id] = device_config
             self._save_config()
@@ -384,6 +421,7 @@ class DeviceManager:
             self.disconnect_device(device_id)
             self.devices.pop(device_id, None)
             self.clients.pop(device_id, None)
+            self._connection_pool.remove(device_id)
             self._save_config()
             logger.info(f"移除设备: {device_id}")
             return True
@@ -398,6 +436,10 @@ class DeviceManager:
             p = d.get('protocol', 'modbus_tcp')
             summary[p] = summary.get(p, 0) + 1
         return summary
+
+    def get_pool_stats(self) -> dict:
+        """获取连接池统计信息"""
+        return self._connection_pool.get_stats()
 
     def _save_config(self):
         """保存设备配置到文件"""

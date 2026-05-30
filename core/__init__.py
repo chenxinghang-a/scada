@@ -8,5 +8,9 @@ from .module_registry import ModuleRegistry
 from .config_manager import ConfigManager
 from .event_bus import EventBus
 from .health_checker import HealthChecker
+from .connection_pool import ConnectionPool, PooledConnection
 
-__all__ = ['DIContainer', 'ModuleRegistry', 'ConfigManager', 'EventBus', 'HealthChecker']
+__all__ = [
+    'DIContainer', 'ModuleRegistry', 'ConfigManager', 'EventBus',
+    'HealthChecker', 'ConnectionPool', 'PooledConnection',
+]
