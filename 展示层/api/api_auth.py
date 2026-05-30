@@ -30,6 +30,9 @@ def api_error_handler(f):
         except PermissionError as e:
             return jsonify({'error': str(e)}), 403
         except Exception as e:
+            from werkzeug.exceptions import HTTPException
+            if isinstance(e, HTTPException):
+                raise
             logger.error(f"API error in {f.__name__}: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
     return decorated

@@ -30,6 +30,9 @@ def api_error_handler(f):
         except PermissionError as e:
             return jsonify({'error': str(e)}), 403
         except Exception as e:
+            from werkzeug.exceptions import HTTPException
+            if isinstance(e, HTTPException):
+                raise
             logger.error(f"API error in {f.__name__}: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
     return decorated
@@ -215,6 +218,7 @@ def get_broadcast_history():
 
 @alarms_bp.route('/alarm-rules', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_alarm_rules():
     """获取所有报警规则"""
     config = load_yaml_config('配置/alarms.yaml')
@@ -223,6 +227,7 @@ def get_alarm_rules():
 
 @alarms_bp.route('/alarm-rules', methods=['POST'])
 @_require_engineer
+@api_error_handler
 def add_alarm_rule():
     """添加报警规则"""
     data = request.get_json()
@@ -249,6 +254,7 @@ def add_alarm_rule():
 
 @alarms_bp.route('/alarm-rules/<rule_id>', methods=['PUT'])
 @_require_engineer
+@api_error_handler
 def update_alarm_rule(rule_id):
     """更新报警规则"""
     data = request.get_json()
@@ -280,6 +286,7 @@ def update_alarm_rule(rule_id):
 
 @alarms_bp.route('/alarm-rules/<rule_id>', methods=['DELETE'])
 @_require_engineer
+@api_error_handler
 def delete_alarm_rule(rule_id):
     """删除报警规则"""
     config = load_yaml_config('配置/alarms.yaml')
@@ -304,6 +311,7 @@ def delete_alarm_rule(rule_id):
 
 @alarms_bp.route('/alarm-rules/notification', methods=['PUT'])
 @_require_engineer
+@api_error_handler
 def update_notification():
     """更新通知设置"""
     data = request.get_json()
@@ -328,6 +336,7 @@ def update_notification():
 
 @alarms_bp.route('/alarm-output/config', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_alarm_output_config():
     """获取声光报警器配置（Modbus连接、DO映射等）"""
     config = load_yaml_config('配置/alarms.yaml')
@@ -341,6 +350,7 @@ def get_alarm_output_config():
 @alarms_bp.route('/alarm-output/config', methods=['PUT'])
 @_require_auth
 @_require_engineer
+@api_error_handler
 def update_alarm_output_config():
     """
     更新声光报警器配置（Modbus连接、DO映射等）
@@ -434,6 +444,7 @@ def update_alarm_output_config():
 
 @alarms_bp.route('/broadcast/config', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_broadcast_config():
     """获取广播系统配置"""
     config = load_yaml_config('配置/alarms.yaml')
@@ -455,6 +466,7 @@ def get_broadcast_config():
 @alarms_bp.route('/broadcast/config', methods=['PUT'])
 @_require_auth
 @_require_engineer
+@api_error_handler
 def update_broadcast_config():
     """
     更新广播系统配置
@@ -526,6 +538,7 @@ def update_broadcast_config():
 
 @alarms_bp.route('/alarms/flood-status', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_flood_status():
     """获取告警洪水检测状态（ISA-18.2）"""
     alarm_manager = current_app.alarm_manager
@@ -534,6 +547,7 @@ def get_flood_status():
 
 @alarms_bp.route('/alarms/dedup-config', methods=['GET'])
 @_require_auth
+@api_error_handler
 def get_dedup_config():
     """获取报警去重配置"""
     alarm_manager = current_app.alarm_manager
@@ -542,6 +556,7 @@ def get_dedup_config():
 
 @alarms_bp.route('/alarms/dedup-config', methods=['PUT'])
 @_require_engineer
+@api_error_handler
 def update_dedup_config():
     """更新报警去重配置"""
     data = request.get_json()
