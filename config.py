@@ -208,6 +208,10 @@ class SecurityConfig:
     HSTS_MAX_AGE = int(os.environ.get('HSTS_MAX_AGE', '31536000'))
     # CSP额外允许的脚本源（逗号分隔）
     CSP_EXTRA_SCRIPTS = [s.strip() for s in os.environ.get('CSP_EXTRA_SCRIPTS', '').split(',') if s.strip()]
+    # 速率限制配置 (GB/T 22239 - 防暴力攻击和DDoS)
+    RATE_LIMIT_ENABLED = os.environ.get('RATE_LIMIT_ENABLED', 'true').lower() == 'true'
+    RATE_LIMIT_DEFAULT = os.environ.get('RATE_LIMIT_DEFAULT', '200 per minute')
+    RATE_LIMIT_LOGIN = os.environ.get('RATE_LIMIT_LOGIN', '5 per minute')
 
 # TDengine时序数据库配置
 class TDengineConfig:

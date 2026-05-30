@@ -9,6 +9,7 @@ from flask_socketio import SocketIO
 
 from .api import register_api_blueprints
 from .websocket import init_socketio
+from core.rate_limiter import create_limiter
 from 用户层.auth import AuthManager
 from config import AuthConfig
 
@@ -45,6 +46,10 @@ def create_app(database, device_manager, alarm_manager, data_collector,
 
     # 初始化认证管理器
     auth_manager = AuthManager(database)
+
+    # 速率限制 (GB/T 22239 等保2.0)
+    limiter = create_limiter(app)
+    app.limiter = limiter
 
     # 注册API蓝图（模块化拆分后的多个Blueprint）
     register_api_blueprints(app)
@@ -210,5 +215,13 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     @app.errorhandler(500)
     def internal_error(error):
         return jsonify({'error': 'Internal server error'}), 500
+
+    @app.errorhandler(429)
+    def rate_limit_exceeded(e):
+        return jsonify({
+            'error': 'Rate limit exceeded',
+            'message': str(e.description),
+            'retry_after': e.retry_after
+        }), 429
 
     return app
