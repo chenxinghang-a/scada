@@ -22,11 +22,11 @@ class HealthStatus:
 
 class HealthCheck:
     """健康检查项"""
-    def __init__(self, name: str, check_func: Callable[[], Dict[str, Any]], 
+    def __init__(self, name: str, check_func: Callable[[], Dict[str, Any]],
                  interval: int = 60, timeout: int = 10):
         """
         初始化健康检查
-        
+
         Args:
             name: 检查名称
             check_func: 检查函数，返回 {'status': str, 'message': str, 'details': dict}
@@ -39,6 +39,7 @@ class HealthCheck:
         self.timeout = timeout
         self.last_check = None
         self.last_result = None
+        self._history_lock = threading.Lock()
         self.history = []
         self.max_history = 100
     
@@ -87,6 +88,13 @@ class HealthCheck:
             }
         else:
             result = result_container[0]
+            # 防御：check_func 返回 None 或非 dict
+            if not isinstance(result, dict):
+                result = {
+                    'status': HealthStatus.UNKNOWN,
+                    'message': f'检查函数返回无效结果: {type(result).__name__}',
+                    'details': {'raw_result': repr(result)},
+                }
             # 确保结果包含必要字段
             if 'status' not in result:
                 result['status'] = HealthStatus.UNKNOWN
@@ -103,9 +111,10 @@ class HealthCheck:
         self.last_result = result
 
         # 记录历史
-        self.history.append(result)
-        if len(self.history) > self.max_history:
-            self.history.pop(0)
+        with self._history_lock:
+            self.history.append(result)
+            if len(self.history) > self.max_history:
+                self.history.pop(0)
 
         return result
     
@@ -245,7 +254,8 @@ class HealthChecker:
         if not check:
             return []
 
-        return check.history[-limit:]
+        with check._history_lock:
+            return list(check.history[-limit:])
     
     @classmethod
     def clear(cls):

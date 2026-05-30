@@ -144,10 +144,15 @@ class HAManager:
                 if self.role == HARole.PRIMARY:
                     self._send_heartbeat()
 
-                # 检查对端心跳超时
-                if (self.role == HARole.STANDBY and
-                    self._last_peer_heartbeat > 0 and
-                    time.time() - self._last_peer_heartbeat > self.heartbeat_timeout):
+                # 检查对端心跳超时（在锁内读取共享状态）
+                should_failover = False
+                with self._lock:
+                    if (self.role == HARole.STANDBY and
+                        self._last_peer_heartbeat > 0 and
+                        time.time() - self._last_peer_heartbeat > self.heartbeat_timeout):
+                        should_failover = True
+
+                if should_failover:
                     self._trigger_failover()
 
                 time.sleep(self.heartbeat_interval)
@@ -160,6 +165,7 @@ class HAManager:
         if not self.peer_address:
             return
 
+        sock = None
         try:
             heartbeat = {
                 'type': 'heartbeat',
@@ -175,32 +181,43 @@ class HAManager:
             sock.settimeout(1)
             sock.sendto(json.dumps(heartbeat).encode(),
                        (self.peer_address, self.peer_port))
-            sock.close()
 
             self.stats['heartbeats_sent'] += 1
         except Exception as e:
             logger.debug(f"心跳发送失败: {e}")
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
 
     def _listen_loop(self):
         """监听心跳"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('0.0.0.0', self.peer_port))
-        sock.settimeout(2)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(('0.0.0.0', self.peer_port))
+            sock.settimeout(2)
 
-        while self._running:
+            while self._running:
+                try:
+                    data, addr = sock.recvfrom(4096)
+                    msg = json.loads(data.decode())
+
+                    if msg.get('type') == 'heartbeat':
+                        self._handle_heartbeat(msg, addr)
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    logger.debug(f"心跳接收异常: {e}")
+        except Exception as e:
+            logger.error(f"心跳监听启动失败: {e}")
+        finally:
             try:
-                data, addr = sock.recvfrom(4096)
-                msg = json.loads(data.decode())
-
-                if msg.get('type') == 'heartbeat':
-                    self._handle_heartbeat(msg, addr)
-            except socket.timeout:
-                continue
-            except Exception as e:
-                logger.debug(f"心跳接收异常: {e}")
-
-        sock.close()
+                sock.close()
+            except Exception:
+                pass
 
     def _handle_heartbeat(self, msg: dict, addr: tuple):
         """处理收到的心跳"""

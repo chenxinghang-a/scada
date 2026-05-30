@@ -56,7 +56,8 @@ class DIContainer:
             name: 服务名称
             instance: 服务实例
         """
-        cls._singletons[name] = instance
+        with cls._lock:
+            cls._singletons[name] = instance
         logger.debug(f"注册实例: {name}")
     
     @classmethod
@@ -71,14 +72,15 @@ class DIContainer:
         Returns:
             服务实例
         """
-        # 检查单例（无锁快速路径）
-        if name in cls._singletons:
-            return cls._singletons[name]
+        # 检查单例
+        with cls._lock:
+            if name in cls._singletons:
+                return cls._singletons[name]
 
-        # 检查服务注册
-        service = cls._services.get(name)
-        if not service:
-            raise KeyError(f"服务 '{name}' 未注册")
+            # 检查服务注册
+            service = cls._services.get(name)
+            if not service:
+                raise KeyError(f"服务 '{name}' 未注册")
 
         # 解析依赖
         dependencies = []
@@ -99,14 +101,15 @@ class DIContainer:
         elif lifecycle == 'scoped':
             if scope_id is None:
                 raise ValueError("scoped生命周期需要scope_id")
-            
-            if scope_id not in cls._scoped:
-                cls._scoped[scope_id] = {}
-            
-            if name not in cls._scoped[scope_id]:
-                cls._scoped[scope_id][name] = service['factory'](*dependencies)
-            
-            return cls._scoped[scope_id][name]
+
+            with cls._lock:
+                if scope_id not in cls._scoped:
+                    cls._scoped[scope_id] = {}
+
+                if name not in cls._scoped[scope_id]:
+                    cls._scoped[scope_id][name] = service['factory'](*dependencies)
+
+                return cls._scoped[scope_id][name]
         
         else:  # transient
             return service['factory'](*dependencies)
@@ -119,16 +122,18 @@ class DIContainer:
         Args:
             scope_id: 作用域ID
         """
-        if scope_id in cls._scoped:
-            del cls._scoped[scope_id]
-            logger.debug(f"清除作用域: {scope_id}")
+        with cls._lock:
+            if scope_id in cls._scoped:
+                del cls._scoped[scope_id]
+        logger.debug(f"清除作用域: {scope_id}")
     
     @classmethod
     def clear_all(cls):
         """清除所有注册和实例"""
-        cls._services.clear()
-        cls._singletons.clear()
-        cls._scoped.clear()
+        with cls._lock:
+            cls._services.clear()
+            cls._singletons.clear()
+            cls._scoped.clear()
         logger.debug("清除所有服务注册")
     
     @classmethod

@@ -88,14 +88,14 @@ class EventBus:
             'timestamp': datetime.now()
         }
         
-        # 记录历史
+        # 记录历史并快照订阅者
         with cls._lock:
             cls._history.append(event)
             if len(cls._history) > cls._max_history:
                 cls._history.pop(0)
-        
-        # 调用订阅者
-        subscribers = cls._subscribers.get(event_type, [])
+            subscribers = list(cls._subscribers.get(event_type, []))
+
+        # 调用订阅者（锁外执行，避免回调死锁）
         for subscriber in subscribers:
             try:
                 # 检查过滤器

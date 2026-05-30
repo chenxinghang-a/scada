@@ -191,276 +191,299 @@ class ModuleRegistry:
     def get_instance(cls, name: str) -> Any:
         """
         获取模块实例
-        
+
         Args:
             name: 模块名称
-            
+
         Returns:
             模块实例
         """
-        module_info = cls._modules.get(name)
-        if not module_info:
-            raise KeyError(f"模块 '{name}' 未注册")
-        
-        if module_info.status != ModuleStatus.INITIALIZED:
-            raise RuntimeError(f"模块 '{name}' 未初始化 (状态: {module_info.status.value})")
-        
-        return module_info.instance
-    
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if not module_info:
+                raise KeyError(f"模块 '{name}' 未注册")
+
+            if module_info.status != ModuleStatus.INITIALIZED:
+                raise RuntimeError(f"模块 '{name}' 未初始化 (状态: {module_info.status.value})")
+
+            return module_info.instance
+
     @classmethod
     def get_status(cls, name: str = None) -> Dict[str, Any]:
         """
         获取模块状态
-        
+
         Args:
             name: 模块名称（None则返回所有模块状态）
-            
+
         Returns:
             模块状态信息
         """
-        if name:
-            module_info = cls._modules.get(name)
-            if not module_info:
-                return {'status': 'not_found'}
-            return module_info.to_dict()
-        
-        return {name: info.to_dict() for name, info in cls._modules.items()}
+        with cls._lock:
+            if name:
+                module_info = cls._modules.get(name)
+                if not module_info:
+                    return {'status': 'not_found'}
+                return module_info.to_dict()
+
+            return {name: info.to_dict() for name, info in cls._modules.items()}
     
     @classmethod
     def set_status(cls, name: str, status: ModuleStatus, error: Exception = None):
         """
         设置模块状态
-        
+
         Args:
             name: 模块名称
             status: 新状态
             error: 错误信息（如果状态为ERROR）
         """
-        module_info = cls._modules.get(name)
-        if module_info:
-            module_info.status = status
-            module_info.error = error
-            logger.debug(f"模块 '{name}' 状态变更为: {status.value}")
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if module_info:
+                module_info.status = status
+                module_info.error = error
+                logger.debug(f"模块 '{name}' 状态变更为: {status.value}")
     
     @classmethod
     def disable(cls, name: str):
         """
         禁用模块
-        
+
         Args:
             name: 模块名称
         """
-        cls.set_status(name, ModuleStatus.DISABLED)
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if module_info:
+                module_info.status = ModuleStatus.DISABLED
         logger.info(f"模块 '{name}' 已禁用")
     
     @classmethod
     def enable(cls, name: str):
         """
         启用模块
-        
+
         Args:
             name: 模块名称
         """
-        module_info = cls._modules.get(name)
-        if module_info and module_info.status == ModuleStatus.DISABLED:
-            module_info.status = ModuleStatus.REGISTERED
-            logger.info(f"模块 '{name}' 已启用")
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if module_info and module_info.status == ModuleStatus.DISABLED:
+                module_info.status = ModuleStatus.REGISTERED
+                logger.info(f"模块 '{name}' 已启用")
     
     @classmethod
     def get_available_modules(cls) -> List[str]:
         """
         获取所有可用模块
-        
+
         Returns:
             可用模块名称列表
         """
-        return [
-            name for name, info in cls._modules.items()
-            if info.status in (ModuleStatus.INITIALIZED, ModuleStatus.RUNNING)
-        ]
-    
+        with cls._lock:
+            return [
+                name for name, info in cls._modules.items()
+                if info.status in (ModuleStatus.INITIALIZED, ModuleStatus.RUNNING)
+            ]
+
     @classmethod
     def get_unavailable_modules(cls) -> List[str]:
         """
         获取所有不可用模块
-        
+
         Returns:
             不可用模块名称列表
         """
-        return [
-            name for name, info in cls._modules.items()
-            if info.status in (ModuleStatus.ERROR, ModuleStatus.DISABLED, ModuleStatus.UNAVAILABLE)
-        ]
+        with cls._lock:
+            return [
+                name for name, info in cls._modules.items()
+                if info.status in (ModuleStatus.ERROR, ModuleStatus.DISABLED, ModuleStatus.UNAVAILABLE)
+            ]
     
     @classmethod
     def start(cls, name: str) -> bool:
         """
         启动模块
-        
+
         Args:
             name: 模块名称
-            
+
         Returns:
             是否启动成功
         """
-        module_info = cls._modules.get(name)
-        if not module_info:
-            logger.error(f"模块 '{name}' 未注册")
-            return False
-        
-        if module_info.status == ModuleStatus.RUNNING:
-            logger.warning(f"模块 '{name}' 已在运行")
-            return True
-        
-        if module_info.status not in (ModuleStatus.INITIALIZED, ModuleStatus.PAUSED):
-            logger.error(f"模块 '{name}' 无法启动，当前状态: {module_info.status.value}")
-            return False
-        
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if not module_info:
+                logger.error(f"模块 '{name}' 未注册")
+                return False
+
+            if module_info.status == ModuleStatus.RUNNING:
+                logger.warning(f"模块 '{name}' 已在运行")
+                return True
+
+            if module_info.status not in (ModuleStatus.INITIALIZED, ModuleStatus.PAUSED):
+                logger.error(f"模块 '{name}' 无法启动，当前状态: {module_info.status.value}")
+                return False
+
         try:
             # 调用模块的start方法（如果存在）
             if hasattr(module_info.instance, 'start'):
                 module_info.instance.start()
-            
-            module_info.status = ModuleStatus.RUNNING
+
+            with cls._lock:
+                module_info.status = ModuleStatus.RUNNING
             logger.info(f"模块 '{name}' 已启动")
             return True
         except Exception as e:
-            module_info.status = ModuleStatus.ERROR
-            module_info.error = e
+            with cls._lock:
+                module_info.status = ModuleStatus.ERROR
+                module_info.error = e
             logger.error(f"模块 '{name}' 启动失败: {e}")
             return False
-    
+
     @classmethod
     def stop(cls, name: str) -> bool:
         """
         停止模块
-        
+
         Args:
             name: 模块名称
-            
+
         Returns:
             是否停止成功
         """
-        module_info = cls._modules.get(name)
-        if not module_info:
-            logger.error(f"模块 '{name}' 未注册")
-            return False
-        
-        if module_info.status not in (ModuleStatus.RUNNING, ModuleStatus.PAUSED):
-            logger.warning(f"模块 '{name}' 未在运行，当前状态: {module_info.status.value}")
-            return True
-        
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if not module_info:
+                logger.error(f"模块 '{name}' 未注册")
+                return False
+
+            if module_info.status not in (ModuleStatus.RUNNING, ModuleStatus.PAUSED):
+                logger.warning(f"模块 '{name}' 未在运行，当前状态: {module_info.status.value}")
+                return True
+
         try:
             # 调用模块的stop方法（如果存在）
             if hasattr(module_info.instance, 'stop'):
                 module_info.instance.stop()
-            
-            module_info.status = ModuleStatus.INITIALIZED
+
+            with cls._lock:
+                module_info.status = ModuleStatus.INITIALIZED
             logger.info(f"模块 '{name}' 已停止")
             return True
         except Exception as e:
-            module_info.status = ModuleStatus.ERROR
-            module_info.error = e
+            with cls._lock:
+                module_info.status = ModuleStatus.ERROR
+                module_info.error = e
             logger.error(f"模块 '{name}' 停止失败: {e}")
             return False
-    
+
     @classmethod
     def pause(cls, name: str) -> bool:
         """
         暂停模块
-        
+
         Args:
             name: 模块名称
-            
+
         Returns:
             是否暂停成功
         """
-        module_info = cls._modules.get(name)
-        if not module_info:
-            logger.error(f"模块 '{name}' 未注册")
-            return False
-        
-        if module_info.status != ModuleStatus.RUNNING:
-            logger.warning(f"模块 '{name}' 未在运行，无法暂停")
-            return False
-        
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if not module_info:
+                logger.error(f"模块 '{name}' 未注册")
+                return False
+
+            if module_info.status != ModuleStatus.RUNNING:
+                logger.warning(f"模块 '{name}' 未在运行，无法暂停")
+                return False
+
         try:
             # 调用模块的pause方法（如果存在）
             if hasattr(module_info.instance, 'pause'):
                 module_info.instance.pause()
-            
-            module_info.status = ModuleStatus.PAUSED
+
+            with cls._lock:
+                module_info.status = ModuleStatus.PAUSED
             logger.info(f"模块 '{name}' 已暂停")
             return True
         except Exception as e:
-            module_info.status = ModuleStatus.ERROR
-            module_info.error = e
+            with cls._lock:
+                module_info.status = ModuleStatus.ERROR
+                module_info.error = e
             logger.error(f"模块 '{name}' 暂停失败: {e}")
             return False
-    
+
     @classmethod
     def resume(cls, name: str) -> bool:
         """
         恢复模块
-        
+
         Args:
             name: 模块名称
-            
+
         Returns:
             是否恢复成功
         """
-        module_info = cls._modules.get(name)
-        if not module_info:
-            logger.error(f"模块 '{name}' 未注册")
-            return False
-        
-        if module_info.status != ModuleStatus.PAUSED:
-            logger.warning(f"模块 '{name}' 未暂停，无法恢复")
-            return False
-        
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if not module_info:
+                logger.error(f"模块 '{name}' 未注册")
+                return False
+
+            if module_info.status != ModuleStatus.PAUSED:
+                logger.warning(f"模块 '{name}' 未暂停，无法恢复")
+                return False
+
         try:
             # 调用模块的resume方法（如果存在）
             if hasattr(module_info.instance, 'resume'):
                 module_info.instance.resume()
-            
-            module_info.status = ModuleStatus.RUNNING
+
+            with cls._lock:
+                module_info.status = ModuleStatus.RUNNING
             logger.info(f"模块 '{name}' 已恢复")
             return True
         except Exception as e:
-            module_info.status = ModuleStatus.ERROR
-            module_info.error = e
+            with cls._lock:
+                module_info.status = ModuleStatus.ERROR
+                module_info.error = e
             logger.error(f"模块 '{name}' 恢复失败: {e}")
             return False
-    
+
     @classmethod
     def restart(cls, name: str) -> bool:
         """
         重启模块
-        
+
         Args:
             name: 模块名称
-            
+
         Returns:
             是否重启成功
         """
-        module_info = cls._modules.get(name)
-        if not module_info:
-            logger.error(f"模块 '{name}' 未注册")
-            return False
-        
+        with cls._lock:
+            module_info = cls._modules.get(name)
+            if not module_info:
+                logger.error(f"模块 '{name}' 未注册")
+                return False
+
         # 先停止
         if module_info.status in (ModuleStatus.RUNNING, ModuleStatus.PAUSED):
             if not cls.stop(name):
                 return False
-        
+
         # 重新初始化
-        module_info.instance = None
-        module_info.status = ModuleStatus.REGISTERED
-        
+        with cls._lock:
+            module_info.instance = None
+            module_info.status = ModuleStatus.REGISTERED
+
         # 重新初始化
         if not cls.initialize(name):
             return False
-        
+
         # 启动
         return cls.start(name)
     
@@ -468,31 +491,32 @@ class ModuleRegistry:
     def get_lifecycle_info(cls, name: str = None) -> Dict[str, Any]:
         """
         获取模块生命周期信息
-        
+
         Args:
             name: 模块名称（None则返回所有模块）
-            
+
         Returns:
             生命周期信息
         """
-        if name:
-            module_info = cls._modules.get(name)
-            if not module_info:
-                return {'status': 'not_found'}
-            
-            return {
-                'name': name,
-                'status': module_info.status.value,
-                'has_instance': module_info.instance is not None,
-                'has_start_method': hasattr(module_info.instance, 'start') if module_info.instance else False,
-                'has_stop_method': hasattr(module_info.instance, 'stop') if module_info.instance else False,
-                'has_pause_method': hasattr(module_info.instance, 'pause') if module_info.instance else False,
-                'has_resume_method': hasattr(module_info.instance, 'resume') if module_info.instance else False,
-                'dependencies': module_info.dependencies,
-                'error': str(module_info.error) if module_info.error else None
-            }
-        
-        return {name: cls.get_lifecycle_info(name) for name in cls._modules}
+        with cls._lock:
+            if name:
+                module_info = cls._modules.get(name)
+                if not module_info:
+                    return {'status': 'not_found'}
+
+                return {
+                    'name': name,
+                    'status': module_info.status.value,
+                    'has_instance': module_info.instance is not None,
+                    'has_start_method': hasattr(module_info.instance, 'start') if module_info.instance else False,
+                    'has_stop_method': hasattr(module_info.instance, 'stop') if module_info.instance else False,
+                    'has_pause_method': hasattr(module_info.instance, 'pause') if module_info.instance else False,
+                    'has_resume_method': hasattr(module_info.instance, 'resume') if module_info.instance else False,
+                    'dependencies': module_info.dependencies,
+                    'error': str(module_info.error) if module_info.error else None
+                }
+
+            return {name: cls.get_lifecycle_info(name) for name in cls._modules}
     
     @classmethod
     def clear(cls):
