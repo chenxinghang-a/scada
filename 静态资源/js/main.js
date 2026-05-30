@@ -2,6 +2,12 @@
  * 工业SCADA系统主JavaScript文件
  */
 
+// XSS 安全转义
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 // 全局变量
 const API_BASE = '/api';
 let socket = null;
@@ -571,9 +577,33 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 加载报警状态（含报警条显示）
     updateAlarmCount();
-    
+
     // 定时更新报警（5秒，保持报警条实时）
     setInterval(updateAlarmCount, 5000);
+
+    // 空闲超时 - 15分钟无操作自动登出 (GB/T 33008: 终端锁定)
+    let idleTimer = null;
+    const IDLE_TIMEOUT = 15 * 60 * 1000;  // 15 minutes
+
+    function resetIdleTimer() {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+            // Show warning first
+            if (confirm('会话即将超时，是否继续？')) {
+                resetIdleTimer();
+            } else {
+                logout();
+            }
+        }, IDLE_TIMEOUT);
+    }
+
+    // Reset on user activity
+    ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'].forEach(event => {
+        document.addEventListener(event, resetIdleTimer, { passive: true });
+    });
+
+    // Start timer
+    resetIdleTimer();
 });
 
 /**
@@ -628,8 +658,8 @@ function updateLatestAlarms(alarms) {
     container.innerHTML = alarms.slice(0, 5).map(alarm => `
         <div class="alert alert-${alarm.alarm_level === 'critical' ? 'danger' : 'warning'} py-2 mb-2">
             <small>
-                <strong>${alarm.alarm_message}</strong><br>
-                ${alarm.device_id} | 值: ${alarm.actual_value?.toFixed(2) || '-'}
+                <strong>${escapeHtml(alarm.alarm_message)}</strong><br>
+                ${escapeHtml(alarm.device_id)} | 值: ${escapeHtml(alarm.actual_value?.toFixed(2) || '-')}
             </small>
         </div>
     `).join('');

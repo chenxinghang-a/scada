@@ -331,7 +331,7 @@ def main():
             logger.warning("SocketIO未初始化，使用普通Flask服务器")
             app.run(host=host, port=port, debug=False)
         else:
-            socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+            socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=False)
 
     except KeyboardInterrupt:
         logger.info("系统正在关闭...")

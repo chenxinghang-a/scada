@@ -352,6 +352,12 @@
 
 {% block extra_js %}
 <script>
+// XSS 安全转义
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 // 待执行的操作
 let pendingAction = null;
 
@@ -396,7 +402,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         showConfirm(
-            `确定要向设备 <strong>${deviceId}</strong> 的寄存器地址 <strong>${address}</strong> 写入值 <strong>${value}</strong> 吗？`,
+            `确定要向设备 <strong>${escapeHtml(deviceId)}</strong> 的寄存器地址 <strong>${escapeHtml(address)}</strong> 写入值 <strong>${escapeHtml(value)}</strong> 吗？`,
             () => writeRegister(deviceId, address, value)
         );
     });
@@ -452,7 +458,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         showConfirm(
-            `确定要向设备 <strong>${deviceId}</strong> 的线圈地址 <strong>${address}</strong> 写入 <strong>${value ? 'ON' : 'OFF'}</strong> 吗？`,
+            `确定要向设备 <strong>${escapeHtml(deviceId)}</strong> 的线圈地址 <strong>${escapeHtml(address)}</strong> 写入 <strong>${value ? 'ON' : 'OFF'}</strong> 吗？`,
             () => writeCoil(deviceId, address, value)
         );
     });
@@ -745,7 +751,7 @@ async function batchControlByGroup(action) {
     const groupName = selectedGroup === 'all' ? '所有设备' : `分组"${groupSelect.options[groupSelect.selectedIndex].text}"`;
 
     showConfirm(
-        `确定要${actionText}<strong>${groupName}</strong>吗？`,
+        `确定要${escapeHtml(actionText)}<strong>${escapeHtml(groupName)}</strong>吗？`,
         async () => {
             try {
                 const body = { action };
@@ -843,10 +849,10 @@ async function loadControlLogs() {
         
         tbody.innerHTML = data.logs.map(log => `
             <tr>
-                <td>${log.timestamp || '-'}</td>
-                <td>${log.username || '-'}</td>
-                <td><span class="badge bg-info">${log.action || '-'}</span></td>
-                <td>${log.details || '-'}</td>
+                <td>${escapeHtml(log.timestamp || '-')}</td>
+                <td>${escapeHtml(log.username || '-')}</td>
+                <td><span class="badge bg-info">${escapeHtml(log.action || '-')}</span></td>
+                <td>${escapeHtml(log.details || '-')}</td>
             </tr>
         `).join('');
     } catch (error) {
@@ -949,16 +955,16 @@ function renderInterlocks(rules) {
                 <div class="d-flex justify-content-between align-items-center">
                     <span>
                         <i class="bi ${icon} text-${color} me-1"></i>
-                        <strong>${r.name || id}</strong>
+                        <strong>${escapeHtml(r.name || id)}</strong>
                     </span>
                     <span>
                         ${r.bypassed
-                            ? `<button class="btn btn-sm btn-outline-success py-0" onclick="restoreInterlock('${id}')">恢复</button>`
-                            : `<button class="btn btn-sm btn-outline-warning py-0" onclick="bypassInterlock('${id}')">旁路</button>`
+                            ? `<button class="btn btn-sm btn-outline-success py-0" onclick="restoreInterlock('${escapeHtml(id)}')">恢复</button>`
+                            : `<button class="btn btn-sm btn-outline-warning py-0" onclick="bypassInterlock('${escapeHtml(id)}')">旁路</button>`
                         }
                     </span>
                 </div>
-                <small class="text-muted">${r.description || ''}</small>
+                <small class="text-muted">${escapeHtml(r.description || '')}</small>
             </div>
         `;
     }).join('');

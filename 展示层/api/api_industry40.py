@@ -10,7 +10,6 @@
 """
 
 import logging
-import traceback
 from datetime import datetime
 from flask import Blueprint, jsonify, request, current_app
 
@@ -79,8 +78,8 @@ def get_health_scores():
         logger.debug(f"获取健康评分: {len(scores) if scores else 0} 个设备")
         return success_response(scores if scores else {}, message="获取健康评分成功")
     except Exception as e:
-        logger.error(f"获取健康评分失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取健康评分失败: {str(e)}", 500)
+        logger.error(f"获取健康评分失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/health/<device_id>', methods=['GET'])
@@ -99,8 +98,8 @@ def get_device_health_by_id(device_id):
         logger.debug(f"获取设备 {device_id} 健康评分成功")
         return success_response(result, message=f"获取设备 {device_id} 健康评分成功")
     except Exception as e:
-        logger.error(f"获取设备 {device_id} 健康评分失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取设备健康评分失败: {str(e)}", 500)
+        logger.error(f"获取设备 {device_id} 健康评分失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/maintenance-alerts', methods=['GET'])
@@ -117,8 +116,8 @@ def get_maintenance_alerts():
         logger.debug(f"获取维护建议: {len(alerts) if alerts else 0} 条")
         return success_response(alerts if alerts else [], message="获取维护建议成功")
     except Exception as e:
-        logger.error(f"获取维护建议失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取维护建议失败: {str(e)}", 500)
+        logger.error(f"获取维护建议失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/trend/<device_id>/<register_name>', methods=['GET'])
@@ -134,8 +133,8 @@ def get_trend_data(device_id, register_name):
         logger.debug(f"获取趋势数据: {device_id}/{register_name}")
         return success_response(result, message="获取趋势数据成功")
     except Exception as e:
-        logger.error(f"获取趋势数据失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取趋势数据失败: {str(e)}", 500)
+        logger.error(f"获取趋势数据失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 # ==================== OEE API ====================
@@ -153,8 +152,8 @@ def get_all_oee():
         logger.debug(f"获取所有OEE: {len(result) if result else 0} 个设备")
         return success_response(result if result else {}, message="获取所有设备OEE成功")
     except Exception as e:
-        logger.error(f"获取所有OEE失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取所有OEE失败: {str(e)}", 500)
+        logger.error(f"获取所有OEE失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/oee/<device_id>', methods=['GET'])
@@ -173,8 +172,8 @@ def get_device_oee(device_id):
         logger.debug(f"获取设备 {device_id} OEE成功")
         return success_response(result, message=f"获取设备 {device_id} OEE成功")
     except Exception as e:
-        logger.error(f"获取设备 {device_id} OEE失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取设备OEE失败: {str(e)}", 500)
+        logger.error(f"获取设备 {device_id} OEE失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 # ==================== SPC API ====================
@@ -198,8 +197,8 @@ def get_spc_chart(device_id, register_name):
         logger.debug(f"获取SPC数据: {device_id}/{register_name}")
         return success_response(result, message="获取SPC控制图数据成功")
     except Exception as e:
-        logger.error(f"获取SPC数据失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取SPC数据失败: {str(e)}", 500)
+        logger.error(f"获取SPC数据失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/spc/violations', methods=['GET'])
@@ -217,8 +216,8 @@ def get_spc_violations():
         logger.debug(f"获取SPC判异结果: {len(violations) if violations else 0} 条")
         return success_response(violations if violations else [], message="获取SPC判异结果成功")
     except Exception as e:
-        logger.error(f"获取SPC判异结果失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取SPC判异结果失败: {str(e)}", 500)
+        logger.error(f"获取SPC判异结果失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 # ==================== 能源管理API ====================
@@ -236,8 +235,8 @@ def get_energy_summary():
         logger.debug("获取能耗汇总成功")
         return success_response(result, message="获取能耗汇总成功")
     except Exception as e:
-        logger.error(f"获取能耗汇总失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取能耗汇总失败: {str(e)}", 500)
+        logger.error(f"获取能耗汇总失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/energy/cost', methods=['GET'])
@@ -253,8 +252,8 @@ def get_energy_cost():
         logger.debug("获取电费分时明细成功")
         return success_response(result, message="获取电费分时明细成功")
     except Exception as e:
-        logger.error(f"获取电费分时明细失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取电费分时明细失败: {str(e)}", 500)
+        logger.error(f"获取电费分时明细失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/energy/carbon', methods=['GET'])
@@ -270,8 +269,8 @@ def get_carbon_emission():
         logger.debug("获取碳排放数据成功")
         return success_response(result, message="获取碳排放数据成功")
     except Exception as e:
-        logger.error(f"获取碳排放数据失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取碳排放数据失败: {str(e)}", 500)
+        logger.error(f"获取碳排放数据失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/energy/power', methods=['GET'])
@@ -290,8 +289,8 @@ def get_realtime_power():
         logger.debug(f"获取实时功率: 总功率={result['total_power_kw']}kW")
         return success_response(result, message="获取实时功率成功")
     except Exception as e:
-        logger.error(f"获取实时功率失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取实时功率失败: {str(e)}", 500)
+        logger.error(f"获取实时功率失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 # ==================== 电价配置API ====================
@@ -309,8 +308,8 @@ def get_energy_tariff():
         logger.debug("获取电价配置成功")
         return success_response(result, message="获取电价配置成功")
     except Exception as e:
-        logger.error(f"获取电价配置失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取电价配置失败: {str(e)}", 500)
+        logger.error(f"获取电价配置失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/energy/tariff', methods=['PUT'])
@@ -349,8 +348,8 @@ def update_energy_tariff():
         else:
             return error_response(result.get('message', '更新失败'), 400)
     except Exception as e:
-        logger.error(f"更新电价配置失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"更新电价配置失败: {str(e)}", 500)
+        logger.error(f"更新电价配置失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/energy/anomaly-config', methods=['GET'])
@@ -365,8 +364,8 @@ def get_energy_anomaly_config():
         result = em.get_anomaly_config()
         return success_response(result, message="获取异常检测配置成功")
     except Exception as e:
-        logger.error(f"获取异常检测配置失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取异常检测配置失败: {str(e)}", 500)
+        logger.error(f"获取异常检测配置失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/energy/anomaly-config', methods=['PUT'])
@@ -390,8 +389,8 @@ def update_energy_anomaly_config():
         else:
             return error_response(result.get('message', '更新失败'), 400)
     except Exception as e:
-        logger.error(f"更新异常检测配置失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"更新异常检测配置失败: {str(e)}", 500)
+        logger.error(f"更新异常检测配置失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 # ==================== 边缘决策API ====================
@@ -409,8 +408,8 @@ def get_edge_status():
         logger.debug("获取边缘决策状态成功")
         return success_response(result, message="获取边缘决策状态成功")
     except Exception as e:
-        logger.error(f"获取边缘决策状态失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取边缘决策状态失败: {str(e)}", 500)
+        logger.error(f"获取边缘决策状态失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/edge/rules', methods=['GET'])
@@ -426,8 +425,8 @@ def get_edge_rules():
         logger.debug("获取边缘决策规则成功")
         return success_response(result, message="获取边缘决策规则成功")
     except Exception as e:
-        logger.error(f"获取边缘决策规则失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取边缘决策规则失败: {str(e)}", 500)
+        logger.error(f"获取边缘决策规则失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/edge/log', methods=['GET'])
@@ -444,8 +443,8 @@ def get_edge_log():
         logger.debug(f"获取决策日志: {len(result) if result else 0} 条")
         return success_response(result if result else [], message="获取决策日志成功")
     except Exception as e:
-        logger.error(f"获取决策日志失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取决策日志失败: {str(e)}", 500)
+        logger.error(f"获取决策日志失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 # ==================== 设备状态API ====================
@@ -463,8 +462,8 @@ def get_devices_status():
         logger.debug(f"获取设备状态: {len(result) if result else 0} 个设备")
         return success_response(result if result else {}, message="获取设备运行状态成功")
     except Exception as e:
-        logger.error(f"获取设备状态失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取设备状态失败: {str(e)}", 500)
+        logger.error(f"获取设备状态失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 # ==================== 振动分析API ====================
@@ -482,8 +481,8 @@ def get_vibration_scores():
         logger.debug(f"获取振动评分: {len(scores) if scores else 0} 个设备")
         return success_response(scores if scores else {}, message="获取振动评分成功")
     except Exception as e:
-        logger.error(f"获取振动评分失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取振动评分失败: {str(e)}", 500)
+        logger.error(f"获取振动评分失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/vibration/<device_id>', methods=['GET'])
@@ -502,8 +501,8 @@ def get_device_vibration(device_id):
         logger.debug(f"获取设备 {device_id} 振动评分成功")
         return success_response(result, message=f"获取设备 {device_id} 振动评分成功")
     except Exception as e:
-        logger.error(f"获取设备 {device_id} 振动评分失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取设备振动评分失败: {str(e)}", 500)
+        logger.error(f"获取设备 {device_id} 振动评分失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/vibration/<device_id>/spectrum', methods=['GET'])
@@ -522,8 +521,8 @@ def get_vibration_spectrum(device_id):
         logger.debug(f"获取设备 {device_id} 振动频谱成功")
         return success_response(result, message=f"获取设备 {device_id} 振动频谱成功")
     except Exception as e:
-        logger.error(f"获取设备 {device_id} 振动频谱失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取设备振动频谱失败: {str(e)}", 500)
+        logger.error(f"获取设备 {device_id} 振动频谱失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 @industry40_bp.route('/industry40/vibration/<device_id>/bearing', methods=['GET'])
@@ -543,8 +542,8 @@ def check_bearing_fault(device_id):
         logger.debug(f"设备 {device_id} 轴承故障检测完成")
         return success_response(result, message="轴承故障检测完成")
     except Exception as e:
-        logger.error(f"轴承故障检测失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"轴承故障检测失败: {str(e)}", 500)
+        logger.error(f"轴承故障检测失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
 
 
 # ==================== 工业4.0总览API ====================
@@ -650,5 +649,5 @@ def get_industry40_overview():
         logger.info("工业4.0总览数据获取完成")
         return success_response(result, message="获取工业4.0总览数据成功")
     except Exception as e:
-        logger.error(f"获取工业4.0总览数据失败: {e}\n{traceback.format_exc()}")
-        return error_response(f"获取工业4.0总览数据失败: {str(e)}", 500)
+        logger.error(f"获取工业4.0总览数据失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)

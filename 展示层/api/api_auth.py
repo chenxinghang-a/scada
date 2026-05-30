@@ -65,6 +65,29 @@ def login():
     return jsonify(result), 200
 
 
+@auth_bp.route('/auth/logout', methods=['POST'])
+@jwt_required
+def logout():
+    """服务端登出 - 记录登出时间 (GB/T 33008: 登出记录)"""
+    try:
+        user = getattr(request, 'current_user', {})
+        username = user.get('username', 'unknown')
+
+        # Record logout
+        auth_manager = get_auth_manager()
+        auth_manager.log_operation(
+            username=username,
+            action='logout',
+            target='session',
+            ip_address=request.remote_addr
+        )
+
+        return jsonify({'message': '已登出'})
+    except Exception as e:
+        logger.error(f"登出失败: {e}")
+        return jsonify({'message': '已登出'})
+
+
 @auth_bp.route('/auth/register', methods=['POST'])
 @api_error_handler
 def register():

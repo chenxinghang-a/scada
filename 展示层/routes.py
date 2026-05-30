@@ -87,7 +87,7 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         # 内容安全策略 - 允许CDN资源
         csp_directives = [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com" + (' ' + ' '.join(SecurityConfig.CSP_EXTRA_SCRIPTS) if SecurityConfig.CSP_EXTRA_SCRIPTS else ''),
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com" + (' ' + ' '.join(SecurityConfig.CSP_EXTRA_SCRIPTS) if SecurityConfig.CSP_EXTRA_SCRIPTS else ''),
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net",
             "img-src 'self' data: blob:",

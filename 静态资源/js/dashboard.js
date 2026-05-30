@@ -239,19 +239,19 @@ function updateDeviceGrid(stats) {
             const qualityDot = quality != null
                 ? `<span class="quality-dot" style="background:${getQualityColor(quality)}" title="${getQualityLabel(quality)}"></span>`
                 : '';
-            return `<span class="dev-val"><span class="label">${label}</span> <span class="num" id="dv-${id}-${r.name}">${cached}</span>${qualityDot}</span>`;
+            return `<span class="dev-val"><span class="label">${escapeHtml(label)}</span> <span class="num" id="dv-${escapeHtml(id)}-${escapeHtml(r.name)}">${escapeHtml(cached)}</span>${qualityDot}</span>`;
         }).join('');
 
         // 机械类设备显示启停按钮
         const ctrlBtn = category === 'mechanical' && online
-            ? `<button class="dev-ctrl-btn ${stopped ? 'start' : 'stop'}" onclick="event.stopPropagation();toggleDevice('${id}',${!stopped})" title="${stopped ? '启动' : '停止'}">${stopped ? '▶' : '■'}</button>`
+            ? `<button class="dev-ctrl-btn ${stopped ? 'start' : 'stop'}" onclick="event.stopPropagation();toggleDevice('${escapeHtml(id)}',${!stopped})" title="${stopped ? '启动' : '停止'}">${stopped ? '▶' : '■'}</button>`
             : '';
 
-        return `<div class="dev-card" onclick="selectDevice('${id}')" title="${name}">
+        return `<div class="dev-card" onclick="selectDevice('${escapeHtml(id)}')" title="${escapeHtml(name)}">
             <div class="dev-status ${statusClass}"></div>
             <div class="dev-info">
-                <div class="dev-name">${name} <span class="dev-state-tag ${statusClass}">${statusText}</span></div>
-                <div class="dev-meta">${d.protocol || 'modbus_tcp'} · ${d.host || ''}</div>
+                <div class="dev-name">${escapeHtml(name)} <span class="dev-state-tag ${statusClass}">${statusText}</span></div>
+                <div class="dev-meta">${escapeHtml(d.protocol || 'modbus_tcp')} · ${escapeHtml(d.host || '')}</div>
                 <div class="dev-values">${valStr}</div>
             </div>
             ${ctrlBtn}
@@ -263,7 +263,7 @@ function updateDeviceGrid(stats) {
     if (select && select.children.length <= 1) {
         select.innerHTML = devs.map(d => {
             const id = d.device_id || d.id;
-            return `<option value="${id}" ${id === selectedDeviceId ? 'selected' : ''}>${d.name || id}</option>`;
+            return `<option value="${escapeHtml(id)}" ${id === selectedDeviceId ? 'selected' : ''}>${escapeHtml(d.name || id)}</option>`;
         }).join('');
         select.addEventListener('change', function() {
             selectedDeviceId = this.value;
@@ -375,7 +375,7 @@ function updateAlarmPanel(alarms) {
 
         // 触发次数
         const count = a.trigger_count || 1;
-        const countStr = count > 1 ? `<span class="alarm-count">×${count}</span>` : '';
+        const countStr = count > 1 ? `<span class="alarm-count">&times;${count}</span>` : '';
 
         // 最后触发时间
         const lastTime = a.last_trigger_time
@@ -385,11 +385,11 @@ function updateAlarmPanel(alarms) {
         const acked = a.acknowledged;
 
         return `<div class="alarm-row ${acked ? '' : 'unacked'}">
-            <span class="alarm-prio ${level}">${prioText}</span>
-            <span class="alarm-time">${lastTime}</span>
+            <span class="alarm-prio ${level}">${escapeHtml(prioText)}</span>
+            <span class="alarm-time">${escapeHtml(lastTime)}</span>
             <span class="alarm-device">${escapeHtml(device)}</span>
             <span class="alarm-msg">${escapeHtml(msg)}</span>
-            <span class="alarm-pv">${pv}</span>
+            <span class="alarm-pv">${escapeHtml(pv)}</span>
             ${countStr}
             ${acked ? '' : `<button class="alarm-ack-btn" data-alarm-id="${escapeHtml(a.alarm_id)}" data-device-id="${escapeHtml(a.device_id)}" data-register="${escapeHtml(a.register_name || '')}">确认</button>`}
         </div>`;
@@ -449,12 +449,14 @@ function prependAlarmItem(alarm) {
     const latestVal = alarm.last_value != null ? alarm.last_value : alarm.actual_value;
     const pv = latestVal != null ? `PV:${parseFloat(latestVal).toFixed(1)}` : '';
 
+    const sevClass = ['critical','high','warning','medium','low','info'].includes(alarm.severity || alarm.alarm_level)
+        ? (alarm.severity || alarm.alarm_level) : 'low';
     const html = `<div class="alarm-row unacked" style="border-left: 3px solid ${color};">
-        <span class="alarm-prio ${alarm.severity || alarm.alarm_level || 'low'}">${prioText}</span>
-        <span class="alarm-time">${time}</span>
+        <span class="alarm-prio ${sevClass}">${escapeHtml(prioText)}</span>
+        <span class="alarm-time">${escapeHtml(time)}</span>
         <span class="alarm-device">${escapeHtml(device)}</span>
         <span class="alarm-msg">${escapeHtml(msg)}</span>
-        <span class="alarm-pv">${pv}</span>
+        <span class="alarm-pv">${escapeHtml(pv)}</span>
         <button class="alarm-ack-btn" data-alarm-id="${escapeHtml(alarm.alarm_id || '')}" data-device-id="${escapeHtml(alarm.device_id || '')}" data-register="${escapeHtml(alarm.register_name || '')}">确认</button>
     </div>`;
 

@@ -3,6 +3,12 @@
  * 从 Flask API 拉取数据，ECharts 渲染，WebSocket 实时更新
  */
 
+// ========== XSS 安全转义 ==========
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 // ========== 全局状态 ==========
 let trendChart, oeeChart, energyChart, spcChart, healthChart, deviceStatusChart;
 const dataBuffers = {};
@@ -200,7 +206,7 @@ async function loadDeviceList() {
             if (ids.length > 0) {
                 selectedDeviceId = ids[0];
                 select.innerHTML = ids.map(id =>
-                    `<option value="${id}" ${id === selectedDeviceId ? 'selected' : ''}>${deviceNameCache[id]}</option>`
+                    `<option value="${escapeHtml(id)}" ${id === selectedDeviceId ? 'selected' : ''}>${escapeHtml(deviceNameCache[id])}</option>`
                 ).join('');
                 select.addEventListener('change', function() {
                     selectedDeviceId = this.value;
@@ -420,8 +426,8 @@ function updateAlarmList(alarms) {
         const level = a.alarm_level === 'critical' ? 'critical' : 'warning';
         const time = new Date(a.timestamp).toLocaleTimeString('zh-CN');
         return `<div class="alarm-item ${level}">
-            <div class="alarm-time">${time}</div>
-            <div class="alarm-msg">${a.alarm_message || a.alarm_id} — ${a.device_id}</div>
+            <div class="alarm-time">${escapeHtml(time)}</div>
+            <div class="alarm-msg">${escapeHtml(a.alarm_message || a.alarm_id)} — ${escapeHtml(a.device_id)}</div>
         </div>`;
     }).join('');
 }
