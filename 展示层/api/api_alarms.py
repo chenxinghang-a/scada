@@ -134,6 +134,8 @@ def alarm_output_acknowledge():
 def alarm_output_reset():
     """复位 — 全部清零，恢复绿灯正常状态"""
     alarm_manager = current_app.alarm_manager
+    if not alarm_manager.alarm_output:
+        return jsonify({'success': False, 'message': '声光报警输出未启用'}), 400
     alarm_manager.reset_alarm()
     get_auth_manager().log_operation(
         request.current_user['username'], 'alarm_reset', '报警输出复位')
@@ -141,9 +143,9 @@ def alarm_output_reset():
 
 
 @alarms_bp.route('/alarm-output/manual', methods=['POST'])
+@api_error_handler
 @_require_auth
 @_require_engineer
-@api_error_handler
 def alarm_output_manual():
     """手动控制报警灯和蜂鸣器（调试/巡检用）"""
     data = request.get_json() or {}

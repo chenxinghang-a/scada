@@ -99,12 +99,12 @@ def get_config():
         return jsonify({'error': '配置文件不存在'}), 404
     # 移除敏感字段，防止密钥泄露
     sensitive_keys = {'secret_key', 'jwt_secret', 'password', 'token', 'api_key'}
-    def _sanitize(obj, depth=0):
+    def _sanitize(obj):
         if isinstance(obj, dict):
-            return {k: ('***' if k.lower() in sensitive_keys and depth > 0 else _sanitize(v, depth+1))
+            return {k: ('***' if k.lower() in sensitive_keys else _sanitize(v))
                     for k, v in obj.items()}
         elif isinstance(obj, list):
-            return [_sanitize(i, depth+1) for i in obj]
+            return [_sanitize(i) for i in obj]
         return obj
     return jsonify({'config': _sanitize(config)})
 

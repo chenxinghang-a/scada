@@ -245,8 +245,10 @@ class Database:
             cursor = conn.cursor()
 
             cursor.execute('''
-                INSERT OR REPLACE INTO realtime_data (device_id, register_name, value, unit, timestamp)
+                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(device_id, register_name) DO UPDATE SET
+                    value = excluded.value, unit = excluded.unit, timestamp = excluded.timestamp
             ''', (device_id, register_name, value, unit, timestamp))
 
             cursor.execute('''
@@ -278,10 +280,12 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # realtime_data: 批量UPSERT
+            # realtime_data: 批量UPSERT（保留稳定id）
             cursor.executemany('''
-                INSERT OR REPLACE INTO realtime_data (device_id, register_name, value, unit, timestamp)
+                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(device_id, register_name) DO UPDATE SET
+                    value = excluded.value, unit = excluded.unit, timestamp = excluded.timestamp
             ''', valid_rows)
 
             # history_data: 批量INSERT
@@ -669,16 +673,11 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 清理实时数据
-            cursor.execute('''
-                DELETE FROM realtime_data 
-                WHERE timestamp < ?
-            ''', (cutoff_date,))
+            # realtime_data 是"最新值"缓存，不按时间清理（仅在delete_device_data时清理）
+            realtime_deleted = 0
 
-            realtime_deleted = cursor.rowcount
-
-            # 清理历史数据（保留更长时间）
-            history_cutoff = datetime.now() - timedelta(days=retention_days * 12)
+            # 清理历史数据
+            history_cutoff = datetime.now() - timedelta(days=retention_days)
             cursor.execute('''
                 DELETE FROM history_data 
                 WHERE timestamp < ?
@@ -782,16 +781,10 @@ class Database:
 
             deleted_rows = cursor.rowcount
 
-            # 3. 清理旧的实时数据（只保留最近24小时）
-            realtime_cutoff = datetime.now() - timedelta(hours=24)
-            cursor.execute('''
-                DELETE FROM realtime_data 
-                WHERE timestamp < ?
-            ''', (realtime_cutoff,))
+            # 3. realtime_data 是"最新值"缓存，不按时间清理
+            realtime_deleted = 0
 
-            realtime_deleted = cursor.rowcount
-
-            logger.info(f"数据归档完成: 归档 {archived_rows} 条, 删除历史 {deleted_rows} 条, 删除实时 {realtime_deleted} 条")
+            logger.info(f"数据归档完成: 归档 {archived_rows} 条, 删除历史 {deleted_rows} 条")
 
             return {
                 'archived': archived_rows,
@@ -831,6 +824,7 @@ class Database:
         """
         try:
             with self.get_connection() as conn:
+                conn.commit()  # 提交任何待处理事务，VACUUM不能在事务内执行
                 conn.execute('VACUUM')
             logger.info("数据库压缩完成")
             return True
@@ -899,8 +893,9 @@ class Database:
             backup_file = backup_path / f"{db_name}_{timestamp}.db"
 
             # 使用SQLite的VACUUM INTO进行热备份
+            safe_path = str(backup_file).replace("'", "''")
             with self.get_connection() as conn:
-                conn.execute(f"VACUUM INTO '{backup_file}'")
+                conn.execute(f"VACUUM INTO '{safe_path}'")
 
             logger.info(f"数据库备份成功: {backup_file}")
 

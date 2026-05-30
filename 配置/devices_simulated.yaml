@@ -793,3 +793,1057 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 台达电子
+- collection_interval: 5
+  description: 暖通空调空气处理机组 — 送风/回风/冷冻水
+  device_model: PXC36
+  enabled: true
+  host: 192.168.1.110
+  id: hvac_ahu_01
+  name: 西门子PXC36暖通控制器
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 送风温度
+    length: 2
+    name: supply_air_temp
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 回风温度
+    length: 2
+    name: return_air_temp
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 室外温度
+    length: 2
+    name: outdoor_temp
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 送风湿度
+    length: 2
+    name: supply_air_humidity
+    scale: 1.0
+    unit: '%'
+  - address: 8
+    data_type: float32
+    description: 回风湿度
+    length: 2
+    name: return_air_humidity
+    scale: 1.0
+    unit: '%'
+  - address: 10
+    data_type: float32
+    description: 冷冻水进水温度
+    length: 2
+    name: chilled_water_temp_in
+    scale: 1.0
+    unit: °C
+  - address: 12
+    data_type: float32
+    description: 冷冻水出水温度
+    length: 2
+    name: chilled_water_temp_out
+    scale: 1.0
+    unit: °C
+  - address: 14
+    data_type: float32
+    description: 冷冻水流量
+    length: 2
+    name: chilled_water_flow
+    scale: 1.0
+    unit: m³/h
+  - address: 16
+    data_type: float32
+    description: 风机转速
+    length: 2
+    name: fan_speed
+    scale: 1.0
+    unit: RPM
+  - address: 18
+    data_type: float32
+    description: 风管静压
+    length: 2
+    name: duct_static_pressure
+    scale: 1.0
+    unit: Pa
+  - address: 20
+    data_type: float32
+    description: 风阀开度
+    length: 2
+    name: damper_position
+    scale: 1.0
+    unit: '%'
+  - address: 22
+    data_type: uint16
+    description: AHU状态 0=停机/1=运行/2=故障
+    length: 1
+    name: ahu_status
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 西门子
+- collection_interval: 5
+  description: 螺杆式空气压缩机 — 排气/温度/油温/干燥
+  device_model: GA90+
+  enabled: true
+  host: 192.168.1.111
+  id: compressor_01
+  name: 阿特拉斯GA90+螺杆空压机
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 排气压力
+    length: 2
+    name: discharge_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: 排气温度
+    length: 2
+    name: discharge_temp
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 润滑油温度
+    length: 2
+    name: oil_temperature
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 电机电流
+    length: 2
+    name: motor_current
+    scale: 1.0
+    unit: A
+  - address: 8
+    data_type: float32
+    description: 排气流量
+    length: 2
+    name: air_flow
+    scale: 1.0
+    unit: m³/min
+  - address: 10
+    data_type: float32
+    description: 露点温度
+    length: 2
+    name: dew_point
+    scale: 1.0
+    unit: °C
+  - address: 12
+    data_type: float32
+    description: 储气罐压力
+    length: 2
+    name: tank_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 14
+    data_type: float32
+    description: 累计运行时间
+    length: 2
+    name: running_hours
+    scale: 1.0
+    unit: h
+  - address: 16
+    data_type: uint16
+    description: 空压机状态 0=停机/1=运行/2=加载/3=故障
+    length: 1
+    name: compressor_status
+    scale: 1
+    unit: ''
+  - address: 17
+    data_type: uint16
+    description: 干燥机状态 0=停机/1=运行/2=故障
+    length: 1
+    name: dryer_status
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 阿特拉斯·科普柯
+- collection_interval: 5
+  description: 仓储物流控制 — 出入库/AGV/货架/输送
+  device_model: LOGO! 12/24RCE
+  enabled: true
+  host: 192.168.1.112
+  id: warehouse_plc_01
+  name: 西门子LOGO!仓储PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: uint16
+    description: 入库数量
+    length: 1
+    name: inbound_count
+    scale: 1
+    unit: 件
+  - address: 1
+    data_type: uint16
+    description: 出库数量
+    length: 1
+    name: outbound_count
+    scale: 1
+    unit: 件
+  - address: 2
+    data_type: uint16
+    description: AGV活跃数量
+    length: 1
+    name: agv_count_active
+    scale: 1
+    unit: 台
+  - address: 3
+    data_type: uint16
+    description: AGV充电数量
+    length: 1
+    name: agv_count_charging
+    scale: 1
+    unit: 台
+  - address: 4
+    data_type: float32
+    description: 货架利用率
+    length: 2
+    name: rack_utilization
+    scale: 1.0
+    unit: '%'
+  - address: 6
+    data_type: uint16
+    description: 输送线状态 0=停机/1=运行/2=故障
+    length: 1
+    name: conveyor_status
+    scale: 1
+    unit: ''
+  - address: 7
+    data_type: uint16
+    description: 仓库门状态 0=关闭/1=开启
+    length: 1
+    name: door_status
+    scale: 1
+    unit: ''
+  - address: 8
+    data_type: float32
+    description: 仓库温度
+    length: 2
+    name: warehouse_temp
+    scale: 1.0
+    unit: °C
+  - address: 10
+    data_type: float32
+    description: 仓库湿度
+    length: 2
+    name: warehouse_humidity
+    scale: 1.0
+    unit: '%'
+  slave_id: 1
+  vendor: 西门子
+- collection_interval: 30
+  description: 烟气连续排放监测 — SO2/NOx/颗粒物/含氧量
+  device_model: SCS-900
+  enabled: true
+  host: 192.168.1.113
+  id: cems_01
+  name: 雪迪龙SCS-900烟气CEMS
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 二氧化硫浓度
+    length: 2
+    name: so2_concentration
+    scale: 1.0
+    unit: mg/m³
+  - address: 2
+    data_type: float32
+    description: 氮氧化物浓度
+    length: 2
+    name: nox_concentration
+    scale: 1.0
+    unit: mg/m³
+  - address: 4
+    data_type: float32
+    description: 颗粒物浓度
+    length: 2
+    name: particulate_matter
+    scale: 1.0
+    unit: mg/m³
+  - address: 6
+    data_type: float32
+    description: 含氧量
+    length: 2
+    name: oxygen_content
+    scale: 1.0
+    unit: '%'
+  - address: 8
+    data_type: float32
+    description: 烟气温度
+    length: 2
+    name: flue_gas_temp
+    scale: 1.0
+    unit: °C
+  - address: 10
+    data_type: float32
+    description: 烟气流速
+    length: 2
+    name: flue_gas_velocity
+    scale: 1.0
+    unit: m/s
+  - address: 12
+    data_type: float32
+    description: 烟气湿度
+    length: 2
+    name: flue_gas_moisture
+    scale: 1.0
+    unit: '%'
+  - address: 14
+    data_type: float32
+    description: 烟道静压
+    length: 2
+    name: stack_pressure
+    scale: 1.0
+    unit: Pa
+  - address: 16
+    data_type: float32
+    description: 二氧化氮浓度
+    length: 2
+    name: no2_concentration
+    scale: 1.0
+    unit: mg/m³
+  - address: 18
+    data_type: uint16
+    description: CEMS状态 0=停机/1=正常/2=标定/3=故障
+    length: 1
+    name: cems_status
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 雪迪龙
+- collection_interval: 5
+  description: 火灾自动报警系统 — 烟感/温感/手报/气体/喷淋
+  device_model: JB-QBL-QM300
+  enabled: true
+  host: 192.168.1.114
+  id: fire_alarm_01
+  name: 海湾JB-QBL-QM300火灾报警
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: uint16
+    description: 烟感报警 0=正常/1=报警
+    length: 1
+    name: smoke_detector_alarm
+    scale: 1
+    unit: ''
+  - address: 1
+    data_type: uint16
+    description: 温感报警 0=正常/1=报警
+    length: 1
+    name: heat_detector_alarm
+    scale: 1
+    unit: ''
+  - address: 2
+    data_type: uint16
+    description: 手动报警 0=正常/1=报警
+    length: 1
+    name: manual_alarm
+    scale: 1
+    unit: ''
+  - address: 3
+    data_type: uint16
+    description: 气体探测报警 0=正常/1=报警
+    length: 1
+    name: gas_detector_alarm
+    scale: 1
+    unit: ''
+  - address: 4
+    data_type: uint16
+    description: 喷淋系统状态 0=正常/1=动作/2=故障
+    length: 1
+    name: sprinkler_status
+    scale: 1
+    unit: ''
+  - address: 5
+    data_type: uint16
+    description: 防火门状态 0=关闭/1=开启/2=故障
+    length: 1
+    name: fire_door_status
+    scale: 1
+    unit: ''
+  - address: 6
+    data_type: uint16
+    description: 疏散指示状态 0=正常/1=故障
+    length: 1
+    name: evacuation_status
+    scale: 1
+    unit: ''
+  - address: 7
+    data_type: uint16
+    description: 系统故障 0=正常/1=故障
+    length: 1
+    name: system_fault
+    scale: 1
+    unit: ''
+  - address: 8
+    data_type: uint16
+    description: 主机模式 0=自动/1=手动/2=联动
+    length: 1
+    name: panel_mode
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 海湾安全技术
+- collection_interval: 5
+  description: 中控DCS系统 — 反应釜群/进料/出料/冷却
+  device_model: JX-300XP
+  enabled: true
+  endpoint: opc.tcp://192.168.1.115:4840
+  id: dcs_supcon_01
+  name: 中控JX-300XP DCS
+  nodes:
+  - description: 反应釜1温度
+    name: reactor1_temp
+    node_id: ns=3;s=Reactor1.Temp
+    unit: °C
+  - description: 反应釜1压力
+    name: reactor1_pressure
+    node_id: ns=3;s=Reactor1.Pressure
+    unit: MPa
+  - description: 反应釜1液位
+    name: reactor1_level
+    node_id: ns=3;s=Reactor1.Level
+    unit: mm
+  - description: 反应釜1搅拌转速
+    name: reactor1_speed
+    node_id: ns=3;s=Reactor1.Speed
+    unit: RPM
+  - description: 反应釜2温度
+    name: reactor2_temp
+    node_id: ns=3;s=Reactor2.Temp
+    unit: °C
+  - description: 反应釜2压力
+    name: reactor2_pressure
+    node_id: ns=3;s=Reactor2.Pressure
+    unit: MPa
+  - description: 反应釜2液位
+    name: reactor2_level
+    node_id: ns=3;s=Reactor2.Level
+    unit: mm
+  - description: 进料阀1开度
+    name: feed_valve_1
+    node_id: ns=3;s=Valve.Feed1
+    unit: '%'
+  - description: 进料阀2开度
+    name: feed_valve_2
+    node_id: ns=3;s=Valve.Feed2
+    unit: '%'
+  - description: 出料阀开度
+    name: discharge_valve
+    node_id: ns=3;s=Valve.Discharge
+    unit: '%'
+  - description: 冷却阀开度
+    name: cooling_valve
+    node_id: ns=3;s=Valve.Cooling
+    unit: '%'
+  - description: 反应釜状态 0=停止/1=运行/2=故障
+    name: reactor_status
+    node_id: ns=3;s=Reactor.Status
+    unit: ''
+  protocol: opcua
+  security_mode: None
+  vendor: 中控技术
+- collection_interval: 5
+  description: 温度变送器 — 反应釜/管路/排气多通道
+  device_model: YTA610
+  enabled: true
+  host: 192.168.1.115
+  id: temp_xmitter_01
+  name: 横河YTA610温度变送器
+  port: 502
+  protocol: modbus_rtu
+  registers:
+  - address: 0
+    data_type: float32
+    description: 反应釜1热电偶温度
+    length: 2
+    name: tc_reactor_1
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 反应釜2热电偶温度
+    length: 2
+    name: tc_reactor_2
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 管路1热电阻温度
+    length: 2
+    name: rtd_pipeline_1
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 管路2热电阻温度
+    length: 2
+    name: rtd_pipeline_2
+    scale: 1.0
+    unit: °C
+  - address: 8
+    data_type: float32
+    description: 排气热电偶温度
+    length: 2
+    name: tc_exhaust_1
+    scale: 1.0
+    unit: °C
+  - address: 10
+    data_type: uint16
+    description: 传感器健康状态 0=正常/1=断线/2=超限
+    length: 1
+    name: sensor_health
+    scale: 1
+    unit: ''
+  - address: 11
+    data_type: uint16
+    description: 通讯错误计数
+    length: 1
+    name: comm_error_count
+    scale: 1
+    unit: 次
+  serial_port: COM4
+  slave_id: 1
+  vendor: 横河电机
+- collection_interval: 5
+  description: 压力变送器 — 蒸汽/供水/液压/气动/真空
+  device_model: 3051S
+  enabled: true
+  host: 192.168.1.115
+  id: pressure_xmitter_01
+  name: 罗斯蒙特3051S压力变送器
+  port: 502
+  protocol: modbus_rtu
+  registers:
+  - address: 0
+    data_type: float32
+    description: 蒸汽总管压力
+    length: 2
+    name: pressure_steam_header
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: 供水压力
+    length: 2
+    name: pressure_water_supply
+    scale: 1.0
+    unit: MPa
+  - address: 4
+    data_type: float32
+    description: 液压系统压力
+    length: 2
+    name: pressure_hydraulic
+    scale: 1.0
+    unit: MPa
+  - address: 6
+    data_type: float32
+    description: 气动系统压力
+    length: 2
+    name: pressure_pneumatic
+    scale: 1.0
+    unit: MPa
+  - address: 8
+    data_type: float32
+    description: 真空系统压力
+    length: 2
+    name: pressure_vacuum
+    scale: 1.0
+    unit: kPa
+  - address: 10
+    data_type: uint16
+    description: 变送器状态 0=正常/1=故障/2=标定中
+    length: 1
+    name: xmitter_status
+    scale: 1
+    unit: ''
+  serial_port: COM5
+  slave_id: 1
+  vendor: Emerson (艾默生)
+- collection_interval: 5
+  description: 电磁流量计 — 原料/产品/冷却水
+  device_model: Promag W 400
+  enabled: true
+  host: 192.168.1.115
+  id: flowmeter_01
+  name: E+H Promag W电磁流量计
+  port: 502
+  protocol: modbus_rtu
+  registers:
+  - address: 0
+    data_type: float32
+    description: 原料流量
+    length: 2
+    name: flow_raw_material
+    scale: 1.0
+    unit: m³/h
+  - address: 2
+    data_type: float32
+    description: 产品流量
+    length: 2
+    name: flow_product
+    scale: 1.0
+    unit: m³/h
+  - address: 4
+    data_type: float32
+    description: 冷却水流量
+    length: 2
+    name: flow_cooling
+    scale: 1.0
+    unit: m³/h
+  - address: 6
+    data_type: float32
+    description: 原料累计流量
+    length: 2
+    name: totalizer_raw
+    scale: 1.0
+    unit: m³
+  - address: 8
+    data_type: float32
+    description: 产品累计流量
+    length: 2
+    name: totalizer_product
+    scale: 1.0
+    unit: m³
+  - address: 10
+    data_type: uint16
+    description: 流量计状态 0=正常/1=空管/2=故障
+    length: 1
+    name: meter_status
+    scale: 1
+    unit: ''
+  - address: 11
+    data_type: float32
+    description: 电导率
+    length: 2
+    name: conductivity
+    scale: 1.0
+    unit: μS/cm
+  serial_port: COM6
+  slave_id: 1
+  vendor: Endress+Hauser (E+H)
+- collection_interval: 1
+  description: 工业机器人 — 六轴关节/循环/抓手/扭矩
+  device_model: M-20iD/25
+  enabled: true
+  endpoint: opc.tcp://192.168.1.116:4840
+  id: robot_fanuc_01
+  name: FANUC M-20iD/25机器人
+  nodes:
+  - description: 关节1角度
+    name: joint_1
+    node_id: ns=3;s=Joint1
+    unit: °
+  - description: 关节2角度
+    name: joint_2
+    node_id: ns=3;s=Joint2
+    unit: °
+  - description: 关节3角度
+    name: joint_3
+    node_id: ns=3;s=Joint3
+    unit: °
+  - description: 关节4角度
+    name: joint_4
+    node_id: ns=3;s=Joint4
+    unit: °
+  - description: 关节5角度
+    name: joint_5
+    node_id: ns=3;s=Joint5
+    unit: °
+  - description: 关节6角度
+    name: joint_6
+    node_id: ns=3;s=Joint6
+    unit: °
+  - description: 循环时间
+    name: cycle_time
+    node_id: ns=3;s=CycleTime
+    unit: s
+  - description: 当前程序号
+    name: program_number
+    node_id: ns=3;s=ProgramNumber
+    unit: ''
+  - description: 机器人状态 0=停止/1=运行/2=报警
+    name: robot_status
+    node_id: ns=3;s=RobotStatus
+    unit: ''
+  - description: 报警代码
+    name: alarm_code
+    node_id: ns=3;s=AlarmCode
+    unit: ''
+  - description: 抓手状态 0=松开/1=夹紧
+    name: gripper_state
+    node_id: ns=3;s=GripperState
+    unit: ''
+  - description: 关节1扭矩
+    name: torque_j1
+    node_id: ns=3;s=Torque.J1
+    unit: Nm
+  protocol: opcua
+  security_mode: None
+  vendor: FANUC (发那科)
+- collection_interval: 5
+  description: 加工中心 — 主轴/进给/刀具/计数
+  device_model: i-300S
+  enabled: true
+  base_url: http://192.168.1.117:8080
+  id: cnc_mazak_01
+  name: 马扎克i-300S加工中心
+  endpoints:
+  - json_path: data.spindle_speed
+    method: GET
+    name: spindle_speed
+    path: /api/machine/spindle_speed
+    unit: RPM
+  - json_path: data.spindle_load
+    method: GET
+    name: spindle_load
+    path: /api/machine/spindle_load
+    unit: '%'
+  - json_path: data.feed_override
+    method: GET
+    name: feed_override
+    path: /api/machine/feed_override
+    unit: '%'
+  - json_path: data.program_number
+    method: GET
+    name: program_number
+    path: /api/machine/program_number
+    unit: ''
+  - json_path: data.program_runtime
+    method: GET
+    name: program_runtime
+    path: /api/machine/program_runtime
+    unit: s
+  - json_path: data.current_tool
+    method: GET
+    name: current_tool
+    path: /api/machine/current_tool
+    unit: ''
+  - json_path: data.tool_life
+    method: GET
+    name: tool_life
+    path: /api/machine/tool_life
+    unit: '%'
+  - json_path: data.part_count
+    method: GET
+    name: part_count
+    path: /api/machine/part_count
+    unit: 件
+  - json_path: data.alarm_code
+    method: GET
+    name: alarm_code
+    path: /api/machine/alarm_code
+    unit: ''
+  - json_path: data.machine_mode
+    method: GET
+    name: machine_mode
+    path: /api/machine/machine_mode
+    unit: ''
+  poll_interval: 5
+  protocol: rest
+  vendor: 马扎克 (Mazak)
+- collection_interval: 5
+  description: 电动机软启动器 — 电流/电压/功率/功率因数
+  device_model: PSTX470
+  enabled: true
+  host: 192.168.1.118
+  id: soft_starter_01
+  name: ABB PSTX470软启动器
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 电机电流
+    length: 2
+    name: motor_current
+    scale: 1.0
+    unit: A
+  - address: 2
+    data_type: float32
+    description: 电机电压
+    length: 2
+    name: motor_voltage
+    scale: 1.0
+    unit: V
+  - address: 4
+    data_type: float32
+    description: 电机功率
+    length: 2
+    name: motor_power
+    scale: 1.0
+    unit: kW
+  - address: 6
+    data_type: float32
+    description: 功率因数
+    length: 2
+    name: motor_power_factor
+    scale: 1.0
+    unit: ''
+  - address: 8
+    data_type: uint16
+    description: 启动次数
+    length: 1
+    name: start_count
+    scale: 1
+    unit: 次
+  - address: 9
+    data_type: float32
+    description: 累计运行时间
+    length: 2
+    name: running_hours
+    scale: 1.0
+    unit: h
+  - address: 11
+    data_type: uint16
+    description: 软启状态 0=待机/1=运行/2=故障
+    length: 1
+    name: starter_status
+    scale: 1
+    unit: ''
+  - address: 12
+    data_type: uint16
+    description: 故障代码
+    length: 1
+    name: fault_code
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: ABB
+- collection_interval: 5
+  description: 多功能电力仪表 — 电能/功率/需量/电压/电流
+  device_model: APM810
+  enabled: true
+  host: 192.168.1.119
+  id: power_meter_sub_01
+  name: 安科瑞APM810多功能电表
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 正向有功电能
+    length: 2
+    name: active_energy_import
+    scale: 1.0
+    unit: kWh
+  - address: 2
+    data_type: float32
+    description: 总有功功率
+    length: 2
+    name: active_power_total
+    scale: 1.0
+    unit: kW
+  - address: 4
+    data_type: float32
+    description: 总无功功率
+    length: 2
+    name: reactive_power_total
+    scale: 1.0
+    unit: kvar
+  - address: 6
+    data_type: float32
+    description: 总视在功率
+    length: 2
+    name: apparent_power_total
+    scale: 1.0
+    unit: kVA
+  - address: 8
+    data_type: float32
+    description: 需量功率
+    length: 2
+    name: demand_power
+    scale: 1.0
+    unit: kW
+  - address: 10
+    data_type: float32
+    description: 总功率因数
+    length: 2
+    name: power_factor_total
+    scale: 1.0
+    unit: ''
+  - address: 12
+    data_type: float32
+    description: 三相电压平均值
+    length: 2
+    name: voltage_ln_avg
+    scale: 1.0
+    unit: V
+  - address: 14
+    data_type: float32
+    description: 三相电流平均值
+    length: 2
+    name: current_avg
+    scale: 1.0
+    unit: A
+  - address: 16
+    data_type: float32
+    description: 今日用电量
+    length: 2
+    name: energy_today
+    scale: 1.0
+    unit: kWh
+  slave_id: 1
+  vendor: 安科瑞
+- collection_interval: 5
+  description: 不间断电源 — 输入/输出/电池/负载
+  device_model: Smart-UPS 3000
+  enabled: true
+  host: 192.168.1.120
+  id: ups_apc_01
+  name: APC Smart-UPS 3000
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 输入电压
+    length: 2
+    name: input_voltage
+    scale: 1.0
+    unit: V
+  - address: 2
+    data_type: float32
+    description: 输出电压
+    length: 2
+    name: output_voltage
+    scale: 1.0
+    unit: V
+  - address: 4
+    data_type: float32
+    description: 输出负载率
+    length: 2
+    name: output_load
+    scale: 1.0
+    unit: '%'
+  - address: 6
+    data_type: float32
+    description: 电池电压
+    length: 2
+    name: battery_voltage
+    scale: 1.0
+    unit: V
+  - address: 8
+    data_type: float32
+    description: 电池容量
+    length: 2
+    name: battery_capacity
+    scale: 1.0
+    unit: '%'
+  - address: 10
+    data_type: float32
+    description: 电池温度
+    length: 2
+    name: battery_temp
+    scale: 1.0
+    unit: °C
+  - address: 12
+    data_type: float32
+    description: 电池剩余时间
+    length: 2
+    name: battery_runtime
+    scale: 1.0
+    unit: min
+  - address: 14
+    data_type: uint16
+    description: UPS状态 0=正常/1=电池供电/2=旁路/3=故障
+    length: 1
+    name: ups_status
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: APC (施耐德)
+- collection_interval: 5
+  description: 焊接机器人 — 电流/电压/送丝/速度/气流量
+  device_model: TM-1800WG
+  enabled: true
+  host: 192.168.1.121
+  id: welder_01
+  name: 松下TM-1800WG焊接机器人
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 焊接电流
+    length: 2
+    name: welding_current
+    scale: 1.0
+    unit: A
+  - address: 2
+    data_type: float32
+    description: 焊接电压
+    length: 2
+    name: welding_voltage
+    scale: 1.0
+    unit: V
+  - address: 4
+    data_type: float32
+    description: 送丝速度
+    length: 2
+    name: wire_feed_speed
+    scale: 1.0
+    unit: m/min
+  - address: 6
+    data_type: float32
+    description: 焊接速度
+    length: 2
+    name: welding_speed
+    scale: 1.0
+    unit: mm/min
+  - address: 8
+    data_type: float32
+    description: 保护气流量
+    length: 2
+    name: gas_flow
+    scale: 1.0
+    unit: L/min
+  - address: 10
+    data_type: float32
+    description: 焊枪温度
+    length: 2
+    name: torch_temperature
+    scale: 1.0
+    unit: °C
+  - address: 12
+    data_type: uint16
+    description: 焊缝计数
+    length: 1
+    name: weld_count
+    scale: 1
+    unit: 条
+  - address: 13
+    data_type: uint16
+    description: 缺陷计数
+    length: 1
+    name: defect_count
+    scale: 1
+    unit: 个
+  - address: 14
+    data_type: uint16
+    description: 焊机状态 0=待机/1=焊接/2=故障
+    length: 1
+    name: welder_status
+    scale: 1
+    unit: ''
+  slave_id: 1
+  vendor: 松下焊接 (Panasonic)

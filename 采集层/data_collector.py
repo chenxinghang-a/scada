@@ -170,6 +170,8 @@ class DiskBackedQueue:
                             if item.get('value') is not None:
                                 self._queue.put_nowait(item)
                                 recovered += 1
+                            else:
+                                logger.warning(f"磁盘恢复: 跳过无value字段的记录 keys={list(item.keys())}")
                         except json.JSONDecodeError:
                             continue  # 跳过损坏行，继续恢复后续数据
                         except queue.Full:
@@ -299,8 +301,12 @@ class DataCollector:
         logger.info(f"数据采集器已启动，共 {len(devices)} 个设备 ({summary})")
 
     def stop(self):
-        """停止数据采集（安全排空队列）"""
+        """停止数据采集（安全排空队列并入库）"""
         self.running = False
+
+        # 等待处理线程结束
+        if self.process_thread and self.process_thread.is_alive():
+            self.process_thread.join(timeout=10)
 
         # 线程安全地取消所有定时器
         with self._tasks_lock:
@@ -308,16 +314,19 @@ class DataCollector:
                 timer.cancel()
             self.tasks.clear()
 
-        # 排空数据队列
-        drained = 0
+        # 排空剩余数据并入库（不丢弃）
+        remaining = []
         while not self.data_queue.empty():
             try:
-                self.data_queue.get_nowait()
-                drained += 1
+                remaining.append(self.data_queue.get_nowait())
             except queue.Empty:
                 break
-        if drained > 0:
-            logger.info(f"排空数据队列: {drained} 条数据已丢弃")
+        if remaining:
+            try:
+                self.database.insert_data_batch(remaining)
+                logger.info(f"关闭前写入 {len(remaining)} 条剩余数据")
+            except Exception as e:
+                logger.error(f"关闭前写入剩余数据失败: {e}")
 
         # 正常关闭，清除磁盘持久化文件
         self.data_queue.clear_persistence()
@@ -361,6 +370,12 @@ class DataCollector:
         if timer:
             timer.cancel()
             logger.info(f"已停止设备 {device_id} 的采集任务")
+        # 清理追踪数据，防止内存泄漏
+        prefix = f"{device_id}:"
+        stale_keys = [k for k in self._last_values if k.startswith(prefix)]
+        for k in stale_keys:
+            self._last_values.pop(k, None)
+            self._last_times.pop(k, None)
 
     def _setup_push_device(self, device_id: str, device_config: dict[str, Any]):
         """设置推送型设备（OPC UA / MQTT）"""
@@ -817,9 +832,6 @@ class DataCollector:
 
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
                 self.database.insert_data_batch(batch)
-                # 批量入库成功，清空持久化文件防崩溃恢复重复
-                if hasattr(self.data_queue, 'clear_persistence'):
-                    self.data_queue.clear_persistence()
 
                 # === 报警检查（每条都要检查） ===
                 if self.alarm_manager:
@@ -855,8 +867,14 @@ class DataCollector:
                     try:
                         if not intel_queue.full():
                             intel_queue.put_nowait(data)
+                        else:
+                            logger.warning(f"智能分发队列已满({intel_queue.qsize()}), 丢弃数据: device={data.get('device_id')}, reg={data.get('register_name')}")
                     except Exception as e:
                         logger.error(f"智能分发异常: {e}")
+
+                # === 所有处理完成后，清除持久化文件防崩溃恢复重复 ===
+                if hasattr(self.data_queue, 'clear_persistence'):
+                    self.data_queue.clear_persistence()
 
                 with self._stats_lock:
                     self.stats['queue_size'] = self.data_queue.qsize()

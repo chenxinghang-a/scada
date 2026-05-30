@@ -94,6 +94,12 @@ class AuthManager:
             except Exception:
                 pass  # 列已存在
 
+            # 为已有表添加 password_changed_at 列（GB/T 35718: 密码变更时间戳）
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN password_changed_at DATETIME')
+            except Exception:
+                pass  # 列已存在
+
             # 创建操作日志表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS operation_logs (
@@ -247,7 +253,7 @@ class AuthManager:
         # 验证密码
         if not bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
             # 增加失败次数
-            attempts = user['login_attempts'] + 1
+            attempts = (user['login_attempts'] or 0) + 1
             locked_until = None
             if attempts >= 5:
                 locked_until = (datetime.now() + timedelta(minutes=30)).isoformat()
@@ -287,6 +293,7 @@ class AuthManager:
                 'success': True,
                 'status': 'must_change_password',
                 'token': token,
+                'refresh_token': refresh_token,
                 'message': '首次登录请修改密码',
                 'user': {
                     'username': user['username'],
@@ -434,6 +441,16 @@ class AuthManager:
             if payload.get('type') != 'refresh':
                 return None
 
+            # 检查黑名单 (GB/T 35718)
+            jti = payload.get('jti')
+            if jti:
+                with self.database.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT 1 FROM jwt_blacklist WHERE token_jti = ?', (jti,))
+                    if cursor.fetchone():
+                        logger.warning(f"刷新令牌已被撤销: jti={jti}")
+                        return None
+
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
@@ -443,6 +460,19 @@ class AuthManager:
 
             if not user:
                 return None
+
+            # 检查密码是否在令牌签发后被修改（BUG 3修复）
+            user = dict(user)
+            token_iat = payload.get('iat', 0)
+            password_changed = user.get('password_changed_at')
+            if password_changed:
+                try:
+                    pwd_time = datetime.fromisoformat(password_changed).timestamp()
+                    if pwd_time > token_iat:
+                        logger.warning(f"密码已变更，刷新令牌失效: user={user['username']}")
+                        return None
+                except (ValueError, TypeError):
+                    pass
 
             user = dict(user)
             new_token = self._generate_token(user)
@@ -490,12 +520,13 @@ class AuthManager:
 
         new_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
 
+        now = datetime.now()
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                UPDATE users SET password_hash = ?, updated_at = ?
+                UPDATE users SET password_hash = ?, updated_at = ?, password_changed_at = ?
                 WHERE username = ?
-            ''', (new_hash.decode('utf-8'), datetime.now(), username))
+            ''', (new_hash.decode('utf-8'), now, now.isoformat(), username))
 
         # GB/T 35718: 密码修改后撤销该用户的所有活跃令牌
         self._blacklist_user_tokens(username, 'password_changed')
@@ -542,7 +573,10 @@ class AuthManager:
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
-            user = dict(cursor.fetchone())
+            row = cursor.fetchone()
+            if not row:
+                return {'success': False, 'message': '用户不存在或已被删除'}
+            user = dict(row)
 
         token = self._generate_token(user)
         refresh_token = self._generate_refresh_token(user)
@@ -746,7 +780,7 @@ def role_required(*required_roles):
 
 def permission_required(permission: str):
     """
-    权限装饰器
+    权限装饰器（组合jwt_required）
     要求用户具有指定权限
 
     Usage:
@@ -755,12 +789,11 @@ def permission_required(permission: str):
             ...
     """
     def decorator(f):
+        # 先应用jwt_required进行认证
+        @jwt_required
         @wraps(f)
         def decorated(*args, **kwargs):
-            user = getattr(request, 'current_user', None)
-            if not user:
-                return jsonify({'error': '未认证'}), 401
-
+            user = request.current_user
             if permission not in user.get('permissions', []):
                 return jsonify({
                     'error': '权限不足',

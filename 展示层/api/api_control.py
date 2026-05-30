@@ -103,11 +103,17 @@ def write_coil(device_id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
+    # 统一布尔值转换（字符串 "false"/"0" 也应视为 False）
+    if isinstance(value, str):
+        bool_val = value.lower() not in ('false', '0', 'no', '')
+    else:
+        bool_val = bool(value)
+
     # 工厂级安全校验
     device_control = getattr(current_app, 'device_control', None)
     if device_control:
         result = device_control.write_with_verification(
-            device_id, address, 1 if value else 0, operator)
+            device_id, address, 1 if bool_val else 0, operator)
         if not result['success']:
             return jsonify(result), 403
         return jsonify(result)
@@ -119,7 +125,7 @@ def write_coil(device_id):
     if not client.connected:
         return jsonify({'error': f'设备 {device_id} 未连接'}), 400
 
-    success = client.write_single_coil(address, bool(value))
+    success = client.write_single_coil(address, bool_val)
     if success:
         get_auth_manager().log_operation(
             operator, 'write_coil',
@@ -436,6 +442,10 @@ def batch_control():
                     client.connect()
                 except Exception:
                     pass
+
+            if not getattr(client, 'connected', False):
+                results[device_id] = {'success': False, 'message': '设备连接失败'}
+                continue
 
             success = False
             if action == 'start':
