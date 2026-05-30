@@ -192,24 +192,24 @@ class TestHealthAPIExtended:
         data = resp.get_json()
         assert data['success'] is True
 
-    def test_health_modules(self, client):
+    def test_health_modules(self, client, auth_headers):
         """GET /api/health/modules"""
-        resp = client.get('/api/health/modules')
+        resp = client.get('/api/health/modules', headers=auth_headers)
         assert resp.status_code == 200
 
-    def test_health_checks(self, client):
+    def test_health_checks(self, client, auth_headers):
         """GET /api/health/checks"""
-        resp = client.get('/api/health/checks')
+        resp = client.get('/api/health/checks', headers=auth_headers)
         assert resp.status_code == 200
 
-    def test_available_modules(self, client):
+    def test_available_modules(self, client, auth_headers):
         """GET /api/health/available"""
-        resp = client.get('/api/health/available')
+        resp = client.get('/api/health/available', headers=auth_headers)
         assert resp.status_code == 200
 
-    def test_unavailable_modules(self, client):
+    def test_unavailable_modules(self, client, auth_headers):
         """GET /api/health/unavailable"""
-        resp = client.get('/api/health/unavailable')
+        resp = client.get('/api/health/unavailable', headers=auth_headers)
         assert resp.status_code == 200
 
 

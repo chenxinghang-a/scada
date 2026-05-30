@@ -1021,9 +1021,9 @@ function renderDeviceHealth(data) {
             <div class="d-flex justify-content-between align-items-center py-1 border-bottom">
                 <span>
                     <span class="health-dot ${status}"></span>
-                    ${id}
+                    ${escapeHtml(id)}
                 </span>
-                <small class="text-muted">${status === 'connected' ? `${Math.round(h.avg_response_ms || 0)}ms` : status}</small>
+                <small class="text-muted">${status === 'connected' ? `${Math.round(h.avg_response_ms || 0)}ms` : escapeHtml(status)}</small>
             </div>
         `;
     }).join('');

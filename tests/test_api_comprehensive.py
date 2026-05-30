@@ -638,14 +638,14 @@ class TestIndustry40APIComprehensive:
 
 class TestHealthAPIComprehensive:
 
-    def test_health_module_not_found(self, client):
+    def test_health_module_not_found(self, client, auth_headers):
         """GET /api/health/modules/<name> 未注册模块"""
-        resp = client.get('/api/health/modules/nonexistent_module')
+        resp = client.get('/api/health/modules/nonexistent_module', headers=auth_headers)
         assert resp.status_code in (200, 404)
 
-    def test_health_check_not_found(self, client):
+    def test_health_check_not_found(self, client, auth_headers):
         """GET /api/health/checks/<name> 未注册检查"""
-        resp = client.get('/api/health/checks/nonexistent_check')
+        resp = client.get('/api/health/checks/nonexistent_check', headers=auth_headers)
         assert resp.status_code in (200, 404)
 
 
