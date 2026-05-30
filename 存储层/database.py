@@ -71,6 +71,9 @@ class Database:
             conn = sqlite3.connect(self.db_path, timeout=30)
             conn.row_factory = sqlite3.Row
             conn.execute('PRAGMA busy_timeout=30000')
+            conn.execute('PRAGMA synchronous=NORMAL')
+            conn.execute('PRAGMA cache_size=-32000')
+            conn.execute('PRAGMA temp_store=MEMORY')
             self._local.connection = conn
 
         try:

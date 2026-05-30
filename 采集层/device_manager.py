@@ -236,12 +236,12 @@ class DeviceManager:
 
     def disconnect_device(self, device_id: str):
         """断开设备连接（同时从连接池中移除）"""
-        client = self.clients.get(device_id)
+        with self._lock:
+            client = self.clients.pop(device_id, None)
         if client:
             client.disconnect()
         # 从连接池中移除
         self._connection_pool.remove(device_id)
-        self.clients.pop(device_id, None)
 
     def connect_all(self) -> dict[str, bool]:
         """连接所有设备"""

@@ -843,10 +843,15 @@ class AlarmManager:
         """
         active_alarms = []
 
-        for state_key, state in self.alarm_states.items():
+        # 线程安全：快照遍历，避免RuntimeError: dictionary changed size
+        with self._state_lock:
+            snapshot = list(self.alarm_states.items())
+            rules_snapshot = dict(self.rules)
+
+        for state_key, state in snapshot:
             device_id, register_name = state_key
             rule_id = state.get('alarm_id')
-            rule_config = self.rules.get(rule_id, {})
+            rule_config = rules_snapshot.get(rule_id, {})
 
             active_alarms.append({
                 'alarm_id': rule_id,
@@ -1053,8 +1058,9 @@ class AlarmManager:
             if rule_id in self.rules:
                 logger.warning(f"报警规则 {rule_id} 已存在，将被覆盖")
 
-            # 添加到内存
-            self.rules[rule_id] = rule_config
+            # 添加到内存 (线程安全)
+            with self._state_lock:
+                self.rules[rule_id] = rule_config
             self._rebuild_rules_index()
 
             # 保存到配置文件
@@ -1079,7 +1085,8 @@ class AlarmManager:
         """
         try:
             if rule_id in self.rules:
-                del self.rules[rule_id]
+                with self._state_lock:
+                    del self.rules[rule_id]
                 self._rebuild_rules_index()
 
                 # 保存到配置文件
@@ -1096,14 +1103,21 @@ class AlarmManager:
             return False
 
     def _save_config(self):
-        """保存报警配置到文件"""
+        """保存报警配置到文件（保留dedup/escalation等非规则配置段）"""
         try:
-            config = {
-                'alarm_rules': list(self.rules.values())
-            }
-
             config_file = Path(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # 读取已有配置，保留非规则段
+            config = {}
+            if config_file.exists():
+                try:
+                    with open(config_file, 'r', encoding='utf-8') as f:
+                        config = yaml.safe_load(f) or {}
+                except Exception:
+                    pass
+
+            config['alarm_rules'] = list(self.rules.values())
 
             with open(config_file, 'w', encoding='utf-8') as f:
                 yaml.dump(config, f, allow_unicode=True, default_flow_style=False)

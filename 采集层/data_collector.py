@@ -170,7 +170,9 @@ class DiskBackedQueue:
                             if item.get('value') is not None:
                                 self._queue.put_nowait(item)
                                 recovered += 1
-                        except (json.JSONDecodeError, queue.Full):
+                        except json.JSONDecodeError:
+                            continue  # 跳过损坏行，继续恢复后续数据
+                        except queue.Full:
                             break
         except Exception as e:
             logger.warning(f"磁盘恢复失败: {e}")
