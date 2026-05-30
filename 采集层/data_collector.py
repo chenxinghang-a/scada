@@ -25,6 +25,12 @@ _spc_kw = ('temperature', 'pressure', 'humidity', 'viscosity', 'ph', 'concentrat
 _status_kw = ('status', 'state', 'running', 'fault', 'alarm', 'speed', 'rpm')
 _count_kw = ('count', 'quantity', 'output', 'production', 'yield', 'total')
 
+# --- 命名常量（替代魔法数字） ---
+BACKOFF_CEILING_S = 60              # 退避上限
+SENSOR_STUCK_WINDOW_S = 300         # 传感器卡死窗口
+BATCH_MAX = 200                     # 批处理最大条数
+BATCH_TIMEOUT_S = 0.5               # 批处理超时
+
 
 def _has_keyword(register_name: str, keywords: tuple) -> bool:
     """检查寄存器名是否包含指定关键字"""
@@ -80,7 +86,7 @@ class DataQualityAssessor:
 
         # 值长时间不变 = UNCERTAIN（可能传感器卡死）
         if last_value is not None and last_time is not None:
-            if abs(value - last_value) < 0.001 and time.time() - last_time > 300:
+            if abs(value - last_value) < 0.001 and time.time() - last_time > SENSOR_STUCK_WINDOW_S:
                 return DataQualityAssessor.UNCERTAIN_LAST_USABLE
 
         # 正常
@@ -133,8 +139,8 @@ class DiskBackedQueue:
             with self._lock:
                 with open(self._persist_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(item, default=str, ensure_ascii=False) + '\n')
-        except Exception:
-            pass  # 持久化失败不影响主流程
+        except Exception as e:
+            logger.debug(f"数据持久化失败: {e}")  # 持久化失败不影响主流程
 
     def _recover_from_disk(self):
         """从磁盘恢复未处理的数据"""
@@ -153,8 +159,8 @@ class DiskBackedQueue:
                             recovered += 1
                         except (json.JSONDecodeError, queue.Full):
                             break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"磁盘恢复失败: {e}")
 
         # 清空已恢复的文件
         if recovered > 0:
@@ -396,7 +402,7 @@ class DataCollector:
             else:
                 failures = self._failure_counts.get(device_id, 0) + 1
                 self._failure_counts[device_id] = failures
-                interval = min(2 ** failures, 60)
+                interval = min(2 ** failures, BACKOFF_CEILING_S)
                 logger.debug(f"设备 {device_id} 连续失败 {failures} 次，{interval}s 后重试")
 
             with self._tasks_lock:
@@ -698,15 +704,13 @@ class DataCollector:
                     continue
                 try:
                     self._dispatch_intelligence(data)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"数据处理异常: {e}")
 
         intel_thread = threading.Thread(target=_intel_worker, daemon=True, name="intel_dispatch")
         intel_thread.start()
 
-        # 批量参数
-        BATCH_MAX = 200       # 最大批次大小
-        BATCH_TIMEOUT = 0.5   # 最大等待时间（秒）
+        # 批量参数（使用模块级常量）
 
         while self.running:
             # === 批量收集：从队列取一批数据 ===
@@ -719,7 +723,7 @@ class DataCollector:
                 continue
 
             # 非阻塞取剩余（凑满批次或等超时）
-            deadline = time.time() + BATCH_TIMEOUT
+            deadline = time.time() + BATCH_TIMEOUT_S
             while len(batch) < BATCH_MAX and time.time() < deadline:
                 try:
                     batch.append(self.data_queue.get_nowait())
@@ -796,8 +800,8 @@ class DataCollector:
                                 protocol=data.get('protocol', ''),
                                 gateway_id=data.get('gateway_id', '')
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"智能分发异常: {e}")
 
                 # === 智能层：扔进异步队列 ===
                 for data in batch:

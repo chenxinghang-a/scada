@@ -25,6 +25,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# --- 命名常量（替代魔法数字） ---
+AUDIT_LOG_CAPACITY = 50000          # 审计日志容量
+COMM_FAILURE_THRESHOLD = 3          # 通信失败阈值
+EMA_ALPHA = 0.3                     # 指数移动平均系数
+BACKOFF_CEILING_S = 60              # 退避上限（秒）
+SENSOR_STUCK_WINDOW_S = 300         # 传感器卡死检测窗口（秒）
+DEVICE_LOCK_TIMEOUT_S = 5.0         # 设备锁超时（秒）
+
 
 class SafetyLevel:
     """安全等级"""
@@ -105,12 +113,12 @@ class DeviceControlSafety:
         self._safe_state_handlers: dict[str, Callable[..., Any]] = {}  # device_id -> safe_state_func
 
         # ===== 操作审计 =====
-        self._audit_log = deque(maxlen=5000)
+        self._audit_log = deque(maxlen=AUDIT_LOG_CAPACITY)
         self._audit_file = Path('data/audit_log.jsonl')
 
         # ===== 通信监控 =====
         self._comm_failures: dict[str, int] = {}  # device_id -> consecutive failures
-        self._comm_threshold = 3  # 连续失败3次触发降级
+        self._comm_threshold = COMM_FAILURE_THRESHOLD
 
         # 加载预置联锁规则
         self._load_preset_interlocks()
@@ -833,7 +841,7 @@ class DeviceControlSafety:
 
         return result
 
-    def acquire_device_lock(self, device_id: str, operator: str, timeout: float = 5.0) -> bool:
+    def acquire_device_lock(self, device_id: str, operator: str, timeout: float = DEVICE_LOCK_TIMEOUT_S) -> bool:
         """获取设备操作锁（防止并发操作）"""
         if device_id not in self._device_locks:
             self._device_locks[device_id] = threading.Lock()
@@ -1033,7 +1041,7 @@ class DeviceControlSafety:
             health['last_seen'] = datetime.now().isoformat()
             health['consecutive_failures'] = 0
             # 指数移动平均
-            alpha = 0.3
+            alpha = EMA_ALPHA
             health['avg_response_ms'] = (
                 alpha * response_time_ms +
                 (1 - alpha) * health.get('avg_response_ms', 0)
