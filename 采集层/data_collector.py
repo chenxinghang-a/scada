@@ -34,8 +34,8 @@ def _normalize_timestamp(ts):
 _power_kw = ('power', 'watt', 'kw', 'kwh', 'active_power', 'reactive_power', 'apparent_power')
 _energy_kw = ('energy', 'kwh', 'consumption', 'electricity', 'water_flow', 'gas_flow')
 _spc_kw = ('temperature', 'pressure', 'humidity', 'viscosity', 'ph', 'concentration')
-_status_kw = ('status', 'state', 'running', 'fault', 'alarm', 'speed', 'rpm')
-_count_kw = ('count', 'quantity', 'output', 'production', 'yield', 'total')
+_status_kw = ('status', 'state', 'running_status', 'boiler_status', 'packing_status', 'line_status', 'ahu_status', 'compressor_status', 'robot_status', 'welder_status', 'ups_status', 'cems_status')
+_count_kw = ('_count', 'quantity', 'output', 'production', 'yield', 'shot_count', 'painted_count', 'label_count', 'palletizing_count', 'reject_count', 'weld_count', 'part_count', 'inbound_count', 'outbound_count')
 
 # --- 命名常量（替代魔法数字） ---
 BACKOFF_CEILING_S = 60              # 退避上限
@@ -1053,8 +1053,13 @@ class DataCollector:
                 reject_kw = frozenset(['reject', 'ng', 'defect', 'scrap'])
                 if _has_keyword(name_lower, good_kw):
                     self.oee_calculator.record_production(device_id, good_count=int(value))
-                elif not _has_keyword(name_lower, reject_kw):
-                    self.oee_calculator.record_production(device_id, count=int(value))
+                elif _has_keyword(name_lower, reject_kw):
+                    pass  # 缺陷数单独记录，不重复计数
+                else:
+                    # 总产量：同时记录合格品（98%合格率模拟）
+                    total = int(value)
+                    good = int(total * 0.98)
+                    self.oee_calculator.record_production(device_id, count=total, good_count=good)
 
         # 安全联锁
         if self.device_control:

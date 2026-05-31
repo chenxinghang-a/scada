@@ -304,12 +304,12 @@ class TestDispatchIntelligence:
         oee.update_device_state.assert_called_once_with('d1', 'running')
 
     def test_dispatch_oee_count_update(self):
-        """Dispatch routes count register to OEE calculator"""
+        """Dispatch routes count register to OEE calculator with auto good_count"""
         oee = MagicMock()
         collector = self._make_collector(oee_calculator=oee)
         data = {'device_id': 'd1', 'register_name': 'production_count', 'value': 100, 'timestamp': datetime.now()}
         collector._dispatch_intelligence(data)
-        oee.record_production.assert_called_once_with('d1', count=100)
+        oee.record_production.assert_called_once_with('d1', count=100, good_count=98)
 
     def test_dispatch_spc_temperature(self):
         """Dispatch routes temperature to SPC analyzer"""
