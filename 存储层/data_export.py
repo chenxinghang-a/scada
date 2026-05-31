@@ -42,7 +42,7 @@ class DataExport:
         """
         if not data:
             logger.warning("没有数据可导出")
-            return ""
+            return None
 
         # 生成文件名
         if not filename:

@@ -8,16 +8,9 @@ from typing import Any
 from datetime import datetime
 
 from .interfaces import IAlarmOutput
+from .alarm_output import AlarmLightPattern
 
 logger = logging.getLogger(__name__)
-
-
-class AlarmLightPattern:
-    """报警灯闪烁模式"""
-    OFF = 'off'
-    STEADY = 'steady'
-    SLOW_FLASH = 'slow'
-    FAST_FLASH = 'fast'
 
 
 class SimulatedAlarmOutput(IAlarmOutput):

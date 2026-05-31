@@ -305,7 +305,7 @@ class TestExportCSV:
 
     def test_export_csv_empty_data(self, exporter):
         result = exporter.export_csv([])
-        assert result == ""
+        assert result is None
 
     def test_export_csv_write_error(self, exporter):
         data = [{'a': 1}]

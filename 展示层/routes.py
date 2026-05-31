@@ -86,8 +86,6 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         response.headers['X-Frame-Options'] = 'SAMEORIGIN'
         # 防止MIME类型嗅探
         response.headers['X-Content-Type-Options'] = 'nosniff'
-        # XSS保护
-        response.headers['X-XSS-Protection'] = '1; mode=block'
         # 内容安全策略 - 允许CDN资源 (GB/T 33008 + GB/T 37980)
         csp_directives = [
             "default-src 'self'",

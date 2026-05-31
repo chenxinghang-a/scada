@@ -151,7 +151,6 @@ def ha_force_role():
 @role_required('admin', 'engineer')
 def update_config():
     """更新系统配置"""
-    from 用户层.auth import jwt_required
     from ._common import get_auth_manager
 
     data = request.get_json()

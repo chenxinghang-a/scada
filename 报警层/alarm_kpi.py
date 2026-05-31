@@ -153,10 +153,9 @@ class AlarmKPI:
         
         # 按时间排序
         sorted_alarms = sorted(alarms, key=lambda x: x.get('timestamp', ''))
-        
+
         max_count = 0
-        window_start = 0
-        
+
         for i, alarm in enumerate(sorted_alarms):
             # 移动窗口起点
             alarm_time = datetime.fromisoformat(alarm['timestamp'].replace('Z', '+00:00'))

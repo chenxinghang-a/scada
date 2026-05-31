@@ -14,7 +14,7 @@ Usage:
 import argparse
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -60,7 +60,7 @@ def generate_self_signed_cert(hostname: str = 'localhost',
     ])
 
     # 构建证书
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)

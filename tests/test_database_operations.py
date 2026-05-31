@@ -548,7 +548,7 @@ class TestDataExport:
         export_dir = tempfile.mkdtemp()
         exporter = DataExport(export_dir)
         filepath = exporter.export_csv([])
-        assert filepath == ""
+        assert filepath is None
         shutil.rmtree(export_dir, ignore_errors=True)
 
     def test_export_csv_custom_filename(self):
