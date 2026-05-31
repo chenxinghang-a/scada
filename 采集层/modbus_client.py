@@ -71,6 +71,10 @@ class ModbusClient:
         self._last_reconnect_time = 0
         self._consecutive_failures = 0  # 连续失败计数，超过阈值才重连
 
+        # Fix 2: 最后已知良好值缓存 — 读取失败时返回缓存值而非 None，
+        # 避免重连期间数据断流。key = (address, count), value = list[int]
+        self._last_good_values: dict[tuple, list[int]] = {}
+
         # 通信日志（线程安全，保留最近 1000 条）
         self._log_lock = threading.Lock()
         self._comm_log: deque[dict[str, Any]] = deque(maxlen=1000)
@@ -291,7 +295,7 @@ class ModbusClient:
                 pass  # socket 可能已经坏了
             self.connected = False
 
-    def read_holding_registers(self, address: int, count: int, 
+    def read_holding_registers(self, address: int, count: int,
                                slave_id: int | None = None) -> list[int] | None:
         """
         读取保持寄存器（功能码03）
@@ -302,17 +306,23 @@ class ModbusClient:
             slave_id: 从站地址（可选）
 
         Returns:
-            list[int]: 寄存器值列表，失败返回None
+            list[int]: 寄存器值列表。读取失败时返回最后已知良好值（缓存）；
+                       仅当缓存中也没有该寄存器的值时才返回 None。
         """
+        cache_key = (address, count)
+
         # GB/T 19582 地址范围校验
         try:
             self.validate_address_range(address, count, 'holding_register')
         except ValueError as e:
             logger.error(str(e))
             self._log_operation('read_holding_registers', address, count, False, str(e))
-            return None
+            return self._last_good_values.get(cache_key)
 
         if not self.connected:
+            cached = self._last_good_values.get(cache_key)
+            if cached is not None:
+                return cached
             logger.error(f"设备 {self.device_name} 未连接")
             return None
 
@@ -336,7 +346,7 @@ class ModbusClient:
                 with self._stats_lock:
                     self.stats['last_error'] = str(result)
                 self._log_operation('read_holding_registers', address, count, False, str(result))
-                return None
+                return self._last_good_values.get(cache_key)
 
             self._inc_stat('successful_reads')
             self._consecutive_failures = 0  # 成功读取，重置失败计数
@@ -344,6 +354,8 @@ class ModbusClient:
                 self.stats['last_read_time'] = time.time()
             self._log_operation('read_holding_registers', address, count, True)
 
+            # Fix 2: 缓存成功读取的值
+            self._last_good_values[cache_key] = result.registers
             return result.registers
 
         except ConnectionException as e:
@@ -360,7 +372,7 @@ class ModbusClient:
             else:
                 logger.debug(f"设备 {self.device_name} 读取失败 ({self._consecutive_failures}/3): {e}")
             self._log_operation('read_holding_registers', address, count, False, str(e))
-            return None
+            return self._last_good_values.get(cache_key)
 
         except Exception as e:
             logger.error(f"读取异常: {e}")
@@ -368,7 +380,7 @@ class ModbusClient:
             with self._stats_lock:
                 self.stats['last_error'] = str(e)
             self._log_operation('read_holding_registers', address, count, False, str(e))
-            return None
+            return self._last_good_values.get(cache_key)
 
     def read_input_registers(self, address: int, count: int,
                              slave_id: int | None = None) -> list[int] | None:
@@ -381,17 +393,23 @@ class ModbusClient:
             slave_id: 从站地址（可选）
 
         Returns:
-            list[int]: 寄存器值列表，失败返回None
+            list[int]: 寄存器值列表。读取失败时返回最后已知良好值（缓存）；
+                       仅当缓存中也没有该寄存器的值时才返回 None。
         """
+        cache_key = (address, count)
+
         # GB/T 19582 地址范围校验
         try:
             self.validate_address_range(address, count, 'input_register')
         except ValueError as e:
             logger.error(str(e))
             self._log_operation('read_input_registers', address, count, False, str(e))
-            return None
+            return self._last_good_values.get(cache_key)
 
         if not self.connected:
+            cached = self._last_good_values.get(cache_key)
+            if cached is not None:
+                return cached
             logger.error(f"设备 {self.device_name} 未连接")
             return None
 
@@ -409,7 +427,7 @@ class ModbusClient:
                 logger.error(f"读取输入寄存器失败: {result}")
                 self._inc_stat('failed_reads')
                 self._log_operation('read_input_registers', address, count, False, str(result))
-                return None
+                return self._last_good_values.get(cache_key)
 
             self._inc_stat('successful_reads')
             self._consecutive_failures = 0  # 成功读取，重置失败计数
@@ -417,6 +435,8 @@ class ModbusClient:
                 self.stats['last_read_time'] = time.time()
             self._log_operation('read_input_registers', address, count, True)
 
+            # Fix 2: 缓存成功读取的值
+            self._last_good_values[cache_key] = result.registers
             return result.registers
 
         except ConnectionException as e:
@@ -431,13 +451,13 @@ class ModbusClient:
             else:
                 logger.debug(f"设备 {self.device_name} 读取失败 ({self._consecutive_failures}/3): {e}")
             self._log_operation('read_input_registers', address, count, False, str(e))
-            return None
+            return self._last_good_values.get(cache_key)
 
         except Exception as e:
             logger.error(f"读取异常: {e}")
             self._inc_stat('failed_reads')
             self._log_operation('read_input_registers', address, count, False, str(e))
-            return None
+            return self._last_good_values.get(cache_key)
 
     def read_coils(self, address: int, count: int,
                    slave_id: int | None = None) -> list[bool] | None:

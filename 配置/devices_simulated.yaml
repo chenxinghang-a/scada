@@ -5,6 +5,7 @@ devices:
   enabled: true
   host: 192.168.1.58
   id: inovance_h5u_01
+  zone: '生产车间'
   name: 汇川H5U PLC
   port: 502
   protocol: modbus_tcp
@@ -59,6 +60,7 @@ devices:
   enabled: true
   host: 192.168.1.54
   id: schneider_m340_01
+  zone: '生产车间'
   name: 施耐德M340 PLC
   port: 502
   protocol: modbus_tcp
@@ -127,6 +129,7 @@ devices:
   enabled: true
   host: 192.168.1.102
   id: abb_m4m_01
+  zone: '动力区'
   name: ABB M4M电力分析仪
   port: 502
   protocol: modbus_tcp
@@ -209,6 +212,7 @@ devices:
   enabled: true
   host: 192.168.1.60
   id: turck_iolink_01
+  zone: '监控区'
   name: 图尔克IO-Link主站
   port: 502
   protocol: modbus_tcp
@@ -263,6 +267,7 @@ devices:
   enabled: true
   host: 192.168.1.200
   id: vibration_sensor_01
+  zone: '监控区'
   name: MQTT振动监测节点
   password: scada123
   port: 1883
@@ -296,6 +301,7 @@ devices:
   enabled: true
   host: 192.168.1.200
   id: water_quality_01
+  zone: '监控区'
   name: MQTT水质监测终端
   password: scada123
   port: 1883
@@ -358,6 +364,7 @@ devices:
     path: /api/v1/variables/DB100.line_status
     unit: ''
   id: siemens_web_01
+  zone: '信息中心'
   name: 西门子S7-1500 Web API
   poll_interval: 5
   protocol: rest
@@ -396,6 +403,7 @@ devices:
     path: /api/v1/quality/defect_rate
     unit: '%'
   id: mes_api_01
+  zone: '信息中心'
   name: MES制造执行系统
   poll_interval: 30
   protocol: rest
@@ -406,6 +414,7 @@ devices:
   enabled: true
   host: 192.168.1.70
   id: signal_tower_01
+  zone: '安全系统'
   name: Patlite LR7信号灯塔 — 1号线
   port: 502
   protocol: modbus_tcp
@@ -460,6 +469,7 @@ devices:
   enabled: true
   host: 192.168.1.72
   id: relay_output_01
+  zone: '安全系统'
   name: 研华ADAM-6060继电器模块
   port: 502
   protocol: modbus_tcp
@@ -519,6 +529,7 @@ devices:
   enabled: true
   endpoint: opc.tcp://192.168.1.50:4840
   id: opcua_plc_01
+  zone: '信息中心'
   name: OPC UA PLC控制器
   nodes:
   - description: 温度值
@@ -545,6 +556,7 @@ devices:
   enabled: true
   host: 192.168.1.55
   id: hollysys_lk_01
+  zone: '生产车间'
   name: 和利时LK PLC
   port: 502
   protocol: modbus_tcp
@@ -609,6 +621,7 @@ devices:
   enabled: true
   host: 192.168.1.53
   id: siemens_1500_01
+  zone: '生产车间'
   name: 西门子S7-1500 PLC
   port: 502
   protocol: modbus_tcp
@@ -677,6 +690,7 @@ devices:
   enabled: true
   host: 192.168.1.56
   id: mitsubishi_fx5u_01
+  zone: '生产车间'
   name: 三菱FX5U PLC
   port: 502
   protocol: modbus_tcp
@@ -745,6 +759,7 @@ devices:
   enabled: true
   host: 192.168.1.57
   id: delta_dvp_01
+  zone: '生产车间'
   name: 台达DVP PLC
   port: 502
   protocol: modbus_tcp
@@ -799,6 +814,7 @@ devices:
   enabled: true
   host: 192.168.1.110
   id: hvac_ahu_01
+  zone: '公用工程'
   name: 西门子PXC36暖通控制器
   port: 502
   protocol: modbus_tcp
@@ -895,6 +911,7 @@ devices:
   enabled: true
   host: 192.168.1.111
   id: compressor_01
+  zone: '公用工程'
   name: 阿特拉斯GA90+螺杆空压机
   port: 502
   protocol: modbus_tcp
@@ -977,6 +994,7 @@ devices:
   enabled: true
   host: 192.168.1.112
   id: warehouse_plc_01
+  zone: '物流区'
   name: 西门子LOGO!仓储PLC
   port: 502
   protocol: modbus_tcp
@@ -1052,6 +1070,7 @@ devices:
   enabled: true
   host: 192.168.1.113
   id: cems_01
+  zone: '质检区'
   name: 雪迪龙SCS-900烟气CEMS
   port: 502
   protocol: modbus_tcp
@@ -1134,6 +1153,7 @@ devices:
   enabled: true
   host: 192.168.1.114
   id: fire_alarm_01
+  zone: '安全系统'
   name: 海湾JB-QBL-QM300火灾报警
   port: 502
   protocol: modbus_tcp
@@ -1209,6 +1229,7 @@ devices:
   enabled: true
   endpoint: opc.tcp://192.168.1.115:4840
   id: dcs_supcon_01
+  zone: '监控区'
   name: 中控JX-300XP DCS
   nodes:
   - description: 反应釜1温度
@@ -1268,6 +1289,7 @@ devices:
   enabled: true
   host: 192.168.1.115
   id: temp_xmitter_01
+  zone: '质检区'
   name: 横河YTA610温度变送器
   port: 502
   protocol: modbus_rtu
@@ -1330,6 +1352,7 @@ devices:
   enabled: true
   host: 192.168.1.115
   id: pressure_xmitter_01
+  zone: '质检区'
   name: 罗斯蒙特3051S压力变送器
   port: 502
   protocol: modbus_rtu
@@ -1385,6 +1408,7 @@ devices:
   enabled: true
   host: 192.168.1.115
   id: flowmeter_01
+  zone: '质检区'
   name: E+H Promag W电磁流量计
   port: 502
   protocol: modbus_rtu
@@ -1447,6 +1471,7 @@ devices:
   enabled: true
   endpoint: opc.tcp://192.168.1.116:4840
   id: robot_fanuc_01
+  zone: '物流区'
   name: FANUC M-20iD/25机器人
   nodes:
   - description: 关节1角度
@@ -1506,6 +1531,7 @@ devices:
   enabled: true
   base_url: http://192.168.1.117:8080
   id: cnc_mazak_01
+  zone: '物流区'
   name: 马扎克i-300S加工中心
   endpoints:
   - json_path: data.spindle_speed
@@ -1567,6 +1593,7 @@ devices:
   enabled: true
   host: 192.168.1.118
   id: soft_starter_01
+  zone: '动力区'
   name: ABB PSTX470软启动器
   port: 502
   protocol: modbus_tcp
@@ -1635,6 +1662,7 @@ devices:
   enabled: true
   host: 192.168.1.119
   id: power_meter_sub_01
+  zone: '动力区'
   name: 安科瑞APM810多功能电表
   port: 502
   protocol: modbus_tcp
@@ -1710,6 +1738,7 @@ devices:
   enabled: true
   host: 192.168.1.120
   id: ups_apc_01
+  zone: '动力区'
   name: APC Smart-UPS 3000
   port: 502
   protocol: modbus_tcp
@@ -1778,6 +1807,7 @@ devices:
   enabled: true
   host: 192.168.1.121
   id: welder_01
+  zone: '物流区'
   name: 松下TM-1800WG焊接机器人
   port: 502
   protocol: modbus_tcp

@@ -31,8 +31,11 @@ def _safe_int(val, name='value'):
 @devices_bp.route('/devices', methods=['GET'])
 @_require_auth
 def get_devices():
-    """获取所有设备列表"""
+    """获取所有设备列表（支持按区域过滤）"""
     devices = current_app.device_manager.get_all_status()
+    zone = request.args.get('zone')
+    if zone:
+        devices = {k: v for k, v in devices.items() if v.get('zone') == zone}
     return jsonify({'devices': devices})
 
 

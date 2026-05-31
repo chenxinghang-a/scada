@@ -128,11 +128,11 @@ class TestDataCollectorLifecycle:
 class TestDataQueue:
 
     def test_queue_maxsize(self):
-        """DataCollector creates queue with maxsize 50000"""
+        """DataCollector creates queue with maxsize 200000"""
         dm = MagicMock()
         dm.get_all_devices.return_value = {}
         collector = DataCollector(dm, MagicMock())
-        assert collector.data_queue.maxsize == 50000
+        assert collector.data_queue.maxsize == 200000
 
     def test_queue_put_get(self):
         """Can put and get items from data queue"""

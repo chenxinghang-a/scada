@@ -97,8 +97,13 @@ class IDeviceManager(ABC):
         pass
 
     @abstractmethod
-    def get_all_status(self) -> list[dict[str, Any]]:
-        """获取所有设备状态"""
+    def get_all_status(self, brief: bool = False) -> list[dict[str, Any]]:
+        """获取所有设备状态
+
+        Args:
+            brief: True时返回精简字段（id/name/zone/connected/stopped/status），
+                   适用于100+设备的仪表盘轮询。False时返回完整状态。
+        """
         pass
 
     @abstractmethod

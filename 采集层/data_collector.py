@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from datetime import datetime
 from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,10 @@ _count_kw = ('_count', 'quantity', 'output', 'production', 'yield', 'shot_count'
 # --- 命名常量（替代魔法数字） ---
 BACKOFF_CEILING_S = 60              # 退避上限
 SENSOR_STUCK_WINDOW_S = 300         # 传感器卡死窗口
-BATCH_MAX = 500                     # 批处理最大条数（WAL模式下500条事务开销最优）
+BATCH_MAX = 1000                    # 批处理最大条数（100设备场景下提高到1000）
 BATCH_TIMEOUT_S = 0.5               # 批处理超时
-CIRCUIT_BREAKER_THRESHOLD = 10      # 断路器：连续失败阈值
-CIRCUIT_BREAKER_COOLDOWN_S = 300    # 断路器：冷却时间（秒）
+CIRCUIT_BREAKER_THRESHOLD = 5       # 断路器：连续失败阈值（5次即可判定设备不可达）
+CIRCUIT_BREAKER_COOLDOWN_S = 30     # 断路器：冷却时间（30秒后试探恢复，满足99.97%可用性）
 
 
 def _has_keyword(register_name: str, keywords: tuple) -> bool:
@@ -242,8 +243,11 @@ class DataCollector:
         self._last_values = {}   # "device_id:register_name" -> last_value
         self._last_times = {}   # "device_id:register_name" -> last_time
 
+        # 线程池（限制并发采集连接数，支持100+设备）
+        self._pool = ThreadPoolExecutor(max_workers=20, thread_name_prefix="collector")
+
         # 数据队列（磁盘持久化，崩溃恢复）
-        self.data_queue = DiskBackedQueue(maxsize=50000)
+        self.data_queue = DiskBackedQueue(maxsize=200000)
 
         # 动态采集频率配置
         self._dynamic_interval_config = {
@@ -318,6 +322,10 @@ class DataCollector:
             for device_id, timer in self.tasks.items():
                 timer.cancel()
             self.tasks.clear()
+
+        # 关闭线程池（等待正在执行的采集完成）
+        if hasattr(self, '_pool'):
+            self._pool.shutdown(wait=True)
 
         # 排空剩余数据并入库（不丢弃）
         remaining = []
@@ -447,56 +455,116 @@ class DataCollector:
             logger.error(f"[{protocol.upper()}] 设备 {device_id} 连接失败")
 
     def _start_device_collection(self, device_id: str, device_config: dict[str, Any]):
-        """启动单个设备的轮询采集任务（Modbus / REST），含失败退避"""
+        """启动单个设备的轮询采集任务（Modbus / REST），含失败退避。
+
+        采集工作提交到线程池执行（max_workers=20），避免100设备创建
+        100+线程。调度延迟仍用 threading.Timer，但实际采集在池中运行。
+        """
         base_interval = device_config.get('collection_interval', 5)
         protocol = device_config.get('protocol', 'modbus_tcp')
 
-        def collect_task():
+        def _run_collection():
+            """在线程池中执行的采集工作"""
             if not self.running:
                 return
+            return self._collect_device_data(device_id, device_config, protocol)
 
-            # 断路器检查：冷却期内跳过采集，避免对已知死设备无限轮询
-            cb = self._circuit_state.get(device_id)
-            if cb and cb.get('opened_at'):
-                elapsed = time.time() - cb['opened_at']
-                if elapsed < CIRCUIT_BREAKER_COOLDOWN_S:
-                    remaining = CIRCUIT_BREAKER_COOLDOWN_S - elapsed
+        def collect_task():
+            # Fix 3: 崩溃恢复 — 整个采集任务包裹在 try/except 中，
+            # 任何未预期的异常都会被捕获并重新调度定时器，确保设备不会永久死亡。
+            try:
+                if not self.running:
+                    return
+
+                # 断路器检查：冷却期内跳过采集，避免对已知死设备无限轮询
+                cb = self._circuit_state.get(device_id)
+                if cb and cb.get('opened_at'):
+                    elapsed = time.time() - cb['opened_at']
+                    if elapsed < CIRCUIT_BREAKER_COOLDOWN_S:
+                        remaining = CIRCUIT_BREAKER_COOLDOWN_S - elapsed
+                        with self._tasks_lock:
+                            if self.running:
+                                timer = threading.Timer(remaining, collect_task)
+                                timer.daemon = True
+                                timer.start()
+                                self.tasks[device_id] = timer
+                        return
+                    # 冷却期结束 → 单次试探读（half-open）
+                    # 如果试探成功，立即恢复完整采集；失败则重新打开断路器
+                    try:
+                        probe_future = self._pool.submit(_run_collection)
+                        probe_ok = probe_future.result(timeout=15)
+                    except Exception as e:
+                        logger.debug(f"设备 {device_id} 试探读异常: {e}")
+                        probe_ok = False
+
+                    if probe_ok:
+                        # 试探成功：关闭断路器，立即恢复常规采集
+                        self._circuit_state.pop(device_id, None)
+                        self._failure_counts[device_id] = 0
+                        interval = self._get_dynamic_interval(device_id, base_interval)
+                        logger.info(f"设备 {device_id} 试探读成功，断路器关闭，恢复采集")
+                    else:
+                        # 试探失败：重新打开断路器，再等一轮冷却
+                        self._circuit_state[device_id] = {'opened_at': time.time()}
+                        interval = CIRCUIT_BREAKER_COOLDOWN_S
+                        logger.warning(f"设备 {device_id} 试探读失败，断路器重新打开")
+
                     with self._tasks_lock:
                         if self.running:
-                            timer = threading.Timer(remaining, collect_task)
+                            timer = threading.Timer(interval, collect_task)
                             timer.daemon = True
                             timer.start()
                             self.tasks[device_id] = timer
                     return
-                # 冷却期结束，允许一次试探（half-open）
 
-            success = self._collect_device_data(device_id, device_config, protocol)
+                # 正常采集路径：提交到线程池（限制并发连接数为20）
+                try:
+                    future = self._pool.submit(_run_collection)
+                    success = future.result(timeout=30)  # 单设备采集超时30秒
+                except Exception as e:
+                    logger.debug(f"设备 {device_id} 线程池采集异常: {e}")
+                    success = False
 
-            if not self.running:
-                return
+                if not self.running:
+                    return
 
-            # 失败退避 + 断路器
-            if success:
-                self._failure_counts[device_id] = 0
-                self._circuit_state.pop(device_id, None)  # 恢复成功，关闭断路器
-                interval = self._get_dynamic_interval(device_id, base_interval)
-            else:
-                failures = self._failure_counts.get(device_id, 0) + 1
-                self._failure_counts[device_id] = failures
-                if failures >= CIRCUIT_BREAKER_THRESHOLD:
-                    self._circuit_state[device_id] = {'opened_at': time.time()}
-                    interval = CIRCUIT_BREAKER_COOLDOWN_S
-                    logger.warning(f"设备 {device_id} 连续失败 {failures} 次，断路器打开，{CIRCUIT_BREAKER_COOLDOWN_S}s 后重试")
+                # 失败退避 + 断路器
+                if success:
+                    self._failure_counts[device_id] = 0
+                    self._circuit_state.pop(device_id, None)  # 恢复成功，关闭断路器
+                    interval = self._get_dynamic_interval(device_id, base_interval)
                 else:
-                    interval = min(2 ** failures, BACKOFF_CEILING_S)
-                    logger.debug(f"设备 {device_id} 连续失败 {failures} 次，{interval}s 后重试")
+                    failures = self._failure_counts.get(device_id, 0) + 1
+                    self._failure_counts[device_id] = failures
+                    if failures >= CIRCUIT_BREAKER_THRESHOLD:
+                        self._circuit_state[device_id] = {'opened_at': time.time()}
+                        interval = CIRCUIT_BREAKER_COOLDOWN_S
+                        logger.warning(f"设备 {device_id} 连续失败 {failures} 次，断路器打开，{CIRCUIT_BREAKER_COOLDOWN_S}s 后重试")
+                    else:
+                        interval = min(2 ** failures, BACKOFF_CEILING_S)
+                        logger.debug(f"设备 {device_id} 连续失败 {failures} 次，{interval}s 后重试")
 
-            with self._tasks_lock:
-                if self.running:
-                    timer = threading.Timer(interval, collect_task)
-                    timer.daemon = True
-                    timer.start()
-                    self.tasks[device_id] = timer
+                with self._tasks_lock:
+                    if self.running:
+                        timer = threading.Timer(interval, collect_task)
+                        timer.daemon = True
+                        timer.start()
+                        self.tasks[device_id] = timer
+
+            except Exception as crash_err:
+                # Fix 3: 未预期的崩溃 — 记录错误，仍然重新调度定时器
+                # 确保单个设备的崩溃不会永久停止其采集任务
+                logger.error(f"设备 {device_id} 采集任务崩溃（已恢复）: {crash_err}", exc_info=True)
+                crash_failures = self._failure_counts.get(device_id, 0) + 1
+                self._failure_counts[device_id] = crash_failures
+                recovery_interval = min(2 ** crash_failures, BACKOFF_CEILING_S)
+                with self._tasks_lock:
+                    if self.running:
+                        timer = threading.Timer(recovery_interval, collect_task)
+                        timer.daemon = True
+                        timer.start()
+                        self.tasks[device_id] = timer
 
         with self._tasks_lock:
             self.tasks[device_id] = threading.Timer(0.1, collect_task)

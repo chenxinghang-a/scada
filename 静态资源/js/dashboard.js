@@ -14,6 +14,11 @@ const MAX_CHART_POINTS = 200;
 const lastDeviceSnapshot = {};  // Virtual DOM diff: last device state snapshot
 let deviceGridDirty = true;     // Whether device grid needs full rebuild
 
+// ========== 分页（100+设备场景） ==========
+const PAGE_SIZE = 20;
+let currentPage = 1;
+let allDevices = [];            // 完整设备列表缓存
+
 // ========== 初始化 ==========
 document.addEventListener('DOMContentLoaded', () => {
     initClock();
@@ -75,7 +80,7 @@ async function loadData() {
     loadDataInProgress = true;
     const gen = ++loadGeneration;
     try {
-        const status = await apiFetch('/system/status');
+        const status = await apiFetch('/system/status?brief=1');
         if (gen !== loadGeneration) return;
         if (!status) return;
         updateKPI(status);
@@ -174,10 +179,13 @@ function updateKPI(stats) {
     }
 }
 
-// ========== 设备卡片网格（Virtual DOM Diff） ==========
+// ========== 设备卡片网格（Virtual DOM Diff + 分页） ==========
 function updateDeviceGrid(stats) {
     if (!stats.devices) return;
     let devs = Array.isArray(stats.devices) ? stats.devices : Object.values(stats.devices);
+
+    // 缓存完整设备列表
+    allDevices = devs;
 
     // 更新缓存
     devs.forEach(d => {
@@ -185,7 +193,7 @@ function updateDeviceGrid(stats) {
         deviceCache[id] = d;
     });
 
-    // 构建轻量快照（只比较变化的字段，避免30台设备全量JSON.stringify）
+    // 构建轻量快照（只比较变化的字段）
     const snapshot = {};
     devs.forEach(d => {
         const id = d.device_id || d.id;
@@ -195,20 +203,56 @@ function updateDeviceGrid(stats) {
     const snapshotChanged = JSON.stringify(snapshot) !== JSON.stringify(lastDeviceSnapshot);
 
     if (!snapshotChanged && !deviceGridDirty) {
-        // 设备列表未变化，只更新数值（不重建DOM）
-        devs.forEach(d => updateDeviceValues(d));
+        // 设备列表未变化，只更新当前页数值（不重建DOM）
+        const pageDevs = getPageDevices();
+        pageDevs.forEach(d => updateDeviceValues(d));
         return;
     }
 
-    // 设备列表变化或首次加载，全量重建
+    // 设备列表变化或首次加载，重建当前页
     Object.keys(lastDeviceSnapshot).forEach(k => delete lastDeviceSnapshot[k]);
     Object.assign(lastDeviceSnapshot, snapshot);
     deviceGridDirty = false;
 
+    renderCurrentPage(devs);
+
+    // 填充设备选择下拉框
+    const select = document.getElementById('trend-device-select');
+    if (select && select.children.length <= 1) {
+        select.innerHTML = devs.map(d => {
+            const id = d.device_id || d.id;
+            return `<option value="${escapeHtml(id)}" ${id === selectedDeviceId ? 'selected' : ''}>${escapeHtml(d.name || id)}</option>`;
+        }).join('');
+        select.addEventListener('change', function() {
+            selectedDeviceId = this.value;
+            Object.keys(dataBuffers).forEach(k => delete dataBuffers[k]);
+            if (trendChart) trendChart.clear();
+        });
+        if (!selectedDeviceId && devs.length > 0) {
+            selectedDeviceId = devs[0].device_id || devs[0].id;
+        }
+    }
+}
+
+// 获取当前页设备
+function getPageDevices() {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return allDevices.slice(start, start + PAGE_SIZE);
+}
+
+// 渲染当前页设备卡片
+function renderCurrentPage(devs) {
+    if (!devs) devs = allDevices;
+    const totalPages = Math.ceil(devs.length / PAGE_SIZE);
+    if (currentPage > totalPages) currentPage = totalPages || 1;
+
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const pageDevs = devs.slice(start, start + PAGE_SIZE);
+
     const grid = document.getElementById('device-grid');
     if (!grid) return;
 
-    grid.innerHTML = devs.map(d => {
+    grid.innerHTML = pageDevs.map(d => {
         const id = d.device_id || d.id;
         const name = d.name || id;
         const online = d.connected;
@@ -250,7 +294,7 @@ function updateDeviceGrid(stats) {
         return `<div class="dev-card" onclick="selectDevice('${escapeHtml(id)}')" title="${escapeHtml(name)}">
             <div class="dev-status ${statusClass}"></div>
             <div class="dev-info">
-                <div class="dev-name">${escapeHtml(name)} <span class="dev-state-tag ${statusClass}">${statusText}</span></div>
+                <div class="dev-name">${escapeHtml(name)} <span class="dev-state-tag ${statusClass}">${statusText}</span>${d.zone ? ` <span class="dev-zone-tag">${escapeHtml(d.zone)}</span>` : ''}</div>
                 <div class="dev-meta">${escapeHtml(d.protocol || 'modbus_tcp')} · ${escapeHtml(d.host || '')}</div>
                 <div class="dev-values">${valStr}</div>
             </div>
@@ -258,22 +302,49 @@ function updateDeviceGrid(stats) {
         </div>`;
     }).join('');
 
-    // 填充设备选择下拉框
-    const select = document.getElementById('trend-device-select');
-    if (select && select.children.length <= 1) {
-        select.innerHTML = devs.map(d => {
-            const id = d.device_id || d.id;
-            return `<option value="${escapeHtml(id)}" ${id === selectedDeviceId ? 'selected' : ''}>${escapeHtml(d.name || id)}</option>`;
-        }).join('');
-        select.addEventListener('change', function() {
-            selectedDeviceId = this.value;
-            Object.keys(dataBuffers).forEach(k => delete dataBuffers[k]);
-            if (trendChart) trendChart.clear();
-        });
-        if (!selectedDeviceId && devs.length > 0) {
-            selectedDeviceId = devs[0].device_id || devs[0].id;
+    // 渲染分页控件
+    renderPagination(devs.length, totalPages);
+}
+
+// 分页控件
+function renderPagination(total, totalPages) {
+    let pager = document.getElementById('device-pager');
+    if (!pager) {
+        pager = document.createElement('div');
+        pager.id = 'device-pager';
+        pager.className = 'device-pager';
+        const grid = document.getElementById('device-grid');
+        if (grid && grid.parentNode) {
+            grid.parentNode.insertBefore(pager, grid.nextSibling);
         }
     }
+
+    if (totalPages <= 1) {
+        pager.innerHTML = `<span class="pager-info">共 ${total} 台设备</span>`;
+        return;
+    }
+
+    const start = (currentPage - 1) * PAGE_SIZE + 1;
+    const end = Math.min(currentPage * PAGE_SIZE, total);
+
+    pager.innerHTML = `
+        <span class="pager-info">${start}-${end} / 共 ${total} 台</span>
+        <button class="pager-btn" onclick="goToPage(1)" ${currentPage === 1 ? 'disabled' : ''} title="首页">&laquo;</button>
+        <button class="pager-btn" onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} title="上一页">&lsaquo;</button>
+        <span class="pager-current">${currentPage} / ${totalPages}</span>
+        <button class="pager-btn" onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} title="下一页">&rsaquo;</button>
+        <button class="pager-btn" onclick="goToPage(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} title="末页">&raquo;</button>
+    `;
+}
+
+function goToPage(page) {
+    const totalPages = Math.ceil(allDevices.length / PAGE_SIZE);
+    if (page < 1 || page > totalPages) return;
+    currentPage = page;
+    // 翻页时清除快照，强制重建DOM
+    Object.keys(lastDeviceSnapshot).forEach(k => delete lastDeviceSnapshot[k]);
+    deviceGridDirty = true;
+    renderCurrentPage();
 }
 
 // 只更新设备数值，不重建DOM

@@ -22,13 +22,19 @@ system_bp = Blueprint('api_system', __name__, url_prefix='/api')
 @system_bp.route('/system/status', methods=['GET'])
 @jwt_required
 def get_system_status():
-    """获取系统状态"""
+    """获取系统状态
+
+    Query params:
+        brief: 1=返回精简设备状态（100+设备场景），0=完整状态（默认）
+    """
     start_time = getattr(current_app, 'system_start_time', None)
     uptime_seconds = (datetime.now() - start_time).total_seconds() if start_time else 0
 
+    brief = request.args.get('brief', '0') == '1'
+
     return jsonify({
         'database': current_app.database.get_database_stats(),
-        'devices': current_app.device_manager.get_all_status(),
+        'devices': current_app.device_manager.get_all_status(brief=brief),
         'collector': current_app.data_collector.get_stats(),
         'alarms': current_app.alarm_manager.get_alarm_statistics(),
         'uptime_seconds': uptime_seconds,

@@ -363,9 +363,31 @@ class DeviceManager:
 
         return status
 
-    def get_all_status(self) -> list[dict[str, Any]]:
-        """获取所有设备状态"""
+    def get_all_status(self, brief: bool = False) -> list[dict[str, Any]]:
+        """获取所有设备状态
+
+        Args:
+            brief: True时返回精简字段，适用于100+设备的仪表盘轮询
+        """
+        if brief:
+            return [self._get_brief_status(did) for did in self.devices]
         return [self.get_device_status(did) for did in self.devices]
+
+    def _get_brief_status(self, device_id: str) -> dict[str, Any]:
+        """获取设备精简状态（仅仪表盘所需字段）"""
+        device_config = self.devices.get(device_id, {})
+        client = self.clients.get(device_id)
+        connected = getattr(client, 'connected', False) if client else False
+        return {
+            'device_id': device_id,
+            'id': device_id,
+            'name': device_config.get('name', device_id),
+            'zone': device_config.get('zone', ''),
+            'connected': connected,
+            'stopped': False,
+            'status': 'online' if connected else 'offline',
+            'protocol': device_config.get('protocol', 'modbus_tcp'),
+        }
 
     def add_device(self, device_config: dict[str, Any]) -> bool:
         """
