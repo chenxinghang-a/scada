@@ -240,9 +240,53 @@ function getPageDevices() {
     return allDevices.slice(start, start + PAGE_SIZE);
 }
 
-// 渲染当前页设备卡片
+// 构建单个设备卡片HTML
+function buildDeviceCard(d) {
+    const id = d.device_id || d.id;
+    const name = d.name || id;
+    const online = d.connected;
+    const stopped = d.stopped;
+    const hasAlarm = d.status === 'fault' || d.status === 'warning';
+    const category = d.device_category || 'sensor';
+
+    let statusClass = 'offline';
+    let statusText = '离线';
+    if (online && stopped) { statusClass = 'stopped'; statusText = '已停止'; }
+    else if (online && hasAlarm) { statusClass = 'warning'; statusText = '告警'; }
+    else if (online) { statusClass = 'online'; statusText = '运行中'; }
+
+    const regs = d.registers || [];
+    const valStr = regs.slice(0, 2).map(r => {
+        const label = getShortLabel(r.name);
+        const cacheKey = `${id}:${r.name}`;
+        const cached = lastDeviceValues[cacheKey] ?? '--';
+        const quality = lastDeviceQuality[cacheKey];
+        const qualityDot = quality != null
+            ? `<span class="quality-dot" style="background:${getQualityColor(quality)}" title="${getQualityLabel(quality)}"></span>`
+            : '';
+        return `<span class="dev-val"><span class="label">${escapeHtml(label)}</span> <span class="num" id="dv-${escapeHtml(id)}-${escapeHtml(r.name)}">${escapeHtml(cached)}</span>${qualityDot}</span>`;
+    }).join('');
+
+    const ctrlBtn = category === 'mechanical' && online
+        ? `<button class="dev-ctrl-btn ${stopped ? 'start' : 'stop'}" onclick="event.stopPropagation();toggleDevice('${escapeHtml(id)}',${!stopped})" title="${stopped ? '启动' : '停止'}">${stopped ? '▶' : '■'}</button>`
+        : '';
+
+    return `<div class="dev-card" data-device-id="${escapeHtml(id)}" onclick="selectDevice('${escapeHtml(id)}')" title="${escapeHtml(name)}">
+        <div class="dev-status ${statusClass}"></div>
+        <div class="dev-info">
+            <div class="dev-name">${escapeHtml(name)} <span class="dev-state-tag ${statusClass}">${statusText}</span>${d.zone ? ` <span class="dev-zone-tag">${escapeHtml(d.zone)}</span>` : ''}</div>
+            <div class="dev-meta">${escapeHtml(d.protocol || 'modbus_tcp')} · ${escapeHtml(d.host || '')}</div>
+            <div class="dev-values">${valStr}</div>
+        </div>
+        ${ctrlBtn}
+    </div>`;
+}
+
+// 渲染当前页设备卡片（DOM diff：只增删改，不全量替换）
 function renderCurrentPage(devs) {
     if (!devs) devs = allDevices;
+    if (!devs || devs.length === 0) return;  // 防空数据清空grid
+
     const totalPages = Math.ceil(devs.length / PAGE_SIZE);
     if (currentPage > totalPages) currentPage = totalPages || 1;
 
@@ -252,55 +296,38 @@ function renderCurrentPage(devs) {
     const grid = document.getElementById('device-grid');
     if (!grid) return;
 
-    grid.innerHTML = pageDevs.map(d => {
-        const id = d.device_id || d.id;
-        const name = d.name || id;
-        const online = d.connected;
-        const stopped = d.stopped;
-        const hasAlarm = d.status === 'fault' || d.status === 'warning';
-        const category = d.device_category || 'sensor';
+    // 构建当前页设备ID集合
+    const pageIds = new Set(pageDevs.map(d => d.device_id || d.id));
 
-        let statusClass = 'offline';
-        let statusText = '离线';
-        if (online && stopped) {
-            statusClass = 'stopped';
-            statusText = '已停止';
-        } else if (online && hasAlarm) {
-            statusClass = 'warning';
-            statusText = '告警';
-        } else if (online) {
-            statusClass = 'online';
-            statusText = '运行中';
+    // 移除不在当前页的旧卡片
+    const existing = grid.querySelectorAll('.dev-card');
+    existing.forEach(el => {
+        if (!pageIds.has(el.dataset.deviceId)) {
+            el.remove();
         }
+    });
 
-        // 取前 2 个寄存器值（用缓存值，不显示"--"）
-        const regs = d.registers || [];
-        const valStr = regs.slice(0, 2).map(r => {
-            const label = getShortLabel(r.name);
-            const cacheKey = `${id}:${r.name}`;
-            const cached = lastDeviceValues[cacheKey] ?? '--';
-            const quality = lastDeviceQuality[cacheKey];
-            const qualityDot = quality != null
-                ? `<span class="quality-dot" style="background:${getQualityColor(quality)}" title="${getQualityLabel(quality)}"></span>`
-                : '';
-            return `<span class="dev-val"><span class="label">${escapeHtml(label)}</span> <span class="num" id="dv-${escapeHtml(id)}-${escapeHtml(r.name)}">${escapeHtml(cached)}</span>${qualityDot}</span>`;
-        }).join('');
-
-        // 机械类设备显示启停按钮
-        const ctrlBtn = category === 'mechanical' && online
-            ? `<button class="dev-ctrl-btn ${stopped ? 'start' : 'stop'}" onclick="event.stopPropagation();toggleDevice('${escapeHtml(id)}',${!stopped})" title="${stopped ? '启动' : '停止'}">${stopped ? '▶' : '■'}</button>`
-            : '';
-
-        return `<div class="dev-card" onclick="selectDevice('${escapeHtml(id)}')" title="${escapeHtml(name)}">
-            <div class="dev-status ${statusClass}"></div>
-            <div class="dev-info">
-                <div class="dev-name">${escapeHtml(name)} <span class="dev-state-tag ${statusClass}">${statusText}</span>${d.zone ? ` <span class="dev-zone-tag">${escapeHtml(d.zone)}</span>` : ''}</div>
-                <div class="dev-meta">${escapeHtml(d.protocol || 'modbus_tcp')} · ${escapeHtml(d.host || '')}</div>
-                <div class="dev-values">${valStr}</div>
-            </div>
-            ${ctrlBtn}
-        </div>`;
-    }).join('');
+    // 更新或新增卡片
+    pageDevs.forEach((d, i) => {
+        const id = d.device_id || d.id;
+        const existingCard = grid.querySelector(`.dev-card[data-device-id="${id}"]`);
+        if (existingCard) {
+            // 更新已有卡片的数值和状态
+            updateDeviceValues(d);
+        } else {
+            // 新增卡片
+            const wrapper = document.createElement('div');
+            wrapper.innerHTML = buildDeviceCard(d);
+            const card = wrapper.firstElementChild;
+            // 按顺序插入
+            const allCards = grid.querySelectorAll('.dev-card');
+            if (i < allCards.length) {
+                grid.insertBefore(card, allCards[i]);
+            } else {
+                grid.appendChild(card);
+            }
+        }
+    });
 
     // 渲染分页控件
     renderPagination(devs.length, totalPages);
@@ -353,7 +380,7 @@ function updateDeviceValues(device) {
     const regs = device.registers || [];
 
     // 更新状态指示器
-    const cardEl = document.querySelector(`.dev-card[onclick*="${id}"]`);
+    const cardEl = document.querySelector(`.dev-card[data-device-id="${id}"]`);
     if (cardEl) {
         const statusEl = cardEl.querySelector('.dev-status');
         const stateTag = cardEl.querySelector('.dev-state-tag');
