@@ -59,6 +59,9 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         self._latest_data: Dict[str, Any] = {}
         self._data_lock = threading.Lock()
 
+        # 每设备独立RNG（避免30台设备故障模式相关）
+        self._rng = random.Random(hash(config.get('id', '')))
+
         # 通信故障模拟参数
         comm_cfg = config.get('communication', {})
         self._conn_fail_rate = comm_cfg.get('connect_fail_rate', 0.0)  # 默认不模拟连接失败
@@ -96,7 +99,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
     def connect(self) -> bool:
         """连接设备（支持连接失败模拟）"""
         # 模拟连接失败
-        if random.random() < self._conn_fail_rate:
+        if self._rng.random() < self._conn_fail_rate:
             self.stats['comm_failures'] += 1
             logger.warning(f"[增强模拟] 设备 {self.device_name} 连接失败（模拟通信故障）")
             return False
@@ -119,15 +122,18 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         return True
     
     def disconnect(self):
-        """断开连接"""
+        """断开连接（安全停止更新线程）"""
+        self._running = False
         self.connected = False
         self.behavior_simulator.stop()
+        if hasattr(self, '_update_thread') and self._update_thread and self._update_thread.is_alive():
+            self._update_thread.join(timeout=3)
         logger.info(f"[增强模拟] 设备 {self.device_name} 已断开")
-    
+
     def _update_loop(self):
         """数据更新循环"""
         last_update = time.time()
-        while self.connected:
+        while self._running and self.connected:
             try:
                 now = time.time()
                 dt = now - last_update
@@ -180,7 +186,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
             time.sleep(self._latency_ms / 1000.0)
 
         # 模拟丢包
-        if random.random() < self._packet_loss_rate:
+        if self._rng.random() < self._packet_loss_rate:
             self.stats['total_reads'] += 1
             self.stats['failed_reads'] += 1
             self.stats['comm_failures'] += 1
@@ -189,7 +195,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
 
         # 模拟随机断线（连续失败时概率上升）
         disconnect_prob = self._random_disconnect_rate * (1 + self._consecutive_failures)
-        if random.random() < disconnect_prob:
+        if self._rng.random() < disconnect_prob:
             self.connected = False
             self.stats['comm_failures'] += 1
             logger.warning(f"[增强模拟] 设备 {self.device_name} 随机断线")
@@ -761,6 +767,7 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
     
     def disconnect(self):
         """断开连接"""
+        self._running = False
         self.connected = False
         self.behavior_simulator.stop()
         logger.info(f"[增强模拟] REST设备 {self.device_name} 已断开")

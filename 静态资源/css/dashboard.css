@@ -125,11 +125,11 @@ body {
     opacity: 0.6;
 }
 
-/* ========== 设备卡片网格 ========== */
+/* ========== 设备卡片网格（自适应列数） ========== */
 .device-grid {
     grid-column: 1 / 3;
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 6px;
     overflow-y: auto;
     padding-right: 4px;

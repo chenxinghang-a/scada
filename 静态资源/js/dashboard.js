@@ -19,7 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initClock();
     initTrendChart();
     loadData();
-    setInterval(loadData, 3000);
+    setInterval(loadData, 5000);  // 30台设备时5秒轮询足够
 
     // 用户信息
     try {
@@ -185,11 +185,11 @@ function updateDeviceGrid(stats) {
         deviceCache[id] = d;
     });
 
-    // 构建当前快照，检测设备列表是否变化
+    // 构建轻量快照（只比较变化的字段，避免30台设备全量JSON.stringify）
     const snapshot = {};
     devs.forEach(d => {
         const id = d.device_id || d.id;
-        snapshot[id] = JSON.stringify(d);
+        snapshot[id] = `${d.connected ? 1 : 0}:${d.stopped ? 1 : 0}:${d.status || ''}`;
     });
 
     const snapshotChanged = JSON.stringify(snapshot) !== JSON.stringify(lastDeviceSnapshot);

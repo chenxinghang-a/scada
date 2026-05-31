@@ -1,0 +1,51 @@
+00:03:46 | INFO     | structured_logging:111 | 日志系统初始化完成: level=INFO, json=True, dir=C:\Users\cxx\WorkBuddy\Claw\industrial_scada\logs
+00:03:46 | INFO     | run:36 | 正在启动工业数据采集与监控系统...
+00:03:47 | INFO     | run:63 | 模拟模式：使用模拟设备配置
+00:03:47 | INFO     | run:66 | 初始化数据库...
+00:03:47 | INFO     | run:70 | 加载设备配置...
+00:03:47 | INFO     | run:77 | 加载报警配置...
+00:03:47 | INFO     | run:103 | 灯控设备: signal_tower_01 @ 192.168.1.70
+00:03:47 | INFO     | run:122 | 初始化数据采集器...
+00:03:47 | INFO     | run:125 | 初始化智能层模块...
+REST API异常: HTTPConnectionPool(host='localhost', port=6041): Max retries exceeded with url: /rest/sql (Caused by NewConnectionError("HTTPConnection(host='localhost', port=6041): Failed to establish a new connection: [WinError 10061] 由于目标计算机积极拒绝，无法连接。"))
+00:03:51 | WARNING  | run:170 | TDengine连接失败，跳过TDengine集成
+00:03:51 | INFO     | run:209 | 创建Web应用...
+00:03:51 | INFO     | run:227 | 注册健康检查...
+00:03:51 | INFO     | run:237 | 初始化高可用管理器...
+HA角色变更: unknown -> primary
+00:03:51 | INFO     | run:248 | HA角色: unknown -> primary
+00:03:51 | INFO     | run:256 | 后台连接设备...
+00:03:51 | INFO     | run:310 | 模拟模式：初始化工业4.0模块数据...
+00:03:51 | INFO     | run:322 | 启动Web服务...
+00:03:51 | INFO     | run:323 | ==================================================
+00:03:51 | INFO     | run:324 | 工业数据采集与监控系统已启动
+00:03:51 | INFO     | run:325 | 访问地址: http://localhost:5000
+00:03:51 | INFO     | run:326 | （模拟模式：使用仿真数据）
+00:03:51 | INFO     | run:260 |   设备 inovance_h5u_01: 成功
+00:03:51 | INFO     | run:260 |   设备 schneider_m340_01: 成功
+00:03:51 | INFO     | run:260 |   设备 abb_m4m_01: 成功
+00:03:51 | INFO     | run:327 | ==================================================
+00:03:51 | INFO     | run:260 |   设备 turck_iolink_01: 成功
+Werkzeug appears to be used in a production deployment. Consider switching to a production web server instead.
+00:03:51 | INFO     | run:260 |   设备 vibration_sensor_01: 成功
+00:03:51 | INFO     | run:260 |   设备 water_quality_01: 成功
+00:03:51 | INFO     | run:260 |   设备 siemens_web_01: 成功
+00:03:51 | INFO     | run:260 |   设备 mes_api_01: 成功
+00:03:51 | INFO     | run:260 |   设备 signal_tower_01: 成功
+00:03:51 | INFO     | run:260 |   设备 relay_output_01: 成功
+00:03:51 | INFO     | run:260 |   设备 opcua_plc_01: 成功
+00:03:51 | INFO     | run:260 |   设备 hollysys_lk_01: 成功
+00:03:51 | INFO     | run:260 |   设备 siemens_1500_01: 成功
+00:03:51 | INFO     | run:260 |   设备 mitsubishi_fx5u_01: 成功
+00:03:51 | INFO     | run:260 |   设备 delta_dvp_01: 成功
+00:03:51 | INFO     | run:263 | 启动数据采集...
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5000
+Press CTRL+C to quit00:03:51 | INFO     | run:267 | 启动智能层模块...
+
+00:03:51 | INFO     | run:302 | 后台采集服务已就绪
+报警触发: 锅炉温度过高 - siemens_1500_01/boiler_temperature = 180.23
+【严重报警】\U0001f534 锅炉温度过高 (设备: siemens_1500_01)
+[行为模拟] 设备 西门子S7-1500 PLC 触发故障: overheating (严重度: 0.60, 当前活跃故障数: 1)
+[行为模拟] 设备 西门子S7-1500 PLC 触发故障: motor_wear (严重度: 0.10, 当前活跃故障数: 2)
+[行为模拟] 设备 西门子S7-1500 PLC 级联故障: overheating → motor_wear

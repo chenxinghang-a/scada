@@ -226,6 +226,7 @@ class SimulatedDeviceManager(IDeviceManager):
             'connected': False,
             'stopped': is_device_stopped(device_id) or _ESTOP_ACTIVE,
             'device_category': IDeviceManager.get_device_category(device_config),
+            'register_count': len(device_config.get('registers', [])) + len(device_config.get('nodes', [])) + len(device_config.get('topics', [])) + len(device_config.get('endpoints', [])),
             'registers': device_config.get('registers', []),
             'nodes': device_config.get('nodes', []),
             'topics': device_config.get('topics', []),

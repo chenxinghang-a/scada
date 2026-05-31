@@ -1393,3 +1393,94 @@
 {"timestamp": "2026-05-30T23:57:42.322577", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
 {"timestamp": "2026-05-30T23:57:42.323004", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 508eacc3, 联锁 rule1, 原因: Not safe"}
 {"timestamp": "2026-05-30T23:57:42.326135", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}
+{"timestamp": "2026-05-31T00:16:27.572659", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test reason，影响设备: []"}
+{"timestamp": "2026-05-31T00:16:27.573949", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test，影响设备: []"}
+{"timestamp": "2026-05-31T00:16:27.574339", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:16:27.575491", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:16:27.579526", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:16:27.580897", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:16:27.581275", "action": "interlock_restore", "operator": "operator1", "detail": "恢复联锁 rule1"}
+{"timestamp": "2026-05-31T00:16:27.582343", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:16:27.583409", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:16:27.583734", "action": "bypass_approved", "operator": "approver1", "detail": "审批旁路请求 fe3cc207, 联锁 rule1, 进度 1/2"}
+{"timestamp": "2026-05-31T00:16:27.584720", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:16:27.585037", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 f9fd7dca, 联锁 rule1, 原因: Not safe"}
+{"timestamp": "2026-05-31T00:16:27.586887", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}
+{"timestamp": "2026-05-31T00:24:46.732653", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test reason，影响设备: []"}
+{"timestamp": "2026-05-31T00:24:46.734112", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test，影响设备: []"}
+{"timestamp": "2026-05-31T00:24:46.734539", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:24:46.735694", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:24:46.739556", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:24:46.741110", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:24:46.741467", "action": "interlock_restore", "operator": "operator1", "detail": "恢复联锁 rule1"}
+{"timestamp": "2026-05-31T00:24:46.742506", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:24:46.743555", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:24:46.743879", "action": "bypass_approved", "operator": "approver1", "detail": "审批旁路请求 e0fdccf9, 联锁 rule1, 进度 1/2"}
+{"timestamp": "2026-05-31T00:24:46.744907", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:24:46.745265", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 29dbb8bf, 联锁 rule1, 原因: Not safe"}
+{"timestamp": "2026-05-31T00:24:46.747071", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}
+{"timestamp": "2026-05-31T00:39:35.485878", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test reason，影响设备: []"}
+{"timestamp": "2026-05-31T00:39:35.487154", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test，影响设备: []"}
+{"timestamp": "2026-05-31T00:39:35.487543", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:39:35.488952", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:39:35.492621", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:39:35.494144", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:39:35.494497", "action": "interlock_restore", "operator": "operator1", "detail": "恢复联锁 rule1"}
+{"timestamp": "2026-05-31T00:39:35.495535", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:39:35.496602", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:39:35.496973", "action": "bypass_approved", "operator": "approver1", "detail": "审批旁路请求 71d267c6, 联锁 rule1, 进度 1/2"}
+{"timestamp": "2026-05-31T00:39:35.498084", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:39:35.498457", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 82cc77e8, 联锁 rule1, 原因: Not safe"}
+{"timestamp": "2026-05-31T00:39:35.500164", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}
+{"timestamp": "2026-05-31T00:43:44.842191", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test reason，影响设备: []"}
+{"timestamp": "2026-05-31T00:43:44.843589", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test，影响设备: []"}
+{"timestamp": "2026-05-31T00:43:44.843905", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:43:44.844907", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:43:44.848507", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:43:44.849935", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:43:44.850287", "action": "interlock_restore", "operator": "operator1", "detail": "恢复联锁 rule1"}
+{"timestamp": "2026-05-31T00:43:44.851345", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:43:44.852688", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:43:44.853072", "action": "bypass_approved", "operator": "approver1", "detail": "审批旁路请求 27ae861e, 联锁 rule1, 进度 1/2"}
+{"timestamp": "2026-05-31T00:43:44.854097", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:43:44.854448", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 e7eba4b3, 联锁 rule1, 原因: Not safe"}
+{"timestamp": "2026-05-31T00:43:44.856058", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}
+{"timestamp": "2026-05-31T00:48:54.815933", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test reason，影响设备: []"}
+{"timestamp": "2026-05-31T00:48:54.817112", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test，影响设备: []"}
+{"timestamp": "2026-05-31T00:48:54.817430", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:48:54.818461", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:48:54.822397", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:48:54.823929", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:48:54.824312", "action": "interlock_restore", "operator": "operator1", "detail": "恢复联锁 rule1"}
+{"timestamp": "2026-05-31T00:48:54.825397", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:48:54.826456", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:48:54.826775", "action": "bypass_approved", "operator": "approver1", "detail": "审批旁路请求 63757521, 联锁 rule1, 进度 1/2"}
+{"timestamp": "2026-05-31T00:48:54.827848", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:48:54.828178", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 91b31035, 联锁 rule1, 原因: Not safe"}
+{"timestamp": "2026-05-31T00:48:54.829791", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}
+{"timestamp": "2026-05-31T00:53:27.750811", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test reason，影响设备: []"}
+{"timestamp": "2026-05-31T00:53:27.753075", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test，影响设备: []"}
+{"timestamp": "2026-05-31T00:53:27.753488", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:53:27.754590", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T00:53:27.758184", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:53:27.759747", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T00:53:27.760083", "action": "interlock_restore", "operator": "operator1", "detail": "恢复联锁 rule1"}
+{"timestamp": "2026-05-31T00:53:27.761102", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:53:27.762432", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:53:27.762872", "action": "bypass_approved", "operator": "approver1", "detail": "审批旁路请求 779f268a, 联锁 rule1, 进度 1/2"}
+{"timestamp": "2026-05-31T00:53:27.763983", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T00:53:27.764422", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 29eba4cc, 联锁 rule1, 原因: Not safe"}
+{"timestamp": "2026-05-31T00:53:27.766124", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}
+{"timestamp": "2026-05-31T13:17:48.044769", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test reason，影响设备: []"}
+{"timestamp": "2026-05-31T13:17:48.046500", "action": "emergency_stop", "operator": "system", "detail": "紧急停机: Test，影响设备: []"}
+{"timestamp": "2026-05-31T13:17:48.046809", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T13:17:48.047790", "action": "estop_reset", "operator": "operator1", "detail": "紧急停机已解除"}
+{"timestamp": "2026-05-31T13:17:48.051585", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T13:17:48.070051", "action": "interlock_bypass_deprecated", "operator": "operator1", "detail": "[废弃]旁路联锁 rule1: maintenance"}
+{"timestamp": "2026-05-31T13:17:48.070469", "action": "interlock_restore", "operator": "operator1", "detail": "恢复联锁 rule1"}
+{"timestamp": "2026-05-31T13:17:48.071579", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T13:17:48.072625", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T13:17:48.072950", "action": "bypass_approved", "operator": "approver1", "detail": "审批旁路请求 702efe23, 联锁 rule1, 进度 1/2"}
+{"timestamp": "2026-05-31T13:17:48.073927", "action": "bypass_requested", "operator": "operator1", "detail": "联锁旁路请求: rule1, 原因: maintenance"}
+{"timestamp": "2026-05-31T13:17:48.074245", "action": "bypass_rejected", "operator": "approver1", "detail": "拒绝旁路请求 fc2271a3, 联锁 rule1, 原因: Not safe"}
+{"timestamp": "2026-05-31T13:17:48.075847", "action": "write_failed", "operator": "operator1", "detail": "写入失败: 设备 dev1 客户端不存在"}

@@ -522,11 +522,14 @@ class DataCollector:
             if status.get('stopped') or status.get('error'):
                 return self._dynamic_interval_config.get('fault', 1)
 
-            # 检查健康评分（如果预测性维护模块可用）
+            # 检查健康评分（如果预测性维护模块可用，带缓存避免O(N²)）
             if self.predictive_maintenance:
-                health_scores = self.predictive_maintenance.get_health_scores()
+                now = time.time()
+                if not hasattr(self, '_health_cache') or now - getattr(self, '_health_cache_ts', 0) > 5:
+                    self._health_cache = self.predictive_maintenance.get_health_scores()
+                    self._health_cache_ts = now
                 device_health = [
-                    s for s in health_scores.values()
+                    s for s in self._health_cache.values()
                     if s.get('device_id') == device_id
                 ]
                 if device_health:
