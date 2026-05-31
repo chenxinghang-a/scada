@@ -15,7 +15,7 @@ const lastDeviceSnapshot = {};  // Virtual DOM diff: last device state snapshot
 let deviceGridDirty = true;     // Whether device grid needs full rebuild
 
 // ========== 分页（100+设备场景） ==========
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 50;  // 100台设备以内不需要分页
 let currentPage = 1;
 let allDevices = [];            // 完整设备列表缓存
 
