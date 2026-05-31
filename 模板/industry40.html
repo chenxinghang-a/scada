@@ -397,13 +397,14 @@
     </div>
 </div>
 
-<!-- Tab导航 -->
-<ul class="nav tab-custom mb-3" id="i4Tabs">
-    <li class="nav-item">
-        <a class="nav-link active" data-bs-toggle="tab" href="#tab-overview">
-            <i class="bi bi-grid-3x3-gap"></i> 总览
-        </a>
-    </li>
+<!-- Tab导航 + 导出按钮 -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <ul class="nav tab-custom mb-0" id="i4Tabs">
+        <li class="nav-item">
+            <a class="nav-link active" data-bs-toggle="tab" href="#tab-overview">
+                <i class="bi bi-grid-3x3-gap"></i> 总览
+            </a>
+        </li>
     <li class="nav-item">
         <a class="nav-link" data-bs-toggle="tab" href="#tab-predictive">
             <i class="bi bi-heart-pulse"></i> 预测性维护
@@ -434,7 +435,13 @@
             <i class="bi bi-box"></i> 数字孪生
         </a>
     </li>
-</ul>
+    </ul>
+    <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary" onclick="exportI40Data('realtime')" title="导出全部实时数据"><i class="bi bi-download"></i> 导出</button>
+        <button class="btn btn-outline-secondary" onclick="exportI40Data('oee')" title="导出OEE数据">OEE</button>
+        <button class="btn btn-outline-secondary" onclick="exportI40Data('spc')" title="导出SPC数据">SPC</button>
+    </div>
+</div>
 
 <div class="tab-content">
     <!-- ==================== 总览Tab ==================== -->
@@ -909,6 +916,51 @@
     var I40_REFRESH_TIMER = null;
     var I40_CHARTS = {};  // 缓存echarts实例，避免重复初始化
     var I40_DEVICE_LIST = []; // 设备列表缓存
+    var I40_DATA_CACHE = {}; // 数据缓存，用于导出
+
+    // ===== 数据导出 =====
+    function exportI40Data(type) {
+        var token = localStorage.getItem('auth_token');
+        var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+        var url = type === 'oee' ? '/api/industry40/oee' :
+                  type === 'spc' ? '/api/industry40/spc' :
+                  type === 'energy' ? '/api/industry40/energy' :
+                  '/api/data/realtime?limit=10000';
+
+        fetch(url, { headers: headers })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var items = data.data || data.devices || data.oee || [];
+                if (!items || (Array.isArray(items) && items.length === 0)) { alert('暂无数据'); return; }
+
+                // 扁平化数据
+                var rows = [];
+                if (Array.isArray(items)) {
+                    items.forEach(function(d) {
+                        if (d.registers) {
+                            d.registers.forEach(function(r) {
+                                rows.push([d.device_id || d.id, r.name, r.value, r.unit || '', r.timestamp || '']);
+                            });
+                        } else {
+                            rows.push(Object.values(d));
+                        }
+                    });
+                } else {
+                    Object.keys(items).forEach(function(k) {
+                        rows.push([k, JSON.stringify(items[k])]);
+                    });
+                }
+
+                var header = ['设备/指标', '参数', '值', '单位', '时间'];
+                var csv = '﻿' + [header].concat(rows).map(function(r) { return r.join(','); }).join('\n');
+                var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'industry40_' + type + '_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.csv';
+                a.click();
+            })
+            .catch(function(e) { alert('导出失败: ' + e.message); });
+    }
 
     // ===== 调试日志 =====
     var debugVisible = false;

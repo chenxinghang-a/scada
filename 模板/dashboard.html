@@ -82,9 +82,13 @@
     <div class="trend-area">
         <div class="trend-header">
             <span class="trend-title">实时趋势</span>
-            <select class="trend-select" id="trend-device-select">
-                <option>加载中...</option>
-            </select>
+            <div style="display:flex;gap:6px;align-items:center">
+                <select class="trend-select" id="trend-device-select">
+                    <option>加载中...</option>
+                </select>
+                <button class="trend-select" onclick="exportChartData()" title="导出当前图表数据" style="cursor:pointer;padding:2px 8px">📊 导出图表</button>
+                <button class="trend-select" onclick="exportAllDeviceData()" title="导出全部设备数据" style="cursor:pointer;padding:2px 8px">📥 导出全部</button>
+            </div>
         </div>
         <div id="trend-chart"></div>
     </div>

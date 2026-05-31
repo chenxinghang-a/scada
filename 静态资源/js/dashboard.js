@@ -561,9 +561,11 @@ function updateTrendChart(data) {
     keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.t)));
     const times = Array.from(timeSet).sort().slice(-MAX_CHART_POINTS);
 
-    const colors = ['#6366f1', '#06b6d4', '#f59e0b', '#ef4444', '#22c55e', '#ec4899'];
+    // 12色循环，支持多寄存器显示
+    const colors = ['#6366f1', '#06b6d4', '#f59e0b', '#ef4444', '#22c55e', '#ec4899',
+                    '#8b5cf6', '#14b8a6', '#f97316', '#84cc16', '#e11d48', '#0ea5e9'];
 
-    const series = keys.slice(0, 4).map((key, i) => {
+    const series = keys.map((key, i) => {
         const map = {};
         dataBuffers[key].forEach(d => { map[d.t] = d.v; });
         return {
@@ -608,6 +610,61 @@ function updateTrendChart(data) {
         },
         series,
     });
+}
+
+// ========== 数据导出 ==========
+function exportChartData() {
+    const keys = Object.keys(dataBuffers);
+    if (keys.length === 0) { alert('暂无数据可导出'); return; }
+
+    // 收集所有时间点
+    const timeSet = new Set();
+    keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.t)));
+    const times = Array.from(timeSet).sort();
+
+    // 构建CSV
+    const header = ['时间', ...keys.map(k => getShortLabel(k))];
+    const rows = times.map(t => {
+        return [t, ...keys.map(k => {
+            const item = dataBuffers[k].find(d => d.t === t);
+            return item ? item.v : '';
+        })];
+    });
+
+    const csv = '﻿' + [header, ...rows].map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `trend_${selectedDeviceId || 'all'}_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function exportAllDeviceData() {
+    const token = localStorage.getItem('auth_token');
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+    fetch('/api/data/realtime?limit=10000', { headers })
+        .then(r => r.json())
+        .then(data => {
+            if (!data.data || data.data.length === 0) { alert('暂无数据'); return; }
+
+            const header = ['设备ID', '寄存器', '值', '单位', '时间'];
+            const rows = data.data.map(d => [
+                d.device_id, d.register_name, d.value, d.unit || '', d.timestamp
+            ]);
+
+            const csv = '﻿' + [header, ...rows].map(r => r.join(',')).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `scada_all_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        })
+        .catch(e => { alert('导出失败: ' + e.message); });
 }
 
 // ========== 设备状态栏 ==========
