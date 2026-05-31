@@ -535,7 +535,18 @@ class DeviceBehaviorSimulator:
 
         current_time = time.time()
         self._dt = dt  # store for fault probability calculations
-        
+
+        # 模拟模式自动启动：IDLE状态超过5秒自动转RUNNING
+        if self.state == DeviceState.IDLE:
+            if not hasattr(self, '_idle_since'):
+                self._idle_since = current_time
+            elif current_time - self._idle_since > 5:
+                self._change_state(DeviceState.RUNNING)
+                logger.info(f"[行为模拟] 设备 {self.device_name} 自动启动，状态→RUNNING")
+                self._idle_since = None
+        else:
+            self._idle_since = None
+
         # 1. 更新设备健康（退化）
         self._update_health(dt)
         
