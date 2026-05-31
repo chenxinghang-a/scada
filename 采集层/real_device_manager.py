@@ -414,6 +414,10 @@ class RealDeviceManager(IDeviceManager):
         client = self.clients.get(device_id)
         connected = getattr(client, 'connected', False) if client else False
         stopped = device_id in self._stopped_devices or self._estop_active
+        regs = device_config.get('registers', [])
+        nodes = device_config.get('nodes', [])
+        topics = device_config.get('topics', [])
+        endpoints = device_config.get('endpoints', [])
         return {
             'device_id': device_id,
             'id': device_id,
@@ -424,6 +428,10 @@ class RealDeviceManager(IDeviceManager):
             'status': 'fault' if stopped else ('online' if connected else 'offline'),
             'protocol': device_config.get('protocol', 'modbus_tcp'),
             'device_category': IDeviceManager.get_device_category(device_config),
+            'registers': [{'name': r.get('name', ''), 'unit': r.get('unit', '')} for r in regs],
+            'nodes': [{'name': n.get('name', ''), 'unit': n.get('unit', '')} for n in nodes],
+            'topics': [{'name': t.get('name', ''), 'unit': t.get('unit', '')} for t in topics],
+            'endpoints': [{'name': e.get('name', ''), 'unit': e.get('unit', '')} for e in endpoints],
         }
 
     def add_device(self, device_config: dict[str, Any]) -> bool:

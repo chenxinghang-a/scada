@@ -262,6 +262,11 @@ class SimulatedDeviceManager(IDeviceManager):
         """获取设备精简状态（仅仪表盘所需字段）"""
         device_config = self.devices.get(device_id, {})
         client = self.clients.get(device_id)
+        # 仪表盘需要寄存器名来显示数值，但不需要完整配置
+        regs = device_config.get('registers', [])
+        nodes = device_config.get('nodes', [])
+        topics = device_config.get('topics', [])
+        endpoints = device_config.get('endpoints', [])
         return {
             'device_id': device_id,
             'id': device_id,
@@ -272,6 +277,10 @@ class SimulatedDeviceManager(IDeviceManager):
             'status': 'fault' if (is_device_stopped(device_id) or _ESTOP_ACTIVE) else ('online' if (client and getattr(client, 'connected', False)) else 'offline'),
             'protocol': device_config.get('protocol', 'modbus_tcp'),
             'device_category': IDeviceManager.get_device_category(device_config),
+            'registers': [{'name': r.get('name', ''), 'unit': r.get('unit', '')} for r in regs],
+            'nodes': [{'name': n.get('name', ''), 'unit': n.get('unit', '')} for n in nodes],
+            'topics': [{'name': t.get('name', ''), 'unit': t.get('unit', '')} for t in topics],
+            'endpoints': [{'name': e.get('name', ''), 'unit': e.get('unit', '')} for e in endpoints],
         }
 
     def add_device(self, device_config: dict[str, Any]) -> bool:

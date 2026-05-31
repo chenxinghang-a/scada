@@ -35,7 +35,10 @@ def get_devices():
     devices = current_app.device_manager.get_all_status()
     zone = request.args.get('zone')
     if zone:
-        devices = {k: v for k, v in devices.items() if v.get('zone') == zone}
+        if isinstance(devices, dict):
+            devices = {k: v for k, v in devices.items() if v.get('zone') == zone}
+        elif isinstance(devices, list):
+            devices = [d for d in devices if d.get('zone') == zone]
     return jsonify({'devices': devices})
 
 

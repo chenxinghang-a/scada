@@ -243,6 +243,9 @@ class DataCollector:
         self._last_values = {}   # "device_id:register_name" -> last_value
         self._last_times = {}   # "device_id:register_name" -> last_time
 
+        # 共享字典锁（_failure_counts/_circuit_state/_last_values/_last_times 多线程访问）
+        self._tracking_lock = threading.Lock()
+
         # 线程池（限制并发采集连接数，支持100+设备）
         self._pool = ThreadPoolExecutor(max_workers=20, thread_name_prefix="collector")
 
@@ -389,8 +392,9 @@ class DataCollector:
         for k in stale_keys:
             self._last_values.pop(k, None)
             self._last_times.pop(k, None)
-        # 清理断路器状态
+        # 清理断路器和失败计数
         self._circuit_state.pop(device_id, None)
+        self._failure_counts.pop(device_id, None)
 
     def _setup_push_device(self, device_id: str, device_config: dict[str, Any]):
         """设置推送型设备（OPC UA / MQTT）的回调和连接。
@@ -531,12 +535,14 @@ class DataCollector:
 
                 # 失败退避 + 断路器
                 if success:
-                    self._failure_counts[device_id] = 0
-                    self._circuit_state.pop(device_id, None)  # 恢复成功，关闭断路器
+                    with self._tracking_lock:
+                        self._failure_counts[device_id] = 0
+                        self._circuit_state.pop(device_id, None)  # 恢复成功，关闭断路器
                     interval = self._get_dynamic_interval(device_id, base_interval)
                 else:
-                    failures = self._failure_counts.get(device_id, 0) + 1
-                    self._failure_counts[device_id] = failures
+                    with self._tracking_lock:
+                        failures = self._failure_counts.get(device_id, 0) + 1
+                        self._failure_counts[device_id] = failures
                     if failures >= CIRCUIT_BREAKER_THRESHOLD:
                         self._circuit_state[device_id] = {'opened_at': time.time()}
                         interval = CIRCUIT_BREAKER_COOLDOWN_S
@@ -556,8 +562,9 @@ class DataCollector:
                 # Fix 3: 未预期的崩溃 — 记录错误，仍然重新调度定时器
                 # 确保单个设备的崩溃不会永久停止其采集任务
                 logger.error(f"设备 {device_id} 采集任务崩溃（已恢复）: {crash_err}", exc_info=True)
-                crash_failures = self._failure_counts.get(device_id, 0) + 1
-                self._failure_counts[device_id] = crash_failures
+                with self._tracking_lock:
+                    crash_failures = self._failure_counts.get(device_id, 0) + 1
+                    self._failure_counts[device_id] = crash_failures
                 recovery_interval = min(2 ** crash_failures, BACKOFF_CEILING_S)
                 with self._tasks_lock:
                     if self.running:
@@ -1122,11 +1129,12 @@ class DataCollector:
                 if _has_keyword(name_lower, good_kw):
                     self.oee_calculator.record_production(device_id, good_count=int(value))
                 elif _has_keyword(name_lower, reject_kw):
-                    pass  # 缺陷数单独记录，不重复计数
+                    # 缺陷数：从总产量中扣除
+                    self.oee_calculator.record_production(device_id, count=int(value))
                 else:
                     # 总产量：同时记录合格品（98%合格率模拟）
                     total = int(value)
-                    good = int(total * 0.98)
+                    good = max(0, total - round(total * 0.02))  # 用round避免小批量截断为0
                     self.oee_calculator.record_production(device_id, count=total, good_count=good)
 
         # 安全联锁

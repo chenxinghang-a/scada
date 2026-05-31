@@ -378,15 +378,24 @@ class DeviceManager:
         device_config = self.devices.get(device_id, {})
         client = self.clients.get(device_id)
         connected = getattr(client, 'connected', False) if client else False
+        regs = device_config.get('registers', [])
+        nodes = device_config.get('nodes', [])
+        topics = device_config.get('topics', [])
+        endpoints = device_config.get('endpoints', [])
         return {
             'device_id': device_id,
             'id': device_id,
             'name': device_config.get('name', device_id),
             'zone': device_config.get('zone', ''),
             'connected': connected,
-            'stopped': False,
+            'stopped': getattr(client, 'stopped', False) if client else False,
             'status': 'online' if connected else 'offline',
             'protocol': device_config.get('protocol', 'modbus_tcp'),
+            'device_category': IDeviceManager.get_device_category(device_config),
+            'registers': [{'name': r.get('name', ''), 'unit': r.get('unit', '')} for r in regs],
+            'nodes': [{'name': n.get('name', ''), 'unit': n.get('unit', '')} for n in nodes],
+            'topics': [{'name': t.get('name', ''), 'unit': t.get('unit', '')} for t in topics],
+            'endpoints': [{'name': e.get('name', ''), 'unit': e.get('unit', '')} for e in endpoints],
         }
 
     def add_device(self, device_config: dict[str, Any]) -> bool:
