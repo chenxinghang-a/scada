@@ -145,4 +145,4 @@ def export_alarms():
     if filepath:
         from pathlib import Path
         return jsonify({'success': True, 'filename': Path(filepath).name})
-    return jsonify({'success': False, 'message': '没有报警记录可导出'})
+    return jsonify({'success': False, 'message': '没有报警记录可导出'}), 404

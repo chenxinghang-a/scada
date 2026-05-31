@@ -7,7 +7,7 @@ import jwt
 import uuid
 import bcrypt
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Any
 from flask import request, jsonify, current_app
@@ -246,7 +246,7 @@ class AuthManager:
         if user.get('locked_until'):
             locked_until = datetime.fromisoformat(user['locked_until'])
             if datetime.now() < locked_until:
-                remaining = (locked_until - datetime.now()).seconds // 60
+                remaining = int((locked_until - datetime.now()).total_seconds()) // 60
                 return {'success': False, 'message': f'账户已锁定，请{remaining}分钟后重试'}
 
         # 验证密码
@@ -254,8 +254,8 @@ class AuthManager:
             # 增加失败次数
             attempts = (user['login_attempts'] or 0) + 1
             locked_until = None
-            if attempts >= 5:
-                locked_until = (datetime.now() + timedelta(minutes=30)).isoformat()
+            if attempts >= AuthConfig.MAX_LOGIN_ATTEMPTS:
+                locked_until = (datetime.now() + timedelta(minutes=AuthConfig.LOCKOUT_MINUTES)).isoformat()
 
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
@@ -267,9 +267,9 @@ class AuthManager:
             self._log_operation(username, 'login_failed', None, 
                               f'密码错误 (尝试{attempts}次)', ip_address)
 
-            if attempts >= 5:
-                return {'success': False, 'message': '密码错误次数过多，账户已锁定30分钟'}
-            return {'success': False, 'message': f'用户名或密码错误 (还剩{5-attempts}次机会)'}
+            if attempts >= AuthConfig.MAX_LOGIN_ATTEMPTS:
+                return {'success': False, 'message': f'密码错误次数过多，账户已锁定{AuthConfig.LOCKOUT_MINUTES}分钟'}
+            return {'success': False, 'message': f'用户名或密码错误 (还剩{AuthConfig.MAX_LOGIN_ATTEMPTS-attempts}次机会)'}
 
         # 登录成功 - 生成JWT
         token = self._generate_token(user)
@@ -507,7 +507,6 @@ class AuthManager:
                 except (ValueError, TypeError):
                     pass
 
-            user = dict(user)
             new_token = self._generate_token(user)
 
             return {
@@ -731,8 +730,8 @@ class AuthManager:
             'role': user['role'],
             'type': 'access',
             'jti': str(uuid.uuid4()),
-            'iat': datetime.utcnow(),
-            'exp': datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
+            'iat': datetime.now(timezone.utc),
+            'exp': datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
         }
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -742,8 +741,8 @@ class AuthManager:
             'username': user['username'],
             'type': 'refresh',
             'jti': str(uuid.uuid4()),
-            'iat': datetime.utcnow(),
-            'exp': datetime.utcnow() + timedelta(days=JWT_REFRESH_DAYS)
+            'iat': datetime.now(timezone.utc),
+            'exp': datetime.now(timezone.utc) + timedelta(days=JWT_REFRESH_DAYS)
         }
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 

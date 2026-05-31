@@ -48,7 +48,7 @@ class TestSimulatedAlarmOutput:
         output = SimulatedAlarmOutput()
         result = output.activate_alarm('info', 'Test info')
         assert result is True
-        assert output.current_state['yellow'] is True
+        assert output.current_state['green'] is True
         assert output.current_state['buzzer'] is False
 
     def test_activate_alarm_disabled(self):

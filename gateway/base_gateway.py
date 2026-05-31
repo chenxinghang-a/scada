@@ -33,6 +33,22 @@ from .thing_model import (
     ThingModelConverter, MQTTTopics, DataQuality
 )
 
+logger = logging.getLogger(__name__)
+
+# 全局信号处理：所有网关实例共享，避免互相覆盖
+_active_gateways: list = []
+_signal_registered = False
+
+
+def _global_signal_handler(signum, frame):
+    """全局信号处理：停止所有活跃网关"""
+    logger.info(f"接收到信号 {signum}，正在关闭所有网关...")
+    for gw in _active_gateways:
+        try:
+            gw.stop()
+        except Exception as e:
+            logger.error(f"关闭网关失败: {e}")
+
 
 class BaseGateway(ABC):
     """
@@ -95,9 +111,12 @@ class BaseGateway(ABC):
         self._on_data_callback: Callable[..., Any] | None = None
         self._on_alarm_callback: Callable[..., Any] | None = None
 
-        # 设置信号处理
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # 注册到全局信号处理器（避免多个实例互相覆盖）
+        _active_gateways.append(self)
+        if not _signal_registered:
+            signal.signal(signal.SIGINT, _global_signal_handler)
+            signal.signal(signal.SIGTERM, _global_signal_handler)
+            _signal_registered = True
 
     def _signal_handler(self, signum, frame):
         """信号处理函数，用于优雅关闭"""

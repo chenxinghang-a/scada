@@ -40,7 +40,7 @@ import sqlite3
 import hashlib
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -233,7 +233,7 @@ class AuditLogger:
         Returns:
             dict: 操作统计
         """
-        cutoff = datetime.now().replace(hour=0, minute=0, second=0).isoformat()
+        cutoff = (datetime.now() - timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
 
         conn = sqlite3.connect(self.db_path)
         try:

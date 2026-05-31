@@ -470,9 +470,10 @@ class ModuleRegistry:
             if not module_info:
                 logger.error(f"模块 '{name}' 未注册")
                 return False
+            should_stop = module_info.status in (ModuleStatus.RUNNING, ModuleStatus.PAUSED)
 
         # 先停止
-        if module_info.status in (ModuleStatus.RUNNING, ModuleStatus.PAUSED):
+        if should_stop:
             if not cls.stop(name):
                 return False
 

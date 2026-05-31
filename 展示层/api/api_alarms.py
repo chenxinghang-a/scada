@@ -75,12 +75,12 @@ def get_active_alarms():
 def acknowledge_alarm(alarm_id):
     """确认报警"""
     data = request.get_json() or {}
-    success = current_app.alarm_manager.acknowledge_alarm(
+    success = bool(current_app.alarm_manager.acknowledge_alarm(
         alarm_id=alarm_id,
         device_id=data.get('device_id'),
         register_name=data.get('register_name'),
         acknowledged_by=data.get('acknowledged_by', 'operator')
-    )
+    ))
     return jsonify({'success': success, 'message': '报警已确认' if success else '确认失败'})
 
 
@@ -125,7 +125,7 @@ def alarm_output_acknowledge():
         get_auth_manager().log_operation(
             request.current_user['username'], 'alarm_acknowledge', '声光报警消音')
         return jsonify({'success': True, 'message': '已消音，指示灯保持'})
-    return jsonify({'success': False, 'message': '声光报警输出未启用'})
+    return jsonify({'success': False, 'message': '声光报警输出未启用'}), 400
 
 
 @alarms_bp.route('/alarm-output/reset', methods=['POST'])
@@ -143,9 +143,9 @@ def alarm_output_reset():
 
 
 @alarms_bp.route('/alarm-output/manual', methods=['POST'])
-@api_error_handler
 @_require_auth
 @_require_engineer
+@api_error_handler
 def alarm_output_manual():
     """手动控制报警灯和蜂鸣器（调试/巡检用）"""
     data = request.get_json() or {}

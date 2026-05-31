@@ -263,8 +263,8 @@ class DataExport:
                     'filename': filepath.name,
                     'size_bytes': stat.st_size,
                     'size_mb': round(stat.st_size / (1024 * 1024), 2),
-                    'created_at': datetime.fromtimestamp(stat.st_ctime),
-                    'modified_at': datetime.fromtimestamp(stat.st_mtime)
+                    'created_at': datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    'modified_at': datetime.fromtimestamp(stat.st_mtime).isoformat()
                 })
 
         # 按修改时间排序

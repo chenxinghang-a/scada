@@ -355,6 +355,8 @@ class EnergyManager:
             # 计算电量增量（梯形积分）
             if old_power > 0 and 'timestamp' in old:
                 dt_hours = (now - old['timestamp']).total_seconds() / 3600
+                if dt_hours <= 0:
+                    return  # 时钟偏移，跳过本次计算
                 avg_power = (old_power + power_kw) / 2
                 delta_kwh = avg_power * dt_hours
 

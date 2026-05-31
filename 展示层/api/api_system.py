@@ -6,6 +6,7 @@
 import logging
 from pathlib import Path
 import yaml
+from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 from datetime import datetime
 
@@ -160,12 +161,20 @@ def update_config():
     config = load_yaml_config('配置/system.yaml')
 
     section = data.get('section')
-    if section and section in config:
+    if section and section in config and isinstance(config[section], dict):
         config[section].update(data.get('data', {}))
+    elif section:
+        return jsonify({'success': False, 'message': f'配置段 {section} 不存在或不是字典'}), 400
     else:
-        config.update(data)
+        # 安全限制：只允许更新白名单中的顶层字段
+        allowed_keys = {'system', 'web', 'security'}
+        filtered = {k: v for k, v in data.items() if k in allowed_keys}
+        if not filtered:
+            return jsonify({'success': False, 'message': '无有效的配置段'}), 400
+        config.update(filtered)
 
-    save_yaml_config('配置/system.yaml', config)
+    if not save_yaml_config('配置/system.yaml', config):
+        return jsonify({'success': False, 'message': '配置保存失败'}), 500
 
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_config', f"更新系统配置: {section or 'global'}")

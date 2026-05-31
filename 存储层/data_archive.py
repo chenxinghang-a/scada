@@ -6,6 +6,7 @@
 
 import logging
 import math
+import re
 from datetime import datetime, timedelta
 from typing import Any, List, Dict, Tuple
 from collections import defaultdict
@@ -34,7 +35,7 @@ class DataArchive:
             database: 数据库实例
         """
         self.database = database
-        
+
         # 压缩算法映射
         self.compress_algorithms = {
             'moving_average': self._compress_moving_average,
@@ -43,6 +44,13 @@ class DataArchive:
             'lttb': self._compress_lttb,
             'statistical': self._compress_statistical,
         }
+
+    @staticmethod
+    def _validate_table_name(name: str) -> str:
+        """防SQL注入：表名只允许字母数字下划线"""
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', str(name)):
+            raise ValueError(f"Invalid table name: {name}")
+        return str(name)
 
     def archive_data(self, retention_days: int = 30, archive_table: str = 'history_data_archive'):
         """
@@ -77,6 +85,7 @@ class DataArchive:
 
     def _create_archive_table(self, archive_table: str):
         """创建归档表"""
+        archive_table = self._validate_table_name(archive_table)
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f'''
@@ -99,6 +108,7 @@ class DataArchive:
 
     def _move_to_archive(self, cutoff_date: datetime, archive_table: str) -> int:
         """移动数据到归档表"""
+        archive_table = self._validate_table_name(archive_table)
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
             

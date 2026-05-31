@@ -51,6 +51,7 @@ class DNP3ObjectGroup:
     DBI = 0x02     # 双位二进制输入
     BO = 0x0C      # 二进制输出（遥控）
     AI = 0x1E      # 16位模拟输入（遥测）
+    AI16 = 0x1E    # 16位模拟输入（AI的别名）
     AO = 0x29      # 模拟输出（遥调）
     CA = 0x3C      # 类别对象
     AI32 = 0x32    # 32位模拟输入
@@ -344,8 +345,8 @@ class DNP3Client:
             return
 
         fc = parsed.get('function_code', 0)
-        # DNP3响应功能码 = 请求功能码 | 0x80
-        if fc == DNP3FunctionCode.READ or fc == DNP3FunctionCode.RESPONSE:
+        # DNP3 outstation只发送RESPONSE(0x81)，不会发送READ(0x01)
+        if fc == DNP3FunctionCode.RESPONSE:
             objects = DNP3Parser.parse_response(parsed.get('data', b''))
             for obj in objects:
                 self._last_data[obj['index']] = {

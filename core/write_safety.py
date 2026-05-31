@@ -65,21 +65,22 @@ ALLOWED_FUNCTION_CODES = {
 # 根据寄存器名称和单位自动推断安全范围
 # 格式: (name_keywords, unit) -> (min, max, risk_level)
 _SAFETY_RULES: list[tuple[list[str], str, float, float, WriteRiskLevel]] = [
-    # 温度类 — 工业设备正常范围 (GB/T 15969)
-    (['temperature', 'temp'], '°c', -40, 500, WriteRiskLevel.MEDIUM),
-    (['temperature', 'temp'], 'c', -40, 500, WriteRiskLevel.MEDIUM),
+    # 温度类 — 特定规则必须在通用规则前面（匹配是子串包含，先匹配先返回）
     (['boiler_temperature'], '°c', 0, 200, WriteRiskLevel.HIGH),
     (['flue_gas_temperature'], '°c', 0, 800, WriteRiskLevel.HIGH),
     (['mold_temperature'], '°c', 0, 400, WriteRiskLevel.MEDIUM),
     (['oven_temperature'], '°c', 0, 300, WriteRiskLevel.MEDIUM),
     (['dryer_temperature'], '°c', 0, 200, WriteRiskLevel.MEDIUM),
+    (['temperature', 'temp'], '°c', -40, 500, WriteRiskLevel.MEDIUM),
+    (['temperature', 'temp'], 'c', -40, 500, WriteRiskLevel.MEDIUM),
 
-    # 压力类 — 工业设备正常范围
-    (['pressure'], 'mpa', 0, 10, WriteRiskLevel.HIGH),
-    (['pressure'], 'kpa', 0, 1000, WriteRiskLevel.HIGH),
+    # 压力类 — 特定规则必须在通用规则前面
     (['boiler_pressure'], 'mpa', 0, 4, WriteRiskLevel.CRITICAL),
     (['injection_pressure'], 'mpa', 0, 30, WriteRiskLevel.HIGH),
     (['hydraulic_pressure'], 'mpa', 0, 35, WriteRiskLevel.HIGH),
+    (['spray_pressure'], 'mpa', 0, 1.5, WriteRiskLevel.HIGH),
+    (['pressure'], 'mpa', 0, 10, WriteRiskLevel.HIGH),
+    (['pressure'], 'kpa', 0, 1000, WriteRiskLevel.HIGH),
 
     # 液位类
     (['level', 'tank_level'], '%', 0, 100, WriteRiskLevel.MEDIUM),
@@ -122,7 +123,6 @@ _SAFETY_RULES: list[tuple[list[str], str, float, float, WriteRiskLevel]] = [
     (['count', 'total', 'shot_count'], '', 0, 999999, WriteRiskLevel.LOW),
 
     # 涂装工艺
-    (['spray_pressure'], 'mpa', 0, 1.5, WriteRiskLevel.HIGH),
     (['coating_thickness'], 'μm', 0, 500, WriteRiskLevel.MEDIUM),
 
     # 湿度

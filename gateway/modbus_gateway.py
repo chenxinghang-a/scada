@@ -203,7 +203,7 @@ class ModbusGateway(BaseGateway):
         """
         order_map = {
             'ABCD': (Endian.BIG, Endian.BIG),
-            'BADC': (Endian.BIG, Endian.LITTLE),
+            'BADC': (Endian.LITTLE, Endian.BIG),
             'CDAB': (Endian.BIG, Endian.LITTLE),
             'DCBA': (Endian.LITTLE, Endian.LITTLE),
         }

@@ -11,6 +11,8 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+_MISSING = object()  # 区分"键不存在"和"键存在但值为None"
+
 
 class ConfigManager:
     """
@@ -116,11 +118,11 @@ class ConfigManager:
 
         for k in keys:
             if isinstance(value, dict):
-                value = value.get(k)
+                value = value.get(k, _MISSING)
             else:
                 return default
 
-        return value if value is not None else default
+        return default if value is _MISSING else value
     
     @classmethod
     def set(cls, config_path: str, key: str, value: Any):

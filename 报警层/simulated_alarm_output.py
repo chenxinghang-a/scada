@@ -107,15 +107,15 @@ class SimulatedAlarmOutput(IAlarmOutput):
         else:  # info
             self.current_state.update({
                 'red': False,
-                'yellow': True,
-                'green': False,
+                'yellow': False,
+                'green': True,
                 'buzzer': False,
                 'pattern': AlarmLightPattern.STEADY,
                 'level': level,
                 'message': message,
                 'since': datetime.now().isoformat()
             })
-            logger.info(f"[模拟报警] 信息: 黄灯常亮 | {message}")
+            logger.info(f"[模拟报警] 信息: 绿灯常亮 | {message}")
 
         # 记录历史
         self.history.append({

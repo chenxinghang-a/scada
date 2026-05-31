@@ -724,8 +724,6 @@ class Database:
         Exceptions:
             不会主动抛出异常。数据库错误会被连接上下文管理器捕获并回滚。
         """
-        cutoff_date = datetime.now() - timedelta(days=retention_days)
-
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
@@ -798,7 +796,7 @@ class Database:
         归档旧数据
 
         将超过archive_days天的历史数据按天聚合后存入归档表，
-        然后删除超过delete_days天的原始数据。
+        然后删除已归档的原始数据。
 
         Args:
             archive_days: 归档天数（默认7天前的数据归档）
@@ -810,11 +808,11 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. 归档：按天聚合并存入归档表
+            # 1. 归档：对archive_days之前的所有数据按天聚合存入归档表
             cursor.execute('''
-                INSERT INTO history_archive 
+                INSERT INTO history_archive
                     (device_id, register_name, avg_value, min_value, max_value, sample_count, archive_date)
-                SELECT 
+                SELECT
                     device_id,
                     register_name,
                     AVG(value) as avg_value,
@@ -823,17 +821,17 @@ class Database:
                     COUNT(*) as sample_count,
                     DATE(timestamp) as archive_date
                 FROM history_data
-                WHERE timestamp < ? AND timestamp >= ?
+                WHERE timestamp < ?
                 GROUP BY device_id, register_name, DATE(timestamp)
-            ''', (archive_cutoff, delete_cutoff))
+            ''', (archive_cutoff,))
 
             archived_rows = cursor.rowcount
 
-            # 2. 删除已归档的旧数据
+            # 2. 删除已归档的旧数据（只删除已归档范围内的数据）
             cursor.execute('''
-                DELETE FROM history_data 
+                DELETE FROM history_data
                 WHERE timestamp < ?
-            ''', (delete_cutoff,))
+            ''', (archive_cutoff,))
 
             deleted_rows = cursor.rowcount
 

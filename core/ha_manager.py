@@ -141,16 +141,17 @@ class HAManager:
         """心跳发送循环"""
         while self._running:
             try:
-                if self.role == HARole.PRIMARY:
-                    self._send_heartbeat()
-
-                # 检查对端心跳超时（在锁内读取共享状态）
-                should_failover = False
+                # 在锁内读取共享状态，避免竞态
                 with self._lock:
-                    if (self.role == HARole.STANDBY and
+                    current_role = self.role
+                    should_failover = (
+                        current_role == HARole.STANDBY and
                         self._last_peer_heartbeat > 0 and
-                        time.time() - self._last_peer_heartbeat > self.heartbeat_timeout):
-                        should_failover = True
+                        time.time() - self._last_peer_heartbeat > self.heartbeat_timeout
+                    )
+
+                if current_role == HARole.PRIMARY:
+                    self._send_heartbeat()
 
                 if should_failover:
                     self._trigger_failover()

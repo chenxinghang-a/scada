@@ -148,14 +148,15 @@ class EventBus:
     def get_subscribers_count(cls, event_type: str = None) -> Dict[str, int]:
         """
         获取订阅者数量
-        
+
         Args:
             event_type: 事件类型（None则返回所有）
-            
+
         Returns:
             事件类型到订阅者数量的映射
         """
-        if event_type:
-            return {event_type: len(cls._subscribers.get(event_type, []))}
-        
-        return {k: len(v) for k, v in cls._subscribers.items()}
+        with cls._lock:
+            if event_type:
+                return {event_type: len(cls._subscribers.get(event_type, []))}
+
+            return {k: len(v) for k, v in cls._subscribers.items()}

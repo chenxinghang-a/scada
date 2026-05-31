@@ -7,6 +7,7 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from html import escape
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -113,31 +114,31 @@ class Notification:
             <table border="1" cellpadding="5" cellspacing="0">
                 <tr>
                     <td><strong>报警级别</strong></td>
-                    <td>{alarm_data.get('level', 'warning')}</td>
+                    <td>{escape(str(alarm_data.get('level', 'warning')))}</td>
                 </tr>
                 <tr>
                     <td><strong>设备ID</strong></td>
-                    <td>{alarm_data.get('device_id', '-')}</td>
+                    <td>{escape(str(alarm_data.get('device_id', '-')))}</td>
                 </tr>
                 <tr>
                     <td><strong>参数名称</strong></td>
-                    <td>{alarm_data.get('register_name', '-')}</td>
+                    <td>{escape(str(alarm_data.get('register_name', '-')))}</td>
                 </tr>
                 <tr>
                     <td><strong>当前值</strong></td>
-                    <td>{alarm_data.get('value', '-')}</td>
+                    <td>{escape(str(alarm_data.get('value', '-')))}</td>
                 </tr>
                 <tr>
                     <td><strong>阈值</strong></td>
-                    <td>{alarm_data.get('threshold', '-')}</td>
+                    <td>{escape(str(alarm_data.get('threshold', '-')))}</td>
                 </tr>
                 <tr>
                     <td><strong>报警时间</strong></td>
-                    <td>{alarm_data.get('timestamp', '-')}</td>
+                    <td>{escape(str(alarm_data.get('timestamp', '-')))}</td>
                 </tr>
                 <tr>
                     <td><strong>报警消息</strong></td>
-                    <td>{alarm_data.get('message', '-')}</td>
+                    <td>{escape(str(alarm_data.get('message', '-')))}</td>
                 </tr>
             </table>
             <p>请及时处理！</p>

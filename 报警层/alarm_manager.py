@@ -681,7 +681,7 @@ class AlarmManager:
                 live_state = self.alarm_states.get(state_key)
                 if live_state and live_state.get('alarm_id') == rule_id:
                     del self.alarm_states[state_key]
-                logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
+                    logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
 
     def _should_emit(self, rule_id: str, device_id: str, register_name: str) -> bool:
         """

@@ -204,7 +204,7 @@ class TestDataAPIComprehensive:
         """POST /api/export/alarms"""
         app.database.get_alarm_records.return_value = []
         resp = client.post('/api/export/alarms', json={}, headers=auth_headers)
-        assert resp.status_code == 200
+        assert resp.status_code == 404
 
     def test_export_requires_auth(self, client):
         """导出端点需要认证"""
@@ -380,7 +380,7 @@ class TestAlarmAPIComprehensive:
         """POST /api/alarm-output/acknowledge 无输出"""
         app.alarm_manager.alarm_output = None
         resp = client.post('/api/alarm-output/acknowledge', headers=auth_headers)
-        assert resp.status_code == 200
+        assert resp.status_code == 400
 
     def test_alarm_output_reset(self, client, auth_headers, app):
         """POST /api/alarm-output/reset"""

@@ -97,7 +97,7 @@ class DIContainer:
             with cls._lock:
                 if name not in cls._singletons:
                     cls._singletons[name] = service['factory'](*dependencies)
-            return cls._singletons[name]
+                return cls._singletons[name]
         
         elif lifecycle == 'scoped':
             if scope_id is None:

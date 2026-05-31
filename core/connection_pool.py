@@ -162,6 +162,8 @@ class ConnectionPool:
                 conn = self._pool[key]
                 if conn.healthy:
                     return conn.client
+                # 销毁不健康连接再创建新的
+                self._destroy_connection(key, conn)
             return self._create_connection(key)
 
     # ------------------------------------------------------------------

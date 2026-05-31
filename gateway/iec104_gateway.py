@@ -193,7 +193,8 @@ class IEC104ASDU:
         }
 
     @staticmethod
-    def build_command(type_id: int, ioa: int, value: float, qual: int = 0) -> bytes:
+    def build_command(type_id: int, ioa: int, value: float,
+                      qual: int = 0, common_addr: int = 1) -> bytes:
         """
         构建控制方向ASDU
 
@@ -204,7 +205,7 @@ class IEC104ASDU:
         ioa_mid = (ioa >> 8) & 0xFF
         ioa_hi = (ioa >> 16) & 0xFF
         header = struct.pack('<BBBBHBBB',
-            type_id, 1, COT.ACTIVATION, 0, 0,
+            type_id, 1, COT.ACTIVATION, 0, common_addr,
             ioa_lo, ioa_mid, ioa_hi)
 
         if type_id == TypeID.C_SE_NC_1:            # 设定命令-短浮点
@@ -370,9 +371,9 @@ class IEC104Client:
             ctrl = parsed['control']
             if ctrl & 0x10:
                 self.logger.info("收到 STARTDT con")
-            elif ctrl & 0x20:
+            if ctrl & 0x20:
                 self.logger.info("收到 STOPDT con")
-            elif ctrl & 0x40:
+            if ctrl & 0x40:
                 self.logger.info("收到 TESTFR con")
 
         elif parsed['type'] == 'S':
@@ -412,7 +413,7 @@ class IEC104Client:
     def send_command(self, ioa: int, value: float,
                      type_id: int = TypeID.C_SE_NC_1) -> bool:
         """发送控制/设定命令"""
-        asdu = IEC104ASDU.build_command(type_id, ioa, value)
+        asdu = IEC104ASDU.build_command(type_id, ioa, value, common_addr=self.common_addr)
         if not asdu:
             return False
         self._send_i_frame(asdu)
@@ -421,7 +422,7 @@ class IEC104Client:
 
     def request_general_interrogation(self) -> bool:
         """发送总召唤命令"""
-        asdu = IEC104ASDU.build_command(TypeID.C_IC_NA_1, 0, 0)
+        asdu = IEC104ASDU.build_command(TypeID.C_IC_NA_1, 0, 0, common_addr=self.common_addr)
         if not asdu:
             return False
         self._send_i_frame(asdu)

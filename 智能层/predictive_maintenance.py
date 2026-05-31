@@ -69,7 +69,6 @@ class PredictiveMaintenance:
                 'current': {'upper': 15.0, 'lower': 0.0},
                 'speed': {'upper': 1800.0, 'lower': 0.0},
                 'vibration': {'upper': 10.0, 'lower': 0.0},
-                'temperature': {'upper': 150.0, 'lower': -10.0},
             }
 
         # 分析间隔（秒）

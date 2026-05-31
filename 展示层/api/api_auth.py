@@ -60,8 +60,8 @@ def login():
     ip_address = request.remote_addr
     result = auth_manager.login(username, password, ip_address)
 
-    if not result['success']:
-        return jsonify(result), 401
+    if not result or not result.get('success'):
+        return jsonify(result or {'success': False, 'message': '登录失败'}), 401
 
     # 构建响应并在服务端设置cookie（GB/T 33008: 令牌安全传递）
     from flask import make_response
@@ -186,7 +186,7 @@ def change_password():
         old_password=data.get('old_password', ''),
         new_password=data.get('new_password', '')
     )
-    return jsonify(result)
+    return jsonify(result or {'success': False, 'message': '操作失败'})
 
 
 @auth_bp.route('/auth/force-change-password', methods=['POST'])
