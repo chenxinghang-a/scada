@@ -11,8 +11,6 @@ const dataBuffers = {};     // {register_name: [{t, v}]}
 const lastDeviceValues = {}; // {"device_id:register_name": "formatted_value"}
 const lastDeviceQuality = {}; // {"device_id:register_name": quality_code}
 const MAX_CHART_POINTS = 200;
-const lastDeviceSnapshot = {};  // Virtual DOM diff: last device state snapshot
-let deviceGridDirty = true;     // Whether device grid needs full rebuild
 
 // ========== 分页（100+设备场景） ==========
 const PAGE_SIZE = 50;  // 100台设备以内不需要分页
@@ -46,7 +44,14 @@ function initClock() {
 async function apiFetch(url) {
     const token = localStorage.getItem('auth_token');
     const h = token ? { 'Authorization': `Bearer ${token}` } : {};
-    const r = await fetch('/api' + url, { headers: h });
+    let r;
+    try {
+        r = await fetch('/api' + url, { headers: h });
+    } catch (e) {
+        // 网络错误 → 不清token，不跳转
+        console.error('Network error:', url, e);
+        return null;
+    }
     if (r.status === 401) {
         localStorage.removeItem('auth_token');
         window.location.href = '/login';
@@ -56,23 +61,11 @@ async function apiFetch(url) {
     return r.json();
 }
 
-// ========== 主数据加载（防抖 + rAF 批处理） ==========
+// ========== 主数据加载 ==========
 let loadDataInProgress = false;
-let pendingUpdateData = null;
-let rafScheduled = false;
 
 function scheduleUpdate(status) {
-    pendingUpdateData = status;
-    if (!rafScheduled) {
-        rafScheduled = true;
-        requestAnimationFrame(() => {
-            if (pendingUpdateData) {
-                updateDeviceGrid(pendingUpdateData);
-                pendingUpdateData = null;
-            }
-            rafScheduled = false;
-        });
-    }
+    updateDeviceGrid(status);
 }
 
 async function loadData() {
@@ -84,13 +77,12 @@ async function loadData() {
         if (gen !== loadGeneration) return;
         if (!status) return;
         updateKPI(status);
-        scheduleUpdate(status);
         updateStatusBar(status);
 
+        // 先获取实时数据填充缓存，再渲染网格（避免首次显示"--"）
         const data = await apiFetch('/data/realtime?limit=5000');
         if (gen !== loadGeneration) return;
         if (data && data.data) {
-            // 用API返回的最新数据填充缓存
             data.data.forEach(item => {
                 if (item.device_id && item.register_name && item.value != null) {
                     const key = `${item.device_id}:${item.register_name}`;
@@ -100,6 +92,9 @@ async function loadData() {
             });
             updateTrendChart(data.data);
         }
+
+        // 数据缓存就绪后，再渲染设备网格
+        scheduleUpdate(status);
 
         // 首次加载后，订阅所有设备的WebSocket推送
         if (window.socket && status.devices) {
@@ -179,7 +174,7 @@ function updateKPI(stats) {
     }
 }
 
-// ========== 设备卡片网格（Virtual DOM Diff + 分页） ==========
+// ========== 设备卡片网格（简化版：每次轮询全量重建） ==========
 function updateDeviceGrid(stats) {
     if (!stats.devices) return;
     let devs = Array.isArray(stats.devices) ? stats.devices : Object.values(stats.devices);
@@ -193,27 +188,7 @@ function updateDeviceGrid(stats) {
         deviceCache[id] = d;
     });
 
-    // 构建轻量快照（只比较变化的字段）
-    const snapshot = {};
-    devs.forEach(d => {
-        const id = d.device_id || d.id;
-        snapshot[id] = `${d.connected ? 1 : 0}:${d.stopped ? 1 : 0}:${d.status || ''}`;
-    });
-
-    const snapshotChanged = JSON.stringify(snapshot) !== JSON.stringify(lastDeviceSnapshot);
-
-    if (!snapshotChanged && !deviceGridDirty) {
-        // 设备列表未变化，只更新当前页数值（不重建DOM）
-        const pageDevs = getPageDevices();
-        pageDevs.forEach(d => updateDeviceValues(d));
-        return;
-    }
-
-    // 设备列表变化或首次加载，重建当前页
-    Object.keys(lastDeviceSnapshot).forEach(k => delete lastDeviceSnapshot[k]);
-    Object.assign(lastDeviceSnapshot, snapshot);
-    deviceGridDirty = false;
-
+    // 直接渲染，不做快照比较
     renderCurrentPage(devs);
 
     // 填充设备选择下拉框
@@ -275,14 +250,14 @@ function buildDeviceCard(d) {
         <div class="dev-status ${statusClass}"></div>
         <div class="dev-info">
             <div class="dev-name">${escapeHtml(name)} <span class="dev-state-tag ${statusClass}">${statusText}</span>${d.zone ? ` <span class="dev-zone-tag">${escapeHtml(d.zone)}</span>` : ''}</div>
-            <div class="dev-meta">${escapeHtml(d.protocol || 'modbus_tcp')} · ${escapeHtml(d.host || '')}</div>
+            <div class="dev-meta">${escapeHtml(d.protocol || 'modbus_tcp')} · <span class="dev-host">${escapeHtml(d.host || '--')}</span></div>
             <div class="dev-values">${valStr}</div>
         </div>
         ${ctrlBtn}
     </div>`;
 }
 
-// 渲染当前页设备卡片（DOM diff：只增删改，不全量替换）
+// 渲染当前页设备卡片（全量替换，确保host等字段始终显示）
 function renderCurrentPage(devs) {
     if (!devs) devs = allDevices;
     if (!devs || devs.length === 0) return;  // 防空数据清空grid
@@ -296,38 +271,12 @@ function renderCurrentPage(devs) {
     const grid = document.getElementById('device-grid');
     if (!grid) return;
 
-    // 构建当前页设备ID集合
-    const pageIds = new Set(pageDevs.map(d => d.device_id || d.id));
+    // 清除"正在加载设备..."占位符（首次加载时存在）
+    const loadingDiv = grid.querySelector(':scope > div[style*="grid-column"]');
+    if (loadingDiv) loadingDiv.remove();
 
-    // 移除不在当前页的旧卡片
-    const existing = grid.querySelectorAll('.dev-card');
-    existing.forEach(el => {
-        if (!pageIds.has(el.dataset.deviceId)) {
-            el.remove();
-        }
-    });
-
-    // 更新或新增卡片
-    pageDevs.forEach((d, i) => {
-        const id = d.device_id || d.id;
-        const existingCard = grid.querySelector(`.dev-card[data-device-id="${id}"]`);
-        if (existingCard) {
-            // 更新已有卡片的数值和状态
-            updateDeviceValues(d);
-        } else {
-            // 新增卡片
-            const wrapper = document.createElement('div');
-            wrapper.innerHTML = buildDeviceCard(d);
-            const card = wrapper.firstElementChild;
-            // 按顺序插入
-            const allCards = grid.querySelectorAll('.dev-card');
-            if (i < allCards.length) {
-                grid.insertBefore(card, allCards[i]);
-            } else {
-                grid.appendChild(card);
-            }
-        }
-    });
+    // 全量替换当前页卡片
+    grid.innerHTML = pageDevs.map(d => buildDeviceCard(d)).join('');
 
     // 渲染分页控件
     renderPagination(devs.length, totalPages);
@@ -368,52 +317,7 @@ function goToPage(page) {
     const totalPages = Math.ceil(allDevices.length / PAGE_SIZE);
     if (page < 1 || page > totalPages) return;
     currentPage = page;
-    // 翻页时清除快照，强制重建DOM
-    Object.keys(lastDeviceSnapshot).forEach(k => delete lastDeviceSnapshot[k]);
-    deviceGridDirty = true;
     renderCurrentPage();
-}
-
-// 只更新设备数值，不重建DOM
-function updateDeviceValues(device) {
-    const id = device.device_id || device.id;
-    const regs = device.registers || [];
-
-    // 更新状态指示器
-    const cardEl = document.querySelector(`.dev-card[data-device-id="${id}"]`);
-    if (cardEl) {
-        const statusEl = cardEl.querySelector('.dev-status');
-        const stateTag = cardEl.querySelector('.dev-state-tag');
-        if (statusEl && stateTag) {
-            const online = device.connected;
-            const stopped = device.stopped;
-            const hasAlarm = device.status === 'fault' || device.status === 'warning';
-            let statusClass = 'offline';
-            let statusText = '离线';
-            if (online && stopped) { statusClass = 'stopped'; statusText = '已停止'; }
-            else if (online && hasAlarm) { statusClass = 'warning'; statusText = '告警'; }
-            else if (online) { statusClass = 'online'; statusText = '运行中'; }
-            statusEl.className = `dev-status ${statusClass}`;
-            stateTag.className = `dev-state-tag ${statusClass}`;
-            stateTag.textContent = statusText;
-        }
-    }
-
-    // 更新寄存器数值
-    regs.slice(0, 2).forEach(r => {
-        const el = document.getElementById(`dv-${id}-${r.name}`);
-        if (!el) return;
-        const key = `${id}:${r.name}`;
-        const val = lastDeviceValues[key];
-        if (val !== undefined) {
-            el.textContent = typeof val === 'number' ? val.toFixed(2) : val;
-        }
-        const quality = lastDeviceQuality[key];
-        if (quality != null) {
-            el.style.color = getQualityColor(quality);
-            el.title = `Quality: ${getQualityLabel(quality)} (${quality})`;
-        }
-    });
 }
 
 function selectDevice(id) {
@@ -549,16 +453,26 @@ function prependAlarmItem(alarm) {
 
     const sevClass = ['critical','high','warning','medium','low','info'].includes(alarm.severity || alarm.alarm_level)
         ? (alarm.severity || alarm.alarm_level) : 'low';
-    const html = `<div class="alarm-row unacked" style="border-left: 3px solid ${color};">
-        <span class="alarm-prio ${sevClass}">${escapeHtml(prioText)}</span>
-        <span class="alarm-time">${escapeHtml(time)}</span>
-        <span class="alarm-device">${escapeHtml(device)}</span>
-        <span class="alarm-msg">${escapeHtml(msg)}</span>
-        <span class="alarm-pv">${escapeHtml(pv)}</span>
-        <button class="alarm-ack-btn" data-alarm-id="${escapeHtml(alarm.alarm_id || '')}" data-device-id="${escapeHtml(alarm.device_id || '')}" data-register="${escapeHtml(alarm.register_name || '')}">确认</button>
-    </div>`;
 
-    alarmList.insertAdjacentHTML('afterbegin', html);
+    // 使用DOM API构建元素，避免insertAdjacentHTML的XSS风险
+    const row = document.createElement('div');
+    row.className = 'alarm-row unacked';
+    row.style.borderLeft = `3px solid ${color}`;
+    const addSpan = (cls, txt) => { const s = document.createElement('span'); s.className = cls; s.textContent = txt; row.appendChild(s); };
+    addSpan('alarm-prio ' + sevClass, prioText);
+    addSpan('alarm-time', time);
+    addSpan('alarm-device', device);
+    addSpan('alarm-msg', msg);
+    addSpan('alarm-pv', pv);
+    const ackBtn = document.createElement('button');
+    ackBtn.className = 'alarm-ack-btn';
+    ackBtn.dataset.alarmId = alarm.alarm_id || '';
+    ackBtn.dataset.deviceId = alarm.device_id || '';
+    ackBtn.dataset.register = alarm.register_name || '';
+    ackBtn.textContent = '确认';
+    row.appendChild(ackBtn);
+
+    alarmList.insertAdjacentElement('afterbegin', row);
 
     // 保持最多 20 条
     while (alarmList.children.length > 20) {

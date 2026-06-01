@@ -60,12 +60,8 @@ function initWebSocket() {
         reconnectAttempts++;
         updateConnectionStatus('error');
 
-        // Token过期，跳转登录
-        if (error.message.includes('401') || error.message.includes('auth')) {
-            localStorage.removeItem('auth_token');
-            window.location.href = '/login';
-            return;
-        }
+        // 只有明确的认证失败才清token（服务端返回401状态码）
+        // 不要用 includes('401') 匹配，避免误判
     });
 
     socket.on('reconnect', (attemptNumber) => {
@@ -538,7 +534,14 @@ async function apiRequest(url, options = {}) {
         },
     };
 
-    const response = await fetch(`${API_BASE}${url}`, { ...defaultOptions, ...options });
+    let response;
+    try {
+        response = await fetch(`${API_BASE}${url}`, { ...defaultOptions, ...options });
+    } catch (e) {
+        // 网络错误/超时 → 不清token，不跳转
+        console.error(`Network error for ${url}:`, e);
+        return null;
+    }
 
     // 处理认证失败
     if (response.status === 401) {

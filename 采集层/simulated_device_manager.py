@@ -276,6 +276,7 @@ class SimulatedDeviceManager(IDeviceManager):
             'stopped': is_device_stopped(device_id) or _ESTOP_ACTIVE,
             'status': 'fault' if (is_device_stopped(device_id) or _ESTOP_ACTIVE) else ('online' if (client and getattr(client, 'connected', False)) else 'offline'),
             'protocol': device_config.get('protocol', 'modbus_tcp'),
+            'host': device_config.get('host', device_config.get('endpoint', '')),
             'device_category': IDeviceManager.get_device_category(device_config),
             'registers': [{'name': r.get('name', ''), 'unit': r.get('unit', '')} for r in regs],
             'nodes': [{'name': n.get('name', ''), 'unit': n.get('unit', '')} for n in nodes],

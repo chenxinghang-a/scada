@@ -1,273 +1,10 @@
 devices:
-- collection_interval: 3
-  description: 涂装车间控制 — 喷涂/烘干/输送
-  device_model: H5U-3232MT
-  enabled: true
-  host: 192.168.1.58
-  id: inovance_h5u_01
-  zone: '生产车间'
-  name: 汇川H5U PLC
-  port: 502
-  protocol: modbus_tcp
-  registers:
-  - address: 0
-    data_type: float32
-    description: 喷涂压力
-    length: 2
-    name: spray_pressure
-    scale: 1.0
-    unit: MPa
-  - address: 2
-    data_type: float32
-    description: 烘干炉温度
-    length: 2
-    name: oven_temperature
-    scale: 1.0
-    unit: °C
-  - address: 4
-    data_type: float32
-    description: 喷涂速度
-    length: 2
-    name: spray_speed
-    scale: 1.0
-    unit: m/min
-  - address: 6
-    data_type: float32
-    description: 涂层厚度
-    length: 2
-    name: coating_thickness
-    scale: 1.0
-    unit: μm
-  - address: 8
-    data_type: float32
-    description: 输送链速度
-    length: 2
-    name: conveyor_speed
-    scale: 1.0
-    unit: m/min
-  - address: 10
-    data_type: uint16
-    description: 喷涂计数
-    length: 1
-    name: painted_count
-    scale: 1
-    unit: 个
-  slave_id: 1
-  vendor: 汇川技术
-- collection_interval: 5
-  description: 水处理车间控制 — 进水/加药/沉淀
-  device_model: BMX P34 2020
-  enabled: true
-  host: 192.168.1.54
-  id: schneider_m340_01
-  zone: '生产车间'
-  name: 施耐德M340 PLC
-  port: 502
-  protocol: modbus_tcp
-  registers:
-  - address: 0
-    data_type: float32
-    description: 进水流量
-    length: 2
-    name: inlet_flow
-    scale: 1.0
-    unit: m³/h
-  - address: 2
-    data_type: float32
-    description: 出水流量
-    length: 2
-    name: outlet_flow
-    scale: 1.0
-    unit: m³/h
-  - address: 4
-    data_type: float32
-    description: 沉淀池液位
-    length: 2
-    name: water_level
-    scale: 1.0
-    unit: m
-  - address: 6
-    data_type: float32
-    description: 出水pH值
-    length: 2
-    name: ph_value
-    scale: 1.0
-    unit: ''
-  - address: 8
-    data_type: float32
-    description: 出水浊度
-    length: 2
-    name: turbidity
-    scale: 1.0
-    unit: NTU
-  - address: 10
-    data_type: float32
-    description: 溶解氧
-    length: 2
-    name: dissolved_oxygen
-    scale: 1.0
-    unit: mg/L
-  - address: 12
-    data_type: float32
-    description: 电导率
-    length: 2
-    name: conductivity
-    scale: 1.0
-    unit: μS/cm
-  - address: 14
-    data_type: uint16
-    description: 进水泵转速
-    length: 1
-    name: pump_speed
-    scale: 1
-    unit: RPM
-  slave_id: 1
-  vendor: 施耐德电气
-- collection_interval: 5
-  description: 车间配电柜 — 电力质量监测
-  device_model: M4M 20
-  enabled: true
-  host: 192.168.1.102
-  id: abb_m4m_01
-  zone: '动力区'
-  name: ABB M4M电力分析仪
-  port: 502
-  protocol: modbus_tcp
-  registers:
-  - address: 0
-    data_type: float32
-    description: A相电压
-    length: 2
-    name: voltage_a
-    scale: 1.0
-    unit: V
-  - address: 2
-    data_type: float32
-    description: B相电压
-    length: 2
-    name: voltage_b
-    scale: 1.0
-    unit: V
-  - address: 4
-    data_type: float32
-    description: C相电压
-    length: 2
-    name: voltage_c
-    scale: 1.0
-    unit: V
-  - address: 6
-    data_type: float32
-    description: A相电流
-    length: 2
-    name: current_a
-    scale: 1.0
-    unit: A
-  - address: 8
-    data_type: float32
-    description: B相电流
-    length: 2
-    name: current_b
-    scale: 1.0
-    unit: A
-  - address: 10
-    data_type: float32
-    description: C相电流
-    length: 2
-    name: current_c
-    scale: 1.0
-    unit: A
-  - address: 12
-    data_type: float32
-    description: 总有功功率
-    length: 2
-    name: active_power
-    scale: 1.0
-    unit: kW
-  - address: 14
-    data_type: float32
-    description: 电网频率
-    length: 2
-    name: frequency
-    scale: 1.0
-    unit: Hz
-  - address: 16
-    data_type: float32
-    description: 电压总谐波畸变率
-    length: 2
-    name: thd_voltage
-    scale: 1.0
-    unit: '%'
-  - address: 18
-    data_type: float32
-    description: 功率因数
-    length: 2
-    name: power_factor
-    scale: 1.0
-    unit: ''
-  slave_id: 1
-  vendor: ABB
-- collection_interval: 2
-  description: 现场IO-Link传感器集成 — 压力/流量/温度/距离
-  device_model: TBEN-L4-8IOL
-  enabled: true
-  host: 192.168.1.60
-  id: turck_iolink_01
-  zone: '监控区'
-  name: 图尔克IO-Link主站
-  port: 502
-  protocol: modbus_tcp
-  registers:
-  - address: 0
-    data_type: float32
-    description: IO-Link压力传感器1
-    length: 2
-    name: iol_pressure_1
-    scale: 1.0
-    unit: MPa
-  - address: 2
-    data_type: float32
-    description: IO-Link流量传感器1
-    length: 2
-    name: iol_flow_1
-    scale: 1.0
-    unit: L/min
-  - address: 4
-    data_type: float32
-    description: IO-Link温度传感器1
-    length: 2
-    name: iol_temperature_1
-    scale: 1.0
-    unit: °C
-  - address: 6
-    data_type: float32
-    description: IO-Link距离传感器1
-    length: 2
-    name: iol_distance_1
-    scale: 1.0
-    unit: mm
-  - address: 8
-    data_type: float32
-    description: IO-Link压力传感器2
-    length: 2
-    name: iol_pressure_2
-    scale: 1.0
-    unit: MPa
-  - address: 10
-    data_type: float32
-    description: IO-Link真空传感器
-    length: 2
-    name: iol_vacuum
-    scale: 1.0
-    unit: Pa
-  slave_id: 1
-  vendor: 图尔克
 - collection_interval: 10
   description: 旋转设备振动监测 — 电机/泵/风机
   device_model: IoT-VIB-100 + LoRa GW
   enabled: true
   host: 192.168.1.200
   id: vibration_sensor_01
-  zone: '监控区'
   name: MQTT振动监测节点
   password: scada123
   port: 1883
@@ -295,45 +32,7 @@ devices:
     unit: °C
   username: scada
   vendor: 自研物联网节点
-- collection_interval: 15
-  description: 出水口在线水质监测 — DO/浊度/电导率/pH
-  device_model: WQ-Multi-01
-  enabled: true
-  host: 192.168.1.200
-  id: water_quality_01
-  zone: '监控区'
-  name: MQTT水质监测终端
-  password: scada123
-  port: 1883
-  protocol: mqtt
-  topics:
-  - description: 溶解氧
-    json_path: value
-    name: dissolved_oxygen
-    topic: factory/water_outlet/quality/dissolved_oxygen
-    unit: mg/L
-  - description: 浊度
-    json_path: value
-    name: turbidity
-    topic: factory/water_outlet/quality/turbidity
-    unit: NTU
-  - description: 电导率
-    json_path: value
-    name: conductivity
-    topic: factory/water_outlet/quality/conductivity
-    unit: μS/cm
-  - description: pH值
-    json_path: value
-    name: ph
-    topic: factory/water_outlet/quality/ph
-    unit: ''
-  - description: 水温
-    json_path: value
-    name: water_temperature
-    topic: factory/water_outlet/quality/temperature
-    unit: °C
-  username: scada
-  vendor: 自研物联网节点
+  zone: 监控区
 - auth_password: admin123
   auth_type: basic
   auth_username: admin
@@ -364,11 +63,11 @@ devices:
     path: /api/v1/variables/DB100.line_status
     unit: ''
   id: siemens_web_01
-  zone: '信息中心'
   name: 西门子S7-1500 Web API
   poll_interval: 5
   protocol: rest
   vendor: 西门子
+  zone: 信息中心
 - auth_token: mes-api-token-xxx
   auth_type: bearer
   base_url: http://192.168.1.250:8080
@@ -403,18 +102,17 @@ devices:
     path: /api/v1/quality/defect_rate
     unit: '%'
   id: mes_api_01
-  zone: '信息中心'
   name: MES制造执行系统
   poll_interval: 30
   protocol: rest
   vendor: 自研MES系统
+  zone: 信息中心
 - collection_interval: 1
   description: 产线1号设备状态指示灯塔 — 红黄绿蓝白+蜂鸣器
   device_model: LR7-302NWFB
   enabled: true
   host: 192.168.1.70
   id: signal_tower_01
-  zone: '安全系统'
   name: Patlite LR7信号灯塔 — 1号线
   port: 502
   protocol: modbus_tcp
@@ -463,13 +161,13 @@ devices:
     unit: ''
   slave_id: 1
   vendor: Patlite (日本帕特莱)
+  zone: 安全系统
 - collection_interval: 1
   description: 报警输出控制 — 外部警灯/蜂鸣器/电磁阀
   device_model: ADAM-6060-AE
   enabled: true
   host: 192.168.1.72
   id: relay_output_01
-  zone: '安全系统'
   name: 研华ADAM-6060继电器模块
   port: 502
   protocol: modbus_tcp
@@ -524,12 +222,12 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 研华科技 (Advantech)
+  zone: 安全系统
 - collection_interval: 3
   description: 支持OPC UA的PLC控制器
   enabled: true
   endpoint: opc.tcp://192.168.1.50:4840
   id: opcua_plc_01
-  zone: '信息中心'
   name: OPC UA PLC控制器
   nodes:
   - description: 温度值
@@ -550,13 +248,13 @@ devices:
     unit: ''
   protocol: opcua
   security_mode: None
+  zone: 信息中心
 - collection_interval: 3
   description: 化工车间控制 — 蒸馏/干燥/包装
   device_model: LK210
   enabled: true
   host: 192.168.1.55
   id: hollysys_lk_01
-  zone: '生产车间'
   name: 和利时LK PLC
   port: 502
   protocol: modbus_tcp
@@ -598,6 +296,7 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 和利时
+  zone: 生产车间
 - _simulation_params:
     base_values:
       boiler_pressure: 1.2
@@ -621,7 +320,6 @@ devices:
   enabled: true
   host: 192.168.1.53
   id: siemens_1500_01
-  zone: '生产车间'
   name: 西门子S7-1500 PLC
   port: 502
   protocol: modbus_tcp
@@ -684,13 +382,13 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 西门子
+  zone: 生产车间
 - collection_interval: 2
   description: 注塑车间控制 — 注塑机/模具/脱模
   device_model: FX5U-64M
   enabled: true
   host: 192.168.1.56
   id: mitsubishi_fx5u_01
-  zone: '生产车间'
   name: 三菱FX5U PLC
   port: 502
   protocol: modbus_tcp
@@ -753,13 +451,13 @@ devices:
     unit: °C
   slave_id: 1
   vendor: 三菱电机
+  zone: 生产车间
 - collection_interval: 5
   description: 包装线控制 — 封箱/贴标/码垛
   device_model: DVP32EH00T3
   enabled: true
   host: 192.168.1.57
   id: delta_dvp_01
-  zone: '生产车间'
   name: 台达DVP PLC
   port: 502
   protocol: modbus_tcp
@@ -808,13 +506,13 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 台达电子
+  zone: 生产车间
 - collection_interval: 5
   description: 暖通空调空气处理机组 — 送风/回风/冷冻水
   device_model: PXC36
   enabled: true
   host: 192.168.1.110
   id: hvac_ahu_01
-  zone: '公用工程'
   name: 西门子PXC36暖通控制器
   port: 502
   protocol: modbus_tcp
@@ -905,13 +603,13 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 西门子
+  zone: 公用工程
 - collection_interval: 5
   description: 螺杆式空气压缩机 — 排气/温度/油温/干燥
   device_model: GA90+
   enabled: true
   host: 192.168.1.111
   id: compressor_01
-  zone: '公用工程'
   name: 阿特拉斯GA90+螺杆空压机
   port: 502
   protocol: modbus_tcp
@@ -988,13 +686,13 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 阿特拉斯·科普柯
+  zone: 公用工程
 - collection_interval: 5
   description: 仓储物流控制 — 出入库/AGV/货架/输送
   device_model: LOGO! 12/24RCE
   enabled: true
   host: 192.168.1.112
   id: warehouse_plc_01
-  zone: '物流区'
   name: 西门子LOGO!仓储PLC
   port: 502
   protocol: modbus_tcp
@@ -1064,13 +762,13 @@ devices:
     unit: '%'
   slave_id: 1
   vendor: 西门子
+  zone: 物流区
 - collection_interval: 30
   description: 烟气连续排放监测 — SO2/NOx/颗粒物/含氧量
   device_model: SCS-900
   enabled: true
   host: 192.168.1.113
   id: cems_01
-  zone: '质检区'
   name: 雪迪龙SCS-900烟气CEMS
   port: 502
   protocol: modbus_tcp
@@ -1147,13 +845,13 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 雪迪龙
+  zone: 质检区
 - collection_interval: 5
   description: 火灾自动报警系统 — 烟感/温感/手报/气体/喷淋
   device_model: JB-QBL-QM300
   enabled: true
   host: 192.168.1.114
   id: fire_alarm_01
-  zone: '安全系统'
   name: 海湾JB-QBL-QM300火灾报警
   port: 502
   protocol: modbus_tcp
@@ -1223,13 +921,13 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 海湾安全技术
+  zone: 安全系统
 - collection_interval: 5
   description: 中控DCS系统 — 反应釜群/进料/出料/冷却
   device_model: JX-300XP
   enabled: true
   endpoint: opc.tcp://192.168.1.115:4840
   id: dcs_supcon_01
-  zone: '监控区'
   name: 中控JX-300XP DCS
   nodes:
   - description: 反应釜1温度
@@ -1283,13 +981,13 @@ devices:
   protocol: opcua
   security_mode: None
   vendor: 中控技术
+  zone: 监控区
 - collection_interval: 5
   description: 温度变送器 — 反应釜/管路/排气多通道
   device_model: YTA610
   enabled: true
   host: 192.168.1.115
   id: temp_xmitter_01
-  zone: '质检区'
   name: 横河YTA610温度变送器
   port: 502
   protocol: modbus_rtu
@@ -1346,13 +1044,13 @@ devices:
   serial_port: COM4
   slave_id: 1
   vendor: 横河电机
+  zone: 质检区
 - collection_interval: 5
   description: 压力变送器 — 蒸汽/供水/液压/气动/真空
   device_model: 3051S
   enabled: true
   host: 192.168.1.115
   id: pressure_xmitter_01
-  zone: '质检区'
   name: 罗斯蒙特3051S压力变送器
   port: 502
   protocol: modbus_rtu
@@ -1402,13 +1100,13 @@ devices:
   serial_port: COM5
   slave_id: 1
   vendor: Emerson (艾默生)
+  zone: 质检区
 - collection_interval: 5
   description: 电磁流量计 — 原料/产品/冷却水
   device_model: Promag W 400
   enabled: true
   host: 192.168.1.115
   id: flowmeter_01
-  zone: '质检区'
   name: E+H Promag W电磁流量计
   port: 502
   protocol: modbus_rtu
@@ -1465,13 +1163,13 @@ devices:
   serial_port: COM6
   slave_id: 1
   vendor: Endress+Hauser (E+H)
+  zone: 质检区
 - collection_interval: 1
   description: 工业机器人 — 六轴关节/循环/抓手/扭矩
   device_model: M-20iD/25
   enabled: true
   endpoint: opc.tcp://192.168.1.116:4840
   id: robot_fanuc_01
-  zone: '物流区'
   name: FANUC M-20iD/25机器人
   nodes:
   - description: 关节1角度
@@ -1525,14 +1223,12 @@ devices:
   protocol: opcua
   security_mode: None
   vendor: FANUC (发那科)
-- collection_interval: 5
+  zone: 物流区
+- base_url: http://192.168.1.117:8080
+  collection_interval: 5
   description: 加工中心 — 主轴/进给/刀具/计数
   device_model: i-300S
   enabled: true
-  base_url: http://192.168.1.117:8080
-  id: cnc_mazak_01
-  zone: '物流区'
-  name: 马扎克i-300S加工中心
   endpoints:
   - json_path: data.spindle_speed
     method: GET
@@ -1584,16 +1280,18 @@ devices:
     name: machine_mode
     path: /api/machine/machine_mode
     unit: ''
+  id: cnc_mazak_01
+  name: 马扎克i-300S加工中心
   poll_interval: 5
   protocol: rest
   vendor: 马扎克 (Mazak)
+  zone: 物流区
 - collection_interval: 5
   description: 电动机软启动器 — 电流/电压/功率/功率因数
   device_model: PSTX470
   enabled: true
   host: 192.168.1.118
   id: soft_starter_01
-  zone: '动力区'
   name: ABB PSTX470软启动器
   port: 502
   protocol: modbus_tcp
@@ -1656,13 +1354,13 @@ devices:
     unit: ''
   slave_id: 1
   vendor: ABB
+  zone: 动力区
 - collection_interval: 5
   description: 多功能电力仪表 — 电能/功率/需量/电压/电流
   device_model: APM810
   enabled: true
   host: 192.168.1.119
   id: power_meter_sub_01
-  zone: '动力区'
   name: 安科瑞APM810多功能电表
   port: 502
   protocol: modbus_tcp
@@ -1732,13 +1430,13 @@ devices:
     unit: kWh
   slave_id: 1
   vendor: 安科瑞
+  zone: 动力区
 - collection_interval: 5
   description: 不间断电源 — 输入/输出/电池/负载
   device_model: Smart-UPS 3000
   enabled: true
   host: 192.168.1.120
   id: ups_apc_01
-  zone: '动力区'
   name: APC Smart-UPS 3000
   port: 502
   protocol: modbus_tcp
@@ -1801,13 +1499,13 @@ devices:
     unit: ''
   slave_id: 1
   vendor: APC (施耐德)
+  zone: 动力区
 - collection_interval: 5
   description: 焊接机器人 — 电流/电压/送丝/速度/气流量
   device_model: TM-1800WG
   enabled: true
   host: 192.168.1.121
   id: welder_01
-  zone: '物流区'
   name: 松下TM-1800WG焊接机器人
   port: 502
   protocol: modbus_tcp
@@ -1877,3 +1575,216 @@ devices:
     unit: ''
   slave_id: 1
   vendor: 松下焊接 (Panasonic)
+  zone: 物流区
+- _simulation_params:
+    base_values:
+      coating_thickness: 60
+      conveyor_speed: 5
+      oven_temperature: 160
+      spray_pressure: 0.4
+      spray_speed: 8
+    energy_baseline: 120
+    noise_levels:
+      coating_thickness: 3
+      conveyor_speed: 0.3
+      oven_temperature: 4
+      spray_pressure: 0.03
+      spray_speed: 0.5
+    theoretical_rate: 100
+  collection_interval: 3
+  description: 涂装车间控制 — 喷涂/烘干/输送
+  device_model: H5U-3232MT
+  enabled: true
+  host: 192.168.1.58
+  id: inovance_h5u_01
+  name: 汇川H5U PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 喷涂压力
+    length: 2
+    name: spray_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: 烘干炉温度
+    length: 2
+    name: oven_temperature
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 喷涂速度
+    length: 2
+    name: spray_speed
+    scale: 1.0
+    unit: m/min
+  - address: 6
+    data_type: float32
+    description: 涂层厚度
+    length: 2
+    name: coating_thickness
+    scale: 1.0
+    unit: μm
+  - address: 8
+    data_type: float32
+    description: 输送链速度
+    length: 2
+    name: conveyor_speed
+    scale: 1.0
+    unit: m/min
+  - address: 10
+    data_type: uint16
+    description: 喷涂计数
+    length: 1
+    name: painted_count
+    scale: 1
+    unit: 个
+  slave_id: 1
+  vendor: 汇川技术
+- _simulation_params:
+    base_values:
+      conductivity: 450
+      dissolved_oxygen: 8
+      inlet_flow: 50
+      outlet_flow: 48
+      ph_value: 7.2
+      pump_speed: 1450
+      turbidity: 5
+      water_level: 3.5
+    energy_baseline: 60
+    noise_levels:
+      conductivity: 20
+      dissolved_oxygen: 0.5
+      inlet_flow: 3
+      outlet_flow: 3
+      ph_value: 0.3
+      pump_speed: 30
+      turbidity: 1.5
+      water_level: 0.2
+    theoretical_rate: 0
+  collection_interval: 5
+  description: 水处理车间控制 — 进水/加药/沉淀
+  device_model: BMX P34 2020
+  enabled: true
+  host: 192.168.1.54
+  id: schneider_m340_01
+  name: 施耐德M340 PLC
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 进水流量
+    length: 2
+    name: inlet_flow
+    scale: 1.0
+    unit: m³/h
+  - address: 2
+    data_type: float32
+    description: 出水流量
+    length: 2
+    name: outlet_flow
+    scale: 1.0
+    unit: m³/h
+  - address: 4
+    data_type: float32
+    description: 沉淀池液位
+    length: 2
+    name: water_level
+    scale: 1.0
+    unit: m
+  - address: 6
+    data_type: float32
+    description: 出水pH值
+    length: 2
+    name: ph_value
+    scale: 1.0
+    unit: ''
+  - address: 8
+    data_type: float32
+    description: 出水浊度
+    length: 2
+    name: turbidity
+    scale: 1.0
+    unit: NTU
+  - address: 10
+    data_type: float32
+    description: 溶解氧
+    length: 2
+    name: dissolved_oxygen
+    scale: 1.0
+    unit: mg/L
+  - address: 12
+    data_type: float32
+    description: 电导率
+    length: 2
+    name: conductivity
+    scale: 1.0
+    unit: μS/cm
+  - address: 14
+    data_type: uint16
+    description: 进水泵转速
+    length: 1
+    name: pump_speed
+    scale: 1
+    unit: RPM
+  slave_id: 1
+  vendor: 施耐德电气
+- collection_interval: 2
+  description: 现场IO-Link传感器集成 — 压力/流量/温度/距离
+  device_model: TBEN-L4-8IOL
+  enabled: true
+  host: 192.168.1.60
+  id: turck_iolink_01
+  name: 图尔克IO-Link主站
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: IO-Link压力传感器1
+    length: 2
+    name: iol_pressure_1
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: IO-Link流量传感器1
+    length: 2
+    name: iol_flow_1
+    scale: 1.0
+    unit: L/min
+  - address: 4
+    data_type: float32
+    description: IO-Link温度传感器1
+    length: 2
+    name: iol_temperature_1
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: IO-Link距离传感器1
+    length: 2
+    name: iol_distance_1
+    scale: 1.0
+    unit: mm
+  - address: 8
+    data_type: float32
+    description: IO-Link压力传感器2
+    length: 2
+    name: iol_pressure_2
+    scale: 1.0
+    unit: MPa
+  - address: 10
+    data_type: float32
+    description: IO-Link真空传感器
+    length: 2
+    name: iol_vacuum
+    scale: 1.0
+    unit: Pa
+  slave_id: 1
+  vendor: 图尔克

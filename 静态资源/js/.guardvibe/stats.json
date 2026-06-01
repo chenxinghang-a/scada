@@ -1,14 +1,14 @@
 {
   "version": 1,
   "firstScan": "2026-05-30T13:34:14.619Z",
-  "lastScan": "2026-05-31T06:23:34.497Z",
+  "lastScan": "2026-05-31T15:15:59.319Z",
   "totals": {
-    "scans": 3,
-    "filesScanned": 3,
-    "findingsTotal": 2,
+    "scans": 5,
+    "filesScanned": 5,
+    "findingsTotal": 3,
     "findingsFixed": 0,
     "critical": 0,
-    "high": 2,
+    "high": 3,
     "medium": 0,
     "low": 0,
     "autoFixesApplied": 0,
@@ -17,21 +17,21 @@
   },
   "monthly": {
     "2026-05": {
-      "scans": 3,
-      "filesScanned": 3,
-      "findingsTotal": 2,
+      "scans": 5,
+      "filesScanned": 5,
+      "findingsTotal": 3,
       "findingsFixed": 0,
       "critical": 0,
-      "high": 2,
+      "high": 3,
       "medium": 0,
       "low": 0
     }
   },
   "tools": {
-    "scan_file": 3
+    "scan_file": 5
   },
   "topRules": {
-    "VG121": 2
+    "VG121": 3
   },
   "grades": []
 }

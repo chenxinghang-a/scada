@@ -202,14 +202,19 @@
             .then(r => r.json())
             .then(data => {
                 if (data.valid) {
+                    // 刷新cookie（cookie可能已过期，但localStorage的token还有效）
+                    document.cookie = `token=${token}; path=/; SameSite=Lax`;
                     window.location.href = '/dashboard';
                 } else {
+                    // 服务端明确返回无效，才清token
                     localStorage.removeItem('auth_token');
                     localStorage.removeItem('scada_user');
+                    document.cookie = 'token=; path=/; max-age=0';
                 }
             })
             .catch(() => {
-                localStorage.removeItem('auth_token');
+                // 网络错误/超时/服务器忙 → 不清token，保留登录状态
+                // 下次访问页面会重新验证
             });
         }
 

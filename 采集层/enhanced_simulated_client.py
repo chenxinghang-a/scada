@@ -170,7 +170,9 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                     results.append(0)
                 else:
                     # 传感器：从缓存读取（行为模拟器仍在更新环境值）
-                    val = self._latest_data.get(reg_name, 25.0)
+                    val = self._latest_data.get(reg_name)
+                    if val is None:
+                        val = 25.0
                     scale = reg_cfg.get('scale', 1.0)
                     raw = val / scale if scale != 0 else val
                     dt = reg_cfg.get('data_type', 'uint16')
@@ -220,13 +222,15 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                 return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
             return [100]
         
-        # 从缓存获取数据
+        # 从缓存获取数据（None保护：行为模拟器边界条件下可能返回None）
         with self._data_lock:
-            value = self._latest_data.get(reg_config['name'], 0)
-        
+            value = self._latest_data.get(reg_config['name'])
+            if value is None:
+                value = 0
+
         # 应用缩放和偏移
         scale = reg_config.get('scale', 1.0)
-        offset = reg_config.get('offset', 0)
+        offset = reg_config.get('offset', 0) or 0
         raw_value = (value - offset) / scale if scale != 0 else value
         
         # 根据数据类型编码

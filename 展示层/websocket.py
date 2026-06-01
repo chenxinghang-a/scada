@@ -49,7 +49,35 @@ def init_socketio(app, database, data_collector):
     global socketio
 
     cors_origins = _load_cors_origins()
-    socketio = SocketIO(app, cors_allowed_origins=cors_origins, async_mode='threading')
+
+    # PyInstaller 打包环境下 eventlet/gevent 不可用，直接用 threading
+    import sys
+    is_frozen = getattr(sys, 'frozen', False)
+
+    async_mode = 'threading'
+    if not is_frozen:
+        try:
+            import eventlet
+            async_mode = 'eventlet'
+        except ImportError:
+            try:
+                import gevent
+                async_mode = 'gevent'
+            except ImportError:
+                async_mode = 'threading'
+
+    try:
+        socketio = SocketIO(app, cors_allowed_origins=cors_origins, async_mode=async_mode)
+        logger.info(f"SocketIO 初始化成功，异步模式: {async_mode}")
+    except Exception as e:
+        logger.error(f"SocketIO 初始化失败: {e}，尝试使用 threading 模式")
+        try:
+            socketio = SocketIO(app, cors_allowed_origins=cors_origins, async_mode='threading')
+            logger.info("SocketIO 使用 threading 模式初始化成功")
+        except Exception as e2:
+            logger.error(f"SocketIO 初始化彻底失败: {e2}")
+            socketio = None
+            return None
 
     # 注册事件处理
     @socketio.on('connect')
@@ -83,7 +111,7 @@ def init_socketio(app, database, data_collector):
         # 加入设备房间
         join_room(f'device_{device_id}')
 
-        # 发送最新数据
+        # 发送最新数据（字典格式：{register_name: {device_id, register_name, value, ...}}）
         latest_data = database.get_latest_data(device_id)
         if latest_data:
             emit('data_update', latest_data)

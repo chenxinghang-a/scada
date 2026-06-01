@@ -3,6 +3,16 @@
 """
 
 import sys
+import os
+
+# 解决PyInstaller打包后中文乱码问题
+if sys.platform == 'win32':
+    os.system('chcp 65001 >nul 2>&1')
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+
 import logging
 import threading
 from pathlib import Path
