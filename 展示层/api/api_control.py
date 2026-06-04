@@ -9,7 +9,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
-from ._common import get_auth_manager, api_error_handler, safe_int, safe_float
+from ._common import get_auth_manager, api_error_handler, api_error, safe_int, safe_float
 from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
@@ -40,12 +40,12 @@ def write_register(device_id):
     """写入寄存器（带安全校验）"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供写入参数'}), 400
+        return api_error('请提供写入参数')
 
     address = data.get('address')
     value = data.get('value')
     if address is None or value is None:
-        return jsonify({'error': '缺少address或value参数'}), 400
+        return api_error('缺少address或value参数')
 
     operator = request.current_user['username']
 
@@ -54,7 +54,7 @@ def write_register(device_id):
         # 支持整数和浮点值写入（float32寄存器需要浮点支持）
         value = safe_float(value, 'value')
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return api_error(str(e))
 
     # 工厂级安全校验
     device_control = getattr(current_app, 'device_control', None)
@@ -68,16 +68,16 @@ def write_register(device_id):
     # 降级：无安全模块时执行基础安全校验
     client = current_app.device_manager.get_client(device_id)
     if not client:
-        return jsonify({'error': f'设备 {device_id} 不存在'}), 404
+        return api_error(f'设备 {device_id} 不存在', 404)
     if not client.connected:
-        return jsonify({'error': f'设备 {device_id} 未连接'}), 400
+        return api_error(f'设备 {device_id} 未连接')
 
     # 基础安全校验：地址范围 + 值范围（防止写入危险值）
     if address < REGISTER_ADDRESS_MIN or address > REGISTER_ADDRESS_MAX:
-        return jsonify({'error': f'寄存器地址超出范围 ({REGISTER_ADDRESS_MIN}-{REGISTER_ADDRESS_MAX})'}), 400
+        return api_error(f'寄存器地址超出范围 ({REGISTER_ADDRESS_MIN}-{REGISTER_ADDRESS_MAX})')
     # INT16 范围检查（最常见场景）
     if not (REGISTER_VALUE_INT16_MIN <= value <= REGISTER_VALUE_INT16_MAX):
-        return jsonify({'error': f'写入值 {value} 超出安全范围 ({REGISTER_VALUE_INT16_MIN}~{REGISTER_VALUE_INT16_MAX})'}), 400
+        return api_error(f'写入值 {value} 超出安全范围 ({REGISTER_VALUE_INT16_MIN}~{REGISTER_VALUE_INT16_MAX})')
 
     # 幂等性检查：2秒内相同地址+值的写入视为重复操作
     import time
@@ -107,19 +107,19 @@ def write_coil(device_id):
     """写入线圈（带安全校验）"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供写入参数'}), 400
+        return api_error('请提供写入参数')
 
     address = data.get('address')
     value = data.get('value')
     if address is None or value is None:
-        return jsonify({'error': '缺少address或value参数'}), 400
+        return api_error('缺少address或value参数')
 
     operator = request.current_user['username']
 
     try:
         address = safe_int(address, 'address')
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return api_error(str(e))
 
     # 统一布尔值转换（字符串 "false"/"0" 也应视为 False）
     if isinstance(value, str):
@@ -139,9 +139,9 @@ def write_coil(device_id):
     # 降级：无安全模块时直接写入
     client = current_app.device_manager.get_client(device_id)
     if not client:
-        return jsonify({'error': f'设备 {device_id} 不存在'}), 404
+        return api_error(f'设备 {device_id} 不存在', 404)
     if not client.connected:
-        return jsonify({'error': f'设备 {device_id} 未连接'}), 400
+        return api_error(f'设备 {device_id} 未连接')
 
     success = client.write_single_coil(address, bool_val)
     if success:
@@ -158,17 +158,17 @@ def adjust_device(device_id):
     """调节设备参数（写入指定寄存器值，如温度设定值、速度等）"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供调节参数'}), 400
+        return api_error('请提供调节参数')
 
     register_name = data.get('register_name')
     value = data.get('value')
     if register_name is None or value is None:
-        return jsonify({'error': '缺少 register_name 或 value 参数'}), 400
+        return api_error('缺少 register_name 或 value 参数')
 
     try:
         value = safe_float(value, 'value')
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return api_error(str(e))
 
     operator = request.current_user['username']
     result = current_app.device_manager.adjust_device(device_id, register_name, value) or {}
@@ -191,17 +191,17 @@ def write_endpoint(device_id):
     method = data.get('method', 'PUT').upper()
 
     if not endpoint_name:
-        return jsonify({'error': '请指定端点名称'}), 400
+        return api_error('请指定端点名称')
 
     if method not in ('POST', 'PUT'):
-        return jsonify({'error': '不支持的HTTP方法，仅支持POST/PUT'}), 400
+        return api_error('不支持的HTTP方法，仅支持POST/PUT')
 
     operator = request.current_user['username']
 
     device_manager = current_app.device_manager
     client = device_manager.get_client(device_id)
     if not client:
-        return jsonify({'error': f'设备 {device_id} 不存在'}), 404
+        return api_error(f'设备 {device_id} 不存在', 404)
 
     # 查找端点配置
     device_config = device_manager.devices.get(device_id, {})
@@ -209,7 +209,7 @@ def write_endpoint(device_id):
     endpoint_config = next((ep for ep in endpoints if ep.get('name') == endpoint_name), None)
 
     if not endpoint_config:
-        return jsonify({'error': f'端点 {endpoint_name} 不存在'}), 404
+        return api_error(f'端点 {endpoint_name} 不存在', 404)
 
     # 执行写入
     success = False
@@ -263,7 +263,7 @@ def trigger_estop():
     reason = data.get('reason', '操作员手动触发紧急停机')
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
-        return jsonify({'error': '设备控制安全模块未启用'}), 503
+        return api_error('设备控制安全模块未启用', 503)
     result = device_control.trigger_emergency_stop(reason)
     get_auth_manager().log_operation(
         request.current_user['username'], 'emergency_stop', f'紧急停机: {reason}')
@@ -277,7 +277,7 @@ def reset_estop():
     operator = request.current_user['username']
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
-        return jsonify({'error': '设备控制安全模块未启用'}), 503
+        return api_error('设备控制安全模块未启用', 503)
     result = device_control.reset_emergency_stop(operator)
     get_auth_manager().log_operation(operator, 'estop_reset', '解除紧急停机')
     return jsonify(result)
@@ -312,7 +312,7 @@ def bypass_interlock(rule_id):
     operator = request.current_user['username']
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
-        return jsonify({'error': '设备控制安全模块未启用'}), 503
+        return api_error('设备控制安全模块未启用', 503)
     success = device_control.bypass_interlock(rule_id, operator, reason)
     return jsonify({'success': success, 'message': f'联锁 {rule_id} 已旁路' if success else '旁路失败'})
 
@@ -324,7 +324,7 @@ def restore_interlock(rule_id):
     operator = request.current_user['username']
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
-        return jsonify({'error': '设备控制安全模块未启用'}), 503
+        return api_error('设备控制安全模块未启用', 503)
     success = device_control.restore_interlock(rule_id, operator)
     return jsonify({'success': success, 'message': f'联锁 {rule_id} 已恢复' if success else '恢复失败'})
 
@@ -339,12 +339,12 @@ def create_bypass_request():
     timeout_minutes = data.get('timeout_minutes', 30)
 
     if not interlock_id:
-        return jsonify({'error': '缺少 interlock_id 参数'}), 400
+        return api_error('缺少 interlock_id 参数')
 
     operator = request.current_user['username']
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
-        return jsonify({'error': '设备控制安全模块未启用'}), 503
+        return api_error('设备控制安全模块未启用', 503)
 
     request_id = device_control.request_bypass(interlock_id, operator, reason, timeout_minutes)
     return jsonify({
@@ -362,12 +362,12 @@ def approve_bypass_request():
     request_id = data.get('request_id')
 
     if not request_id:
-        return jsonify({'error': '缺少 request_id 参数'}), 400
+        return api_error('缺少 request_id 参数')
 
     approver = request.current_user['username']
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
-        return jsonify({'error': '设备控制安全模块未启用'}), 503
+        return api_error('设备控制安全模块未启用', 503)
 
     success, message = device_control.approve_bypass(request_id, approver)
     return jsonify({'success': success, 'message': message}), (200 if success else 400)
@@ -382,12 +382,12 @@ def reject_bypass_request():
     reason = data.get('reason', '')
 
     if not request_id:
-        return jsonify({'error': '缺少 request_id 参数'}), 400
+        return api_error('缺少 request_id 参数')
 
     rejector = request.current_user['username']
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
-        return jsonify({'error': '设备控制安全模块未启用'}), 503
+        return api_error('设备控制安全模块未启用', 503)
 
     success, message = device_control.reject_bypass(request_id, rejector, reason)
     return jsonify({'success': success, 'message': message}), (200 if success else 400)
@@ -399,7 +399,7 @@ def get_pending_bypasses():
     """获取待审批的旁路请求"""
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
-        return jsonify({'error': '设备控制安全模块未启用'}), 503
+        return api_error('设备控制安全模块未启用', 503)
 
     pending = device_control.get_pending_bypasses()
     return jsonify({'pending': pending, 'count': len(pending)})
@@ -424,7 +424,7 @@ def batch_control():
     device_ids = data.get('device_ids')  # 可选：指定设备ID列表
 
     if action not in ('start', 'stop', 'reset'):
-        return jsonify({'error': '无效的操作类型，支持: start, stop, reset'}), 400
+        return api_error('无效的操作类型，支持: start, stop, reset')
 
     operator = request.current_user['username']
 
@@ -538,7 +538,7 @@ def start_recipe():
     device_id = data.get('device_id')
 
     if not recipe_name:
-        return jsonify({'error': '缺少 recipe_name 参数'}), 400
+        return api_error('缺少 recipe_name 参数')
 
     from 采集层.recipe_simulator import RecipeSimulator
     if recipe_name not in RecipeSimulator.RECIPES:
@@ -550,7 +550,7 @@ def start_recipe():
     # 查找目标设备的行为模拟器
     behavior_sim = _get_behavior_simulator(device_id)
     if not behavior_sim:
-        return jsonify({'error': '未找到可用的设备行为模拟器'}), 404
+        return api_error('未找到可用的设备行为模拟器', 404)
 
     success = behavior_sim.set_recipe(recipe_name)
     if success:
@@ -576,11 +576,11 @@ def stop_recipe():
 
     behavior_sim = _get_behavior_simulator(device_id)
     if not behavior_sim:
-        return jsonify({'error': '未找到可用的设备行为模拟器'}), 404
+        return api_error('未找到可用的设备行为模拟器', 404)
 
     status = behavior_sim.get_recipe_status()
     if not status:
-        return jsonify({'error': '该设备没有正在运行的配方'}), 400
+        return api_error('该设备没有正在运行的配方')
 
     behavior_sim.stop_recipe()
     operator = request.current_user['username']
@@ -602,7 +602,7 @@ def get_recipe_status():
 
     behavior_sim = _get_behavior_simulator(device_id)
     if not behavior_sim:
-        return jsonify({'error': '未找到可用的设备行为模拟器'}), 404
+        return api_error('未找到可用的设备行为模拟器', 404)
 
     status = behavior_sim.get_recipe_status()
     if not status:

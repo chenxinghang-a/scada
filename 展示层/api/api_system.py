@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, request, current_app
 from datetime import datetime
 
 from 用户层.auth import role_required, jwt_required
-from ._common import load_yaml_config, save_yaml_config
+from ._common import load_yaml_config, save_yaml_config, api_error
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ def get_config():
     """获取系统配置（过滤敏感字段）"""
     config = load_yaml_config('配置/system.yaml')
     if not config:
-        return jsonify({'error': '配置文件不存在'}), 404
+        return api_error('配置文件不存在', 404)
     # 移除敏感字段，防止密钥泄露
     sensitive_keys = {'secret_key', 'jwt_secret', 'password', 'token', 'api_key'}
     def _sanitize(obj):
@@ -155,7 +155,7 @@ def update_config():
 
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供配置数据'}), 400
+        return api_error('请提供配置数据')
 
     config = load_yaml_config('配置/system.yaml')
 

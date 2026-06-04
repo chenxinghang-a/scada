@@ -9,7 +9,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
-from ._common import get_auth_manager, api_error_handler, safe_int
+from ._common import get_auth_manager, api_error_handler, api_error, safe_int
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def get_device(device_id):
     """获取单个设备详情"""
     status = current_app.device_manager.get_device_status(device_id)
     if 'error' in status:
-        return jsonify(status), 404
+        return api_error(status['error'], 404)
     return jsonify({'device': status})
 
 
@@ -51,17 +51,17 @@ def add_device():
     """添加新设备（支持所有协议）"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供设备配置'}), 400
+        return api_error('请提供设备配置')
 
     # 基础必填字段
     for field in ('id', 'name'):
         if field not in data:
-            return jsonify({'error': f'缺少必填字段: {field}'}), 400
+            return api_error(f'缺少必填字段: {field}')
 
     # 设备ID格式验证（防止SQL注入和特殊字符）
     device_id = data.get('id', '')
     if not device_id or not device_id.replace('_', '').replace('-', '').isalnum():
-        return jsonify({'error': '设备ID只能包含字母、数字、下划线和连字符'}), 400
+        return api_error('设备ID只能包含字母、数字、下划线和连字符')
 
     protocol = data.get('protocol', 'modbus_tcp')
 
@@ -70,14 +70,14 @@ def add_device():
         _validate_protocol_fields(protocol, data)
     except ValueError as e:
         logger.warning(f"设备配置验证失败: {e}")
-        return jsonify({'error': '设备配置验证失败，请检查必填字段'}), 400
+        return api_error('设备配置验证失败，请检查必填字段')
 
     # 构建设备配置
     try:
         device_config = _build_device_config(protocol, data)
     except ValueError as e:
         logger.warning(f"设备配置类型错误: {e}")
-        return jsonify({'error': str(e)}), 400
+        return api_error(str(e))
 
     success = current_app.device_manager.add_device(device_config)
     if success:
@@ -105,11 +105,11 @@ def update_device(device_id):
     """更新设备配置（支持所有协议）"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供设备配置'}), 400
+        return api_error('请提供设备配置')
 
     device_manager = current_app.device_manager
     if device_id not in device_manager.devices:
-        return jsonify({'error': f'设备 {device_id} 不存在'}), 404
+        return api_error(f'设备 {device_id} 不存在', 404)
 
     device_config = device_manager.devices[device_id]
     protocol = data.get('protocol', device_config.get('protocol', 'modbus_tcp'))
@@ -129,13 +129,13 @@ def update_device(device_id):
                 else:
                     device_config[key] = data[key]
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return api_error(str(e))
 
     # 协议专属字段
     try:
         _update_protocol_fields(protocol, device_config, data)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return api_error(str(e))
 
     device_manager._save_config()
     get_auth_manager().log_operation(
@@ -215,12 +215,12 @@ def stop_device(device_id):
     device_manager = current_app.device_manager
     config = device_manager.devices.get(device_id)
     if not config:
-        return jsonify({'error': f'设备 {device_id} 不存在'}), 404
+        return api_error(f'设备 {device_id} 不存在', 404)
 
     from 采集层.interfaces import IDeviceManager
     category = IDeviceManager.get_device_category(config)
     if category != 'mechanical':
-        return jsonify({'success': False, 'message': f'{category} 类型设备不支持启停操作'}), 400
+        return api_error(f'{category} 类型设备不支持启停操作')
 
     result = device_manager.stop_device(device_id)
     if result:
@@ -235,7 +235,7 @@ def start_device(device_id):
     device_manager = current_app.device_manager
     config = device_manager.devices.get(device_id)
     if not config:
-        return jsonify({'error': f'设备 {device_id} 不存在'}), 404
+        return api_error(f'设备 {device_id} 不存在', 404)
 
     from 采集层.interfaces import IDeviceManager
     category = IDeviceManager.get_device_category(config)
@@ -343,8 +343,8 @@ def get_device_behavior(device_id):
     client = device_manager.get_client(device_id)
     
     if not client:
-        return jsonify({'error': f'设备 {device_id} 不存在或未连接'}), 404
-    
+        return api_error(f'设备 {device_id} 不存在或未连接', 404)
+
     # 检查是否是增强版模拟客户端
     if hasattr(client, 'behavior_simulator'):
         simulator = client.behavior_simulator
@@ -378,20 +378,20 @@ def inject_device_fault(device_id):
     """注入设备故障（测试用）"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供故障配置'}), 400
-    
+        return api_error('请提供故障配置')
+
     fault_type = data.get('fault_type', 'sensor_drift')
     severity = data.get('severity', 0.5)
-    
+
     device_manager = current_app.device_manager
 
     if not device_manager.simulation_mode:
-        return jsonify({'error': '故障注入仅在模拟模式下可用'}), 403
+        return api_error('故障注入仅在模拟模式下可用', 403)
 
     client = device_manager.get_client(device_id)
 
     if not client:
-        return jsonify({'error': f'设备 {device_id} 不存在或未连接'}), 404
+        return api_error(f'设备 {device_id} 不存在或未连接', 404)
 
     # 检查是否是增强版模拟客户端
     if hasattr(client, 'inject_fault'):
@@ -409,14 +409,14 @@ def inject_device_fault(device_id):
         
         fault = fault_map.get(fault_type)
         if not fault:
-            return jsonify({'error': f'不支持的故障类型: {fault_type}'}), 400
-        
+            return api_error(f'不支持的故障类型: {fault_type}')
+
         client.inject_fault(fault, severity)
-        
+
         get_auth_manager().log_operation(
             request.current_user['username'], 'inject_fault',
             f"注入故障: {device_id} - {fault_type} (严重度: {severity})")
-        
+
         return jsonify({
             'success': True,
             'message': f'已注入故障: {fault_type}',
@@ -425,7 +425,7 @@ def inject_device_fault(device_id):
             'severity': severity
         })
     else:
-        return jsonify({'error': '该设备不支持故障注入'}), 400
+        return api_error('该设备不支持故障注入')
 
 
 @devices_bp.route('/devices/<device_id>/force-state', methods=['POST'])
@@ -434,24 +434,24 @@ def force_device_state(device_id):
     """强制设置设备状态（测试用）"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供状态配置'}), 400
+        return api_error('请提供状态配置')
     
     state_name = data.get('state', 'RUNNING')
     
     device_manager = current_app.device_manager
 
     if not device_manager.simulation_mode:
-        return jsonify({'error': '状态强制设置仅在模拟模式下可用'}), 403
+        return api_error('状态强制设置仅在模拟模式下可用', 403)
 
     client = device_manager.get_client(device_id)
 
     if not client:
-        return jsonify({'error': f'设备 {device_id} 不存在或未连接'}), 404
+        return api_error(f'设备 {device_id} 不存在或未连接', 404)
 
     # 检查是否是增强版模拟客户端
     if hasattr(client, 'force_state'):
         from 采集层.device_behavior_simulator import DeviceState
-        
+
         # 映射状态
         state_map = {
             'STOPPED': DeviceState.STOPPED,
@@ -461,17 +461,17 @@ def force_device_state(device_id):
             'MAINTENANCE': DeviceState.MAINTENANCE,
             'SETUP': DeviceState.SETUP
         }
-        
+
         state = state_map.get(state_name)
         if not state:
-            return jsonify({'error': f'不支持的状态: {state_name}'}), 400
-        
+            return api_error(f'不支持的状态: {state_name}')
+
         client.force_state(state)
-        
+
         get_auth_manager().log_operation(
             request.current_user['username'], 'force_state',
             f"强制状态: {device_id} → {state_name}")
-        
+
         return jsonify({
             'success': True,
             'message': f'已设置状态: {state_name}',
@@ -479,7 +479,7 @@ def force_device_state(device_id):
             'state': state_name
         })
     else:
-        return jsonify({'error': '该设备不支持状态强制设置'}), 400
+        return api_error('该设备不支持状态强制设置')
 
 
 @devices_bp.route('/devices/templates', methods=['GET'])

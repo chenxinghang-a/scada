@@ -8,7 +8,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
-from ._common import get_auth_manager, load_yaml_config, save_yaml_config, api_error_handler
+from ._common import get_auth_manager, load_yaml_config, save_yaml_config, api_error_handler, api_error
 from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
@@ -217,13 +217,13 @@ def add_alarm_rule():
     """添加报警规则"""
     data = request.get_json()
     if not data or 'id' not in data:
-        return jsonify({'error': '请提供规则ID'}), 400
+        return api_error('请提供规则ID')
 
     config = load_yaml_config('配置/alarms.yaml')
 
     rules = config.get('alarm_rules', [])
     if any(r.get('id') == data['id'] for r in rules):
-        return jsonify({'error': f'规则 {data["id"]} 已存在'}), 400
+        return api_error(f'规则 {data["id"]} 已存在')
 
     rules.append(data)
     config['alarm_rules'] = rules
@@ -244,7 +244,7 @@ def update_alarm_rule(rule_id):
     """更新报警规则"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供更新数据'}), 400
+        return api_error('请提供更新数据')
 
     config = load_yaml_config('配置/alarms.yaml')
 
@@ -257,7 +257,7 @@ def update_alarm_rule(rule_id):
             break
 
     if not found:
-        return jsonify({'error': f'规则 {rule_id} 不存在'}), 404
+        return api_error(f'规则 {rule_id} 不存在', 404)
 
     config['alarm_rules'] = rules
     save_yaml_config('配置/alarms.yaml', config)
@@ -280,7 +280,7 @@ def delete_alarm_rule(rule_id):
     new_rules = [r for r in rules if r.get('id') != rule_id]
 
     if len(new_rules) == len(rules):
-        return jsonify({'error': f'规则 {rule_id} 不存在'}), 404
+        return api_error(f'规则 {rule_id} 不存在', 404)
 
     config['alarm_rules'] = new_rules
     save_yaml_config('配置/alarms.yaml', config)
@@ -301,7 +301,7 @@ def update_notification():
     """更新通知设置"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供通知配置'}), 400
+        return api_error('请提供通知配置')
 
     config = load_yaml_config('配置/alarms.yaml')
 
@@ -546,7 +546,7 @@ def update_dedup_config():
     """更新报警去重配置"""
     data = request.get_json()
     if not data:
-        return jsonify({'error': '请提供去重配置'}), 400
+        return api_error('请提供去重配置')
 
     alarm_manager = current_app.alarm_manager
     updated_config = alarm_manager.update_dedup_config(data)
