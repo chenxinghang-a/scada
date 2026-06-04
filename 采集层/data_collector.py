@@ -882,15 +882,15 @@ class DataCollector:
                 except (ValueError, TypeError, queue.Full):
                     pass
 
-    def _collect_rest(self, client, device_id: str, device_config: dict[str, Any], timestamp):
+    def _collect_rest(self, client, device_id: str, device_config: dict[str, Any], timestamp: datetime) -> None:
         """采集REST设备的缓存数据（客户端自带轮询）"""
         self._collect_from_cache(client, device_id, timestamp)
 
-    def _collect_opcua(self, client, device_id: str, device_config: dict[str, Any], timestamp):
+    def _collect_opcua(self, client, device_id: str, device_config: dict[str, Any], timestamp: datetime) -> None:
         """采集OPC UA设备的缓存数据（客户端通过订阅自动更新缓存）"""
         self._collect_from_cache(client, device_id, timestamp)
 
-    def _collect_mqtt(self, client, device_id: str, device_config: dict[str, Any], timestamp):
+    def _collect_mqtt(self, client, device_id: str, device_config: dict[str, Any], timestamp: datetime) -> None:
         """采集MQTT设备的缓存数据（客户端通过订阅自动更新缓存）"""
         self._collect_from_cache(client, device_id, timestamp)
 
@@ -938,7 +938,7 @@ class DataCollector:
             logger.error(f"读取寄存器异常 ({register.get('name', '?')}): {e}", exc_info=True)
             return None
 
-    def _process_data(self):
+    def _process_data(self) -> None:
         """数据处理主循环（在独立守护线程中运行）。
 
         从 ``self.data_queue`` 中批量取出数据，依次执行以下操作：
