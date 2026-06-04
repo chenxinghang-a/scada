@@ -58,7 +58,7 @@ class Database:
     @contextmanager
     def get_connection(self, readonly=False):
         """
-        获取数据库连接（线程本地复用）
+        获取数据库连接（线程本地复用 + 死锁检测）
 
         Args:
             readonly: True表示只读操作，不提交事务
@@ -66,6 +66,7 @@ class Database:
         Yields:
             sqlite3.Connection: 数据库连接
         """
+        import time
         # 每个线程复用一个连接，不再每次 open/close
         conn = getattr(self._local, 'connection', None)
         if conn is None:
@@ -77,13 +78,24 @@ class Database:
             conn.execute('PRAGMA temp_store=MEMORY')
             self._local.connection = conn
 
+        # 死锁检测：记录操作开始时间
+        start_time = time.time()
+        operation_timeout = 60  # 操作超时60秒
+
         try:
             yield conn
             if not readonly:
                 conn.commit()
         except Exception as e:
+            # 死锁检测：检查是否是长时间阻塞
+            elapsed = time.time() - start_time
+            if elapsed > operation_timeout:
+                logger.error(f"数据库操作超时 ({elapsed:.1f}s)，可能存在死锁: {e}")
             if not readonly:
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             raise e
 
     def check_health(self) -> Dict[str, Any]:
