@@ -19,6 +19,11 @@ control_bp = Blueprint('api_control', __name__, url_prefix='/api')
 _require_auth = jwt_required
 _require_engineer = role_required('admin', 'engineer')
 
+# 幂等性：记录最近的写操作，防止重复提交
+_recent_writes: dict[str, float] = {}
+_write_lock = __import__('threading').Lock()
+IDEMPOTENCY_WINDOW_S = 2  # 2秒内的重复写入视为同一操作
+
 
 # ==================== 设备控制API ====================
 
@@ -66,6 +71,19 @@ def write_register(device_id):
     # INT16 范围检查（最常见场景）
     if not (-32768 <= value <= 65535):
         return jsonify({'error': f'写入值 {value} 超出安全范围 (-32768~65535)'}), 400
+
+    # 幂等性检查：2秒内相同地址+值的写入视为重复操作
+    import time
+    write_key = f"{device_id}:{address}:{value}"
+    with _write_lock:
+        last_write = _recent_writes.get(write_key, 0)
+        now = time.time()
+        if now - last_write < IDEMPOTENCY_WINDOW_S:
+            return jsonify({'success': True, 'message': f'写入成功(幂等): 地址={address}, 值={value}'})
+        _recent_writes[write_key] = now
+        # 清理过期记录
+        if len(_recent_writes) > 1000:
+            _recent_writes.clear()
 
     success = client.write_single_register(address, value)
     if success:
