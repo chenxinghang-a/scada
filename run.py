@@ -307,7 +307,7 @@ def main():
                 tsdb_adapter.start()
                 logger.info("TDengine智能层适配器已启动")
 
-            # 自动归档：每24小时清理超过7天的历史数据
+            # 自动归档+checkpoint：每24小时清理超过7天的历史数据
             def _auto_archive_loop():
                 import time as _time
                 while True:
@@ -317,6 +317,10 @@ def main():
                         logger.info(f"自动归档完成: {result}")
                     except Exception as e:
                         logger.error(f"自动归档失败: {e}")
+                    try:
+                        database.wal_checkpoint()
+                    except Exception as e:
+                        logger.error(f"WAL checkpoint失败: {e}")
 
             import threading as _threading
             _archive_thread = _threading.Thread(target=_auto_archive_loop, daemon=True)

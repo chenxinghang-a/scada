@@ -49,7 +49,7 @@ class Database:
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA synchronous=NORMAL')
         conn.execute('PRAGMA cache_size=-32000')  # 32MB 缓存（高吞吐场景）
-        conn.execute('PRAGMA wal_autocheckpoint=4000')
+        conn.execute('PRAGMA wal_autocheckpoint=1000')  # 每1000页(~4MB)自动checkpoint
         conn.execute('PRAGMA busy_timeout=10000')  # 10秒超时（不卡太久）
         conn.execute('PRAGMA temp_store=MEMORY')   # 临时表放内存
         conn.execute('PRAGMA mmap_size=268435456')  # 256MB 内存映射I/O（读密集场景提速2-5倍）
@@ -790,6 +790,15 @@ class Database:
                 'total_records': total_records,
                 'database_size_mb': round(db_size / (1024 * 1024), 2)
             }
+
+    def wal_checkpoint(self):
+        """手动执行WAL checkpoint（将WAL数据合并到主数据库文件）"""
+        try:
+            with self.get_connection() as conn:
+                conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            logger.info("WAL checkpoint 完成")
+        except Exception as e:
+            logger.warning(f"WAL checkpoint 失败: {e}")
 
     def archive_old_data(self, archive_days: int = 7, delete_days: int = 30):
         """
