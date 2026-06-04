@@ -112,9 +112,10 @@ class AuditLogger:
     def log_operation(self, user: str, action: str, target: str,
                       value: Any = None, reason: str = '',
                       result: str = 'success', detail: str = '',
-                      role: str = '', ip_address: str = ''):
+                      role: str = '', ip_address: str = '',
+                      session_id: str = '', user_agent: str = ''):
         """
-        记录操作审计日志
+        记录操作审计日志（GB/T 32919 ICS安全审计）
 
         Args:
             user: 操作人用户名
@@ -126,6 +127,8 @@ class AuditLogger:
             detail: 详细信息（可选）
             role: 操作人角色
             ip_address: 操作人 IP
+            session_id: 会话ID（可选）
+            user_agent: 用户代理（可选）
         """
         with self._chain_lock:
             now = datetime.now()
