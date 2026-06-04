@@ -66,7 +66,9 @@ def login():
     # 构建响应并在服务端设置cookie（GB/T 33008: 令牌安全传递）
     from flask import make_response
     if result.get('status') == 'must_change_password':
-        resp = make_response(jsonify(result), 403)
+        # 兼容前端：同时返回 must_change_password 字段和 status 字段
+        result['must_change_password'] = True
+        resp = make_response(jsonify(result), 200)
     else:
         resp = make_response(jsonify(result), 200)
 
@@ -100,10 +102,10 @@ def logout():
             ip_address=request.remote_addr
         )
 
-        return jsonify({'message': '已登出'})
+        return jsonify({'success': True, 'message': '已登出'})
     except Exception as e:
         logger.error(f"登出失败: {e}")
-        return jsonify({'message': '已登出'})
+        return jsonify({'success': True, 'message': '已登出'})
 
 
 @auth_bp.route('/auth/register', methods=['POST'])

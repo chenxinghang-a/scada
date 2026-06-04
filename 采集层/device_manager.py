@@ -227,12 +227,29 @@ class DeviceManager:
 
         return client
 
-    def connect_device(self, device_id: str) -> bool:
-        """连接设备"""
+    def connect_device(self, device_id: str, timeout: int = 20) -> bool:
+        """连接设备
+
+        Args:
+            timeout: 连接超时秒数（默认20s）
+        """
         client = self.get_client(device_id)
         if not client:
             return False
-        return client.connect()
+        import threading
+        result = [False]
+        def _do_connect():
+            try:
+                result[0] = client.connect()
+            except Exception:
+                result[0] = False
+        t = threading.Thread(target=_do_connect, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        if t.is_alive():
+            logger.warning(f"设备 {device_id} 连接超时 ({timeout}s)")
+            return False
+        return result[0]
 
     def disconnect_device(self, device_id: str):
         """断开设备连接（同时从连接池中移除）"""
@@ -243,14 +260,18 @@ class DeviceManager:
         # 从连接池中移除
         self._connection_pool.remove(device_id)
 
-    def connect_all(self) -> dict[str, bool]:
-        """连接所有设备"""
+    def connect_all(self, timeout: int = 20) -> dict[str, bool]:
+        """连接所有设备
+
+        Args:
+            timeout: 单个设备连接超时秒数（默认20s）
+        """
         results = {}
         for device_id in self.devices:
             if self.devices[device_id].get('enabled', True):
-                results[device_id] = self.connect_device(device_id)
+                results[device_id] = self.connect_device(device_id, timeout=timeout)
             else:
-                results[device_id] = None  # 跳过禁用设备
+                results[device_id] = None
         return results
 
     def disconnect_all(self):
@@ -474,13 +495,17 @@ class DeviceManager:
         return self._connection_pool.get_stats()
 
     def _save_config(self):
-        """保存设备配置到文件"""
+        """保存设备配置到文件（线程安全 + 原子写入）"""
         try:
-            config = {'devices': list(self.devices.values())}
+            with self._lock:
+                config = {'devices': list(self.devices.values())}
             config_file = Path(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(config_file, 'w', encoding='utf-8') as f:
+            # 原子写入：先写临时文件再 rename，防止崩溃时配置损坏
+            tmp_file = config_file.with_suffix('.tmp')
+            with open(tmp_file, 'w', encoding='utf-8') as f:
                 yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+            tmp_file.replace(config_file)
             logger.info("设备配置已保存")
         except Exception as e:
             logger.error(f"保存配置文件异常: {e}")

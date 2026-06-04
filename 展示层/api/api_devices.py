@@ -71,7 +71,7 @@ def get_device(device_id):
     status = current_app.device_manager.get_device_status(device_id)
     if 'error' in status:
         return jsonify(status), 404
-    return jsonify(status)
+    return jsonify({'device': status})
 
 
 @devices_bp.route('/devices', methods=['POST'])

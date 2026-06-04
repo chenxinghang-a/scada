@@ -217,7 +217,26 @@ class SecurityConfig:
     RATE_LIMIT_LOGIN = os.environ.get('RATE_LIMIT_LOGIN', '5 per minute')
     # CSRF配置 (GB/T 37980)
     CSRF_ENABLED = os.environ.get('CSRF_ENABLED', 'true').lower() == 'true'
-    CSRF_SECRET = os.environ.get('CSRF_SECRET', secrets.token_hex(32))
+    CSRF_SECRET = os.environ.get('CSRF_SECRET', '')
+    if not CSRF_SECRET:
+        # 尝试从 .env 文件读取，没有则生成并持久化
+        _env_file = BASE_DIR / '.env'
+        _generated = secrets.token_hex(32)
+        try:
+            if _env_file.exists():
+                for line in _env_file.read_text(encoding='utf-8').splitlines():
+                    if line.startswith('CSRF_SECRET='):
+                        CSRF_SECRET = line.split('=', 1)[1].strip().strip('"').strip("'")
+                        break
+        except Exception:
+            pass
+        if not CSRF_SECRET:
+            CSRF_SECRET = _generated
+            try:
+                with open(_env_file, 'a', encoding='utf-8') as f:
+                    f.write(f'\nCSRF_SECRET={_generated}\n')
+            except Exception:
+                pass
     # TLS/HTTPS 配置 (GB/T 35718 + GB/T 37980)
     TLS_ENABLED = os.environ.get('SCADA_TLS_ENABLED', 'false').lower() == 'true'
     TLS_CERT_FILE = os.environ.get('SCADA_TLS_CERT', str(BASE_DIR / 'certs' / 'server.crt'))

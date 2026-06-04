@@ -639,42 +639,39 @@ class AlarmManager:
         delay = rule_config.get('delay', 0)
 
         if triggered:
-            # 用实时引用检查（同一次check_alarm中其他规则可能已修改alarm_states）
+            # C1修复: 整个 read-modify-write 在同一锁块内，消除 TOCTOU 竞态
             with self._state_lock:
                 live_state = self.alarm_states.get(state_key)
-            if live_state and live_state.get('alarm_id') == rule_id:
-                # 已经在报警，只更新时间和数值，不重复触发声光/弹窗
-                live_state['last_trigger_time'] = timestamp
-                live_state['trigger_count'] = live_state.get('trigger_count', 0) + 1
-                live_state['last_value'] = value
-                # 持续报警不重复触发 — 只记录，不重发声光和弹窗
-            else:
-                logger.debug(f"新报警触发: rule={rule_id} device={device_id} reg={register_name} "
-                           f"current_alarm_id={current_state.get('alarm_id')} state_key={state_key}")
-                # 新报警（或不同规则覆盖同一设备/寄存器）
-                alarm_state = {
-                    'alarm_id': rule_id,
-                    'device_id': device_id,
-                    'register_name': register_name,
-                    'first_trigger_time': timestamp,
-                    'last_trigger_time': timestamp,
-                    'trigger_count': 1,
-                    'confirmed': False,
-                    'acknowledged': False
-                }
-
-                # 如果有延迟，等待确认
-                if delay > 0:
-                    alarm_state['pending'] = True
-                    alarm_state['confirm_time'] = timestamp
+                if live_state and live_state.get('alarm_id') == rule_id:
+                    # 已经在报警，只更新时间和数值，不重复触发声光/弹窗
+                    live_state['last_trigger_time'] = timestamp
+                    live_state['trigger_count'] = live_state.get('trigger_count', 0) + 1
+                    live_state['last_value'] = value
                 else:
-                    # 立即触发报警（新报警总是触发一次）
-                    alarm_state['pending'] = False
+                    logger.debug(f"新报警触发: rule={rule_id} device={device_id} reg={register_name} "
+                               f"current_alarm_id={current_state.get('alarm_id')} state_key={state_key}")
+                    alarm_state = {
+                        'alarm_id': rule_id,
+                        'device_id': device_id,
+                        'register_name': register_name,
+                        'first_trigger_time': timestamp,
+                        'last_trigger_time': timestamp,
+                        'trigger_count': 1,
+                        'confirmed': False,
+                        'acknowledged': False
+                    }
+                    if delay > 0:
+                        alarm_state['pending'] = True
+                        alarm_state['confirm_time'] = timestamp
+                    else:
+                        alarm_state['pending'] = False
+                    self.alarm_states[state_key] = alarm_state
+
+            # 锁外触发（避免回调死锁）
+            if not (live_state and live_state.get('alarm_id') == rule_id):
+                if delay <= 0:
                     self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
                     self._record_emit(rule_id, device_id, register_name)
-
-                with self._state_lock:
-                    self.alarm_states[state_key] = alarm_state
         else:
             # 未触发，检查是否需要清除报警（只清除自己规则的状态）
             with self._state_lock:

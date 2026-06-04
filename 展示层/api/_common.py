@@ -26,12 +26,14 @@ def load_yaml_config(config_path: str) -> dict[str, Any]:
 
 
 def save_yaml_config(config_path: str, config: dict[str, Any]) -> bool:
-    """保存YAML配置文件"""
+    """保存YAML配置文件（原子写入：先写临时文件再 rename）"""
     try:
         path = Path(config_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
+        tmp_path = path.with_suffix('.tmp')
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+        tmp_path.replace(path)
         return True
     except Exception as e:
         logger.error(f"保存配置文件失败: {e}")

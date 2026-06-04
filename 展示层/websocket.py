@@ -131,21 +131,27 @@ def init_socketio(app, database, data_collector):
     return socketio
 
 
+# 模块级停止事件，供外部调用 stop_data_push_thread()
+_push_stop_event = None
+
+
 def start_data_push_thread(database, data_collector):
     """启动数据推送线程（优化版：单次查询 + 状态缓存 + 异常保护）"""
-    _stop_event = threading.Event()
+    global _push_stop_event
+    # 如果已有线程在运行，先停止
+    if _push_stop_event is not None:
+        _push_stop_event.set()
+    _push_stop_event = threading.Event()
     _last_status_time = 0
     _cached_status = None
 
     def push_data():
         nonlocal _last_status_time, _cached_status
 
-        while not _stop_event.is_set():
+        while not _push_stop_event.is_set():
             try:
-                # 获取所有设备最新数据（单次查询，不是 N+1）
                 devices = database.get_device_summary()
                 if devices:
-                    # 一次性获取所有设备的最新数据
                     all_latest = database.get_latest_data_all()
                     for device in devices:
                         device_id = device['device_id']
@@ -156,7 +162,6 @@ def start_data_push_thread(database, data_collector):
                             except Exception as e:
                                 logger.debug(f"推送设备 {device_id} 数据失败: {e}")
 
-                # 系统状态每 10 秒更新一次（不是每 2 秒查 5 个 COUNT）
                 now = time.time()
                 if now - _last_status_time >= 10:
                     _cached_status = {
@@ -172,15 +177,24 @@ def start_data_push_thread(database, data_collector):
                     except Exception as e:
                         logger.debug(f"推送系统状态失败: {e}")
 
-                time.sleep(2)
+                _push_stop_event.wait(2)
 
             except Exception as e:
                 logger.error(f"数据推送异常: {e}")
-                time.sleep(5)
+                _push_stop_event.wait(5)
 
     thread = threading.Thread(target=push_data, daemon=True)
     thread.start()
     logger.info("数据推送线程已启动")
+
+
+def stop_data_push_thread():
+    """停止数据推送线程"""
+    global _push_stop_event
+    if _push_stop_event is not None:
+        _push_stop_event.set()
+        _push_stop_event = None
+        logger.info("数据推送线程已停止")
 
 
 def emit_alarm(alarm_data):

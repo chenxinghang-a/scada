@@ -90,12 +90,19 @@ def write_register(device_id):
             return jsonify(result), 403
         return jsonify(result)
 
-    # 降级：无安全模块时直接写入
+    # 降级：无安全模块时执行基础安全校验
     client = current_app.device_manager.get_client(device_id)
     if not client:
         return jsonify({'error': f'设备 {device_id} 不存在'}), 404
     if not client.connected:
         return jsonify({'error': f'设备 {device_id} 未连接'}), 400
+
+    # 基础安全校验：地址范围 + 值范围（防止写入危险值）
+    if address < 0 or address > 65535:
+        return jsonify({'error': '寄存器地址超出范围 (0-65535)'}), 400
+    # INT16 范围检查（最常见场景）
+    if not (-32768 <= value <= 65535):
+        return jsonify({'error': f'写入值 {value} 超出安全范围 (-32768~65535)'}), 400
 
     success = client.write_single_register(address, value)
     if success:

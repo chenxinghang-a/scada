@@ -69,8 +69,8 @@ def get_latest_data(device_id):
     register_name = request.args.get('register_name')
     data = current_app.database.get_latest_data(device_id=device_id, register_name=register_name)
     if data:
-        return jsonify(data)
-    return jsonify({'error': '没有数据'}), 404
+        return jsonify({'data': data})
+    return jsonify({'data': [], 'error': '没有数据'}), 200
 
 
 @data_bp.route('/data/history/<device_id>/<register_name>', methods=['GET'])
@@ -122,7 +122,8 @@ def export_device_data(device_id):
 
     if filepath:
         from pathlib import Path
-        return jsonify({'success': True, 'filename': Path(filepath).name})
+        from flask import send_file
+        return send_file(filepath, as_attachment=True, download_name=Path(filepath).name)
     return jsonify({'success': False, 'message': '导出失败'}), 500
 
 
@@ -144,5 +145,6 @@ def export_alarms():
 
     if filepath:
         from pathlib import Path
-        return jsonify({'success': True, 'filename': Path(filepath).name})
+        from flask import send_file
+        return send_file(filepath, as_attachment=True, download_name=Path(filepath).name)
     return jsonify({'success': False, 'message': '没有报警记录可导出'}), 404

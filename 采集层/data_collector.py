@@ -122,9 +122,9 @@ class DiskBackedQueue:
         self._recover_from_disk()
 
     def put(self, item, block=True, timeout=None):
-        """入队（同时写磁盘）"""
-        self._queue.put(item, block=block, timeout=timeout)
+        """入队（先持久化再入队，崩溃时不丢数据）"""
         self._persist_item(item)
+        self._queue.put(item, block=block, timeout=timeout)
 
     def get(self, block=True, timeout=None):
         """出队"""
@@ -163,6 +163,7 @@ class DiskBackedQueue:
             return
 
         recovered = 0
+        queue_full = False
         try:
             with open(self._persist_file, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -176,21 +177,23 @@ class DiskBackedQueue:
                             else:
                                 logger.warning(f"磁盘恢复: 跳过无value字段的记录 keys={list(item.keys())}")
                         except json.JSONDecodeError:
-                            continue  # 跳过损坏行，继续恢复后续数据
+                            continue
                         except queue.Full:
+                            queue_full = True
                             break
         except Exception as e:
             logger.warning(f"磁盘恢复失败: {e}")
 
-        # 清空已恢复的文件
-        if recovered > 0:
+        # 只有全部恢复成功才删文件；队列满时保留文件供下次恢复
+        if recovered > 0 and not queue_full:
             try:
                 self._persist_file.unlink()
             except Exception:
                 pass
 
         if recovered > 0:
-            logger.info(f"从磁盘恢复 {recovered} 条未处理数据")
+            logger.info(f"从磁盘恢复 {recovered} 条未处理数据" +
+                       (f"（队列满，剩余数据待下次恢复）" if queue_full else ""))
 
     def clear_persistence(self):
         """清除持久化文件（正常关闭时调用）"""
