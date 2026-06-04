@@ -120,6 +120,11 @@ class DeviceManager:
         self.clients = {}  # device_id -> protocol client (legacy, kept for backward compat)
         self._lock = threading.Lock()
 
+        # 设备状态缓存（TTL 5秒，避免频繁查询）
+        self._status_cache: dict[str, dict] = {}
+        self._status_cache_time: dict[str, float] = {}
+        self._status_cache_ttl = 5.0
+
         # 连接池 - 复用连接，避免频繁创建/销毁
         self._connection_pool = ConnectionPool(
             factory=self._create_client_for_pool,
@@ -368,7 +373,16 @@ class DeviceManager:
         }
 
     def get_device_status(self, device_id: str) -> dict[str, Any]:
-        """获取设备状态"""
+        """获取设备状态（带5秒缓存）"""
+        import time
+        now = time.time()
+
+        # 检查缓存
+        if device_id in self._status_cache:
+            cache_age = now - self._status_cache_time.get(device_id, 0)
+            if cache_age < self._status_cache_ttl:
+                return self._status_cache[device_id]
+
         device_config = self.devices.get(device_id)
 
         if not device_config:
@@ -413,6 +427,9 @@ class DeviceManager:
             status['connected'] = getattr(client, 'connected', False)
             status['stats'] = getattr(client, 'stats', {})
 
+        # 更新缓存
+        self._status_cache[device_id] = status
+        self._status_cache_time[device_id] = now
         return status
 
     def get_all_status(self, brief: bool = False) -> list[dict[str, Any]]:
