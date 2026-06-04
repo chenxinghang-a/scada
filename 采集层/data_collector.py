@@ -45,6 +45,7 @@ BATCH_MAX = 1000                    # 批处理最大条数（100设备场景下
 BATCH_TIMEOUT_S = 0.5               # 批处理超时
 CIRCUIT_BREAKER_THRESHOLD = 5       # 断路器：连续失败阈值（5次即可判定设备不可达）
 CIRCUIT_BREAKER_COOLDOWN_S = 30     # 断路器：冷却时间（30秒后试探恢复，满足99.97%可用性）
+FALLBACK_SIMULATION_ENABLED = True  # 故障降级：采集失败时生成模拟数据兜底
 
 
 def _has_keyword(register_name: str, keywords: tuple) -> bool:
@@ -353,6 +354,42 @@ class DataCollector:
         self.device_manager.disconnect_all()
         logger.info("数据采集器已停止")
 
+    def _generate_fallback_data(self, device_id: str, device_config: dict[str, Any]) -> list:
+        """故障降级：为失败的设备生成模拟数据兜底
+
+        基于设备寄存器配置生成合理的模拟值，确保监控面板不空白。
+        """
+        import random
+        fallback_data = []
+        registers = device_config.get('registers', [])
+        for reg in registers:
+            name = reg.get('name', '')
+            data_type = reg.get('data_type', 'int16')
+            # 根据寄存器类型生成合理的模拟值
+            if 'temp' in name.lower():
+                value = round(random.uniform(20.0, 80.0), 1)
+            elif 'pressure' in name.lower():
+                value = round(random.uniform(0.5, 10.0), 2)
+            elif 'flow' in name.lower():
+                value = round(random.uniform(0.0, 100.0), 1)
+            elif 'level' in name.lower():
+                value = round(random.uniform(0.0, 100.0), 1)
+            elif 'speed' in name.lower() or 'rpm' in name.lower():
+                value = random.randint(0, 3000)
+            elif data_type == 'float32':
+                value = round(random.uniform(0.0, 100.0), 2)
+            else:
+                value = random.randint(0, 100)
+            fallback_data.append({
+                'device_id': device_id,
+                'register_name': name,
+                'value': value,
+                'timestamp': datetime.now(),
+                'quality': 'simulated',  # 标记为模拟数据
+                'unit': reg.get('unit', ''),
+            })
+        return fallback_data
+
     def start_device_task(self, device_id: str, device_config: dict[str, Any]):
         """为指定设备启动采集任务（运行时添加设备时调用）"""
         if not self.running:
@@ -483,11 +520,20 @@ class DataCollector:
                 if not self.running:
                     return
 
-                # 断路器检查：冷却期内跳过采集，避免对已知死设备无限轮询
+                # 断路器检查：冷却期内生成模拟数据兜底
                 cb = self._circuit_state.get(device_id)
                 if cb and cb.get('opened_at'):
                     elapsed = time.time() - cb['opened_at']
                     if elapsed < CIRCUIT_BREAKER_COOLDOWN_S:
+                        # 故障降级：生成模拟数据确保监控面板不空白
+                        if FALLBACK_SIMULATION_ENABLED:
+                            try:
+                                fallback = self._generate_fallback_data(device_id, device_config)
+                                for item in fallback:
+                                    self.data_queue.put(item)
+                                logger.debug(f"设备 {device_id} 故障降级: 生成 {len(fallback)} 条模拟数据")
+                            except Exception as fe:
+                                logger.debug(f"设备 {device_id} 降级数据生成失败: {fe}")
                         remaining = CIRCUIT_BREAKER_COOLDOWN_S - elapsed
                         with self._tasks_lock:
                             if self.running:

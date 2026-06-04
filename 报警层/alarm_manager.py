@@ -308,11 +308,41 @@ class AlarmManager:
         # 加载报警配置
         self.load_config()
 
+        # 配置文件热重载：记录文件修改时间，定期检查变化
+        self._config_mtime: float = 0
+        try:
+            self._config_mtime = Path(self.config_path).stat().st_mtime
+        except Exception:
+            pass
+        self._config_watcher_running = True
+        self._start_config_watcher()
+
         # 启动报警升级自动检查定时器
         self._start_escalation_timer()
 
         # 启动告警洪水检查定时器
         self._start_flood_timer()
+
+    def _start_config_watcher(self):
+        """启动配置文件热重载后台线程（每10秒检查文件修改时间）"""
+        def _watch_loop():
+            while self._config_watcher_running:
+                try:
+                    import time as _time
+                    _time.sleep(10)
+                    config_file = Path(self.config_path)
+                    if config_file.exists():
+                        current_mtime = config_file.stat().st_mtime
+                        if current_mtime > self._config_mtime:
+                            logger.info(f"检测到报警配置文件变更，自动重载...")
+                            self.load_config()
+                            self._config_mtime = current_mtime
+                            logger.info("报警配置热重载完成")
+                except Exception as e:
+                    logger.debug(f"配置文件监控异常: {e}")
+        t = threading.Thread(target=_watch_loop, daemon=True)
+        t.start()
+        logger.info("报警配置文件热重载监控已启动（每10秒检查）")
 
     def _start_escalation_timer(self):
         """启动报警升级后台检查定时器"""
