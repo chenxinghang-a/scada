@@ -208,31 +208,34 @@ class ConnectionPool:
         logger.debug(f"连接池 {self._name}: 销毁连接 {key}")
 
     def _cleanup_loop(self) -> None:
-        """后台清理过期和不健康连接"""
+        """后台清理过期和不健康连接（缩小锁粒度：快照+检查在锁外，删除在锁内）"""
         while self._running:
             time.sleep(60)
+            # 快照：在锁内获取空闲连接列表
             with self._lock:
                 now = time.time()
-                expired = []
-                for key, conn in self._pool.items():
-                    if conn.in_use:
-                        continue
-                    # 空闲超时
-                    if now - conn.last_used > self._max_idle_time:
-                        expired.append(key)
-                    # 生命周期超时
-                    elif now - conn.created_at > self._max_lifetime:
-                        expired.append(key)
-                    # 不健康
-                    elif not conn.healthy:
-                        expired.append(key)
-                    # 主动健康检查
-                    elif self._health_check and not self._health_check(conn.client):
-                        conn.healthy = False
-                        expired.append(key)
+                snapshot = [(key, conn) for key, conn in self._pool.items()
+                           if not conn.in_use]
 
-                for key in expired:
-                    self._destroy_connection(key, self._pool[key])
+            # 检查：在锁外执行健康检查（可能涉及网络IO）
+            expired = []
+            for key, conn in snapshot:
+                if now - conn.last_used > self._max_idle_time:
+                    expired.append(key)
+                elif now - conn.created_at > self._max_lifetime:
+                    expired.append(key)
+                elif not conn.healthy:
+                    expired.append(key)
+                elif self._health_check and not self._health_check(conn.client):
+                    conn.healthy = False
+                    expired.append(key)
+
+            # 删除：在锁内执行
+            if expired:
+                with self._lock:
+                    for key in expired:
+                        if key in self._pool and not self._pool[key].in_use:
+                            self._destroy_connection(key, self._pool[key])
 
     # ------------------------------------------------------------------
     # Stats & Lifecycle
