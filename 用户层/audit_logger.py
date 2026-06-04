@@ -53,8 +53,18 @@ class AuditLogger:
     def __init__(self, db_path: str = "data/audit.db"):
         self.db_path = db_path
         self._chain_lock = threading.Lock()
+        self._local = threading.local()
         self._init_db()
         logger.info(f"审计日志初始化: {db_path}")
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """获取线程本地连接（复用，不每次 open/close）"""
+        conn = getattr(self._local, 'connection', None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute('PRAGMA busy_timeout=30000')
+            self._local.connection = conn
+        return conn
 
     def _init_db(self):
         """初始化审计数据库（追加写入，不可删除）"""
@@ -135,7 +145,7 @@ class AuditLogger:
             check_input = f"{last_id}:{timestamp}:{user}:{action}:{target}:{value_str}:{result}"
             checksum = self._compute_checksum(check_input)
 
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_conn()
             try:
                 conn.execute("""
                     INSERT INTO audit_log
@@ -146,15 +156,12 @@ class AuditLogger:
                 logger.info(f"[审计] {user} {action} {target} = {value_str} -> {result}")
             except Exception as e:
                 logger.error(f"审计日志写入失败: {e}")
-            finally:
-                conn.close()
 
     def _get_last_id(self) -> int:
         """获取最后一条记录的 ID（用于链式校验）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         cursor = conn.execute("SELECT MAX(id) FROM audit_log")
         row = cursor.fetchone()
-        conn.close()
         return row[0] if row and row[0] else 0
 
     def _backup_log(self):
@@ -215,12 +222,10 @@ class AuditLogger:
         """
         params.append(limit)
 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         cursor = conn.execute(sql, params)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
-        conn.close()
-
         return [dict(zip(columns, row)) for row in rows]
 
     def get_operation_stats(self, hours: float = 24.0) -> dict[str, Any]:
@@ -235,49 +240,46 @@ class AuditLogger:
         """
         cutoff = (datetime.now() - timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
 
-        conn = sqlite3.connect(self.db_path)
-        try:
-            # 按操作类型统计
-            cursor = conn.execute("""
-                SELECT action, COUNT(*) as count
-                FROM audit_log
-                WHERE timestamp >= ?
-                GROUP BY action
-                ORDER BY count DESC
-            """, (cutoff,))
-            by_action = {row[0]: row[1] for row in cursor.fetchall()}
+        conn = self._get_conn()
+        # 按操作类型统计
+        cursor = conn.execute("""
+            SELECT action, COUNT(*) as count
+            FROM audit_log
+            WHERE timestamp >= ?
+            GROUP BY action
+            ORDER BY count DESC
+        """, (cutoff,))
+        by_action = {row[0]: row[1] for row in cursor.fetchall()}
 
-            # 按操作人统计
-            cursor = conn.execute("""
-                SELECT user_name, COUNT(*) as count
-                FROM audit_log
-                WHERE timestamp >= ?
-                GROUP BY user_name
-                ORDER BY count DESC
-            """, (cutoff,))
-            by_user = {row[0]: row[1] for row in cursor.fetchall()}
+        # 按操作人统计
+        cursor = conn.execute("""
+            SELECT user_name, COUNT(*) as count
+            FROM audit_log
+            WHERE timestamp >= ?
+            GROUP BY user_name
+            ORDER BY count DESC
+        """, (cutoff,))
+        by_user = {row[0]: row[1] for row in cursor.fetchall()}
 
-            # 按结果统计
-            cursor = conn.execute("""
-                SELECT result, COUNT(*) as count
-                FROM audit_log
-                WHERE timestamp >= ?
-                GROUP BY result
-            """, (cutoff,))
-            by_result = {row[0]: row[1] for row in cursor.fetchall()}
+        # 按结果统计
+        cursor = conn.execute("""
+            SELECT result, COUNT(*) as count
+            FROM audit_log
+            WHERE timestamp >= ?
+            GROUP BY result
+        """, (cutoff,))
+        by_result = {row[0]: row[1] for row in cursor.fetchall()}
 
-            # 总数
-            cursor = conn.execute("SELECT COUNT(*) FROM audit_log")
-            total = cursor.fetchone()[0]
+        # 总数
+        cursor = conn.execute("SELECT COUNT(*) FROM audit_log")
+        total = cursor.fetchone()[0]
 
-            return {
-                'total_records': total,
-                'today_by_action': by_action,
-                'today_by_user': by_user,
-                'today_by_result': by_result,
-            }
-        finally:
-            conn.close()
+        return {
+            'total_records': total,
+            'today_by_action': by_action,
+            'today_by_user': by_user,
+            'today_by_result': by_result,
+        }
 
     def export_csv(self, output_path: str, start_time: datetime = None,
                    end_time: datetime = None) -> int:
@@ -314,13 +316,12 @@ class AuditLogger:
         Returns:
             dict: 验证结果
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         cursor = conn.execute("""
             SELECT id, timestamp, user_name, action, target, value, result, checksum
             FROM audit_log ORDER BY id
         """)
         rows = cursor.fetchall()
-        conn.close()
 
         total = len(rows)
         valid = 0

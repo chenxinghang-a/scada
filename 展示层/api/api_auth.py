@@ -74,7 +74,9 @@ def login():
 
     token = result.get('token', '')
     if token:
-        resp.set_cookie('token', token, path='/', samesite='Lax', httponly=True)
+        from config import SCADAConfig
+        secure_flag = SCADAConfig.TLS_ENABLED
+        resp.set_cookie('token', token, path='/', samesite='Strict', httponly=True, secure=secure_flag)
     return resp
 
 

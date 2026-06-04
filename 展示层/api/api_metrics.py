@@ -6,11 +6,13 @@ from flask import Blueprint, Response, current_app
 from prometheus_client import CONTENT_TYPE_LATEST
 
 from core.metrics import metrics_collector
+from 用户层.auth import jwt_required
 
 metrics_bp = Blueprint('metrics', __name__)
 
 
 @metrics_bp.route('/metrics')
+@jwt_required
 def prometheus_metrics():
     """Prometheus指标端点"""
     # 更新动态指标
