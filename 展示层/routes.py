@@ -48,6 +48,9 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     from config import FlaskConfig, SecurityConfig
     app.config['SECRET_KEY'] = FlaskConfig.SECRET_KEY
 
+    # 请求超时和大文件限制（系统健壮性）
+    app.config['MAX_CONTENT_LENGTH'] = FlaskConfig.MAX_CONTENT_LENGTH  # 16MB默认
+
     # API响应gzip压缩（减少传输体积，提升加载速度）
     try:
         from flask_compress import Compress
@@ -109,6 +112,44 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         """处理500"""
         logger.error(f"服务器错误: {e}", exc_info=True)
         return jsonify({'error': '服务器内部错误'}), 500
+
+    # 请求超时控制（基于信号的超时机制，仅Unix有效）
+    import signal
+    REQUEST_TIMEOUT = FlaskConfig.REQUEST_TIMEOUT
+
+    def _timeout_handler(signum, frame):
+        """请求超时处理"""
+        raise TimeoutError("请求处理超时")
+
+    @app.before_request
+    def before_request_timeout():
+        """请求开始前设置超时"""
+        if hasattr(signal, 'SIGALRM'):  # Unix系统
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(REQUEST_TIMEOUT)
+
+    @app.after_request
+    def after_request_timeout(response):
+        """请求完成后取消超时"""
+        if hasattr(signal, 'SIGALRM'):  # Unix系统
+            signal.alarm(0)
+        return response
+
+    # 并发请求限制（信号量机制）
+    import threading
+    _request_semaphore = threading.Semaphore(FlaskConfig.MAX_CONCURRENT_REQUESTS)
+
+    @app.before_request
+    def before_request_limit():
+        """并发请求限制"""
+        if not _request_semaphore.acquire(timeout=30):
+            return jsonify({'error': '服务器繁忙，请稍后重试'}), 503
+
+    @app.after_request
+    def after_request_release(response):
+        """请求完成后释放信号量"""
+        _request_semaphore.release()
+        return response
 
     # 安全响应头 (GB/T 22239 等保2.0)
     @app.after_request

@@ -75,6 +75,15 @@ class FlaskConfig:
     PORT = 5000          # 模拟模式
     REAL_PORT = 5001     # 真实模式（Chrome 拦截 6000/6666 等端口）
 
+    # 请求超时控制（秒）
+    REQUEST_TIMEOUT = _get_int('SCADA_REQUEST_TIMEOUT', 30, min_val=5, max_val=300)
+
+    # 最大请求体大小（字节），默认16MB
+    MAX_CONTENT_LENGTH = _get_int('SCADA_MAX_CONTENT_MB', 16, min_val=1, max_val=100) * 1024 * 1024
+
+    # 并发请求限制（单进程最大并发）
+    MAX_CONCURRENT_REQUESTS = _get_int('SCADA_MAX_CONCURRENT', 100, min_val=10, max_val=1000)
+
 # 数据库配置
 class DatabaseConfig:
     # SQLite数据库路径
