@@ -86,6 +86,31 @@ class Database:
                 conn.rollback()
             raise e
 
+    def check_health(self) -> Dict[str, Any]:
+        """检查数据库连接健康状态"""
+        try:
+            with self.get_connection(readonly=True) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT 1')
+                result = cursor.fetchone()
+
+                # 检查WAL状态
+                cursor.execute('PRAGMA wal_checkpoint')
+                wal_status = cursor.fetchone()
+
+                return {
+                    'status': 'healthy',
+                    'connection': 'ok',
+                    'wal_checkpoint': wal_status[0] if wal_status else 'unknown',
+                    'database_path': self.db_path,
+                }
+        except Exception as e:
+            return {
+                'status': 'unhealthy',
+                'error': str(e),
+                'database_path': self.db_path,
+            }
+
     def _init_database(self):
         """初始化数据库表结构"""
         with self.get_connection() as conn:
