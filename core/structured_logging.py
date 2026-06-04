@@ -1,13 +1,52 @@
 """
 结构化日志配置 - 等保2.0要求
 GB/T 22239: 安全审计日志必须可机器解析
+
+增强功能：
+- 请求ID追踪
+- 用户上下文
+- 性能指标
+- 业务事件标记
 """
 import sys
 import json
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
+from contextvars import ContextVar
+
+# 上下文变量（用于跨函数传递追踪信息）
+request_id_var: ContextVar[str] = ContextVar('request_id', default='')
+user_id_var: ContextVar[str] = ContextVar('user_id', default='')
+device_id_var: ContextVar[str] = ContextVar('device_id', default='')
+
+# 日志上下文管理器
+_log_context = threading.local()
+
+
+def set_log_context(**kwargs):
+    """设置日志上下文"""
+    for key, value in kwargs.items():
+        setattr(_log_context, key, value)
+
+
+def get_log_context() -> Dict[str, Any]:
+    """获取日志上下文"""
+    context = {}
+    for key in ['request_id', 'user_id', 'device_id', 'action', 'target']:
+        value = getattr(_log_context, key, None)
+        if value:
+            context[key] = value
+    return context
+
+
+def clear_log_context():
+    """清除日志上下文"""
+    for key in ['request_id', 'user_id', 'device_id', 'action', 'target']:
+        if hasattr(_log_context, key):
+            delattr(_log_context, key)
 
 
 def setup_logging(
