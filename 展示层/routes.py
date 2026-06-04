@@ -48,6 +48,18 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     from config import FlaskConfig, SecurityConfig
     app.config['SECRET_KEY'] = FlaskConfig.SECRET_KEY
 
+    # API响应gzip压缩（减少传输体积，提升加载速度）
+    try:
+        from flask_compress import Compress
+        app.config['COMPRESS_MIMETYPES'] = [
+            'text/html', 'text/css', 'text/xml', 'application/json',
+            'application/javascript', 'text/javascript', 'application/xml'
+        ]
+        app.config['COMPRESS_MIN_SIZE'] = 500  # 小于500字节不压缩
+        Compress(app)
+    except ImportError:
+        logger.warning("flask_compress未安装，跳过gzip压缩")
+
     # 初始化认证管理器
     auth_manager = AuthManager(database)
 
