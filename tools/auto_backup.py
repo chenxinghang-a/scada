@@ -136,6 +136,87 @@ class AutoBackup:
 
         return result
 
+    def verify_backup(self, backup_path: str = None) -> Dict[str, Any]:
+        """验证备份文件完整性"""
+        result = {
+            'timestamp': datetime.now().isoformat(),
+            'status': 'ok',
+            'checks': [],
+        }
+
+        try:
+            # 检查最新备份
+            if backup_path:
+                db_file = Path(backup_path)
+            else:
+                # 找最新备份
+                latest_dir = None
+                for d in sorted(self.backup_dir.iterdir(), reverse=True):
+                    if d.is_dir():
+                        db_files = list(d.glob('scada_*.db'))
+                        if db_files:
+                            db_file = db_files[0]
+                            latest_dir = d
+                            break
+
+                if not latest_dir:
+                    result['status'] = 'no_backup'
+                    result['checks'].append({'name': '存在性', 'status': 'fail', 'message': '无备份文件'})
+                    return result
+
+            # 检查1: 文件存在
+            if db_file.exists():
+                result['checks'].append({'name': '存在性', 'status': 'pass'})
+            else:
+                result['checks'].append({'name': '存在性', 'status': 'fail'})
+                result['status'] = 'error'
+                return result
+
+            # 检查2: 文件大小合理（>1KB）
+            size = db_file.stat().st_size
+            if size > 1024:
+                result['checks'].append({'name': '文件大小', 'status': 'pass', 'size_mb': round(size/1024/1024, 2)})
+            else:
+                result['checks'].append({'name': '文件大小', 'status': 'fail', 'size': size})
+                result['status'] = 'error'
+
+            # 检查3: SQLite完整性
+            try:
+                conn = sqlite3.connect(str(db_file), timeout=5)
+                cursor = conn.execute("PRAGMA integrity_check")
+                integrity = cursor.fetchone()[0]
+                conn.close()
+                if integrity == 'ok':
+                    result['checks'].append({'name': '完整性', 'status': 'pass'})
+                else:
+                    result['checks'].append({'name': '完整性', 'status': 'fail', 'result': integrity})
+                    result['status'] = 'error'
+            except Exception as e:
+                result['checks'].append({'name': '完整性', 'status': 'fail', 'error': str(e)})
+                result['status'] = 'error'
+
+            # 检查4: 表结构完整
+            try:
+                conn = sqlite3.connect(str(db_file), timeout=5)
+                cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = [r[0] for r in cursor.fetchall()]
+                conn.close()
+                expected = {'realtime_data', 'history_data', 'alarm_records', 'users'}
+                missing = expected - set(tables)
+                if not missing:
+                    result['checks'].append({'name': '表结构', 'status': 'pass', 'tables': len(tables)})
+                else:
+                    result['checks'].append({'name': '表结构', 'status': 'fail', 'missing': list(missing)})
+                    result['status'] = 'error'
+            except Exception as e:
+                result['checks'].append({'name': '表结构', 'status': 'fail', 'error': str(e)})
+
+        except Exception as e:
+            result['status'] = 'error'
+            result['error'] = str(e)
+
+        return result
+
     def run_backup(self) -> Dict[str, Any]:
         """执行完整备份"""
         results = {
