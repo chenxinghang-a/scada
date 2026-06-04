@@ -122,34 +122,34 @@ class DiskBackedQueue:
         # 启动时恢复
         self._recover_from_disk()
 
-    def put(self, item, block=True, timeout=None):
+    def put(self, item: Dict[str, Any], block: bool = True, timeout: Optional[float] = None) -> None:
         """入队（先持久化再入队，崩溃时不丢数据）"""
         self._persist_item(item)
         self._queue.put(item, block=block, timeout=timeout)
 
-    def get(self, block=True, timeout=None):
+    def get(self, block: bool = True, timeout: Optional[float] = None) -> Dict[str, Any]:
         """出队"""
         return self._queue.get(block=block, timeout=timeout)
 
-    def get_nowait(self):
+    def get_nowait(self) -> Dict[str, Any]:
         """非阻塞出队"""
         return self._queue.get_nowait()
 
-    def put_nowait(self, item):
+    def put_nowait(self, item: Dict[str, Any]) -> None:
         """非阻塞入队"""
         self._queue.put_nowait(item)
         self._persist_item(item)
 
-    def qsize(self):
+    def qsize(self) -> int:
         return self._queue.qsize()
 
-    def empty(self):
+    def empty(self) -> bool:
         return self._queue.empty()
 
-    def full(self):
+    def full(self) -> bool:
         return self._queue.full()
 
-    def _persist_item(self, item):
+    def _persist_item(self, item: Dict[str, Any]) -> None:
         """持久化单条数据"""
         try:
             with self._lock:
@@ -158,7 +158,7 @@ class DiskBackedQueue:
         except Exception as e:
             logger.debug(f"数据持久化失败: {e}")  # 持久化失败不影响主流程
 
-    def _recover_from_disk(self):
+    def _recover_from_disk(self) -> None:
         """从磁盘恢复未处理的数据"""
         if not self._persist_file.exists():
             return
@@ -196,7 +196,7 @@ class DiskBackedQueue:
             logger.info(f"从磁盘恢复 {recovered} 条未处理数据" +
                        (f"（队列满，剩余数据待下次恢复）" if queue_full else ""))
 
-    def clear_persistence(self):
+    def clear_persistence(self) -> None:
         """清除持久化文件（正常关闭时调用）"""
         try:
             if self._persist_file.exists():
@@ -280,12 +280,12 @@ class DataCollector:
         # 数据处理线程
         self.process_thread = None
 
-    def _inc_stat(self, key: str, amount: int = 1):
+    def _inc_stat(self, key: str, amount: int = 1) -> None:
         """线程安全地增加统计计数"""
         with self._stats_lock:
             self.stats[key] = self.stats.get(key, 0) + amount
 
-    def start(self):
+    def start(self) -> None:
         """启动数据采集"""
         if self.running:
             logger.warning("数据采集器已在运行")
@@ -316,7 +316,7 @@ class DataCollector:
         summary = ', '.join(f"{k}:{v}" for k, v in proto_count.items())
         logger.info(f"数据采集器已启动，共 {len(devices)} 个设备 ({summary})")
 
-    def stop(self):
+    def stop(self) -> None:
         """停止数据采集（安全排空队列并入库）"""
         self.running = False
 
