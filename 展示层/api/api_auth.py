@@ -270,5 +270,7 @@ def get_operation_logs():
     """获取操作日志（仅管理员）"""
     auth_manager = get_auth_manager()
     username = request.args.get('username')
-    limit = request.args.get('limit', 100, type=int)
+    # 兼容前端 page/per_page 和后端 limit 两种参数
+    per_page = request.args.get('per_page', type=int)
+    limit = per_page or request.args.get('limit', 100, type=int)
     return jsonify({'logs': auth_manager.get_operation_logs(username=username, limit=limit)})

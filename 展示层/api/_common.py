@@ -6,7 +6,8 @@ from typing import Any
 import yaml
 import logging
 from pathlib import Path
-from flask import current_app
+from functools import wraps
+from flask import current_app, jsonify
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,43 @@ logger = logging.getLogger(__name__)
 def get_auth_manager() -> Any:
     """获取认证管理器"""
     return current_app.auth_manager
+
+
+def api_error_handler(f):
+    """API错误处理装饰器（所有API模块共用）"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except ValueError as e:
+            logger.warning(f"Validation error in {f.__name__}: {e}")
+            return jsonify({'error': '请求参数验证失败'}), 400
+        except PermissionError as e:
+            logger.warning(f"Permission denied in {f.__name__}: {e}")
+            return jsonify({'error': '权限不足'}), 403
+        except Exception as e:
+            from werkzeug.exceptions import HTTPException
+            if isinstance(e, HTTPException):
+                raise
+            logger.error(f"API error in {f.__name__}: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+    return decorated
+
+
+def safe_int(val, name='value'):
+    """安全整数转换"""
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        raise ValueError(f'Invalid {name}: must be integer')
+
+
+def safe_float(val, name='value'):
+    """安全浮点转换"""
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        raise ValueError(f'Invalid {name}: must be number')
 
 
 def load_yaml_config(config_path: str) -> dict[str, Any]:

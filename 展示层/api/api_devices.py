@@ -9,7 +9,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
-from ._common import get_auth_manager
+from ._common import get_auth_manager, api_error_handler, safe_int
 
 logger = logging.getLogger(__name__)
 
@@ -17,35 +17,6 @@ devices_bp = Blueprint('api_devices', __name__, url_prefix='/api')
 
 _require_auth = jwt_required
 _require_engineer = role_required('admin', 'engineer')
-
-
-def api_error_handler(f):
-    """API错误处理装饰器"""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except ValueError as e:
-            logger.warning(f"Validation error in {f.__name__}: {e}")
-            return jsonify({'error': '请求参数验证失败'}), 400
-        except PermissionError as e:
-            logger.warning(f"Permission denied in {f.__name__}: {e}")
-            return jsonify({'error': '权限不足'}), 403
-        except Exception as e:
-            from werkzeug.exceptions import HTTPException
-            if isinstance(e, HTTPException):
-                raise
-            logger.error(f"API error in {f.__name__}: {e}", exc_info=True)
-            return jsonify({'error': 'Internal server error'}), 500
-    return decorated
-
-
-def _safe_int(val, name='value'):
-    """安全整数转换"""
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        raise ValueError(f'Invalid {name}: must be integer')
 
 
 # ==================== 设备管理API ====================
@@ -143,7 +114,7 @@ def update_device(device_id):
         for key in ('name', 'description', 'enabled', 'collection_interval', 'protocol'):
             if key in data:
                 if key == 'collection_interval':
-                    device_config[key] = _safe_int(data[key], key)
+                    device_config[key] = safe_int(data[key], key)
                 elif key == 'enabled':
                     # 布尔字段：字符串 "false"/"0" 也应视为 False
                     v = data[key]
@@ -839,16 +810,16 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         'protocol': protocol,
         'device_category': data.get('device_category', 'instrument'),
         'enabled': data.get('enabled', True),
-        'collection_interval': _safe_int(data.get('collection_interval', 5), 'collection_interval')
+        'collection_interval': safe_int(data.get('collection_interval', 5), 'collection_interval')
     }
 
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         config['host'] = data['host']
-        config['port'] = _safe_int(data['port'], 'port')
-        config['slave_id'] = _safe_int(data.get('slave_id', 1), 'slave_id')
+        config['port'] = safe_int(data['port'], 'port')
+        config['slave_id'] = safe_int(data.get('slave_id', 1), 'slave_id')
         config['registers'] = data.get('registers', [])
         if protocol == 'modbus_rtu':
-            config['baudrate'] = _safe_int(data.get('baudrate', 115200), 'baudrate')
+            config['baudrate'] = safe_int(data.get('baudrate', 115200), 'baudrate')
     elif protocol == 'opcua':
         config['endpoint'] = data['endpoint']
         config['security_mode'] = data.get('security_mode', 'None')
@@ -858,14 +829,14 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         config['nodes'] = data['nodes']
     elif protocol == 'mqtt':
         config['host'] = data['host']
-        config['port'] = _safe_int(data['port'], 'port')
+        config['port'] = safe_int(data['port'], 'port')
         if data.get('username'):
             config['username'] = data['username']
             config['password'] = data.get('password', '')
         config['topics'] = data['topics']
     elif protocol == 'rest':
         config['base_url'] = data['base_url']
-        config['poll_interval'] = _safe_int(data.get('poll_interval', 10), 'poll_interval')
+        config['poll_interval'] = safe_int(data.get('poll_interval', 10), 'poll_interval')
         auth_type = data.get('auth_type', 'none')
         if auth_type != 'none':
             config['auth_type'] = auth_type
@@ -877,13 +848,13 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         config['endpoints'] = data['endpoints']
     elif protocol == 'mc':
         config['host'] = data['host']
-        config['port'] = _safe_int(data['port'], 'port')
-        config['network'] = _safe_int(data.get('network', 0), 'network')
-        config['pc'] = _safe_int(data.get('pc', 0xFF), 'pc')
+        config['port'] = safe_int(data['port'], 'port')
+        config['network'] = safe_int(data.get('network', 0), 'network')
+        config['pc'] = safe_int(data.get('pc', 0xFF), 'pc')
         config['registers'] = data.get('registers', [])
     elif protocol == 'fins':
         config['host'] = data['host']
-        config['port'] = _safe_int(data['port'], 'port')
+        config['port'] = safe_int(data['port'], 'port')
         config['registers'] = data.get('registers', [])
 
     return config
@@ -919,7 +890,7 @@ def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: 
     for key in fields:
         if key in data:
             if key in int_keys:
-                device_config[key] = _safe_int(data[key], key)
+                device_config[key] = safe_int(data[key], key)
             else:
                 device_config[key] = data[key]
 

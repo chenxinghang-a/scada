@@ -9,7 +9,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
-from ._common import get_auth_manager
+from ._common import get_auth_manager, api_error_handler, safe_int, safe_float
 from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
@@ -18,43 +18,6 @@ control_bp = Blueprint('api_control', __name__, url_prefix='/api')
 
 _require_auth = jwt_required
 _require_engineer = role_required('admin', 'engineer')
-
-
-def api_error_handler(f):
-    """API错误处理装饰器"""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except ValueError as e:
-            logger.warning(f"Validation error in {f.__name__}: {e}")
-            return jsonify({'error': '请求参数验证失败'}), 400
-        except PermissionError as e:
-            logger.warning(f"Permission denied in {f.__name__}: {e}")
-            return jsonify({'error': '权限不足'}), 403
-        except Exception as e:
-            from werkzeug.exceptions import HTTPException
-            if isinstance(e, HTTPException):
-                raise
-            logger.error(f"API error in {f.__name__}: {e}", exc_info=True)
-            return jsonify({'error': 'Internal server error'}), 500
-    return decorated
-
-
-def _safe_int(val, name='value'):
-    """安全整数转换"""
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        raise ValueError(f'Invalid {name}: must be integer')
-
-
-def _safe_float(val, name='value'):
-    """安全浮点转换"""
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        raise ValueError(f'Invalid {name}: must be number')
 
 
 # ==================== 设备控制API ====================
@@ -75,9 +38,9 @@ def write_register(device_id):
     operator = request.current_user['username']
 
     try:
-        address = _safe_int(address, 'address')
+        address = safe_int(address, 'address')
         # 支持整数和浮点值写入（float32寄存器需要浮点支持）
-        value = _safe_float(value, 'value')
+        value = safe_float(value, 'value')
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -129,7 +92,7 @@ def write_coil(device_id):
     operator = request.current_user['username']
 
     try:
-        address = _safe_int(address, 'address')
+        address = safe_int(address, 'address')
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -178,7 +141,7 @@ def adjust_device(device_id):
         return jsonify({'error': '缺少 register_name 或 value 参数'}), 400
 
     try:
-        value = _safe_float(value, 'value')
+        value = safe_float(value, 'value')
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
