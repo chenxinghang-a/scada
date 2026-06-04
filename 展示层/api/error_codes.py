@@ -1,0 +1,104 @@
+"""
+API错误码体系
+统一错误码，便于前端处理和日志分析
+"""
+
+# 通用错误 (1xxx)
+SUCCESS = 'SUCCESS'
+INTERNAL_ERROR = 'E1000'
+INVALID_REQUEST = 'E1001'
+MISSING_PARAMETER = 'E1002'
+INVALID_PARAMETER = 'E1003'
+NOT_FOUND = 'E1004'
+METHOD_NOT_ALLOWED = 'E1005'
+
+# 认证错误 (2xxx)
+UNAUTHORIZED = 'E2001'
+INVALID_TOKEN = 'E2002'
+TOKEN_EXPIRED = 'E2003'
+FORBIDDEN = 'E2004'
+ACCOUNT_LOCKED = 'E2005'
+PASSWORD_EXPIRED = 'E2006'
+
+# 设备错误 (3xxx)
+DEVICE_NOT_FOUND = 'E3001'
+DEVICE_OFFLINE = 'E3002'
+DEVICE_BUSY = 'E3003'
+DEVICE_TIMEOUT = 'E3004'
+INVALID_REGISTER = 'E3005'
+WRITE_FAILED = 'E3006'
+READ_FAILED = 'E3007'
+PROTOCOL_ERROR = 'E3008'
+
+# 数据错误 (4xxx)
+DATA_NOT_FOUND = 'E4001'
+DATA_INVALID = 'E4002'
+DATA_DUPLICATE = 'E4003'
+DATA_OVERFLOW = 'E4004'
+EXPORT_FAILED = 'E4005'
+
+# 报警错误 (5xxx)
+ALARM_NOT_FOUND = 'E5001'
+ALREADY_ACKNOWLEDGED = 'E5002'
+ALARM_RULE_INVALID = 'E5003'
+ALARM_ESCALATION_FAILED = 'E5004'
+
+# 系统错误 (6xxx)
+CONFIG_ERROR = 'E6001'
+DATABASE_ERROR = 'E6002'
+SERVICE_UNAVAILABLE = 'E6003'
+RATE_LIMITED = 'E6004'
+MAINTENANCE_MODE = 'E6005'
+
+# 控制错误 (7xxx)
+CONTROL_DENIED = 'E7001'
+INTERLOCK_ACTIVE = 'E7002'
+SAFETY_VIOLATION = 'E7003'
+EMERGENCY_STOP = 'E7004'
+
+ERROR_MESSAGES = {
+    SUCCESS: '操作成功',
+    INTERNAL_ERROR: '服务器内部错误',
+    INVALID_REQUEST: '请求格式错误',
+    MISSING_PARAMETER: '缺少必要参数',
+    INVALID_PARAMETER: '参数值无效',
+    NOT_FOUND: '资源不存在',
+    METHOD_NOT_ALLOWED: '请求方法不允许',
+    UNAUTHORIZED: '未登录或登录已过期',
+    INVALID_TOKEN: '无效的认证令牌',
+    TOKEN_EXPIRED: '认证令牌已过期',
+    FORBIDDEN: '权限不足',
+    ACCOUNT_LOCKED: '账户已锁定',
+    PASSWORD_EXPIRED: '密码已过期，请修改密码',
+    DEVICE_NOT_FOUND: '设备不存在',
+    DEVICE_OFFLINE: '设备离线',
+    DEVICE_BUSY: '设备忙',
+    DEVICE_TIMEOUT: '设备响应超时',
+    INVALID_REGISTER: '无效的寄存器地址',
+    WRITE_FAILED: '写入失败',
+    READ_FAILED: '读取失败',
+    PROTOCOL_ERROR: '协议通信错误',
+    DATA_NOT_FOUND: '数据不存在',
+    DATA_INVALID: '数据格式无效',
+    DATA_DUPLICATE: '数据重复',
+    DATA_OVERFLOW: '数据溢出',
+    EXPORT_FAILED: '导出失败',
+    ALARM_NOT_FOUND: '报警不存在',
+    ALREADY_ACKNOWLEDGED: '报警已确认',
+    ALARM_RULE_INVALID: '报警规则无效',
+    ALARM_ESCALATION_FAILED: '报警升级失败',
+    CONFIG_ERROR: '配置错误',
+    DATABASE_ERROR: '数据库错误',
+    SERVICE_UNAVAILABLE: '服务不可用',
+    RATE_LIMITED: '请求过于频繁',
+    MAINTENANCE_MODE: '系统维护中',
+    CONTROL_DENIED: '控制操作被拒绝',
+    INTERLOCK_ACTIVE: '安全联锁激活',
+    SAFETY_VIOLATION: '安全违规',
+    EMERGENCY_STOP: '紧急停机状态',
+}
+
+
+def get_error_message(code: str) -> str:
+    """获取错误码对应的错误消息"""
+    return ERROR_MESSAGES.get(code, '未知错误')

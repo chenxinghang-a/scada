@@ -63,6 +63,37 @@ def load_yaml_config(config_path: str) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def api_success(data=None, message: str = 'success', **kwargs):
+    """标准化成功响应"""
+    response = {'success': True, 'message': message}
+    if data is not None:
+        response['data'] = data
+    response.update(kwargs)
+    return jsonify(response)
+
+
+def api_error(message: str, code: int = 400, error_code: str = None):
+    """标准化错误响应"""
+    response = {'success': False, 'error': message}
+    if error_code:
+        response['error_code'] = error_code
+    return jsonify(response), code
+
+
+def api_paginated(items: list, total: int, page: int = 1, per_page: int = 20):
+    """标准化分页响应"""
+    return jsonify({
+        'success': True,
+        'data': items,
+        'pagination': {
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+            'pages': (total + per_page - 1) // per_page,
+        }
+    })
+
+
 def save_yaml_config(config_path: str, config: dict[str, Any]) -> bool:
     """保存YAML配置文件（原子写入：先写临时文件再 rename）"""
     try:

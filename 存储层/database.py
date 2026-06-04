@@ -242,8 +242,22 @@ class Database:
             ''')
 
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_archive_device_date 
+                CREATE INDEX IF NOT EXISTS idx_archive_device_date
                 ON history_archive(device_id, archive_date)
+            ''')
+
+            # 复合索引优化常见查询模式
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_alarm_device_ack
+                ON alarm_records(device_id, acknowledged)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_alarm_id_device_register
+                ON alarm_records(alarm_id, device_id, register_name)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_history_device_register_time
+                ON history_data(device_id, register_name, timestamp)
             ''')
 
             # 迁移：给旧表添加新列（如果不存在）
