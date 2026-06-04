@@ -6,6 +6,7 @@
 import logging
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 
@@ -52,24 +53,25 @@ class HealthCheck:
         """
         start_time = time.time()
 
-        # 在子线程中执行检查函数，以便强制超时
-        result_container = [None]
-        exception_container = [None]
-
-        def _target():
-            try:
-                result_container[0] = self.check_func()
-            except Exception as e:
-                exception_container[0] = e
-
-        worker = threading.Thread(target=_target, daemon=True)
-        worker.start()
-        worker.join(timeout=self.timeout)
-
-        duration = time.time() - start_time
-
-        if worker.is_alive():
-            # 超时：子线程仍在运行
+        # 用 ThreadPoolExecutor 执行检查，超时后自动清理线程（不泄漏）
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self.check_func)
+                check_result = future.result(timeout=self.timeout)
+            duration = time.time() - start_time
+            result = {
+                'status': HealthStatus.HEALTHY,
+                'message': 'OK',
+                'details': check_result if isinstance(check_result, dict) else {},
+                'duration': duration,
+                'timestamp': datetime.now().isoformat()
+            }
+            # 检查返回值是否标记了不健康
+            if isinstance(check_result, dict) and check_result.get('status'):
+                result['status'] = check_result['status']
+                result['message'] = check_result.get('message', 'OK')
+        except FuturesTimeout:
+            duration = time.time() - start_time
             result = {
                 'status': HealthStatus.UNHEALTHY,
                 'message': f'健康检查超时（{self.timeout}秒）',
@@ -77,8 +79,8 @@ class HealthCheck:
                 'duration': duration,
                 'timestamp': datetime.now().isoformat()
             }
-        elif exception_container[0] is not None:
-            e = exception_container[0]
+        except Exception as e:
+            duration = time.time() - start_time
             result = {
                 'status': HealthStatus.UNHEALTHY,
                 'message': str(e),
@@ -86,25 +88,6 @@ class HealthCheck:
                 'duration': duration,
                 'timestamp': datetime.now().isoformat()
             }
-        else:
-            result = result_container[0]
-            # 防御：check_func 返回 None 或非 dict
-            if not isinstance(result, dict):
-                result = {
-                    'status': HealthStatus.UNKNOWN,
-                    'message': f'检查函数返回无效结果: {type(result).__name__}',
-                    'details': {'raw_result': repr(result)},
-                }
-            # 确保结果包含必要字段
-            if 'status' not in result:
-                result['status'] = HealthStatus.UNKNOWN
-            if 'message' not in result:
-                result['message'] = ''
-            if 'details' not in result:
-                result['details'] = {}
-
-            result['duration'] = duration
-            result['timestamp'] = datetime.now().isoformat()
 
         # 更新状态
         self.last_check = datetime.now()
