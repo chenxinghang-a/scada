@@ -1221,6 +1221,11 @@ devices:
     name: temp
     type: float
     unit: C
+- host: 192.168.1.1
+  id: test_device
+  name: Test Device
+  port: 502
+  protocol: modbus_tcp
 - host: 127.0.0.1
   id: dev1
   name: Test

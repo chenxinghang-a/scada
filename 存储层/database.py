@@ -6,7 +6,7 @@
 import sqlite3
 import logging
 import threading
-from typing import Any
+from typing import Any, Dict
 from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import contextmanager
