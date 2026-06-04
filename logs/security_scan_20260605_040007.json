@@ -1,0 +1,92 @@
+{
+  "timestamp": "2026-06-05T04:00:07.529149",
+  "summary": {
+    "total_findings": 11,
+    "severity_counts": {
+      "critical": 10,
+      "high": 1,
+      "medium": 0,
+      "low": 0
+    },
+    "security_score": 0
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "type": "hardcoded_credential",
+      "file": "config.py",
+      "message": "硬编码密钥",
+      "recommendation": "使用环境变量或配置文件存储凭证"
+    },
+    {
+      "severity": "critical",
+      "type": "hardcoded_credential",
+      "file": "测试\\_write_thesis.py",
+      "message": "硬编码API密钥",
+      "recommendation": "使用环境变量或配置文件存储凭证"
+    },
+    {
+      "severity": "critical",
+      "type": "hardcoded_credential",
+      "file": "展示层\\api\\error_codes.py",
+      "message": "硬编码token",
+      "recommendation": "使用环境变量或配置文件存储凭证"
+    },
+    {
+      "severity": "high",
+      "type": "sensitive_file",
+      "file": "dist\\scada-backend\\_internal\\certifi\\cacert.pem",
+      "message": "敏感文件未被.gitignore忽略: cacert.pem",
+      "recommendation": "将此文件添加到.gitignore"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "配置\\devices.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "配置\\devices_simulated.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "配置\\simulation_presets.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "dist\\scada-backend\\_internal\\配置\\devices.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "dist\\scada-backend\\_internal\\配置\\devices_simulated.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "dist\\scada-backend\\_internal\\配置\\simulation_presets.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "docker-compose.yml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    }
+  ]
+}
