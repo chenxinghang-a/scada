@@ -79,10 +79,19 @@ def init_socketio(app, database, data_collector):
             socketio = None
             return None
 
+    # 连接数限制配置
+    MAX_CONNECTIONS = 100
+    _connected_clients = set()
+
     # 注册事件处理
     @socketio.on('connect')
     def handle_connect():
-        """客户端连接（需要JWT认证）"""
+        """客户端连接（需要JWT认证 + 连接数限制）"""
+        # 连接数限制
+        if len(_connected_clients) >= MAX_CONNECTIONS:
+            logger.warning(f"WebSocket连接被拒绝: 超过最大连接数 {MAX_CONNECTIONS}, sid={request.sid}")
+            return False
+
         token = request.args.get('token')
         if not token:
             logger.warning(f"WebSocket连接被拒绝: 未提供token, sid={request.sid}")
@@ -94,13 +103,15 @@ def init_socketio(app, database, data_collector):
             logger.warning(f"WebSocket连接被拒绝: token无效, sid={request.sid}")
             return False  # 拒绝连接
 
-        logger.info(f"客户端连接: {request.sid}, 用户: {user['username']}")
+        _connected_clients.add(request.sid)
+        logger.info(f"客户端连接: {request.sid}, 用户: {user['username']}, 当前连接数: {len(_connected_clients)}")
         emit('connected', {'message': '连接成功', 'user': user['username']})
 
     @socketio.on('disconnect')
     def handle_disconnect():
         """客户端断开"""
-        logger.info(f"客户端断开: {request.sid}")
+        _connected_clients.discard(request.sid)
+        logger.info(f"客户端断开: {request.sid}, 当前连接数: {len(_connected_clients)}")
 
     @socketio.on('heartbeat')
     def handle_heartbeat(data):

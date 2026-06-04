@@ -51,12 +51,18 @@ class ConnectionPool:
         max_lifetime: float = 3600.0,
         health_check: Optional[Callable[[Any], bool]] = None,
         name: str = "pool",
+        auto_scale: bool = True,
     ):
         self._factory = factory
         self._max_size = max_size
         self._min_idle = min_idle
         self._max_idle_time = max_idle_time
         self._max_lifetime = max_lifetime
+        self._auto_scale = auto_scale
+        self._scale_up_threshold = 0.8  # 使用率超过80%时扩容
+        self._scale_down_threshold = 0.3  # 使用率低于30%时缩容
+        self._last_scale_time = 0
+        self._scale_cooldown = 60  # 扩缩容冷却时间（秒）
         self._health_check = health_check
         self._name = name
 
@@ -236,6 +242,43 @@ class ConnectionPool:
                     for key in expired:
                         if key in self._pool and not self._pool[key].in_use:
                             self._destroy_connection(key, self._pool[key])
+
+            # 自动扩缩容检查
+            if self._auto_scale:
+                self._check_auto_scale()
+
+    def _check_auto_scale(self):
+        """检查是否需要扩缩容"""
+        import time
+        now = time.time()
+
+        # 冷却时间检查
+        if now - self._last_scale_time < self._scale_cooldown:
+            return
+
+        with self._lock:
+            total = len(self._pool)
+            active = sum(1 for c in self._pool.values() if c.in_use)
+            idle = total - active
+
+            if total == 0:
+                return
+
+            usage_rate = active / total
+
+            # 扩容：使用率高且未达上限
+            if usage_rate > self._scale_up_threshold and total < self._max_size:
+                new_max = min(total + 5, self._max_size)
+                logger.info(f"连接池 {self._name} 扩容: {total} -> {new_max} (使用率 {usage_rate:.1%})")
+                self._max_size = new_max
+                self._last_scale_time = now
+
+            # 缩容：使用率低且超过最小值
+            elif usage_rate < self._scale_down_threshold and total > self._min_idle + 5:
+                new_max = max(total - 5, self._min_idle + 5)
+                logger.info(f"连接池 {self._name} 缩容: {total} -> {new_max} (使用率 {usage_rate:.1%})")
+                self._max_size = new_max
+                self._last_scale_time = now
 
     # ------------------------------------------------------------------
     # Stats & Lifecycle
