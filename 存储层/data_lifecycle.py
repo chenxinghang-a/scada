@@ -77,27 +77,41 @@ class DataLifecycleManager:
         with self._lock:
             self.policies[policy.table] = policy
 
-    def execute_lifecycle(self) -> Dict[str, Any]:
-        """执行生命周期管理"""
+    def execute_lifecycle(self, database=None) -> Dict[str, Any]:
+        """执行生命周期管理
+
+        Args:
+            database: Database实例（可选，用于复用连接池）
+        """
         results = {
             'timestamp': datetime.now().isoformat(),
             'actions': [],
         }
 
         try:
-            conn = sqlite3.connect(self.db_path, timeout=30)
-
-            for table, policy in self.policies.items():
-                try:
-                    result = self._process_table(conn, table, policy)
-                    results['actions'].append(result)
-                except Exception as e:
-                    results['actions'].append({
-                        'table': table,
-                        'error': str(e),
-                    })
-
-            conn.close()
+            if database:
+                with database.get_connection() as conn:
+                    for table, policy in self.policies.items():
+                        try:
+                            result = self._process_table(conn, table, policy)
+                            results['actions'].append(result)
+                        except Exception as e:
+                            results['actions'].append({
+                                'table': table,
+                                'error': str(e),
+                            })
+            else:
+                conn = sqlite3.connect(self.db_path, timeout=30)
+                for table, policy in self.policies.items():
+                    try:
+                        result = self._process_table(conn, table, policy)
+                        results['actions'].append(result)
+                    except Exception as e:
+                        results['actions'].append({
+                            'table': table,
+                            'error': str(e),
+                        })
+                conn.close()
 
         except Exception as e:
             results['error'] = str(e)

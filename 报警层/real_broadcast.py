@@ -52,10 +52,11 @@ class RealBroadcastSystem(IBroadcastSystem):
         
         # MQTT客户端（延迟创建）
         self._mqtt_client = None
-        
-        # 广播历史
+
+        # 广播历史（线程安全）
         self.history: list[dict[str, Any]] = []
-        
+        self._history_lock = threading.Lock()
+
         logger.info(f"[真实] 广播系统初始化完成: {self.mqtt_broker}:{self.mqtt_port}")
 
     @property
@@ -156,11 +157,11 @@ class RealBroadcastSystem(IBroadcastSystem):
             'mqtt_topic': topic,
             'success': success
         }
-        self.history.append(record)
-        
-        # 限制历史记录数量
-        if len(self.history) > 1000:
-            self.history = self.history[-500:]
+        with self._history_lock:
+            self.history.append(record)
+            # 限制历史记录数量
+            if len(self.history) > 1000:
+                self.history = self.history[-500:]
 
         return {
             'success': success,
@@ -188,21 +189,23 @@ class RealBroadcastSystem(IBroadcastSystem):
         Returns:
             历史记录列表
         """
-        return self.history[-limit:]
+        with self._history_lock:
+            return self.history[-limit:]
 
     def get_status(self) -> dict[str, Any]:
         """
         获取系统状态
-        
+
         Returns:
             状态字典
         """
-        return {
-            'enabled': self._enabled,
-            'mode': 'real',
-            'mqtt_broker': self.mqtt_broker,
-            'mqtt_port': self.mqtt_port,
-            'areas': self.areas,
-            'history_count': len(self.history),
-            'last_broadcast': self.history[-1] if self.history else None
-        }
+        with self._history_lock:
+            return {
+                'enabled': self._enabled,
+                'mode': 'real',
+                'mqtt_broker': self.mqtt_broker,
+                'mqtt_port': self.mqtt_port,
+                'areas': self.areas,
+                'history_count': len(self.history),
+                'last_broadcast': self.history[-1] if self.history else None
+            }

@@ -170,22 +170,23 @@ class AlarmOutput:
             return
 
         # 同级别报警不重复触发灯控（避免抢灯）
-        if self.current_state.get('level') == level and self.current_state.get('pattern') != AlarmLightPattern.STEADY:
-            # 只更新消息，不动灯
-            self.current_state['message'] = message
-            self.current_state['device_id'] = device_id
-            return
+        with self._lock:
+            if self.current_state.get('level') == level and self.current_state.get('pattern') != AlarmLightPattern.STEADY:
+                # 只更新消息，不动灯
+                self.current_state['message'] = message
+                self.current_state['device_id'] = device_id
+                return
 
-        # 手动控制模式下不自动接管灯
-        if self.current_state.get('level') == 'manual':
-            return
+            # 手动控制模式下不自动接管灯
+            if self.current_state.get('level') == 'manual':
+                return
 
-        self.current_state.update({
-            'level': level,
-            'message': message,
-            'device_id': device_id,
-            'since': datetime.now().isoformat()
-        })
+            self.current_state.update({
+                'level': level,
+                'message': message,
+                'device_id': device_id,
+                'since': datetime.now().isoformat()
+            })
 
         # 先停掉旧的闪烁线程和蜂鸣器
         self._stop_flash()
@@ -403,17 +404,18 @@ class AlarmOutput:
 
     def get_status(self) -> dict[str, Any]:
         """获取当前输出状态"""
-        return {
-            'enabled': self.enabled,
-            'simulation': self.simulation,
-            'state': self.current_state.copy(),
-            'do_mapping': {
-                'red_light': self.do_red,
-                'yellow_light': self.do_yellow,
-                'green_light': self.do_green,
-                'buzzer': self.do_buzzer
+        with self._lock:
+            return {
+                'enabled': self.enabled,
+                'simulation': self.simulation,
+                'state': self.current_state.copy(),
+                'do_mapping': {
+                    'red_light': self.do_red,
+                    'yellow_light': self.do_yellow,
+                    'green_light': self.do_green,
+                    'buzzer': self.do_buzzer
+                }
             }
-        }
 
     def disconnect(self):
         """断开连接（复位输出后断开Modbus）"""

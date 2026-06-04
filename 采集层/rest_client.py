@@ -81,8 +81,9 @@ class RESTDeviceClient:
         # 连接状态
         self.connected = False
 
-        # 最新数据缓存
+        # 最新数据缓存（线程安全）
         self.latest_data: dict[str, dict[str, Any]] = {}
+        self._data_lock = threading.Lock()
 
         # 数据回调
         self._data_callbacks: list[Callable[..., Any]] = []
@@ -158,6 +159,8 @@ class RESTDeviceClient:
     def disconnect(self):
         """断开连接"""
         self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
         if self._session:
             self._session.close()
             self._session = None
@@ -166,7 +169,8 @@ class RESTDeviceClient:
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取所有端点的最新数据"""
-        return dict(self.latest_data)
+        with self._data_lock:
+            return dict(self.latest_data)
 
     def read_endpoint(self, endpoint_config: dict[str, Any]) -> Any:
         """
@@ -262,14 +266,15 @@ class RESTDeviceClient:
                     value = self.read_endpoint(ep)
 
                     if value is not None:
-                        self.latest_data[ep_name] = {
-                            'value': value,
-                            'unit': ep.get('unit', ''),
-                            'timestamp': datetime.now().isoformat(),
-                            'quality': 'good',
-                            'endpoint': ep.get('path', ''),
-                            'device_id': self.device_id
-                        }
+                        with self._data_lock:
+                            self.latest_data[ep_name] = {
+                                'value': value,
+                                'unit': ep.get('unit', ''),
+                                'timestamp': datetime.now().isoformat(),
+                                'quality': 'good',
+                                'endpoint': ep.get('path', ''),
+                                'device_id': self.device_id
+                            }
 
                         # 触发回调
                         for callback in self._data_callbacks:
@@ -279,12 +284,13 @@ class RESTDeviceClient:
                                 logger.error(f"数据回调异常: {e}")
                     else:
                         # 标记为通信故障
-                        self.latest_data[ep_name] = {
-                            'value': None,
-                            'quality': 'bad',
-                            'timestamp': datetime.now().isoformat(),
-                            'error': self.stats.get('last_error', 'unknown')
-                        }
+                        with self._data_lock:
+                            self.latest_data[ep_name] = {
+                                'value': None,
+                                'quality': 'bad',
+                                'timestamp': datetime.now().isoformat(),
+                                'error': self.stats.get('last_error', 'unknown')
+                            }
 
             except Exception as e:
                 logger.error(f"轮询异常: {e}")

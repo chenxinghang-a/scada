@@ -23,6 +23,13 @@ _require_engineer = role_required('admin', 'engineer')
 _recent_writes: dict[str, float] = {}
 _write_lock = __import__('threading').Lock()
 IDEMPOTENCY_WINDOW_S = 2  # 2秒内的重复写入视为同一操作
+RECENT_WRITES_MAX = 1000  # 幂等性记录最大条数
+
+# 寄存器地址/值范围常量
+REGISTER_ADDRESS_MIN = 0
+REGISTER_ADDRESS_MAX = 65535
+REGISTER_VALUE_INT16_MIN = -32768
+REGISTER_VALUE_INT16_MAX = 65535
 
 
 # ==================== 设备控制API ====================
@@ -66,11 +73,11 @@ def write_register(device_id):
         return jsonify({'error': f'设备 {device_id} 未连接'}), 400
 
     # 基础安全校验：地址范围 + 值范围（防止写入危险值）
-    if address < 0 or address > 65535:
-        return jsonify({'error': '寄存器地址超出范围 (0-65535)'}), 400
+    if address < REGISTER_ADDRESS_MIN or address > REGISTER_ADDRESS_MAX:
+        return jsonify({'error': f'寄存器地址超出范围 ({REGISTER_ADDRESS_MIN}-{REGISTER_ADDRESS_MAX})'}), 400
     # INT16 范围检查（最常见场景）
-    if not (-32768 <= value <= 65535):
-        return jsonify({'error': f'写入值 {value} 超出安全范围 (-32768~65535)'}), 400
+    if not (REGISTER_VALUE_INT16_MIN <= value <= REGISTER_VALUE_INT16_MAX):
+        return jsonify({'error': f'写入值 {value} 超出安全范围 ({REGISTER_VALUE_INT16_MIN}~{REGISTER_VALUE_INT16_MAX})'}), 400
 
     # 幂等性检查：2秒内相同地址+值的写入视为重复操作
     import time
@@ -82,7 +89,7 @@ def write_register(device_id):
             return jsonify({'success': True, 'message': f'写入成功(幂等): 地址={address}, 值={value}'})
         _recent_writes[write_key] = now
         # 清理过期记录
-        if len(_recent_writes) > 1000:
+        if len(_recent_writes) > RECENT_WRITES_MAX:
             _recent_writes.clear()
 
     success = client.write_single_register(address, value)
