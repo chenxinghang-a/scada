@@ -58,6 +58,11 @@ def add_device():
         if field not in data:
             return jsonify({'error': f'缺少必填字段: {field}'}), 400
 
+    # 设备ID格式验证（防止SQL注入和特殊字符）
+    device_id = data.get('id', '')
+    if not device_id or not device_id.replace('_', '').replace('-', '').isalnum():
+        return jsonify({'error': '设备ID只能包含字母、数字、下划线和连字符'}), 400
+
     protocol = data.get('protocol', 'modbus_tcp')
 
     # 协议级必填字段验证
