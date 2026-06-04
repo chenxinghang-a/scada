@@ -4,9 +4,12 @@
 """
 import threading
 import time
+import hmac
+import hashlib
 import logging
 import socket
 import json
+import secrets
 from enum import Enum
 from typing import Optional, Callable, Dict, Any
 from dataclasses import dataclass, field
@@ -58,13 +61,16 @@ class HAManager:
                  heartbeat_interval: float = 2.0,
                  heartbeat_timeout: float = 10.0,
                  peer_address: str = '',
-                 peer_port: int = 9999):
+                 peer_port: int = 9999,
+                 shared_secret: str = ''):
         self.node_id = node_id
         self.priority = priority
         self.heartbeat_interval = heartbeat_interval
         self.heartbeat_timeout = heartbeat_timeout
         self.peer_address = peer_address
         self.peer_port = peer_port
+        # HMAC 共享密钥（主备节点必须一致）
+        self._shared_secret = (shared_secret or secrets.token_hex(16)).encode('utf-8')
 
         self.role = HARole.UNKNOWN
         self.state = HAState.INITIALIZING
@@ -161,8 +167,17 @@ class HAManager:
                 logger.error(f"心跳循环异常: {e}")
                 time.sleep(1)
 
+    def _compute_hmac(self, payload: str) -> str:
+        """计算 HMAC-SHA256 签名"""
+        return hmac.new(self._shared_secret, payload.encode('utf-8'), hashlib.sha256).hexdigest()
+
+    def _verify_hmac(self, payload: str, signature: str) -> bool:
+        """验证 HMAC-SHA256 签名"""
+        expected = self._compute_hmac(payload)
+        return hmac.compare_digest(expected, signature)
+
     def _send_heartbeat(self):
-        """发送心跳"""
+        """发送心跳（带 HMAC 签名）"""
         if not self.peer_address:
             return
 
@@ -176,8 +191,10 @@ class HAManager:
                 'timestamp': time.time(),
                 'state': self.state.value,
             }
+            # 签名：对核心字段计算 HMAC
+            sign_data = f"{heartbeat['node_id']}:{heartbeat['role']}:{heartbeat['priority']}:{heartbeat['timestamp']}"
+            heartbeat['signature'] = self._compute_hmac(sign_data)
 
-            # UDP广播心跳
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(1)
             sock.sendto(json.dumps(heartbeat).encode(),
@@ -221,7 +238,14 @@ class HAManager:
                 pass
 
     def _handle_heartbeat(self, msg: dict, addr: tuple):
-        """处理收到的心跳"""
+        """处理收到的心跳（验证 HMAC 签名）"""
+        # 验证签名
+        signature = msg.get('signature', '')
+        sign_data = f"{msg.get('node_id', '')}:{msg.get('role', '')}:{msg.get('priority', 0)}:{msg.get('timestamp', 0)}"
+        if not signature or not self._verify_hmac(sign_data, signature):
+            logger.warning(f"心跳签名验证失败，丢弃: {addr}")
+            return
+
         peer_id = msg.get('node_id', 'unknown')
         peer_priority = msg.get('priority', 0)
 
