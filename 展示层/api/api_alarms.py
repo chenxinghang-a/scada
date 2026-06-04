@@ -556,3 +556,46 @@ def update_dedup_config():
         f'更新去重配置: emit_cooldown={updated_config["emit_cooldown_seconds"]}s, '
         f'ack_suppress={updated_config["acknowledge_suppress_seconds"]}s')
     return jsonify({'success': True, 'config': updated_config, 'message': '去重配置已更新'})
+
+
+# ==================== 告警升级配置API ====================
+
+@alarms_bp.route('/alarms/escalation/status', methods=['GET'])
+@_require_auth
+@api_error_handler
+def get_escalation_status():
+    """获取告警升级状态"""
+    alarm_manager = current_app.alarm_manager
+    if hasattr(alarm_manager, '_escalation_manager'):
+        return jsonify(alarm_manager._escalation_manager.get_status())
+    return jsonify({'running': False, 'message': '升级管理器未初始化'})
+
+
+@alarms_bp.route('/alarms/escalation/rules', methods=['GET'])
+@_require_auth
+@api_error_handler
+def get_escalation_rules():
+    """获取升级规则"""
+    alarm_manager = current_app.alarm_manager
+    if hasattr(alarm_manager, '_escalation_manager'):
+        return jsonify({'rules': alarm_manager._escalation_manager.get_rules()})
+    return jsonify({'rules': []})
+
+
+@alarms_bp.route('/alarms/escalation/rules', methods=['PUT'])
+@_require_engineer
+@api_error_handler
+def update_escalation_rules():
+    """更新升级规则"""
+    data = request.get_json()
+    if not data or 'rules' not in data:
+        return api_error('请提供升级规则')
+
+    alarm_manager = current_app.alarm_manager
+    if hasattr(alarm_manager, '_escalation_manager'):
+        alarm_manager._escalation_manager.update_rules(data['rules'])
+        get_auth_manager().log_operation(
+            request.current_user['username'], 'update_escalation_rules',
+            f'更新升级规则: {len(data["rules"])} 条')
+        return jsonify({'success': True, 'message': '升级规则已更新'})
+    return api_error('升级管理器未初始化', 500)

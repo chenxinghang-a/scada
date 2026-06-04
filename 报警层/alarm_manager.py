@@ -291,6 +291,17 @@ class AlarmManager:
         self._escalation_timeout = 600  # 默认10分钟
         self._escalation_callbacks: list = []  # 升级回调函数列表
 
+        # 告警升级管理器（多级升级）
+        try:
+            from 报警层.alarm_escalation import AlarmEscalationManager
+            escalation_cfg = config.get('escalation', {}) if isinstance(config, dict) else {}
+            self._escalation_manager = AlarmEscalationManager(escalation_cfg)
+            self._escalation_manager.add_callback(self._on_escalation)
+            self._escalation_manager.start()
+        except Exception as e:
+            logger.warning(f"告警升级管理器初始化失败: {e}")
+            self._escalation_manager = None
+
         # 规则索引：(device_id, register_name) -> [(rule_id, rule_config), ...]
         self._rules_index: dict[tuple, list[tuple[str, dict]]] = {}
 
@@ -491,6 +502,25 @@ class AlarmManager:
                         callback(alarm_info)
                     except Exception as e:
                         logger.error(f"报警升级回调异常: {e}")
+
+    def _on_escalation(self, escalation_info: Dict[str, Any]):
+        """升级回调：触发广播通知"""
+        try:
+            if self.broadcast_system and self.broadcast_system.enabled:
+                level = escalation_info.get('level', 1)
+                rule = escalation_info.get('rule')
+                message = rule.message_template.format(
+                    alarm_message=escalation_info.get('alarm_id', '未知')
+                ) if rule else f"告警升级: {escalation_info.get('alarm_id')}"
+
+                self.broadcast_system.speak_alarm(
+                    level='critical' if level >= 3 else 'warning',
+                    message=message,
+                    device_id=escalation_info.get('device_id'),
+                    area='all'
+                )
+        except Exception as e:
+            logger.error(f"升级广播异常: {e}")
 
     def set_alarm_statistics(self, alarm_statistics):
         """注入报警统计分析器"""
@@ -785,6 +815,10 @@ class AlarmManager:
             logger.debug(f"告警被洪水检测器抑制: {rule_id} ({device_id}/{register_name})")
             return
         alarm_level = rule_config.get('level', 'warning')
+
+        # 记录到升级管理器
+        if self._escalation_manager:
+            self._escalation_manager.record_alarm(rule_id, device_id, register_name)
         alarm_message = rule_config.get('name', '未知报警')
         threshold = rule_config.get('threshold', 0)
         alarm_area = rule_config.get('area', 'all')
@@ -926,6 +960,10 @@ class AlarmManager:
 
         # 更新数据库
         success = self.database.acknowledge_alarm(alarm_id, acknowledged_by, device_id, register_name)
+
+        # 通知升级管理器
+        if success and self._escalation_manager:
+            self._escalation_manager.acknowledge_alarm(alarm_id, device_id, register_name)
 
         if success:
             logger.info(f"报警已确认: {alarm_id} by {acknowledged_by}")
