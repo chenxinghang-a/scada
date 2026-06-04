@@ -31,6 +31,33 @@ def _get_secret(name: str, env_var: str) -> str:
         )
     return value
 
+
+def _get_int(env_var: str, default: int, min_val: int = None, max_val: int = None) -> int:
+    """获取整数配置值，带范围验证"""
+    value = os.environ.get(env_var)
+    if value is None:
+        return default
+    try:
+        result = int(value)
+        if min_val is not None and result < min_val:
+            logger.warning(f"{env_var}={result} 低于最小值 {min_val}，使用默认值 {default}")
+            return default
+        if max_val is not None and result > max_val:
+            logger.warning(f"{env_var}={result} 超过最大值 {max_val}，使用默认值 {default}")
+            return default
+        return result
+    except ValueError:
+        logger.warning(f"{env_var}={value} 不是有效整数，使用默认值 {default}")
+        return default
+
+
+def _get_bool(env_var: str, default: bool) -> bool:
+    """获取布尔配置值"""
+    value = os.environ.get(env_var)
+    if value is None:
+        return default
+    return value.lower() in ('true', '1', 'yes', 'on')
+
 # 项目根目录（通过 paths 模块统一管理）
 try:
     import paths
