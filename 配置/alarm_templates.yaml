@@ -1,0 +1,181 @@
+# 报警规则模板库
+# 预定义的工业报警规则模板，可快速应用到设备
+
+templates:
+  # 温度报警模板
+  - id: temp_high_warning
+    name: 高温警告
+    description: 设备温度超过警告阈值
+    category: temperature
+    condition: greater_than
+    threshold: 70
+    level: warning
+    applicable_registers: [temperature, temp, motor_temp, bearing_temp]
+    message_template: "{device_name} 温度 {actual_value}°C 超过警告阈值 {threshold}°C"
+
+  - id: temp_high_critical
+    name: 高温严重
+    description: 设备温度超过严重阈值
+    category: temperature
+    condition: greater_than
+    threshold: 90
+    level: critical
+    applicable_registers: [temperature, temp, motor_temp, bearing_temp]
+    message_template: "{device_name} 温度 {actual_value}°C 超过严重阈值 {threshold}°C"
+
+  - id: temp_low_warning
+    name: 低温警告
+    description: 设备温度低于警告阈值
+    category: temperature
+    condition: less_than
+    threshold: 5
+    level: warning
+    applicable_registers: [temperature, temp, ambient_temp]
+    message_template: "{device_name} 温度 {actual_value}°C 低于警告阈值 {threshold}°C"
+
+  # 压力报警模板
+  - id: pressure_high_warning
+    name: 高压警告
+    description: 设备压力超过警告阈值
+    category: pressure
+    condition: greater_than
+    threshold: 8
+    level: warning
+    applicable_registers: [pressure, psi, bar]
+    message_template: "{device_name} 压力 {actual_value}bar 超过警告阈值 {threshold}bar"
+
+  - id: pressure_high_critical
+    name: 高压严重
+    description: 设备压力超过严重阈值
+    category: pressure
+    condition: greater_than
+    threshold: 10
+    level: critical
+    applicable_registers: [pressure, psi, bar]
+    message_template: "{device_name} 压力 {actual_value}bar 超过严重阈值 {threshold}bar"
+
+  - id: pressure_low_warning
+    name: 低压警告
+    description: 设备压力低于警告阈值
+    category: pressure
+    condition: less_than
+    threshold: 2
+    level: warning
+    applicable_registers: [pressure, psi, bar]
+    message_template: "{device_name} 压力 {actual_value}bar 低于警告阈值 {threshold}bar"
+
+  # 振动报警模板
+  - id: vibration_high_warning
+    name: 振动警告
+    description: 设备振动超过警告阈值
+    category: vibration
+    condition: greater_than
+    threshold: 4.5
+    level: warning
+    applicable_registers: [vibration, vib, accel]
+    message_template: "{device_name} 振动 {actual_value}mm/s 超过警告阈值 {threshold}mm/s"
+
+  - id: vibration_high_critical
+    name: 振动严重
+    description: 设备振动超过严重阈值
+    category: vibration
+    condition: greater_than
+    threshold: 7.1
+    level: critical
+    applicable_registers: [vibration, vib, accel]
+    message_template: "{device_name} 振动 {actual_value}mm/s 超过严重阈值 {threshold}mm/s"
+
+  # 液位报警模板
+  - id: level_high_warning
+    name: 高液位警告
+    description: 容器液位超过警告阈值
+    category: level
+    condition: greater_than
+    threshold: 80
+    level: warning
+    applicable_registers: [level, liquid_level, tank_level]
+    message_template: "{device_name} 液位 {actual_value}% 超过警告阈值 {threshold}%"
+
+  - id: level_high_critical
+    name: 高液位严重
+    description: 容器液位超过严重阈值
+    category: level
+    condition: greater_than
+    threshold: 95
+    level: critical
+    applicable_registers: [level, liquid_level, tank_level]
+    message_template: "{device_name} 液位 {actual_value}% 超过严重阈值 {threshold}%"
+
+  - id: level_low_warning
+    name: 低液位警告
+    description: 容器液位低于警告阈值
+    category: level
+    condition: less_than
+    threshold: 20
+    level: warning
+    applicable_registers: [level, liquid_level, tank_level]
+    message_template: "{device_name} 液位 {actual_value}% 低于警告阈值 {threshold}%"
+
+  # 流量报警模板
+  - id: flow_high_warning
+    name: 高流量警告
+    description: 管道流量超过警告阈值
+    category: flow
+    condition: greater_than
+    threshold: 100
+    level: warning
+    applicable_registers: [flow, flow_rate, flowmeter]
+    message_template: "{device_name} 流量 {actual_value}m³/h 超过警告阈值 {threshold}m³/h"
+
+  - id: flow_low_warning
+    name: 低流量警告
+    description: 管道流量低于警告阈值
+    category: flow
+    condition: less_than
+    threshold: 10
+    level: warning
+    applicable_registers: [flow, flow_rate, flowmeter]
+    message_template: "{device_name} 流量 {actual_value}m³/h 低于警告阈值 {threshold}m³/h"
+
+  # 电机报警模板
+  - id: motor_current_high
+    name: 电机过流
+    description: 电机电流超过额定值
+    category: motor
+    condition: greater_than
+    threshold: 80
+    level: warning
+    applicable_registers: [current, motor_current, ampere]
+    message_template: "{device_name} 电流 {actual_value}A 超过额定值 {threshold}A"
+
+  - id: motor_speed_low
+    name: 电机低速
+    description: 电机转速低于正常值
+    category: motor
+    condition: less_than
+    threshold: 100
+    level: warning
+    applicable_registers: [speed, rpm, motor_speed]
+    message_template: "{device_name} 转速 {actual_value}RPM 低于正常值 {threshold}RPM"
+
+  # 电力报警模板
+  - id: power_high_warning
+    name: 功率超限
+    description: 设备功率超过警告阈值
+    category: power
+    condition: greater_than
+    threshold: 80
+    level: warning
+    applicable_registers: [power, watt, kw]
+    message_template: "{device_name} 功率 {actual_value}kW 超过警告阈值 {threshold}kW"
+
+  # 频率报警模板
+  - id: frequency_deviation
+    name: 频率偏差
+    description: 电源频率偏离正常值
+    category: frequency
+    condition: greater_than
+    threshold: 0.5
+    level: warning
+    applicable_registers: [frequency, hz]
+    message_template: "{device_name} 频率偏差 {actual_value}Hz 超过允许范围 {threshold}Hz"
