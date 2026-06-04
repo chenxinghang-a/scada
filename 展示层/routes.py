@@ -89,6 +89,27 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     app.device_control = device_control
     app.vibration_analyzer = vibration_analyzer
 
+    # 全局异常处理（未捕获异常兜底）
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        """处理所有未捕获的异常"""
+        from werkzeug.exceptions import HTTPException
+        if isinstance(e, HTTPException):
+            return jsonify({'error': e.description}), e.code
+        logger.error(f"未捕获异常: {e}", exc_info=True)
+        return jsonify({'error': '服务器内部错误，请联系管理员'}), 500
+
+    @app.errorhandler(404)
+    def not_found(e):
+        """处理404"""
+        return jsonify({'error': '资源不存在'}), 404
+
+    @app.errorhandler(500)
+    def internal_error(e):
+        """处理500"""
+        logger.error(f"服务器错误: {e}", exc_info=True)
+        return jsonify({'error': '服务器内部错误'}), 500
+
     # 安全响应头 (GB/T 22239 等保2.0)
     @app.after_request
     def add_security_headers(response):

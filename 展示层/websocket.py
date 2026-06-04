@@ -102,6 +102,14 @@ def init_socketio(app, database, data_collector):
         """客户端断开"""
         logger.info(f"客户端断开: {request.sid}")
 
+    @socketio.on('heartbeat')
+    def handle_heartbeat(data):
+        """心跳保活（客户端定期发送，服务端回复确认）"""
+        emit('heartbeat_ack', {
+            'timestamp': datetime.now().isoformat(),
+            'client_timestamp': data.get('timestamp') if data else None
+        })
+
     @socketio.on('subscribe')
     def handle_subscribe(data):
         """订阅设备数据"""
