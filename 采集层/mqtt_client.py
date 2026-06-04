@@ -91,9 +91,15 @@ class MQTTClient:
 
         self.client_id = f'scada_{self.device_id}'
 
-        # 创建MQTT客户端（clean_session=False 保留订阅和排队消息）
-        self.client = mqtt.Client(client_id=self.client_id, protocol=mqtt.MQTTv311,
-                                   clean_session=False)
+        # 创建MQTT客户端（兼容 paho-mqtt v1.x 和 v2.x）
+        try:
+            self.client = mqtt.Client(client_id=self.client_id, protocol=mqtt.MQTTv311,
+                                       clean_session=False)
+        except TypeError:
+            # paho-mqtt v2.x: clean_session -> clean_start, 参数位置变更
+            self.client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
+                                       client_id=self.client_id, protocol=mqtt.MQTTv311,
+                                       clean_session=False)
 
         # 设置认证
         if username:

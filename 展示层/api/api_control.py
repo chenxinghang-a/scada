@@ -76,7 +76,8 @@ def write_register(device_id):
 
     try:
         address = _safe_int(address, 'address')
-        value = _safe_int(value, 'value')
+        # 支持整数和浮点值写入（float32寄存器需要浮点支持）
+        value = _safe_float(value, 'value')
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 

@@ -17,6 +17,7 @@ alarms_bp = Blueprint('api_alarms', __name__, url_prefix='/api')
 
 _require_auth = jwt_required
 _require_engineer = role_required('admin', 'engineer')
+_require_operator = role_required('admin', 'engineer', 'operator')
 
 
 def api_error_handler(f):
@@ -50,7 +51,7 @@ def get_alarms():
     device_id = request.args.get('device_id')
     alarm_level = request.args.get('alarm_level')
     acknowledged = request.args.get('acknowledged')
-    limit = request.args.get('limit', 100, type=int)
+    limit = min(request.args.get('limit', 100, type=int), 10000)
 
     if acknowledged is not None:
         acknowledged = acknowledged.lower() == 'true'
@@ -71,15 +72,16 @@ def get_active_alarms():
 
 @alarms_bp.route('/alarms/<alarm_id>/acknowledge', methods=['POST'])
 @_require_auth
+@_require_operator
 @api_error_handler
 def acknowledge_alarm(alarm_id):
-    """确认报警"""
+    """确认报警（需要 admin/engineer/operator 角色）"""
     data = request.get_json() or {}
     success = bool(current_app.alarm_manager.acknowledge_alarm(
         alarm_id=alarm_id,
         device_id=data.get('device_id'),
         register_name=data.get('register_name'),
-        acknowledged_by=data.get('acknowledged_by', 'operator')
+        acknowledged_by=request.current_user.get('username', 'unknown')
     ))
     return jsonify({'success': success, 'message': '报警已确认' if success else '确认失败'})
 

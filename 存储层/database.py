@@ -808,9 +808,9 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. 归档：对archive_days之前的所有数据按天聚合存入归档表
+            # 1. 归档：对archive_days之前的所有数据按天聚合存入归档表（INSERT OR IGNORE 防止重复归档）
             cursor.execute('''
-                INSERT INTO history_archive
+                INSERT OR IGNORE INTO history_archive
                     (device_id, register_name, avg_value, min_value, max_value, sample_count, archive_date)
                 SELECT
                     device_id,

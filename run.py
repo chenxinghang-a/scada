@@ -378,6 +378,13 @@ def main():
             broadcast_system.disconnect()
         if 'device_manager' in locals():
             device_manager.disconnect_all()
+        if 'alarm_manager' in locals():
+            alarm_manager.stop_escalation_timer()
+            alarm_manager.stop_flood_timer()
+        if 'ha_manager' in locals():
+            ha_manager.stop()
+        if 'HealthChecker' in locals():
+            HealthChecker.stop_periodic_checks()
         logger.info("系统已关闭")
 
     except Exception as e:

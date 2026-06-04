@@ -16,6 +16,7 @@
 
 import logging
 import time
+import uuid
 import threading
 from typing import Any, Callable
 from datetime import datetime
@@ -257,7 +258,11 @@ class BroadcastSystem:
             username = self._mqtt_config.get('username', '')
             password = self._mqtt_config.get('password', '')
 
-            self._mqtt_client = mqtt.Client(client_id=f'scada_pa_{int(time.time())}')
+            try:
+                self._mqtt_client = mqtt.Client(client_id=f'scada_pa_{uuid.uuid4().hex[:12]}')
+            except TypeError:
+                self._mqtt_client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
+                                                client_id=f'scada_pa_{uuid.uuid4().hex[:12]}')
             if username:
                 self._mqtt_client.username_pw_set(username, password)
 

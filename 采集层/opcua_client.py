@@ -145,54 +145,65 @@ class OPCUAClient:
             self._loop.close()
 
     async def _connect_and_subscribe(self):
-        """建立连接并订阅节点"""
-        try:
-            self.client = Client(url=self.endpoint)
+        """建立连接并订阅节点（带指数退避重连）"""
+        reconnect_delay = 1.0
+        max_delay = 60.0
 
-            # 设置认证
-            if self.username:
-                self.client.set_user(self.username)
-                self.client.set_password(self.password)
+        while self._running:
+            try:
+                self.client = Client(url=self.endpoint)
 
-            # 设置安全策略
-            if self.security_mode == 'SignAndEncrypt':
-                # 需要证书文件，生产环境使用
-                await self.client.set_security_string(
-                    f"Basic256Sha256,SignAndEncrypt,cert.pem,key.pem"
-                )
+                # 设置认证
+                if self.username:
+                    self.client.set_user(self.username)
+                    self.client.set_password(self.password)
 
-            # 连接
-            await self.client.connect()
-            self.connected = True
-            self.stats['connected_since'] = datetime.now().isoformat()
-            logger.info(f"OPC UA已连接: {self.endpoint}")
+                # 设置安全策略
+                if self.security_mode == 'SignAndEncrypt':
+                    await self.client.set_security_string(
+                        "Basic256Sha256,SignAndEncrypt,cert.pem,key.pem"
+                    )
 
-            # 创建订阅（500ms间隔）
-            self.subscription = await self.client.create_subscription(500, self)
-            self.stats['nodes_subscribed'] = len(self.node_configs)
+                # 连接
+                await self.client.connect()
+                self.connected = True
+                reconnect_delay = 1.0  # 连接成功，重置退避
+                self.stats['connected_since'] = datetime.now().isoformat()
+                logger.info(f"OPC UA已连接: {self.endpoint}")
 
-            # 订阅所有配置的节点
-            for node_cfg in self.node_configs:
-                node_id = node_cfg.get('node_id')
-                node_name = node_cfg.get('name', node_id)
-                try:
-                    node = self.client.get_node(node_id)
-                    await self.subscription.subscribe_data_change(node)
-                    logger.info(f"订阅节点: {node_name} ({node_id})")
-                except Exception as e:
-                    logger.error(f"订阅节点失败 {node_name}: {e}")
-                    self.stats['errors'] += 1
+                # 创建订阅（500ms间隔）
+                self.subscription = await self.client.create_subscription(500, self)
+                self.stats['nodes_subscribed'] = len(self.node_configs)
 
-            # 保持运行
-            while self._running:
-                await asyncio.sleep(1)
+                # 订阅所有配置的节点
+                for node_cfg in self.node_configs:
+                    node_id = node_cfg.get('node_id')
+                    node_name = node_cfg.get('name', node_id)
+                    try:
+                        node = self.client.get_node(node_id)
+                        await self.subscription.subscribe_data_change(node)
+                        logger.info(f"订阅节点: {node_name} ({node_id})")
+                    except Exception as e:
+                        logger.error(f"订阅节点失败 {node_name}: {e}")
+                        self.stats['errors'] += 1
 
-        except Exception as e:
-            logger.error(f"OPC UA连接异常: {e}")
-            self.stats['last_error'] = str(e)
-            self.connected = False
-        finally:
-            await self._cleanup()
+                # 保持运行
+                while self._running:
+                    await asyncio.sleep(1)
+
+            except Exception as e:
+                logger.error(f"OPC UA连接异常: {e}，{reconnect_delay:.0f}秒后重连...")
+                self.stats['last_error'] = str(e)
+                self.connected = False
+                await self._cleanup()
+                if not self._running:
+                    break
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, max_delay)
+                continue
+
+        # 最终清理
+        await self._cleanup()
 
     async def _cleanup(self):
         """清理资源"""

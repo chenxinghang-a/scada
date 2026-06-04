@@ -803,7 +803,11 @@ class AlarmManager:
             except Exception as e:
                 logger.error(f"语音广播异常: {e}")
 
-        # 4. 前端WebSocket推送（含去重标记）
+        # 4. 前端WebSocket推送（含去重标记 + 冷却/确认抑制检查）
+        if not self._should_emit(rule_id, device_id, register_name):
+            logger.debug(f"报警WebSocket推送被去重抑制: {rule_id} ({device_id}/{register_name})")
+            return
+        self._record_emit(rule_id, device_id, register_name)
         self._emit_websocket_alarm({
             'alarm_id': rule_id,
             'device_id': device_id,
