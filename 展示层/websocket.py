@@ -147,9 +147,21 @@ def start_data_push_thread(database, data_collector):
 
     def push_data():
         nonlocal _last_status_time, _cached_status
+        # 自适应频率：根据连接客户端数调整推送间隔
+        BASE_INTERVAL = 2.0  # 基础间隔2秒
+        MAX_INTERVAL = 10.0  # 最大间隔10秒（无客户端时）
 
         while not _push_stop_event.is_set():
             try:
+                # 根据连接客户端数调整推送频率
+                client_count = len(socketio.server.manager.rooms.get('/', {}))
+                if client_count == 0:
+                    push_interval = MAX_INTERVAL  # 无客户端时降低频率
+                elif client_count > 20:
+                    push_interval = min(BASE_INTERVAL * 2, 5.0)  # 多客户端时适当降频
+                else:
+                    push_interval = BASE_INTERVAL
+
                 devices = database.get_device_summary()
                 if devices:
                     all_latest = database.get_latest_data_all()
@@ -177,7 +189,7 @@ def start_data_push_thread(database, data_collector):
                     except Exception as e:
                         logger.debug(f"推送系统状态失败: {e}")
 
-                _push_stop_event.wait(2)
+                _push_stop_event.wait(push_interval)
 
             except Exception as e:
                 logger.error(f"数据推送异常: {e}")

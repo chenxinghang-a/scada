@@ -460,7 +460,8 @@ class Database:
 
     def get_history_data(self, device_id: str, register_name: str | None,
                          start_time: datetime, end_time: datetime,
-                         interval: str = '1min') -> list[dict[str, Any]]:
+                         interval: str = '1min', limit: int = 10000,
+                         offset: int = 0) -> list[dict[str, Any]]:
         """获取历史数据（支持时间聚合）。
 
         从 ``history_data`` 表查询指定设备和时间范围内的历史数据，
@@ -530,7 +531,7 @@ class Database:
 
             params.insert(0, group_format)
             cursor.execute(f'''
-                SELECT 
+                SELECT
                     strftime(?, timestamp) as time_bucket,
                     AVG(value) as avg_value,
                     MIN(value) as min_value,
@@ -540,7 +541,8 @@ class Database:
                 {base_where}
                 GROUP BY time_bucket
                 ORDER BY time_bucket
-            ''', params)
+                LIMIT ? OFFSET ?
+            ''', params + [limit, offset])
 
             return [dict(row) for row in cursor.fetchall()]
 
