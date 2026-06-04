@@ -269,6 +269,9 @@ def main():
                 status = "成功" if success else "失败"
                 logger.info(f"  设备 {device_id}: {status}")
 
+            # 启动断线自动重连（每30秒检查一次）
+            device_manager.start_reconnect_loop(interval=30)
+
             # 启动数据采集
             logger.info("启动数据采集...")
             data_collector.start()

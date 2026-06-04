@@ -9,6 +9,7 @@ import logging
 import yaml
 import socket
 import threading
+import threading
 from typing import Any
 from pathlib import Path
 
@@ -276,11 +277,41 @@ class DeviceManager:
 
     def disconnect_all(self):
         """断开所有设备连接"""
+        self._reconnect_running = False
         for device_id in list(self.clients.keys()):
             self.disconnect_device(device_id)
-        # 关闭连接池
         self._connection_pool.shutdown()
         self.clients.clear()
+
+    def start_reconnect_loop(self, interval: int = 30):
+        """启动断线自动重连后台线程
+
+        Args:
+            interval: 检查间隔秒数（默认30s）
+        """
+        self._reconnect_running = True
+        def _reconnect_loop():
+            while self._reconnect_running:
+                try:
+                    for device_id, config in self.devices.items():
+                        if not self._reconnect_running:
+                            break
+                        if not config.get('enabled', True):
+                            continue
+                        client = self.clients.get(device_id)
+                        if client and not getattr(client, 'connected', False):
+                            try:
+                                logger.info(f"自动重连设备: {device_id}")
+                                client.connect()
+                            except Exception as e:
+                                logger.debug(f"自动重连失败 {device_id}: {e}")
+                except Exception as e:
+                    logger.error(f"重连循环异常: {e}")
+                import time as _time
+                _time.sleep(interval)
+        t = threading.Thread(target=_reconnect_loop, daemon=True)
+        t.start()
+        logger.info(f"设备自动重连线程已启动（间隔{interval}秒）")
 
     def switch_simulation_mode(self, new_mode: bool) -> dict[str, Any]:
         """
