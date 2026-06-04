@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "industrial-scada"
-version = "3.0.0"
+version = "3.1.0"
 description = "Industrial SCADA System - Modbus/OPC-UA/MQTT protocol gateway with real-time monitoring"
 requires-python = ">=3.12"
 dependencies = [
