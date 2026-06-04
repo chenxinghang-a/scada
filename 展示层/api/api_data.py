@@ -9,33 +9,13 @@ from flask import Blueprint, jsonify, request, current_app
 from datetime import datetime, timedelta
 
 from 用户层.auth import jwt_required
+from ._common import api_error_handler
 
 logger = logging.getLogger(__name__)
 
 data_bp = Blueprint('api_data', __name__, url_prefix='/api')
 
 _require_auth = jwt_required
-
-
-def api_error_handler(f):
-    """API错误处理装饰器"""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except ValueError as e:
-            logger.warning(f"Validation error in {f.__name__}: {e}")
-            return jsonify({'error': '请求参数验证失败'}), 400
-        except PermissionError as e:
-            logger.warning(f"Permission denied in {f.__name__}: {e}")
-            return jsonify({'error': '权限不足'}), 403
-        except Exception as e:
-            from werkzeug.exceptions import HTTPException
-            if isinstance(e, HTTPException):
-                raise
-            logger.error(f"API error in {f.__name__}: {e}", exc_info=True)
-            return jsonify({'error': 'Internal server error'}), 500
-    return decorated
 
 
 def _parse_time(time_str, default):

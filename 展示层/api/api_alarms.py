@@ -8,7 +8,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
-from ._common import get_auth_manager, load_yaml_config, save_yaml_config
+from ._common import get_auth_manager, load_yaml_config, save_yaml_config, api_error_handler
 from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
@@ -18,27 +18,6 @@ alarms_bp = Blueprint('api_alarms', __name__, url_prefix='/api')
 _require_auth = jwt_required
 _require_engineer = role_required('admin', 'engineer')
 _require_operator = role_required('admin', 'engineer', 'operator')
-
-
-def api_error_handler(f):
-    """API错误处理装饰器"""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except ValueError as e:
-            logger.warning(f"Validation error in {f.__name__}: {e}")
-            return jsonify({'error': '请求参数验证失败'}), 400
-        except PermissionError as e:
-            logger.warning(f"Permission denied in {f.__name__}: {e}")
-            return jsonify({'error': '权限不足'}), 403
-        except Exception as e:
-            from werkzeug.exceptions import HTTPException
-            if isinstance(e, HTTPException):
-                raise
-            logger.error(f"API error in {f.__name__}: {e}", exc_info=True)
-            return jsonify({'error': 'Internal server error'}), 500
-    return decorated
 
 
 # ==================== 报警相关API ====================
