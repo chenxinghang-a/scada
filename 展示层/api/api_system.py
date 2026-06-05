@@ -178,3 +178,38 @@ def update_config():
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_config', f"更新系统配置: {section or 'global'}")
     return jsonify({'success': True, 'message': '配置已保存'})
+
+
+# ==================== 前端错误日志上报 ====================
+
+_client_error_logger = logging.getLogger('client_error')
+
+
+@system_bp.route('/system/client-errors', methods=['POST'])
+def report_client_errors():
+    """接收前端错误日志上报
+
+    等保2.0 GB/T 22239 要求：应记录安全事件，便于事后追溯。
+    无需认证（错误可能发生在认证失败时），但限流保护。
+    """
+    data = request.get_json()
+    if not data or 'errors' not in data:
+        return jsonify({'success': False, 'message': '无效的错误数据'}), 400
+
+    errors = data['errors']
+    if not isinstance(errors, list) or len(errors) > 50:
+        return jsonify({'success': False, 'message': '错误数据格式不正确'}), 400
+
+    client_ip = request.remote_addr or 'unknown'
+    for err in errors:
+        _client_error_logger.warning(
+            "前端错误 [%s] %s | url=%s user=%s ip=%s",
+            err.get('type', 'unknown'),
+            err.get('message', '')[:200],
+            err.get('url', ''),
+            err.get('userId', 'anonymous'),
+            client_ip,
+            extra={'client_error': err}
+        )
+
+    return jsonify({'success': True, 'received': len(errors)})

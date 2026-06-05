@@ -11,6 +11,7 @@ from pathlib import Path
 from flask import request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime
+from core.ws_compress import compress_message
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ def start_data_push_thread(database, data_collector):
                         latest = all_latest.get(device_id) if all_latest else None
                         if latest:
                             try:
-                                socketio.emit('data_update', latest, room=f'device_{device_id}')
+                                socketio.emit('data_update', compress_message(latest), room=f'device_{device_id}')
                             except Exception as e:
                                 logger.debug(f"推送设备 {device_id} 数据失败: {e}")
 
@@ -204,7 +205,7 @@ def start_data_push_thread(database, data_collector):
 
                 if _cached_status:
                     try:
-                        socketio.emit('system_status', _cached_status)
+                        socketio.emit('system_status', compress_message(_cached_status))
                     except Exception as e:
                         logger.debug(f"推送系统状态失败: {e}")
 

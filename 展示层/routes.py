@@ -104,6 +104,10 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     from core.request_tracking import init_request_tracking
     init_request_tracking(app)
 
+    # 请求去重（防止重复提交）
+    from core.request_dedup import init_request_dedup
+    init_request_dedup(app)
+
     # 注册API蓝图（模块化拆分后的多个Blueprint）
     register_api_blueprints(app)
 

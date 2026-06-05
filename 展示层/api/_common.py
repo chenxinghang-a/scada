@@ -94,6 +94,25 @@ def api_paginated(items: list, total: int, page: int = 1, per_page: int = 20):
     })
 
 
+def get_pagination_params(default_page: int = 1, default_per_page: int = 20, max_per_page: int = 100):
+    """从请求参数中解析分页参数
+
+    Returns:
+        tuple: (page, per_page, offset)
+    """
+    from flask import request
+    page = request.args.get('page', default_page, type=int)
+    per_page = request.args.get('per_page', default_per_page, type=int)
+    if page < 1:
+        page = 1
+    if per_page < 1:
+        per_page = default_per_page
+    if per_page > max_per_page:
+        per_page = max_per_page
+    offset = (page - 1) * per_page
+    return page, per_page, offset
+
+
 def save_yaml_config(config_path: str, config: dict[str, Any]) -> bool:
     """保存YAML配置文件（原子写入：先写临时文件再 rename）"""
     try:
