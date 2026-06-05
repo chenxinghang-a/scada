@@ -9,6 +9,8 @@ from flask import Blueprint, request, jsonify
 from core.circuit_breaker import circuit_breaker_manager, CircuitBreakerError
 from core.dynamic_rate_limiter import dynamic_rate_limiter, LoadLevel
 from core.degradation_manager import degradation_manager, DegradationLevel
+from core.fault_injection import fault_injector, FaultType, FaultSeverity
+from core.chaos_engineering import chaos_engine
 from core.service_response import success_response, error_response
 from 用户层.auth import jwt_required
 
@@ -218,4 +220,158 @@ def check_feature_enabled(feature_name):
         })
     except Exception as e:
         logger.error(f"检查功能可用性失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+# ================================================================
+# 故障注入 API
+# ================================================================
+
+@resilience_bp.route('/fault-injection', methods=['GET'])
+@jwt_required
+def get_fault_injection_status():
+    """获取故障注入器状态"""
+    try:
+        status = fault_injector.get_status()
+        return success_response(status)
+    except Exception as e:
+        logger.error(f"获取故障注入状态失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+@resilience_bp.route('/fault-injection/inject', methods=['POST'])
+@jwt_required
+def inject_fault():
+    """注入故障"""
+    try:
+        data = request.get_json()
+        if not data:
+            return error_response("请求体不能为空", 400)
+
+        target = data.get('target')
+        fault_type_name = data.get('fault_type')
+        if not target or not fault_type_name:
+            return error_response("target 和 fault_type 必填", 400)
+
+        try:
+            fault_type = FaultType(fault_type_name)
+        except ValueError:
+            valid = [t.value for t in FaultType]
+            return error_response(f"无效故障类型: {fault_type_name}, 可选: {valid}", 400)
+
+        severity_name = data.get('severity', 'medium')
+        try:
+            severity = FaultSeverity(severity_name)
+        except ValueError:
+            severity = FaultSeverity.MEDIUM
+
+        duration = data.get('duration', 60)
+        params = {k: v for k, v in data.items() if k not in ('target', 'fault_type', 'severity', 'duration')}
+
+        injection = fault_injector.inject(target, fault_type, severity, duration, **params)
+        if injection:
+            return success_response({
+                'message': f'故障已注入: {target}/{fault_type.value}',
+                'injection': injection.to_dict(),
+            })
+        else:
+            return error_response("故障注入已全局禁用", 403)
+    except Exception as e:
+        logger.error(f"注入故障失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+@resilience_bp.route('/fault-injection/<target>', methods=['DELETE'])
+@jwt_required
+def remove_fault(target):
+    """移除故障注入"""
+    try:
+        removed = fault_injector.remove(target)
+        if removed:
+            return success_response({'message': f'故障注入已移除: {target}'})
+        return error_response(f'未找到 {target} 的故障注入', 404)
+    except Exception as e:
+        logger.error(f"移除故障注入失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+@resilience_bp.route('/fault-injection/clear', methods=['POST'])
+@jwt_required
+def clear_all_faults():
+    """清除所有故障注入"""
+    try:
+        fault_injector.clear_all()
+        return success_response({'message': '所有故障注入已清除'})
+    except Exception as e:
+        logger.error(f"清除故障注入失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+# ================================================================
+# 混沌工程 API
+# ================================================================
+
+@resilience_bp.route('/chaos', methods=['GET'])
+@jwt_required
+def get_chaos_status():
+    """获取混沌工程引擎状态"""
+    try:
+        status = chaos_engine.get_status()
+        return success_response(status)
+    except Exception as e:
+        logger.error(f"获取混沌工程状态失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+@resilience_bp.route('/chaos/experiment', methods=['POST'])
+@jwt_required
+def create_experiment():
+    """创建混沌实验"""
+    try:
+        data = request.get_json()
+        if not data:
+            return error_response("请求体不能为空", 400)
+
+        name = data.get('name')
+        if not name:
+            return error_response("name 必填", 400)
+
+        experiment = chaos_engine.create_experiment(
+            name=name,
+            description=data.get('description', ''),
+            steady_state=data.get('steady_state', ''),
+            steps=data.get('steps', []),
+            rollback_on_failure=data.get('rollback_on_failure', True),
+            timeout=data.get('timeout', 300),
+            tags=data.get('tags', []),
+        )
+        return success_response(experiment.to_dict())
+    except Exception as e:
+        logger.error(f"创建混沌实验失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+@resilience_bp.route('/chaos/experiment/<name>/run', methods=['POST'])
+@jwt_required
+def run_experiment(name):
+    """运行混沌实验"""
+    try:
+        result = chaos_engine.run_experiment(name)
+        if 'error' in result and result.get('state') is None:
+            return error_response(result['error'], 404)
+        return success_response(result)
+    except Exception as e:
+        logger.error(f"运行混沌实验失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+@resilience_bp.route('/chaos/experiment/<name>/report', methods=['GET'])
+@jwt_required
+def get_experiment_report(name):
+    """获取实验报告"""
+    try:
+        report = chaos_engine.generate_report(name)
+        return success_response({'report': report})
+    except Exception as e:
+        logger.error(f"获取实验报告失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
