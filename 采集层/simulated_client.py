@@ -490,6 +490,72 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0,
     return value
 
 
+def _generate_data_common(
+    device_id: str,
+    start_time: float,
+    configs: list[dict],
+    rules_cache: dict,
+    latest_data: dict,
+    data_callbacks: list,
+    stats: dict,
+    extra_field_fn: Callable[[dict], dict] | None = None,
+    stat_inc_key: str = 'data_updates',
+    callback_error_label: str = '回调',
+):
+    """通用模拟数据生成逻辑（供OPC UA/MQTT/REST客户端复用）
+
+    Args:
+        device_id: 设备ID
+        start_time: 设备启动时间
+        configs: 节点/主题/端点配置列表（需含 name/unit 字段）
+        rules_cache: 预缓存的规则字典
+        latest_data: 存储最新数据的字典
+        data_callbacks: 数据回调列表
+        stats: 统计字典（会原地修改）
+        extra_field_fn: 接受config条目，返回额外字段的函数
+        stat_inc_key: 统计计数器的key名
+        callback_error_label: 回调异常日志标签
+    """
+    t = time.time() - start_time
+    device_stopped = is_device_stopped(device_id)
+
+    for i, cfg in enumerate(configs):
+        name = cfg.get('name', cfg.get('node_id', cfg.get('topic', 'unknown')))
+        unit = cfg.get('unit', '')
+
+        if device_stopped:
+            value = 0.0
+        else:
+            rule = rules_cache.get(name)
+            if rule:
+                value = _generate_value(rule, t, i * 0.5, noise_key=f"{device_id}:{name}")
+            else:
+                value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
+
+        value = round(value, 2)
+        if not device_stopped:
+            value = _estop_override(name, value)
+
+        entry = {
+            'value': value,
+            'unit': unit,
+            'timestamp': datetime.now().isoformat(),
+            'quality': 'good',
+            'device_id': device_id,
+        }
+        if extra_field_fn:
+            entry.update(extra_field_fn(cfg))
+        latest_data[name] = entry
+
+        stats[stat_inc_key] = stats.get(stat_inc_key, 0) + 1
+
+        for callback in data_callbacks:
+            try:
+                callback(device_id, name, value, unit)
+            except Exception as e:
+                logger.error(f"[模拟] {callback_error_label}回调异常: {e}")
+
+
 # ==================== 模拟Modbus客户端 ====================
 
 class SimulatedModbusClient(ModbusClientInterface):
@@ -772,39 +838,17 @@ class SimulatedOPCUAClient(PushClientInterface):
                 'connected': self.connected, **self.stats}
 
     def _generate_data(self):
-        t = time.time() - self.start_time
-        device_stopped = is_device_stopped(self.device_id)
-
-        for i, node_cfg in enumerate(self.node_configs):
-            name = node_cfg.get('name', node_cfg.get('node_id', 'unknown'))
-            unit = node_cfg.get('unit', '')
-
-            if device_stopped:
-                value = 0.0  # 设备级停止，全部归零
-            else:
-                rule = self._rules_cache.get(name)
-                if rule:
-                    value = _generate_value(rule, t, i * 0.5, noise_key=f"{self.device_id}:{name}")
-                else:
-                    value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
-
-            value = round(value, 2)
-            # E-STOP：机械类值归零
-            if not device_stopped:
-                value = _estop_override(name, value)
-            self.latest_data[name] = {
-                'value': value, 'unit': unit,
-                'timestamp': datetime.now().isoformat(),
-                'quality': 'good', 'node_id': node_cfg.get('node_id', '')
-            }
-
-            self.stats['data_updates'] += 1
-
-            for callback in self._data_callbacks:
-                try:
-                    callback(self.device_id, name, value, unit)
-                except Exception as e:
-                    logger.error(f"[模拟] OPC UA回调异常: {e}")
+        _generate_data_common(
+            device_id=self.device_id,
+            start_time=self.start_time,
+            configs=self.node_configs,
+            rules_cache=self._rules_cache,
+            latest_data=self.latest_data,
+            data_callbacks=self._data_callbacks,
+            stats=self.stats,
+            extra_field_fn=lambda cfg: {'node_id': cfg.get('node_id', '')},
+            callback_error_label='OPC UA',
+        )
 
     def datachange_notification(self, node, val, data):
         pass
@@ -904,41 +948,21 @@ class SimulatedMQTTClient(PushClientInterface):
                 self._generate_data()
 
     def _generate_data(self):
-        t = time.time() - self.start_time
-        device_stopped = is_device_stopped(self.device_id)
-
-        for i, topic_cfg in enumerate(self.topics_config):
-            name = topic_cfg.get('name', 'unknown')
-            unit = topic_cfg.get('unit', '')
-
-            if device_stopped:
-                value = 0.0
-            else:
-                rule = self._rules_cache.get(name)
-                if rule:
-                    value = _generate_value(rule, t, i * 0.7, noise_key=f"{self.device_id}:{name}")
-                else:
-                    value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
-
-            value = round(value, 2)
-            # E-STOP：机械类值归零
-            if not device_stopped:
-                value = _estop_override(name, value)
-            self.stats['messages_received'] += 1
-            self.stats['messages_parsed'] += 1
-            self.stats['last_message_time'] = datetime.now().isoformat()
-
-            self.latest_data[name] = {
-                'value': value, 'unit': unit,
-                'timestamp': datetime.now().isoformat(),
-                'quality': 'good', 'device_id': self.device_id
-            }
-
-            for callback in self._data_callbacks:
-                try:
-                    callback(self.device_id, name, value, unit)
-                except Exception as e:
-                    logger.error(f"[模拟] MQTT回调异常: {e}")
+        now = datetime.now().isoformat()
+        _generate_data_common(
+            device_id=self.device_id,
+            start_time=self.start_time,
+            configs=self.topics_config,
+            rules_cache=self._rules_cache,
+            latest_data=self.latest_data,
+            data_callbacks=self._data_callbacks,
+            stats=self.stats,
+            stat_inc_key='messages_received',
+            callback_error_label='MQTT',
+        )
+        # MQTT特有统计
+        self.stats['messages_parsed'] = self.stats.get('messages_parsed', 0) + len(self.topics_config)
+        self.stats['last_message_time'] = now
 
 
 # ==================== 模拟REST客户端 ====================
@@ -1013,35 +1037,14 @@ class SimulatedRESTClient(PushClientInterface):
                 'connected': self.connected, **self.stats}
 
     def _generate_data(self):
-        t = time.time() - self.start_time
-        device_stopped = is_device_stopped(self.device_id)
-
-        for i, ep in enumerate(self.endpoints):
-            name = ep.get('name', 'unknown')
-            unit = ep.get('unit', '')
-
-            if device_stopped:
-                value = 0.0
-            else:
-                rule = self._rules_cache.get(name)
-                if rule:
-                    value = _generate_value(rule, t, i * 0.4, noise_key=f"{self.device_id}:{name}")
-                else:
-                    value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
-
-            value = round(value, 2)
-            # E-STOP：机械类值归零
-            if not device_stopped:
-                value = _estop_override(name, value)
-            self.latest_data[name] = {
-                'value': value, 'unit': unit,
-                'timestamp': datetime.now().isoformat(),
-                'quality': 'good', 'endpoint': ep.get('path', ''),
-                'device_id': self.device_id
-            }
-
-            for callback in self._data_callbacks:
-                try:
-                    callback(self.device_id, name, value, unit)
-                except Exception as e:
-                    logger.error(f"[模拟] REST回调异常: {e}")
+        _generate_data_common(
+            device_id=self.device_id,
+            start_time=self.start_time,
+            configs=self.endpoints,
+            rules_cache=self._rules_cache,
+            latest_data=self.latest_data,
+            data_callbacks=self._data_callbacks,
+            stats=self.stats,
+            extra_field_fn=lambda cfg: {'endpoint': cfg.get('path', '')},
+            callback_error_label='REST',
+        )
