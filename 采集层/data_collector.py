@@ -11,7 +11,7 @@ import queue
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional
 from datetime import datetime
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor

@@ -13,7 +13,7 @@ import logging
 import yaml
 import time
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Dict
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock

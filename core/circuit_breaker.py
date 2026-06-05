@@ -301,3 +301,35 @@ class CircuitBreakerManager:
 
 # 全局熔断器管理器
 circuit_breaker_manager = CircuitBreakerManager()
+
+
+# ================================================================
+# 兼容性别名（供已有模块使用）
+# ================================================================
+
+# rest_client.py 等模块使用的别名
+CircuitBreakerOpenError = CircuitBreakerError
+
+
+def get_circuit_breaker(
+    name: str,
+    failure_threshold: int = 5,
+    timeout_seconds: float = 30.0,
+    **kwargs,
+) -> CircuitBreaker:
+    """
+    获取或创建熔断器（兼容性接口）
+
+    Args:
+        name: 熔断器名称
+        failure_threshold: 失败阈值
+        timeout_seconds: 恢复超时（映射到 recovery_timeout）
+
+    Returns:
+        CircuitBreaker 实例
+    """
+    return circuit_breaker_manager.get_or_create(
+        name=name,
+        failure_threshold=failure_threshold,
+        recovery_timeout=timeout_seconds,
+    )
