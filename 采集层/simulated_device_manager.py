@@ -207,6 +207,10 @@ class SimulatedDeviceManager(IDeviceManager):
         for device_id in list(self.clients.keys()):
             self.disconnect_device(device_id)
 
+    def start_reconnect_loop(self, interval: int = 30) -> None:
+        """模拟设备不需要重连（no-op）"""
+        logger.debug("模拟模式：跳过断线重连循环")
+
     def get_device_status(self, device_id: str) -> dict[str, Any]:
         """获取设备状态"""
         client = self.clients.get(device_id)

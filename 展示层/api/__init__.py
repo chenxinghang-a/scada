@@ -3,7 +3,7 @@ REST API子模块包
 将原api.py (54KB) 按功能域拆分为独立模块
 """
 
-from flask import Blueprint
+from flask import Blueprint, request
 
 # 各子模块Blueprint
 from .api_auth import auth_bp
@@ -74,6 +74,6 @@ def register_api_blueprints(app):
     def add_api_version_header(response):
         if request.path.startswith('/api/'):
             response.headers['X-API-Version'] = API_VERSION
-            if getattr(request.environ, 'get', lambda k, d: d)('SCADA_API_VERSION') == 'v1':
+            if request.environ.get('SCADA_API_VERSION') == 'v1':
                 response.headers['X-API-Version-Prefix'] = 'v1'
         return response
