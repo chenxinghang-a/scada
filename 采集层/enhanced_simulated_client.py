@@ -27,6 +27,72 @@ from .modbus_client import ByteOrder
 logger = logging.getLogger(__name__)
 
 
+def _generate_enhanced_data(
+    device_id: str,
+    behavior_simulator,
+    configs: list[dict],
+    latest_data: dict,
+    data_callbacks: list,
+    stats: dict,
+    extra_field_fn: Callable[[dict], dict] | None = None,
+    stat_inc_keys: list[str] | None = None,
+    callback_error_label: str = '回调',
+) -> bool:
+    """增强版通用数据生成逻辑（供OPC UA/MQTT/REST客户端复用）
+
+    Args:
+        device_id: 设备ID
+        behavior_simulator: 行为模拟器实例
+        configs: 节点/主题/端点配置列表
+        latest_data: 存储最新数据的字典
+        data_callbacks: 数据回调列表
+        stats: 统计字典
+        extra_field_fn: 接受config条目，返回额外字段的函数
+        stat_inc_keys: 统计计数器的key列表（每个key都会+1）
+        callback_error_label: 回调异常日志标签
+
+    Returns:
+        True if data was generated, False if stopped
+    """
+    # 停机设备不产生数据
+    if is_device_stopped(device_id):
+        return False
+
+    # 更新行为模拟器
+    data = behavior_simulator.update(2.0)
+
+    if data.get('_stopped'):
+        return False
+
+    for cfg in configs:
+        name = cfg.get('name', cfg.get('node_id', cfg.get('topic', 'unknown')))
+        unit = cfg.get('unit', '')
+
+        value = data.get(name, 50 + 30 * time.time() % 100)
+
+        entry = {
+            'value': round(float(value), 2),
+            'unit': unit,
+            'timestamp': datetime.now().isoformat(),
+            'quality': 'good',
+            'device_id': device_id,
+        }
+        if extra_field_fn:
+            entry.update(extra_field_fn(cfg))
+        latest_data[name] = entry
+
+        for key in (stat_inc_keys or []):
+            stats[key] = stats.get(key, 0) + 1
+
+        for callback in data_callbacks:
+            try:
+                callback(device_id, name, round(float(value), 2), unit)
+            except Exception as e:
+                logger.error(f"[增强模拟] {callback_error_label}回调异常: {e}")
+
+    return True
+
+
 class EnhancedSimulatedModbusClient(ModbusClientInterface):
     """
     增强版模拟Modbus客户端
@@ -478,45 +544,17 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
     def _generate_data(self):
         """生成数据"""
         with self._data_lock:
-            self._do_generate_data()
-
-    def _do_generate_data(self):
-        """内部生成数据（需在锁内调用）"""
-        # 停机设备不产生数据
-        if is_device_stopped(self.device_id):
-            return
-
-        # 更新行为模拟器
-        data = self.behavior_simulator.update(2.0)
-
-        # ===== 停机设备不产生数据 =====
-        if data.get('_stopped'):
-            return
-
-        # 更新节点数据
-        for i, node_cfg in enumerate(self.node_configs):
-            name = node_cfg.get('name', node_cfg.get('node_id', 'unknown'))
-            unit = node_cfg.get('unit', '')
-            
-            # 从行为模拟器获取数据
-            value = data.get(name, 50 + 30 * time.time() % 100)
-            
-            self.latest_data[name] = {
-                'value': round(float(value), 2),
-                'unit': unit,
-                'timestamp': datetime.now().isoformat(),
-                'quality': 'good',
-                'node_id': node_cfg.get('node_id', '')
-            }
-            
-            self.stats['data_updates'] += 1
-            
-            # 触发回调
-            for callback in self._data_callbacks:
-                try:
-                    callback(self.device_id, name, round(float(value), 2), unit)
-                except Exception as e:
-                    logger.error(f"[增强模拟] OPC UA回调异常: {e}")
+            _generate_enhanced_data(
+                device_id=self.device_id,
+                behavior_simulator=self.behavior_simulator,
+                configs=self.node_configs,
+                latest_data=self.latest_data,
+                data_callbacks=self._data_callbacks,
+                stats=self.stats,
+                extra_field_fn=lambda cfg: {'node_id': cfg.get('node_id', '')},
+                stat_inc_keys=['data_updates'],
+                callback_error_label='OPC UA',
+            )
 
     def get_latest_data(self) -> Dict[str, Dict[str, Any]]:
         """获取最新数据"""
@@ -641,42 +679,18 @@ class EnhancedSimulatedMQTTClient(PushClientInterface):
     
     def _generate_data(self):
         """生成数据"""
-        if is_device_stopped(self.device_id):
-            return
-
-        # 更新行为模拟器
-        data = self.behavior_simulator.update(3.0)
-
-        # ===== 停机设备不产生数据 =====
-        if data.get('_stopped'):
-            return
-        
-        # 更新主题数据
-        for i, topic_cfg in enumerate(self.topics_config):
-            name = topic_cfg.get('name', 'unknown')
-            unit = topic_cfg.get('unit', '')
-            
-            # 从行为模拟器获取数据
-            value = data.get(name, 50 + 30 * time.time() % 100)
-            
-            self.stats['messages_received'] += 1
-            self.stats['messages_parsed'] += 1
-            self.stats['last_message_time'] = datetime.now().isoformat()
-            
-            self.latest_data[name] = {
-                'value': round(float(value), 2),
-                'unit': unit,
-                'timestamp': datetime.now().isoformat(),
-                'quality': 'good',
-                'device_id': self.device_id
-            }
-            
-            # 触发回调
-            for callback in self._data_callbacks:
-                try:
-                    callback(self.device_id, name, round(float(value), 2), unit)
-                except Exception as e:
-                    logger.error(f"[增强模拟] MQTT回调异常: {e}")
+        now = datetime.now().isoformat()
+        _generate_enhanced_data(
+            device_id=self.device_id,
+            behavior_simulator=self.behavior_simulator,
+            configs=self.topics_config,
+            latest_data=self.latest_data,
+            data_callbacks=self._data_callbacks,
+            stats=self.stats,
+            stat_inc_keys=['messages_received', 'messages_parsed'],
+            callback_error_label='MQTT',
+        )
+        self.stats['last_message_time'] = now
     
     def get_latest_data(self) -> Dict[str, Dict[str, Any]]:
         """获取最新数据"""
@@ -962,39 +976,16 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
 
     def _generate_data(self):
         """生成数据"""
-        if is_device_stopped(self.device_id):
-            return
-
-        # 更新行为模拟器
-        data = self.behavior_simulator.update(1.0)
-
-        # ===== 停机设备不产生数据 =====
-        if data.get('_stopped'):
-            return
-
-        # 更新端点数据
-        for i, ep in enumerate(self.endpoints):
-            name = ep.get('name', 'unknown')
-            unit = ep.get('unit', '')
-            
-            # 从行为模拟器获取数据
-            value = data.get(name, 50 + 30 * time.time() % 100)
-            
-            self.latest_data[name] = {
-                'value': round(float(value), 2),
-                'unit': unit,
-                'timestamp': datetime.now().isoformat(),
-                'quality': 'good',
-                'endpoint': ep.get('path', ''),
-                'device_id': self.device_id
-            }
-            
-            # 触发回调
-            for callback in self._data_callbacks:
-                try:
-                    callback(self.device_id, name, round(float(value), 2), unit)
-                except Exception as e:
-                    logger.error(f"[增强模拟] REST回调异常: {e}")
+        _generate_enhanced_data(
+            device_id=self.device_id,
+            behavior_simulator=self.behavior_simulator,
+            configs=self.endpoints,
+            latest_data=self.latest_data,
+            data_callbacks=self._data_callbacks,
+            stats=self.stats,
+            extra_field_fn=lambda cfg: {'endpoint': cfg.get('path', '')},
+            callback_error_label='REST',
+        )
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""

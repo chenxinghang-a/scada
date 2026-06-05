@@ -84,6 +84,30 @@ class ConnectionPool:
         self._running = True
         self._cleanup_thread.start()
 
+    def validate_config(self) -> List[str]:
+        """验证连接池配置，返回警告列表"""
+        warnings = []
+
+        if self._max_size < 1:
+            warnings.append(f"连接池 {self._name}: max_size={self._max_size} 过小，建议>=1")
+
+        if self._max_size > 100:
+            warnings.append(f"连接池 {self._name}: max_size={self._max_size} 过大，可能导致资源耗尽")
+
+        if self._min_idle > self._max_size:
+            warnings.append(f"连接池 {self._name}: min_idle={self._min_idle} > max_size={self._max_size}")
+
+        if self._max_idle_time < 10:
+            warnings.append(f"连接池 {self._name}: max_idle_time={self._max_idle_time}s 过短，可能导致频繁重建连接")
+
+        if self._max_lifetime < 60:
+            warnings.append(f"连接池 {self._name}: max_lifetime={self._max_lifetime}s 过短")
+
+        if self._scale_up_threshold <= self._scale_down_threshold:
+            warnings.append(f"连接池 {self._name}: scale_up({self._scale_up_threshold}) <= scale_down({self._scale_down_threshold})")
+
+        return warnings
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
