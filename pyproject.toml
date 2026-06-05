@@ -43,6 +43,17 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 
+[tool.black]
+line-length = 120
+target-version = ["py312"]
+skip-string-normalization = false
+
+[tool.isort]
+profile = "black"
+line_length = 120
+known_first_party = ["core", "采集层", "报警层", "存储层", "展示层", "智能层", "用户层"]
+known_third_party = ["flask", "pymodbus", "asyncua", "paho", "jwt", "bcrypt", "pandas", "numpy", "yaml", "loguru"]
+
 [tool.pyright]
 typeCheckingMode = "basic"
 pythonVersion = "3.12"

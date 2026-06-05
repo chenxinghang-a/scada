@@ -100,6 +100,10 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     except Exception as e:
         logger.warning(f"降级管理器启动失败（非致命）: {e}")
 
+    # 请求追踪与响应时间中间件
+    from core.request_tracking import init_request_tracking
+    init_request_tracking(app)
+
     # 注册API蓝图（模块化拆分后的多个Blueprint）
     register_api_blueprints(app)
 

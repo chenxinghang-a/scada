@@ -16,6 +16,26 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_smoke_test_dbs():
+    """会话开始前清理残留的smoke_test数据库文件"""
+    data_dir = Path(PROJECT_ROOT) / "data"
+    if data_dir.exists():
+        for db_file in data_dir.glob("smoke_test_*.db*"):
+            try:
+                db_file.unlink()
+            except (PermissionError, OSError):
+                pass
+    yield
+    # 会话结束后再次清理
+    if data_dir.exists():
+        for db_file in data_dir.glob("smoke_test_*.db*"):
+            try:
+                db_file.unlink()
+            except (PermissionError, OSError):
+                pass
+
+
 @pytest.fixture(autouse=True)
 def _reset_singletons():
     """Reset all class-based singletons between tests"""
