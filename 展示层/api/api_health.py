@@ -114,6 +114,30 @@ def get_health_detail():
         # 版本和运行时间
         result['version'] = '3.1.0'
 
+        # API缓存状态
+        try:
+            from core.api_cache import get_cache_stats
+            result['api_cache'] = get_cache_stats()
+        except Exception:
+            result['api_cache'] = {'status': 'unavailable'}
+
+        # 请求队列状态
+        try:
+            from core.request_queue import report_queue, export_queue
+            result['queues'] = {
+                'report': report_queue.get_stats(),
+                'export': export_queue.get_stats(),
+            }
+        except Exception:
+            result['queues'] = {'status': 'unavailable'}
+
+        # 熔断器状态
+        try:
+            from core.circuit_breaker import circuit_breaker_manager
+            result['circuit_breakers'] = circuit_breaker_manager.get_all_stats()
+        except Exception:
+            result['circuit_breakers'] = {'status': 'unavailable'}
+
         return success_response(result)
     except Exception as e:
         logger.error(f"获取详细健康状态失败: {e}", exc_info=True)
@@ -268,4 +292,39 @@ def get_unavailable_modules():
         return success_response(unavailable)
     except Exception as e:
         logger.error(f"获取不可用模块失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+@health_bp.route('/tasks/<task_id>', methods=['GET'])
+@jwt_required
+def get_task_status(task_id):
+    """
+    查询异步任务状态
+
+    Args:
+        task_id: 任务ID
+
+    Returns:
+        {
+            "success": true,
+            "data": {
+                "id": "abc123",
+                "status": "pending|running|completed|failed",
+                "created_at": 1234567890.0,
+                "result": {...}
+            }
+        }
+    """
+    try:
+        from core.request_queue import report_queue, export_queue
+
+        # 在所有队列中查找任务
+        for queue in [report_queue, export_queue]:
+            status = queue.get_status(task_id)
+            if status:
+                return success_response(status)
+
+        return error_response(f"任务 '{task_id}' 不存在", 404)
+    except Exception as e:
+        logger.error(f"查询任务状态失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
