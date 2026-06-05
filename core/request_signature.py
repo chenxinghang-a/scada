@@ -1,13 +1,20 @@
 """
-API请求签名验证
+API请求签名验证（多级策略）
 HMAC签名防篡改，支持请求体+时间戳+nonce签名。
 
+签名等级:
+  - light: GET/HEAD/OPTIONS，只签 method+path+timestamp（不校验nonce）
+  - full:  POST/PUT/PATCH/DELETE，签 method+path+body+timestamp+nonce
+
 使用方式:
-    from core.request_signature import signature_required, generate_signature
-    @app.route('/api/secure')
+    from core.request_signature import signature_required, signature_light
+    @app.route('/api/read')
+    @signature_light
+    def read_endpoint(): ...
+
+    @app.route('/api/write', methods=['POST'])
     @signature_required
-    def secure_endpoint():
-        ...
+    def write_endpoint(): ...
 """
 
 import hashlib
@@ -16,7 +23,7 @@ import time
 import logging
 import secrets
 from functools import wraps
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from flask import request, jsonify, current_app
 
 logger = logging.getLogger(__name__)
@@ -192,9 +199,70 @@ def get_signature_headers(
     }
 
 
+def signature_light(f):
+    """
+    轻量签名装饰器（GET/HEAD/OPTIONS）
+    只验证 method+path+timestamp，不校验nonce（读操作可重放）
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        signature = request.headers.get(SIGNATURE_HEADER)
+        timestamp = request.headers.get(TIMESTAMP_HEADER)
+
+        if not signature or not timestamp:
+            return jsonify({
+                'success': False,
+                'error': '缺少签名头',
+                'error_code': 'MISSING_SIGNATURE',
+            }), 401
+
+        # 验证时间戳
+        try:
+            ts = float(timestamp)
+            age = abs(time.time() - ts)
+            if age > MAX_TIMESTAMP_AGE * 2:  # 轻量签名允许更长过期
+                return jsonify({
+                    'success': False,
+                    'error': '请求已过期',
+                    'error_code': 'EXPIRED_REQUEST',
+                }), 401
+        except ValueError:
+            return jsonify({
+                'success': False,
+                'error': '无效的时间戳',
+                'error_code': 'INVALID_TIMESTAMP',
+            }), 401
+
+        # 获取签名密钥
+        secret = current_app.config.get('API_SIGNATURE_SECRET', '')
+        if not secret:
+            return f(*args, **kwargs)
+
+        # 轻量签名：method + path + timestamp
+        expected = generate_signature(secret, request.method, request.path, timestamp=timestamp)
+        if not hmac.compare_digest(expected, signature):
+            return jsonify({
+                'success': False,
+                'error': '签名验证失败',
+                'error_code': 'INVALID_SIGNATURE',
+            }), 401
+
+        return f(*args, **kwargs)
+    return decorated
+
+
 def cleanup_nonce_cache():
     """清理过期的nonce缓存"""
     with _nonce_lock:
         expired = [k for k, v in _nonce_cache.items() if time.time() - v > MAX_TIMESTAMP_AGE]
         for k in expired:
             del _nonce_cache[k]
+
+
+def get_signature_stats() -> Dict[str, Any]:
+    """获取签名验证统计"""
+    with _nonce_lock:
+        return {
+            'nonce_cache_size': len(_nonce_cache),
+            'max_timestamp_age': MAX_TIMESTAMP_AGE,
+        }
