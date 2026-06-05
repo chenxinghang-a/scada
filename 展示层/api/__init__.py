@@ -17,6 +17,7 @@ from .api_health import health_bp
 from .api_metrics import metrics_bp
 from .swagger import swagger_bp
 from .api_resilience import resilience_bp
+from .api_ops import ops_bp
 
 # 统一注册的Blueprint列表
 ALL_BLUEPRINTS = [
@@ -31,6 +32,7 @@ ALL_BLUEPRINTS = [
     metrics_bp,
     swagger_bp,
     resilience_bp,
+    ops_bp,
 ]
 
 
