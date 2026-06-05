@@ -698,12 +698,9 @@ class DataCollector:
 
             if protocol in ('modbus_tcp', 'modbus_rtu', 'mc', 'fins'):
                 self._collect_modbus(client, device_id, device_config, timestamp)
-            elif protocol == 'rest':
-                self._collect_rest(client, device_id, device_config, timestamp)
-            elif protocol == 'opcua':
-                self._collect_opcua(client, device_id, device_config, timestamp)
-            elif protocol == 'mqtt':
-                self._collect_mqtt(client, device_id, device_config, timestamp)
+            elif protocol in ('rest', 'opcua', 'mqtt'):
+                # REST/OPC-UA/MQTT都是缓存型协议，统一从缓存采集
+                self._collect_from_cache(client, device_id, timestamp)
             else:
                 logger.warning(f"设备 {device_id} 不支持的协议: {protocol}")
                 self._inc_stat('failed_collections')
@@ -881,18 +878,6 @@ class DataCollector:
                     self.data_queue.put_nowait(item)
                 except (ValueError, TypeError, queue.Full):
                     pass
-
-    def _collect_rest(self, client, device_id: str, device_config: dict[str, Any], timestamp: datetime) -> None:
-        """采集REST设备的缓存数据（客户端自带轮询）"""
-        self._collect_from_cache(client, device_id, timestamp)
-
-    def _collect_opcua(self, client, device_id: str, device_config: dict[str, Any], timestamp: datetime) -> None:
-        """采集OPC UA设备的缓存数据（客户端通过订阅自动更新缓存）"""
-        self._collect_from_cache(client, device_id, timestamp)
-
-    def _collect_mqtt(self, client, device_id: str, device_config: dict[str, Any], timestamp: datetime) -> None:
-        """采集MQTT设备的缓存数据（客户端通过订阅自动更新缓存）"""
-        self._collect_from_cache(client, device_id, timestamp)
 
     def _read_register(self, client, register: dict[str, Any]) -> float | None:
         """读取单个Modbus寄存器数据"""

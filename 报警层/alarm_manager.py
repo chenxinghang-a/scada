@@ -291,16 +291,8 @@ class AlarmManager:
         self._escalation_timeout = 600  # 默认10分钟
         self._escalation_callbacks: list = []  # 升级回调函数列表
 
-        # 告警升级管理器（多级升级）
-        try:
-            from 报警层.alarm_escalation import AlarmEscalationManager
-            escalation_cfg = config.get('escalation', {}) if isinstance(config, dict) else {}
-            self._escalation_manager = AlarmEscalationManager(escalation_cfg)
-            self._escalation_manager.add_callback(self._on_escalation)
-            self._escalation_manager.start()
-        except Exception as e:
-            logger.warning(f"告警升级管理器初始化失败: {e}")
-            self._escalation_manager = None
+        # 告警升级管理器（多级升级，延迟到 load_config 后初始化）
+        self._escalation_manager = None
 
         # 规则索引：(device_id, register_name) -> [(rule_id, rule_config), ...]
         self._rules_index: dict[tuple, list[tuple[str, dict]]] = {}
@@ -566,6 +558,18 @@ class AlarmManager:
             if escalation_cfg:
                 self._escalation_timeout = escalation_cfg.get('timeout_seconds', 600)
                 logger.info(f"加载报警升级配置: 超时{self._escalation_timeout}s")
+
+                # 初始化告警升级管理器（多级升级）
+                if self._escalation_manager is None:
+                    try:
+                        from 报警层.alarm_escalation import AlarmEscalationManager
+                        self._escalation_manager = AlarmEscalationManager(escalation_cfg)
+                        self._escalation_manager.add_callback(self._on_escalation)
+                        self._escalation_manager.start()
+                        logger.info("告警升级管理器初始化成功")
+                    except Exception as e:
+                        logger.warning(f"告警升级管理器初始化失败: {e}")
+                        self._escalation_manager = None
 
         except Exception as e:
             logger.error(f"加载报警配置异常: {e}")

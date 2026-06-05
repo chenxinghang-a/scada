@@ -1,6 +1,5 @@
 """
-运行时诊断工具
-用于诊断SCADA系统运行状态和性能问题
+运行时诊断工�?用于诊断SCADA系统运行状态和性能问题
 
 使用方法:
     python tools/diagnostics.py full           # 完整诊断
@@ -48,8 +47,7 @@ class SystemDiagnostics:
             'performance': self._check_performance(),
         }
 
-        # 计算总体状态
-        statuses = []
+        # 计算总体状�?        statuses = []
         for section in results.values():
             if isinstance(section, dict) and 'status' in section:
                 statuses.append(section['status'])
@@ -64,7 +62,7 @@ class SystemDiagnostics:
         return results
 
     def _check_system(self) -> Dict[str, Any]:
-        """检查系统信息"""
+        """检查系统信�?""
         return {
             'status': 'ok',
             'platform': platform.platform(),
@@ -76,7 +74,7 @@ class SystemDiagnostics:
         }
 
     def _check_database(self) -> Dict[str, Any]:
-        """检查数据库状态"""
+        """检查数据库状�?""
         db_path = self.data_dir / 'scada.db'
 
         if not db_path.exists():
@@ -95,11 +93,10 @@ class SystemDiagnostics:
                 try:
                     cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
                     table_counts[table] = cursor.fetchone()[0]
-                except:
+                except Exception:
                     table_counts[table] = -1
 
-            # 检查WAL状态
-            cursor = conn.execute("PRAGMA wal_checkpoint")
+            # 检查WAL状�?            cursor = conn.execute("PRAGMA wal_checkpoint")
             wal_status = cursor.fetchone()
 
             # 检查数据库大小
@@ -119,9 +116,9 @@ class SystemDiagnostics:
             return {'status': 'error', 'message': str(e)}
 
     def _check_config(self) -> Dict[str, Any]:
-        """检查配置文件"""
+        """检查配置文�?""
         if not self.config_dir.exists():
-            return {'status': 'warning', 'message': '配置目录不存在'}
+            return {'status': 'warning', 'message': '配置目录不存�?}
 
         config_files = list(self.config_dir.glob('*.yaml'))
 
@@ -145,22 +142,21 @@ class SystemDiagnostics:
         }
 
     def _check_logs(self) -> Dict[str, Any]:
-        """检查日志状态"""
+        """检查日志状�?""
         if not self.log_dir.exists():
-            return {'status': 'warning', 'message': '日志目录不存在'}
+            return {'status': 'warning', 'message': '日志目录不存�?}
 
         log_files = list(self.log_dir.glob('*.log'))
         total_size = sum(f.stat().st_size for f in log_files)
 
         # 检查最近的错误
         recent_errors = 0
-        for log_file in log_files[-5:]:  # 检查最近5个日志文件
-            try:
+        for log_file in log_files[-5:]:  # 检查最�?个日志文�?            try:
                 with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
                         if 'ERROR' in line or 'CRITICAL' in line:
                             recent_errors += 1
-            except:
+            except Exception:
                 pass
 
         return {
@@ -171,14 +167,13 @@ class SystemDiagnostics:
         }
 
     def _check_network(self) -> Dict[str, Any]:
-        """检查网络连接"""
+        """检查网络连�?""
         results = {
             'status': 'ok',
             'localhost': self._ping('localhost'),
         }
 
-        # 检查常用端口
-        ports_to_check = [5000, 502, 4840, 1883]
+        # 检查常用端�?        ports_to_check = [5000, 502, 4840, 1883]
         port_results = {}
 
         for port in ports_to_check:
@@ -189,7 +184,7 @@ class SystemDiagnostics:
                 result = sock.connect_ex(('localhost', port))
                 port_results[port] = 'open' if result == 0 else 'closed'
                 sock.close()
-            except:
+            except Exception:
                 port_results[port] = 'error'
 
         results['ports'] = port_results
@@ -204,11 +199,11 @@ class SystemDiagnostics:
             command = ['ping', param, '1', host]
             result = subprocess.run(command, capture_output=True, timeout=5)
             return result.returncode == 0
-        except:
+        except Exception:
             return False
 
     def _check_memory(self) -> Dict[str, Any]:
-        """检查内存使用"""
+        """检查内存使�?""
         try:
             import psutil
             memory = psutil.virtual_memory()
@@ -219,7 +214,7 @@ class SystemDiagnostics:
                 'percent': memory.percent,
             }
         except ImportError:
-            return {'status': 'unknown', 'message': 'psutil未安装'}
+            return {'status': 'unknown', 'message': 'psutil未安�?}
 
     def _check_performance(self) -> Dict[str, Any]:
         """检查性能指标"""
@@ -287,7 +282,7 @@ class SystemDiagnostics:
 
 
 def format_report(results: Dict[str, Any], indent: int = 2) -> str:
-    """格式化诊断报告"""
+    """格式化诊断报�?""
     lines = []
     lines.append("=" * 60)
     lines.append("SCADA系统诊断报告")
@@ -313,11 +308,11 @@ def format_report(results: Dict[str, Any], indent: int = 2) -> str:
     if 'overall_status' in results:
         status = results['overall_status']
         if status == 'healthy':
-            lines.append("✓ 系统状态: 正常")
+            lines.append("�?系统状�? 正常")
         elif status == 'warning':
-            lines.append("⚠ 系统状态: 警告")
+            lines.append("�?系统状�? 警告")
         else:
-            lines.append("✗ 系统状态: 异常")
+            lines.append("�?系统状�? 异常")
 
     return "\n".join(lines)
 
@@ -348,7 +343,7 @@ def main():
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
-    print(f"\n详细报告已保存: {output_file}")
+    print(f"\n详细报告已保�? {output_file}")
 
 
 if __name__ == '__main__':
