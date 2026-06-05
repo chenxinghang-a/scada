@@ -10,6 +10,7 @@ API输入验证，支持嵌套对象和自定义规则。
 
 import re
 import logging
+from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
@@ -179,11 +180,115 @@ class SchemaValidator:
             'date': r'^\d{4}-\d{2}-\d{2}$',
             'date-time': r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}',
             'uuid': r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            'modbus_address': r'^[0-9]+$',  # Modbus地址
+            'ip_port': r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$',  # IP:Port
         }
         pattern = formats.get(format_type)
         if pattern:
             return bool(re.match(pattern, value, re.IGNORECASE))
         return True
+
+    def validate_with_sanitize(self, data: Any) -> Tuple[bool, List[SchemaValidationError], Any]:
+        """
+        验证并清理数据
+
+        Returns:
+            (是否有效, 错误列表, 清理后的数据)
+        """
+        valid, errors = self.validate(data)
+        sanitized = self._sanitize(data, self.schema)
+        return valid, errors, sanitized
+
+    def _sanitize(self, data: Any, schema: Dict) -> Any:
+        """清理数据"""
+        if data is None:
+            return schema.get('default')
+
+        if isinstance(data, str):
+            # 字符串清理
+            data = data.strip()
+            max_length = schema.get('maxLength')
+            if max_length and len(data) > max_length:
+                data = data[:max_length]
+
+        if isinstance(data, dict):
+            properties = schema.get('properties', {})
+            result = {}
+            for key, value in data.items():
+                if key in properties:
+                    result[key] = self._sanitize(value, properties[key])
+                elif schema.get('additionalProperties', True):
+                    result[key] = value
+            return result
+
+        if isinstance(data, list):
+            items_schema = schema.get('items')
+            if items_schema:
+                return [self._sanitize(item, items_schema) for item in data]
+            return data
+
+        return data
+
+
+def validate_request_body(schema: Dict[str, Any]):
+    """
+    请求体验证装饰器
+
+    用法:
+        @app.route('/api/devices', methods=['POST'])
+        @validate_request_body(DEVICE_SCHEMA)
+        def create_device():
+            data = request.validated_data
+            ...
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            from flask import request, jsonify
+            data = request.get_json(silent=True)
+            if data is None:
+                return jsonify({'success': False, 'error': '请求体必须是JSON'}), 400
+
+            validator = SchemaValidator(schema)
+            valid, errors, sanitized = validator.validate_with_sanitize(data)
+
+            if not valid:
+                return jsonify({
+                    'success': False,
+                    'error': '数据验证失败',
+                    'details': [e.to_dict() for e in errors[:10]],  # 最多10个错误
+                }), 400
+
+            request.validated_data = sanitized
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+# 更多预定义Schema
+USER_SCHEMA = {
+    'type': 'object',
+    'required': ['username', 'password'],
+    'properties': {
+        'username': {'type': 'string', 'minLength': 3, 'maxLength': 50, 'pattern': r'^[a-zA-Z0-9_]+$'},
+        'password': {'type': 'string', 'minLength': 8, 'maxLength': 128},
+        'role': {'type': 'string', 'enum': ['admin', 'operator', 'viewer']},
+        'email': {'type': 'string', 'format': 'email'},
+    },
+}
+
+HISTORY_QUERY_SCHEMA = {
+    'type': 'object',
+    'required': ['device_id', 'register_name'],
+    'properties': {
+        'device_id': {'type': 'string'},
+        'register_name': {'type': 'string'},
+        'start_time': {'type': 'string', 'format': 'date-time'},
+        'end_time': {'type': 'string', 'format': 'date-time'},
+        'page': {'type': 'integer', 'minimum': 1, 'default': 1},
+        'page_size': {'type': 'integer', 'minimum': 1, 'maximum': 1000, 'default': 100},
+    },
+}
 
 
 # 预定义Schema
