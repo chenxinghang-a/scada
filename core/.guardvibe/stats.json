@@ -1,10 +1,10 @@
 {
   "version": 1,
   "firstScan": "2026-06-04T15:32:08.093Z",
-  "lastScan": "2026-06-05T12:28:18.389Z",
+  "lastScan": "2026-06-05T12:46:08.200Z",
   "totals": {
-    "scans": 62,
-    "filesScanned": 62,
+    "scans": 65,
+    "filesScanned": 65,
     "findingsTotal": 29,
     "findingsFixed": 0,
     "critical": 28,
@@ -17,8 +17,8 @@
   },
   "monthly": {
     "2026-06": {
-      "scans": 62,
-      "filesScanned": 62,
+      "scans": 65,
+      "filesScanned": 65,
       "findingsTotal": 29,
       "findingsFixed": 0,
       "critical": 28,
@@ -28,7 +28,7 @@
     }
   },
   "tools": {
-    "scan_file": 62
+    "scan_file": 65
   },
   "topRules": {
     "VG120": 1,
