@@ -14,7 +14,7 @@ import sqlite3
 import hashlib
 import logging
 import threading
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -210,11 +210,43 @@ class TieredCache:
         return value
 
     def invalidate_pattern(self, pattern: str):
-        """按前缀失效缓存"""
+        """按前缀失效缓存（L1+L2）"""
         with self.l1._lock:
             keys_to_delete = [k for k in self.l1._cache if k.startswith(pattern)]
             for k in keys_to_delete:
                 del self.l1._cache[k]
+
+        # L2也按前缀失效
+        try:
+            conn = sqlite3.connect(self.l2._db_path, timeout=5)
+            conn.execute('DELETE FROM cache WHERE key LIKE ?', (pattern + '%',))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    def invalidate_table(self, table: str):
+        """按表名失效所有相关缓存"""
+        self.invalidate_pattern(f'db:{table}:')
+
+    def warmup(self, loaders: List[Tuple[str, Callable, float]]):
+        """
+        缓存预热
+
+        Args:
+            loaders: [(key, factory_fn, ttl), ...] 列表
+        """
+        warmed = 0
+        for key, factory, ttl in loaders:
+            try:
+                cached = self.get(key)
+                if cached is None:
+                    value = factory()
+                    self.set(key, value, ttl)
+                    warmed += 1
+            except Exception as e:
+                logger.warning(f"缓存预热失败: {key}: {e}")
+        logger.info(f"缓存预热完成: {warmed}/{len(loaders)} 项")
 
     def get_stats(self) -> Dict[str, Any]:
         return {
