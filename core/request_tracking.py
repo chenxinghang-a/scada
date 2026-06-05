@@ -72,22 +72,4 @@ def init_request_tracking(app: Flask):
 
         return response
 
-    @app.errorhandler(Exception)
-    def _handle_exception(error):
-        """全局异常处理中包含trace_id"""
-        trace_id = getattr(g, 'trace_id', 'unknown')
-        logger.error(
-            "未捕获异常: %s (trace_id=%s)", error, trace_id,
-            exc_info=True
-        )
-        from flask import jsonify
-        response = jsonify({
-            'success': False,
-            'error': '服务器内部错误',
-            'trace_id': trace_id,
-        })
-        response.status_code = 500
-        response.headers['X-Trace-ID'] = trace_id
-        return response
-
     logger.info("请求追踪中间件已初始化 (慢请求阈值=%ss)", SLOW_REQUEST_THRESHOLD)
