@@ -29,6 +29,13 @@ class DataMasker:
     def __init__(self):
         self.rules = self._load_default_rules()
 
+    # 敏感列名模式
+    SENSITIVE_COLUMN_PATTERNS = [
+        'password', 'passwd', 'pwd', 'secret', 'token', 'key', 'credential',
+        'api_key', 'api_token', 'access_token', 'refresh_token',
+        'ssn', 'social_security', 'credit_card', 'card_number',
+    ]
+
     def _load_default_rules(self) -> List[Dict[str, Any]]:
         """加载默认脱敏规则"""
         return [
@@ -60,14 +67,41 @@ class DataMasker:
                 'replacement': lambda m: m.group()[:6] + '********' + m.group()[-4:],
                 'description': '身份证保留前6后4',
             },
+            # 信用卡号脱敏
+            {
+                'name': 'credit_card',
+                'pattern': r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b',
+                'replacement': lambda m: '****-****-****-' + m.group().replace('-', '').replace(' ', '')[-4:],
+                'description': '信用卡号保留后4位',
+            },
+            # API密钥/Token脱敏
+            {
+                'name': 'api_key',
+                'pattern': r'(?i)(bearer|apikey|api-key|token)\s+[A-Za-z0-9\-._~+/]+=*',
+                'replacement': lambda m: m.group().split()[0] + ' ***MASKED***',
+                'description': 'API密钥/Token完全脱敏',
+            },
             # 密码字段脱敏
             {
                 'name': 'password',
-                'pattern': r'(?i)(password|passwd|pwd|secret|token)\s*[=:]\s*\S+',
+                'pattern': r'(?i)(password|passwd|pwd|secret)\s*[=:]\s*\S+',
                 'replacement': lambda m: m.group().split('=')[0] + '=***MASKED***' if '=' in m.group() else m.group().split(':')[0] + ':***MASKED***',
                 'description': '密码字段完全脱敏',
             },
         ]
+
+    def is_sensitive_column(self, column_name: str) -> bool:
+        """检测列名是否为敏感字段"""
+        lower = column_name.lower()
+        return any(p in lower for p in self.SENSITIVE_COLUMN_PATTERNS)
+
+    def mask_value_by_column(self, column_name: str, value: Any) -> Any:
+        """根据列名自动脱敏"""
+        if not isinstance(value, str):
+            return value
+        if self.is_sensitive_column(column_name):
+            return '***MASKED***'
+        return self.mask_text(value)
 
     def _mask_ip(self, ip: str) -> str:
         """脱敏IP地址"""
