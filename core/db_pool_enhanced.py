@@ -66,12 +66,14 @@ class EnhancedConnectionPool:
         min_connections: int = 2,
         max_idle_time: float = 300,
         health_check_interval: float = 60,
+        liveness_probe_interval: float = 30,
     ):
         self.db_path = db_path
         self.max_connections = max_connections
         self.min_connections = min_connections
         self.max_idle_time = max_idle_time
         self.health_check_interval = health_check_interval
+        self.liveness_probe_interval = liveness_probe_interval
 
         self._pool: List[PooledConnection] = []
         self._lock = threading.Lock()
@@ -84,16 +86,39 @@ class EnhancedConnectionPool:
             'released': 0,
             'expired': 0,
             'health_failures': 0,
+            'liveness_failures': 0,
             'peak_size': 0,
+            'warmup_created': 0,
         }
 
         # 泄漏检测
         self._active_connections: Dict[str, float] = {}  # conn_id -> acquire_time
         self._leak_threshold = 60  # 秒
 
+        # 延迟追踪
+        self._latency_history: List[float] = []
+        self._max_latency_history = 100
+
         # 启动健康检查线程
         self._health_thread = threading.Thread(target=self._health_check_loop, daemon=True)
         self._health_thread.start()
+
+        # 预热：创建最小连接数
+        self._warmup()
+
+    def _warmup(self):
+        """预热连接池（创建最小连接数）"""
+        with self._lock:
+            while len(self._pool) < self.min_connections:
+                try:
+                    pooled = self._create_connection()
+                    self._pool.append(pooled)
+                    self._stats['warmup_created'] += 1
+                except Exception as e:
+                    logger.warning(f"连接池预热失败: {e}")
+                    break
+        if self._stats['warmup_created'] > 0:
+            logger.info(f"连接池预热: 创建 {self._stats['warmup_created']} 个连接")
 
     def _create_connection(self) -> PooledConnection:
         """创建新连接"""
@@ -150,12 +175,19 @@ class EnhancedConnectionPool:
 
     def _health_check_loop(self):
         """健康检查循环"""
+        last_liveness = 0
         while True:
             time.sleep(self.health_check_interval)
             try:
                 self._health_check()
                 self._cleanup_expired()
                 self._detect_leaks()
+
+                # 存活探测（按独立间隔）
+                now = time.time()
+                if now - last_liveness >= self.liveness_probe_interval:
+                    self._liveness_probe()
+                    last_liveness = now
             except Exception as e:
                 logger.error(f"连接池健康检查异常: {e}")
 
@@ -171,6 +203,48 @@ class EnhancedConnectionPool:
                     self._pool.remove(pooled)
                     self._stats['health_failures'] += 1
                     logger.warning(f"连接池健康检查: 移除失效连接 {pooled.conn_id}")
+
+    def _liveness_probe(self):
+        """存活探测（ping所有连接）"""
+        failed = 0
+        with self._lock:
+            for pooled in list(self._pool):
+                if not pooled.in_use:
+                    try:
+                        start = time.time()
+                        pooled.conn.execute("SELECT 1")
+                        latency = (time.time() - start) * 1000
+                        self._latency_history.append(latency)
+                        if len(self._latency_history) > self._max_latency_history:
+                            self._latency_history = self._latency_history[-self._max_latency_history:]
+                    except Exception:
+                        failed += 1
+                        self._stats['liveness_failures'] += 1
+                        try:
+                            pooled.conn.close()
+                        except Exception:
+                            pass
+                        self._pool.remove(pooled)
+
+        if failed > 0:
+            logger.warning(f"连接池存活探测: {failed} 个连接失败")
+
+    def get_latency_stats(self) -> Dict[str, Any]:
+        """获取延迟统计"""
+        with self._lock:
+            if not self._latency_history:
+                return {'avg_ms': 0, 'p50_ms': 0, 'p95_ms': 0, 'p99_ms': 0, 'samples': 0}
+            sorted_lat = sorted(self._latency_history)
+            n = len(sorted_lat)
+            return {
+                'avg_ms': round(sum(sorted_lat) / n, 2),
+                'p50_ms': round(sorted_lat[n // 2], 2),
+                'p95_ms': round(sorted_lat[int(n * 0.95)], 2),
+                'p99_ms': round(sorted_lat[int(n * 0.99)], 2),
+                'min_ms': round(sorted_lat[0], 2),
+                'max_ms': round(sorted_lat[-1], 2),
+                'samples': n,
+            }
 
     def _cleanup_expired(self):
         """清理过期连接"""
@@ -209,13 +283,15 @@ class EnhancedConnectionPool:
         with self._lock:
             active = sum(1 for p in self._pool if p.in_use)
             idle = sum(1 for p in self._pool if not p.in_use)
-            return {
+            stats = {
                 **self._stats,
                 'pool_size': len(self._pool),
                 'active_connections': active,
                 'idle_connections': idle,
                 'max_connections': self.max_connections,
             }
+        stats['latency'] = self.get_latency_stats()
+        return stats
 
     def shutdown(self):
         """关闭连接池"""
