@@ -9,8 +9,14 @@ from .config_manager import ConfigManager
 from .event_bus import EventBus
 from .health_checker import HealthChecker
 from .connection_pool import ConnectionPool, PooledConnection
+from .circuit_breaker import CircuitBreaker, CircuitBreakerManager, circuit_breaker_manager
+from .dynamic_rate_limiter import DynamicRateLimiter, dynamic_rate_limiter
+from .degradation_manager import DegradationManager, DegradationLevel, degradation_manager
 
 __all__ = [
     'DIContainer', 'ModuleRegistry', 'ConfigManager', 'EventBus',
     'HealthChecker', 'ConnectionPool', 'PooledConnection',
+    'CircuitBreaker', 'CircuitBreakerManager', 'circuit_breaker_manager',
+    'DynamicRateLimiter', 'dynamic_rate_limiter',
+    'DegradationManager', 'DegradationLevel', 'degradation_manager',
 ]

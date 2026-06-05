@@ -17,6 +17,8 @@ import requests
 from typing import Any, Callable
 from datetime import datetime
 
+from core.circuit_breaker import get_circuit_breaker, CircuitBreakerOpenError
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,6 +96,13 @@ class RESTDeviceClient:
 
         # HTTP会话（复用连接）
         self._session: requests.Session | None = None
+
+        # 熔断器（保护外部HTTP调用）
+        self._circuit_breaker = get_circuit_breaker(
+            name=f"rest_client_{self.device_id}",
+            failure_threshold=config.get('circuit_breaker_threshold', 5),
+            timeout_seconds=config.get('circuit_breaker_timeout', 60),
+        )
 
         # 统计
         self.stats: dict[str, Any] = {
@@ -174,7 +183,7 @@ class RESTDeviceClient:
 
     def read_endpoint(self, endpoint_config: dict[str, Any]) -> Any:
         """
-        读取单个端点数据
+        读取单个端点数据（带熔断器保护）
 
         Args:
             endpoint_config: 端点配置
@@ -187,10 +196,9 @@ class RESTDeviceClient:
         params = endpoint_config.get('params', {})
         body = endpoint_config.get('body')
 
-        # 重试 3 次，指数退避（0.5s, 1s, 2s）
-        last_error = None
-        for attempt in range(3):
-            try:
+        # 使用熔断器保护
+        try:
+            def _do_request():
                 resp = self._session.request(
                     method=method,
                     url=url,
@@ -198,26 +206,32 @@ class RESTDeviceClient:
                     json=body if method in ('POST', 'PUT', 'PATCH') else None
                 )
                 resp.raise_for_status()
+                return resp.json()
 
-                self.stats['total_requests'] += 1
-                self.stats['successful_requests'] += 1
-                self.stats['last_request_time'] = datetime.now().isoformat()
+            data = self._circuit_breaker.call(_do_request)
 
-                data = resp.json()
-                json_path = endpoint_config.get('json_path', '')
-                value = self._extract_by_path(data, json_path) if json_path else data
-                return value
+            self.stats['total_requests'] += 1
+            self.stats['successful_requests'] += 1
+            self.stats['last_request_time'] = datetime.now().isoformat()
 
-            except Exception as e:
-                last_error = e
-                if attempt < 2:
-                    time.sleep(0.5 * (2 ** attempt))
+            json_path = endpoint_config.get('json_path', '')
+            value = self._extract_by_path(data, json_path) if json_path else data
+            return value
 
-        self.stats['total_requests'] += 1
-        self.stats['failed_requests'] += 1
-        self.stats['last_error'] = str(last_error)
-        logger.error(f"REST请求失败(3次重试) [{endpoint_config.get('path')}]: {last_error}")
-        return None
+        except CircuitBreakerOpenError as e:
+            # 熔断器打开，快速失败
+            self.stats['total_requests'] += 1
+            self.stats['failed_requests'] += 1
+            self.stats['last_error'] = f"熔断器打开: {e}"
+            logger.warning(f"REST请求被熔断器拒绝 [{endpoint_config.get('path')}]: {e}")
+            return None
+
+        except Exception as e:
+            self.stats['total_requests'] += 1
+            self.stats['failed_requests'] += 1
+            self.stats['last_error'] = str(e)
+            logger.error(f"REST请求失败 [{endpoint_config.get('path')}]: {e}")
+            return None
 
     def write_endpoint(self, endpoint_config: dict[str, Any], value: Any) -> bool:
         """

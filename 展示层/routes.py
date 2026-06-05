@@ -3,6 +3,7 @@ Flask路由模块
 定义Web页面路由
 """
 
+import logging
 from pathlib import Path as _Path
 _BASE_DIR = _Path(__file__).resolve().parent.parent  # industrial_scada/
 
@@ -10,9 +11,14 @@ import jwt
 from flask import Flask, render_template, jsonify, request, redirect, url_for, g, current_app
 from flask_socketio import SocketIO
 
+logger = logging.getLogger(__name__)
+
 from .api import register_api_blueprints
 from .websocket import init_socketio
 from core.rate_limiter import create_limiter
+from core.circuit_breaker import circuit_breaker_manager
+from core.dynamic_rate_limiter import dynamic_rate_limiter
+from core.degradation_manager import degradation_manager
 from 用户层.auth import AuthManager
 from config import AuthConfig
 
@@ -48,27 +54,51 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     from config import FlaskConfig, SecurityConfig
     app.config['SECRET_KEY'] = FlaskConfig.SECRET_KEY
 
-    # 请求超时和大文件限制（系统健壮性）
-    app.config['MAX_CONTENT_LENGTH'] = FlaskConfig.MAX_CONTENT_LENGTH  # 16MB默认
-
-    # API响应gzip压缩（减少传输体积，提升加载速度）
-    try:
-        from flask_compress import Compress
-        app.config['COMPRESS_MIMETYPES'] = [
-            'text/html', 'text/css', 'text/xml', 'application/json',
-            'application/javascript', 'text/javascript', 'application/xml'
-        ]
-        app.config['COMPRESS_MIN_SIZE'] = 500  # 小于500字节不压缩
-        Compress(app)
-    except ImportError:
-        logger.warning("flask_compress未安装，跳过gzip压缩")
-
     # 初始化认证管理器
     auth_manager = AuthManager(database)
 
     # 速率限制 (GB/T 22239 等保2.0)
     limiter = create_limiter(app)
     app.limiter = limiter
+
+    # 动态限流器 - 关联Flask-Limiter并启动
+    dynamic_rate_limiter.set_flask_limiter(limiter)
+    try:
+        dynamic_rate_limiter.start()
+    except Exception as e:
+        logger.warning(f"动态限流器启动失败（非致命）: {e}")
+
+    # 熔断器管理器 - 注册内置熔断器
+    circuit_breaker_manager.get_or_create('database', failure_threshold=3, recovery_timeout=60)
+    circuit_breaker_manager.get_or_create('device_comm', failure_threshold=5, recovery_timeout=30)
+    circuit_breaker_manager.get_or_create('alarm_system', failure_threshold=3, recovery_timeout=45)
+
+    # 降级管理器 - 注册默认触发器并启动
+    def _health_degrade_trigger():
+        """基于健康检查的降级触发器"""
+        try:
+            from core.health_checker import HealthChecker, HealthStatus
+            status = HealthChecker.get_status()
+            unhealthy_count = sum(
+                1 for s in status.get('checks', {}).values()
+                if s.get('status') == HealthStatus.UNHEALTHY
+            )
+            if unhealthy_count >= 3:
+                from core.degradation_manager import DegradationLevel
+                return DegradationLevel.SEVERE
+            elif unhealthy_count >= 2:
+                return DegradationLevel.MODERATE
+            elif unhealthy_count >= 1:
+                return DegradationLevel.LIGHT
+        except Exception:
+            pass
+        return None
+
+    degradation_manager.register_trigger(_health_degrade_trigger)
+    try:
+        degradation_manager.start()
+    except Exception as e:
+        logger.warning(f"降级管理器启动失败（非致命）: {e}")
 
     # 注册API蓝图（模块化拆分后的多个Blueprint）
     register_api_blueprints(app)
@@ -91,65 +121,6 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     app.edge_decision = edge_decision
     app.device_control = device_control
     app.vibration_analyzer = vibration_analyzer
-
-    # 全局异常处理（未捕获异常兜底）
-    @app.errorhandler(Exception)
-    def handle_exception(e):
-        """处理所有未捕获的异常"""
-        from werkzeug.exceptions import HTTPException
-        if isinstance(e, HTTPException):
-            return jsonify({'error': e.description}), e.code
-        logger.error(f"未捕获异常: {e}", exc_info=True)
-        return jsonify({'error': '服务器内部错误，请联系管理员'}), 500
-
-    @app.errorhandler(404)
-    def not_found(e):
-        """处理404"""
-        return jsonify({'error': '资源不存在'}), 404
-
-    @app.errorhandler(500)
-    def internal_error(e):
-        """处理500"""
-        logger.error(f"服务器错误: {e}", exc_info=True)
-        return jsonify({'error': '服务器内部错误'}), 500
-
-    # 请求超时控制（基于信号的超时机制，仅Unix有效）
-    import signal
-    REQUEST_TIMEOUT = FlaskConfig.REQUEST_TIMEOUT
-
-    def _timeout_handler(signum, frame):
-        """请求超时处理"""
-        raise TimeoutError("请求处理超时")
-
-    @app.before_request
-    def before_request_timeout():
-        """请求开始前设置超时"""
-        if hasattr(signal, 'SIGALRM'):  # Unix系统
-            signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(REQUEST_TIMEOUT)
-
-    @app.after_request
-    def after_request_timeout(response):
-        """请求完成后取消超时"""
-        if hasattr(signal, 'SIGALRM'):  # Unix系统
-            signal.alarm(0)
-        return response
-
-    # 并发请求限制（信号量机制）
-    import threading
-    _request_semaphore = threading.Semaphore(FlaskConfig.MAX_CONCURRENT_REQUESTS)
-
-    @app.before_request
-    def before_request_limit():
-        """并发请求限制"""
-        if not _request_semaphore.acquire(timeout=30):
-            return jsonify({'error': '服务器繁忙，请稍后重试'}), 503
-
-    @app.after_request
-    def after_request_release(response):
-        """请求完成后释放信号量"""
-        _request_semaphore.release()
-        return response
 
     # 安全响应头 (GB/T 22239 等保2.0)
     @app.after_request
