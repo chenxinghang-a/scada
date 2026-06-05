@@ -27,6 +27,9 @@ class Database:
         # 线程本地存储：每个线程复用一个连接
         self._local = threading.local()
 
+        # 清理残留锁（崩溃后可能遗留的 stale WAL 锁）
+        self._cleanup_stale_locks()
+
         # 初始化数据库（用独立连接设置 WAL 等全局 PRAGMA）
         self._init_pragmas()
         self._init_database()
@@ -43,17 +46,40 @@ class Database:
     # 向后兼容别名
     close_thread_connection = close
 
+    def _cleanup_stale_locks(self):
+        """清理崩溃后遗留的数据库锁文件（stale lock）"""
+        import os
+        lock_files = [self.db_path + '-wal', self.db_path + '-shm']
+        for lf in lock_files:
+            if os.path.exists(lf):
+                try:
+                    # 尝试以独占方式打开，检测是否被其他进程锁定
+                    with open(lf, 'r+b') as f:
+                        pass  # 能打开说明没有活跃锁
+                except (PermissionError, OSError):
+                    logger.warning(f"数据库锁文件可能被其他进程占用: {lf}")
+
     def _init_pragmas(self):
         """初始化全局 PRAGMA（只需执行一次）"""
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA synchronous=NORMAL')
-        conn.execute('PRAGMA cache_size=-32000')  # 32MB 缓存（高吞吐场景）
-        conn.execute('PRAGMA wal_autocheckpoint=1000')  # 每1000页(~4MB)自动checkpoint
-        conn.execute('PRAGMA busy_timeout=10000')  # 10秒超时（不卡太久）
-        conn.execute('PRAGMA temp_store=MEMORY')   # 临时表放内存
-        conn.execute('PRAGMA mmap_size=268435456')  # 256MB 内存映射I/O（读密集场景提速2-5倍）
-        conn.close()
+        import time
+        start = time.time()
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=15)
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA synchronous=NORMAL')
+            conn.execute('PRAGMA cache_size=-32000')  # 32MB 缓存（高吞吐场景）
+            conn.execute('PRAGMA wal_autocheckpoint=1000')  # 每1000页(~4MB)自动checkpoint
+            conn.execute('PRAGMA busy_timeout=10000')  # 10秒超时（不卡太久）
+            conn.execute('PRAGMA temp_store=MEMORY')   # 临时表放内存
+            conn.execute('PRAGMA mmap_size=268435456')  # 256MB 内存映射I/O（读密集场景提速2-5倍）
+            conn.close()
+            elapsed = time.time() - start
+            if elapsed > 5:
+                logger.warning(f"数据库 PRAGMA 初始化耗时较长: {elapsed:.1f}s，可能存在锁竞争")
+        except sqlite3.OperationalError as e:
+            logger.error(f"数据库 PRAGMA 初始化失败: {e}")
+            logger.error("可能原因: 数据库文件被其他进程锁定，请关闭所有 Python 进程后重试")
+            raise
 
     @contextmanager
     def get_connection(self, readonly=False):
