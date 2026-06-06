@@ -248,7 +248,7 @@ python run.py
                             else:
                                 os.kill(pid, 0)
                                 is_running = True
-                        except:
+                        except Exception:
                             is_running = False
 
                         if not is_running:

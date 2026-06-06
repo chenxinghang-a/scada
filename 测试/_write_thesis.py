@@ -9,8 +9,8 @@ import requests
 import json
 import os
 
-# Gemini配置
-API_KEY = "AIzaSyC0MMf6fQkQsG5kMj9mDeGSKn0i2imhfik"
+# Gemini配置 — 从环境变量读取，不再硬编码
+API_KEY = os.environ.get("GEMINI_API_KEY", "")
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta/chat/completions"
 PROXY = "http://127.0.0.1:7890"
 

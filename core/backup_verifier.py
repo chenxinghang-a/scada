@@ -214,7 +214,7 @@ class BackupVerifier:
                     # SECURITY: 表名来自sqlite_master系统表（可信源），非用户输入
                     count = self._count_table_rows(conn, table)
                     table_stats[table] = count
-                except:
+                except Exception:
                     table_stats[table] = -1
 
             conn.close()

@@ -65,7 +65,7 @@ class MemoryMonitor:
             # 文件描述符
             try:
                 snapshot['fds'] = process.num_fds()
-            except:
+            except Exception:
                 snapshot['fds'] = -1
 
         except ImportError:

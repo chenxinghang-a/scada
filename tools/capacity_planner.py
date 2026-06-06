@@ -102,7 +102,7 @@ class CapacityPlanner:
                     cursor.execute(f"SELECT COUNT(*) FROM {table}")
                     count = cursor.fetchone()[0]
                     result['tables'][table] = {'count': count}
-                except:
+                except Exception:
                     result['tables'][table] = {'count': 0}
 
             # WAL文件大小

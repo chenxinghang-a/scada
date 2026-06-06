@@ -11,7 +11,7 @@ from core.ops_tools import (
     data_cleaner, diagnostic_exporter,
 )
 from core.service_response import success_response, error_response
-from 用户层.auth import jwt_required
+from 用户层.auth import jwt_required, role_required
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,8 @@ def update_runtime_config():
         if not data:
             return error_response("请求体不能为空", 400)
 
-        operator = data.get('operator', 'api_user')
+        # SECURITY: 从JWT获取操作者，不信任客户端传入
+        operator = request.current_user.get('username', 'unknown')
         updates = data.get('config', {})
         if not updates:
             return error_response("config 字段不能为空", 400)
@@ -87,7 +88,8 @@ def set_config_key(key):
         if not data or 'value' not in data:
             return error_response("value 字段必填", 400)
 
-        operator = data.get('operator', 'api_user')
+        # SECURITY: 从JWT获取操作者，不信任客户端传入
+        operator = request.current_user.get('username', 'unknown')
         value = data['value']
         changed = runtime_config_manager.set(key, value, operator)
 
@@ -120,6 +122,7 @@ def get_config_history():
 
 @ops_bp.route('/db/vacuum', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def db_vacuum():
     """执行 VACUUM"""
     try:
@@ -133,6 +136,7 @@ def db_vacuum():
 
 @ops_bp.route('/db/reindex', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def db_reindex():
     """执行 REINDEX"""
     try:
@@ -148,6 +152,7 @@ def db_reindex():
 
 @ops_bp.route('/db/analyze', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def db_analyze():
     """执行 ANALYZE"""
     try:
@@ -189,6 +194,7 @@ def db_table_stats():
 
 @ops_bp.route('/cleanup/history', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def cleanup_history():
     """清理过期历史数据"""
     try:
@@ -204,6 +210,7 @@ def cleanup_history():
 
 @ops_bp.route('/cleanup/backups', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def cleanup_backups():
     """清理旧备份"""
     try:
@@ -219,6 +226,7 @@ def cleanup_backups():
 
 @ops_bp.route('/cleanup/logs', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def cleanup_logs():
     """清理过期日志"""
     try:

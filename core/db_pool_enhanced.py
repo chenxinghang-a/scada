@@ -306,11 +306,14 @@ class EnhancedConnectionPool:
 
 # 全局实例
 _pool: Optional[EnhancedConnectionPool] = None
+_pool_lock = threading.Lock()
 
 
 def get_connection_pool(db_path: str = None, **kwargs) -> EnhancedConnectionPool:
-    """获取连接池实例"""
+    """获取连接池实例（线程安全单例）"""
     global _pool
     if _pool is None:
-        _pool = EnhancedConnectionPool(db_path or 'data/scada.db', **kwargs)
+        with _pool_lock:
+            if _pool is None:
+                _pool = EnhancedConnectionPool(db_path or 'data/scada.db', **kwargs)
     return _pool
