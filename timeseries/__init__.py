@@ -34,7 +34,12 @@ from .data_models import (
 from .query_builder import QueryBuilder
 from .migration import SQLiteToTDengineMigrator
 
-__version__ = "2.1.0"
+# 版本号唯一真源：项目根目录 VERSION 文件
+try:
+    from pathlib import Path as _Path
+    __version__ = (_Path(__file__).resolve().parent.parent / 'VERSION').read_text(encoding='utf-8').strip()
+except Exception:
+    __version__ = "0.0.0"
 __author__ = "Industrial SCADA Team"
 
 __all__ = [

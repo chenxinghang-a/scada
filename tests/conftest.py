@@ -16,24 +16,29 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
+def _quarantine_smoke_test_dbs(data_dir: Path):
+    """将冒烟测试数据库移出工作目录，避免测试清理触发批量删除保护。"""
+    if not data_dir.exists():
+        return
+    for db_file in data_dir.glob("smoke_test_*.db*"):
+        try:
+            target = db_file.with_name(f".stale_{db_file.name}")
+            suffix = 1
+            while target.exists():
+                target = db_file.with_name(f".stale_{suffix}_{db_file.name}")
+                suffix += 1
+            db_file.rename(target)
+        except (PermissionError, OSError):
+            pass
+
+
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_smoke_test_dbs():
-    """会话开始前清理残留的smoke_test数据库文件"""
+    """会话开始/结束时隔离残留的smoke_test数据库文件。"""
     data_dir = Path(PROJECT_ROOT) / "data"
-    if data_dir.exists():
-        for db_file in data_dir.glob("smoke_test_*.db*"):
-            try:
-                db_file.unlink()
-            except (PermissionError, OSError):
-                pass
+    _quarantine_smoke_test_dbs(data_dir)
     yield
-    # 会话结束后再次清理
-    if data_dir.exists():
-        for db_file in data_dir.glob("smoke_test_*.db*"):
-            try:
-                db_file.unlink()
-            except (PermissionError, OSError):
-                pass
+    _quarantine_smoke_test_dbs(data_dir)
 
 
 @pytest.fixture(autouse=True)

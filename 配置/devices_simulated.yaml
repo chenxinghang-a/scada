@@ -1788,3 +1788,123 @@ devices:
     unit: Pa
   slave_id: 1
   vendor: 图尔克
+- collection_interval: 5
+  description: 车间配电柜 — 电力质量监测
+  device_model: M4M 20
+  enabled: true
+  host: 192.168.1.102
+  id: abb_m4m_01
+  name: ABB M4M电力分析仪
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: A相电压
+    length: 2
+    name: voltage_a
+    scale: 1.0
+    unit: V
+  - address: 2
+    data_type: float32
+    description: B相电压
+    length: 2
+    name: voltage_b
+    scale: 1.0
+    unit: V
+  - address: 4
+    data_type: float32
+    description: C相电压
+    length: 2
+    name: voltage_c
+    scale: 1.0
+    unit: V
+  - address: 6
+    data_type: float32
+    description: A相电流
+    length: 2
+    name: current_a
+    scale: 1.0
+    unit: A
+  - address: 8
+    data_type: float32
+    description: B相电流
+    length: 2
+    name: current_b
+    scale: 1.0
+    unit: A
+  - address: 10
+    data_type: float32
+    description: C相电流
+    length: 2
+    name: current_c
+    scale: 1.0
+    unit: A
+  - address: 12
+    data_type: float32
+    description: 总有功功率
+    length: 2
+    name: active_power
+    scale: 1.0
+    unit: kW
+  - address: 14
+    data_type: float32
+    description: 电网频率
+    length: 2
+    name: frequency
+    scale: 1.0
+    unit: Hz
+  - address: 16
+    data_type: float32
+    description: 电压总谐波畸变率
+    length: 2
+    name: thd_voltage
+    scale: 1.0
+    unit: '%'
+  - address: 18
+    data_type: float32
+    description: 功率因数
+    length: 2
+    name: power_factor
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: ABB
+- collection_interval: 15
+  description: 出水口在线水质监测 — DO/浊度/电导率/pH
+  device_model: WQ-Multi-01
+  enabled: true
+  host: 192.168.1.200
+  id: water_quality_01
+  name: MQTT水质监测终端
+  password: scada123
+  port: 1883
+  protocol: mqtt
+  topics:
+  - description: 溶解氧
+    json_path: value
+    name: dissolved_oxygen
+    topic: factory/water_outlet/quality/dissolved_oxygen
+    unit: mg/L
+  - description: 浊度
+    json_path: value
+    name: turbidity
+    topic: factory/water_outlet/quality/turbidity
+    unit: NTU
+  - description: 电导率
+    json_path: value
+    name: conductivity
+    topic: factory/water_outlet/quality/conductivity
+    unit: μS/cm
+  - description: pH值
+    json_path: value
+    name: ph
+    topic: factory/water_outlet/quality/ph
+    unit: ''
+  - description: 水温
+    json_path: value
+    name: water_temperature
+    topic: factory/water_outlet/quality/temperature
+    unit: °C
+  username: scada
+  vendor: 自研物联网节点

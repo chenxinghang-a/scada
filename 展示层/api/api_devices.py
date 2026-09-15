@@ -5,6 +5,7 @@
 
 from typing import Any
 import logging
+import re
 from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
@@ -62,6 +63,13 @@ def add_device():
     device_id = data.get('id', '')
     if not device_id or not device_id.replace('_', '').replace('-', '').isalnum():
         return api_error('设备ID只能包含字母、数字、下划线和连字符')
+
+    # 设备名称只允许纯文本，拒绝 HTML 标签，避免名称进入前端后形成 XSS
+    device_name = data.get('name')
+    if not isinstance(device_name, str) or not device_name.strip():
+        return api_error('设备名称必须是非空文本')
+    if re.search(r'<[^>]*>', device_name):
+        return api_error('设备名称不能包含HTML标签')
 
     protocol = data.get('protocol', 'modbus_tcp')
 
@@ -780,6 +788,7 @@ def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
         for field in ('host', 'port'):
             if field not in data:
                 raise ValueError(f'Modbus设备缺少必填字段: {field}')
+        _validate_port(data['port'])
     elif protocol == 'opcua':
         if 'endpoint' not in data:
             raise ValueError('OPC UA设备缺少必填字段: endpoint')
@@ -789,6 +798,7 @@ def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
         for field in ('host', 'port'):
             if field not in data:
                 raise ValueError(f'MQTT设备缺少必填字段: {field}')
+        _validate_port(data['port'])
         if not data.get('topics'):
             raise ValueError('MQTT设备缺少主题配置')
     elif protocol == 'rest':
@@ -800,10 +810,23 @@ def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
         for field in ('host', 'port'):
             if field not in data:
                 raise ValueError(f'MC协议设备缺少必填字段: {field}')
+        _validate_port(data['port'])
     elif protocol == 'fins':
         for field in ('host', 'port'):
             if field not in data:
                 raise ValueError(f'FINS协议设备缺少必填字段: {field}')
+        _validate_port(data['port'])
+
+
+def _validate_port(value: Any) -> int:
+    """验证 TCP/MQTT 等协议端口处于合法范围。"""
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('端口必须是整数') from exc
+    if not 1 <= port <= 65535:
+        raise ValueError('端口范围必须是1到65535')
+    return port
 
 
 def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:

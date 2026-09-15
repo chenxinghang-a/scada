@@ -9,6 +9,12 @@ from unittest.mock import MagicMock, patch
 from datetime import datetime
 
 
+@pytest.fixture
+def mock_db():
+    """AlarmManager 依赖的数据库对象（去重逻辑不触碰 DB，用 Mock 即可）"""
+    return MagicMock()
+
+
 class TestAlarmDedup:
     """报警去重功能测试"""
 

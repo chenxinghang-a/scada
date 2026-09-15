@@ -35,6 +35,7 @@ class TestAlarmE2E:
 
         # 1. 触发报警
         am._process_alarm_state(
+            rule_id=rule['id'],
             rule_config=rule,
             device_id='motor_01',
             register_name='temperature',
@@ -58,6 +59,7 @@ class TestAlarmE2E:
 
         # 3. 清除报警（值回到正常范围）
         am._process_alarm_state(
+            rule_id=rule['id'],
             rule_config=rule,
             device_id='motor_01',
             register_name='temperature',
@@ -121,6 +123,7 @@ class TestAlarmE2E:
 
         # 触发报警
         am._process_alarm_state(
+            rule_id=rule['id'],
             rule_config=rule,
             device_id='tank_01',
             register_name='level',
@@ -133,10 +136,14 @@ class TestAlarmE2E:
         time.sleep(2)
 
         # 触发升级检查
-        am._check_escalation()
+        am.check_escalation()
 
-        # 验证升级已触发（如果配置了升级回调）
-        # 注意：实际升级逻辑可能需要更多配置
+        # 验证升级已触发（超过 escalation_timeout 仍未确认）
+        assert len(escalated) == 1, f"应触发1次升级回调，实际 {len(escalated)} 次"
+        assert escalated[0]['alarm_id'] == 'test_rule_003'
+        assert escalated[0]['device_id'] == 'tank_01'
+        assert escalated[0]['register_name'] == 'level'
+        assert escalated[0]['elapsed_seconds'] >= 1
 
 
 class TestAlarmOutputIntegration:

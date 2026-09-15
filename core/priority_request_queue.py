@@ -13,6 +13,7 @@ import heapq
 import threading
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from functools import wraps
 from dataclasses import dataclass, field
 from enum import IntEnum
 from concurrent.futures import Future, ThreadPoolExecutor

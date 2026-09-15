@@ -66,6 +66,18 @@ except ImportError:
     from pathlib import Path
     BASE_DIR = Path(__file__).resolve().parent
 
+
+# 版本号：唯一真源为项目根目录的 VERSION 文件
+# 改版本号只改 VERSION，不要在代码里硬编码。
+def _read_version() -> str:
+    try:
+        return (BASE_DIR / 'VERSION').read_text(encoding='utf-8').strip()
+    except Exception:
+        return '0.0.0'
+
+
+APP_VERSION = _read_version()
+
 # Flask配置
 class FlaskConfig:
     # 生产环境必须通过 SECRET_KEY 环境变量设置，否则使用随机值（重启失效）

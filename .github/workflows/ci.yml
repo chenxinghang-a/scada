@@ -17,9 +17,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -r requirements.txt
-      - run: pip install pytest pytest-cov pyright
-      - run: pytest tests/ -v --cov=. --cov-report=xml --cov-report=term-missing || true
-      - run: pyright --version || true
+      - run: pip install pytest pytest-cov
+      - name: Run test suite
+        run: pytest tests/ -q --cov=. --cov-report=xml --cov-report=term-missing
 
   lint:
     runs-on: ubuntu-latest
@@ -29,4 +29,6 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install ruff
-      - run: ruff check . --select E,W,F --ignore E501,W503 || true
+      - name: Ruff (advisory, non-blocking)
+        continue-on-error: true
+        run: ruff check . --select E,W,F --ignore E501,W503

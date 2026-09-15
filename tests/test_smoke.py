@@ -9,6 +9,7 @@ import os
 import json
 import time
 import threading
+import uuid
 import requests
 from pathlib import Path
 
@@ -20,6 +21,20 @@ def _find_free_port():
     with socket.socket() as s:
         s.bind(('', 0))
         return s.getsockname()[1]
+
+
+def _post_login(base_url, username='admin', password='admin123'):
+    """调用登录接口并返回响应。
+
+    请求体带唯一 nonce：core/request_dedup.py 的指纹缓存是进程级全局的
+    （方法+路径+Authorization+body 哈希，2秒窗口），完全相同的登录请求
+    在窗口内会被判为重复提交并返回 409，测试就拿不到真实的登录响应了。
+    """
+    return requests.post(f'{base_url}/api/auth/login', json={
+        'username': username,
+        'password': password,
+        'client_nonce': uuid.uuid4().hex,
+    })
 
 
 @pytest.fixture(scope='module')
@@ -78,10 +93,7 @@ def app_server():
 @pytest.fixture(scope='module')
 def auth_token(app_server):
     """获取认证token（处理首次登录改密场景）"""
-    r = requests.post(f'{app_server}/api/auth/login', json={
-        'username': 'admin',
-        'password': 'admin123'
-    })
+    r = _post_login(app_server)
     if r.status_code == 200:
         data = r.json()
         token = data.get('token', '')
@@ -98,13 +110,12 @@ def auth_token(app_server):
                           json={'username': 'admin', 'new_password': 'Admin123!'},
                           headers=headers)
             # 用新密码重新登录
-            r2 = requests.post(f'{app_server}/api/auth/login', json={
-                'username': 'admin', 'password': 'Admin123!'
-            })
+            r2 = _post_login(app_server, password='Admin123!')
             if r2.status_code == 200:
                 return r2.json().get('token', '')
             return token  # 即使改密后登录失败，返回原token
-    pytest.skip("无法登录，跳过需要认证的测试")
+    pytest.skip(f"无法登录，跳过需要认证的测试 "
+                f"(status={r.status_code}, body={r.text[:200]!r})")
 
 
 class TestSmokeStartup:
@@ -259,20 +270,25 @@ class TestSmokeJWT:
     """JWT黑名单"""
 
     def test_logout_blacklists_token(self, app_server, auth_token):
+        # auth_token fixture 已完成首次改密，当前密码为 Admin123!
         # 先获取一个新token
-        r = requests.post(f'{app_server}/api/auth/login', json={
-            'username': 'admin', 'password': 'admin123'
-        })
+        r = _post_login(app_server, password='Admin123!')
         if r.status_code != 200:
-            pytest.skip("无法登录")
+            pytest.skip(f"无法登录 (status={r.status_code}, body={r.text[:200]!r})")
         token = r.json().get('token', '')
         headers = {'Authorization': f'Bearer {token}'}
+
+        # 需要一个真实存在且要求认证的端点：/api/data/latest 未注册（恒404），
+        # 无法证明令牌被撤销；/api/auth/users 要求管理员令牌。
+        protected = f'{app_server}/api/auth/users'
+        assert requests.get(protected, headers=headers).status_code == 200, \
+            "登出前有效token应可访问受保护端点"
 
         # 登出
         r = requests.post(f'{app_server}/api/auth/logout', headers=headers)
         assert r.status_code == 200
 
         # 已登出token应被拒绝
-        r = requests.get(f'{app_server}/api/data/latest', headers=headers)
+        r = requests.get(protected, headers=headers)
         assert r.status_code in (401, 403), \
             f"已登出token应被拒绝，返回 {r.status_code}"

@@ -7,7 +7,7 @@ import yaml
 import logging
 from pathlib import Path
 from functools import wraps
-from flask import current_app, jsonify
+from flask import current_app, jsonify, make_response
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +73,11 @@ def api_success(data=None, message: str = 'success', **kwargs):
 
 
 def api_error(message: str, code: int = 400, error_code: str = None):
-    """标准化错误响应"""
+    """标准化错误响应（返回带状态码的Response，可直接作为视图返回值）"""
     response = {'success': False, 'error': message}
     if error_code:
         response['error_code'] = error_code
-    return jsonify(response), code
+    return make_response(jsonify(response), code)
 
 
 def api_paginated(items: list, total: int, page: int = 1, per_page: int = 20):

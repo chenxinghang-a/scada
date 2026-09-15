@@ -37,7 +37,12 @@ from .iec104_gateway import IEC104Gateway
 from .dnp3_gateway import DNP3Gateway
 from .mqtt_subscriber import MQTTSubscriber, MQTTDataDistributor
 
-__version__ = "2.2.0"
+# 版本号唯一真源：项目根目录 VERSION 文件
+try:
+    from pathlib import Path as _Path
+    __version__ = (_Path(__file__).resolve().parent.parent / 'VERSION').read_text(encoding='utf-8').strip()
+except Exception:
+    __version__ = "0.0.0"
 __author__ = "Industrial SCADA Team"
 
 __all__ = [

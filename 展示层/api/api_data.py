@@ -9,7 +9,8 @@ from flask import Blueprint, jsonify, request, current_app
 from datetime import datetime, timedelta
 
 from 用户层.auth import jwt_required
-from ._common import api_error_handler
+from ._common import api_error_handler, api_error
+from .error_codes import DATA_NOT_FOUND
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def get_latest_data(device_id):
     data = current_app.database.get_latest_data(device_id=device_id, register_name=register_name)
     if data:
         return jsonify({'data': data})
-    return jsonify({'data': [], 'error': '没有数据'}), 200
+    return api_error('没有数据', 404, DATA_NOT_FOUND)
 
 
 @data_bp.route('/data/history/<device_id>/<register_name>', methods=['GET'])

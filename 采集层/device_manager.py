@@ -444,6 +444,7 @@ class DeviceManager:
 
     def _get_brief_status(self, device_id: str) -> dict[str, Any]:
         """获取设备精简状态（仅仪表盘所需字段）"""
+        from 采集层.interfaces import IDeviceManager
         device_config = self.devices.get(device_id, {})
         client = self.clients.get(device_id)
         connected = getattr(client, 'connected', False) if client else False

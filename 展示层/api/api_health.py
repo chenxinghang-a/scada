@@ -75,7 +75,7 @@ def get_health_detail():
                 "collector": {"status": "ok", "active_tasks": 10, "queue_size": 0},
                 "alarm": {"status": "ok", "active_alarms": 2},
                 "uptime_seconds": 3600,
-                "version": "3.1.0"
+                "version": "<APP_VERSION>"
             }
         }
     """
@@ -111,8 +111,12 @@ def get_health_detail():
         except Exception:
             result['collector'] = {'status': 'unknown'}
 
-        # 版本和运行时间
-        result['version'] = '3.1.0'
+        # 版本和运行时间（版本号来自 VERSION 文件，见 config.APP_VERSION）
+        try:
+            from config import APP_VERSION
+            result['version'] = APP_VERSION
+        except Exception:
+            result['version'] = 'unknown'
 
         # API缓存状态
         try:

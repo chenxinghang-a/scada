@@ -2,15 +2,71 @@
 安全渗透测试
 验证系统安全防护能力
 """
+import jwt
 import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
+
+from config import AuthConfig
+from 用户层.auth import ROLES
+
+
+def _make_token(username: str, role: str, expired: bool = False) -> str:
+    """按生产配置签发测试用 JWT（与 用户层/auth.py 使用同一密钥/算法）"""
+    now = datetime.now(timezone.utc)
+    payload = {
+        'username': username,
+        'role': role,
+        'type': 'access',
+        'iat': now - timedelta(hours=2) if expired else now,
+        'exp': now - timedelta(hours=1) if expired else now + timedelta(hours=1),
+    }
+    return jwt.encode(payload, AuthConfig.JWT_SECRET, algorithm=AuthConfig.JWT_ALGORITHM)
+
+
+@pytest.fixture(autouse=True)
+def faithful_auth_manager(app):
+    """让 conftest 里被 Mock 的 auth_manager 像真实 AuthManager 一样校验令牌。
+
+    conftest 的 app fixture 用 MagicMock 充当 auth_manager，verify_token() 默认返回
+    一个真值 MagicMock，导致任意令牌（含无效/过期令牌）都能通过认证 —— 这会让本文件
+    所有认证/授权断言变成空断言。这里把 verify_token 换成真实 JWT 解码
+    （与 用户层/auth.py:318 verify_token 的语义一致：解码失败/过期 → None）。
+    """
+    def _verify_token(token: str):
+        try:
+            payload = jwt.decode(
+                token, AuthConfig.JWT_SECRET, algorithms=[AuthConfig.JWT_ALGORITHM])
+        except jwt.InvalidTokenError:
+            return None
+        if payload.get('type') not in (None, 'access'):
+            return None
+        role = payload.get('role')
+        return {
+            'username': payload.get('username'),
+            'role': role,
+            'display_name': payload.get('username'),
+            'permissions': ROLES.get(role, {}).get('permissions', []),
+        }
+
+    app.auth_manager.verify_token.side_effect = _verify_token
+    return app.auth_manager
+
+
+@pytest.fixture
+def viewer_headers(app):
+    """只读角色（viewer）的认证头，用于越权测试"""
+    return {'Authorization': f'Bearer {_make_token("viewer1", "viewer")}'}
 
 
 class TestSQLInjection:
     """SQL注入防护测试"""
 
-    def test_sql_injection_in_device_id(self, client, auth_headers):
+    def test_sql_injection_in_device_id(self, client, auth_headers, app):
         """测试设备ID SQL注入防护"""
+        # 真实 DeviceManager 对未知设备返回错误字典；mock 需保持同样语义，
+        # 否则 get_device 会把 MagicMock 塞进 jsonify 变成 500，测不出注入防护
+        app.device_manager.get_device_status.return_value = {'error': '设备不存在'}
         # 尝试SQL注入
         malicious_id = "'; DROP TABLE devices; --"
         resp = client.get(f'/api/devices/{malicious_id}', headers=auth_headers)
@@ -82,8 +138,8 @@ class TestAuthenticationBypass:
 
     def test_expired_token_access(self, client):
         """测试过期token访问"""
-        # 模拟过期token
-        headers = {'Authorization': 'Bearer expired_token'}
+        # 用真实签名但已过期的 JWT，确保走的是 ExpiredSignatureError 分支
+        headers = {'Authorization': f'Bearer {_make_token("testuser", "admin", expired=True)}'}
         resp = client.get('/api/devices', headers=headers)
         assert resp.status_code == 401
 

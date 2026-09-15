@@ -2,8 +2,36 @@
 API标准化测试
 验证新的响应格式和错误码体系
 """
+import gc
+import os
+import tempfile
+
 import pytest
 from unittest.mock import patch, MagicMock
+
+
+@pytest.fixture
+def db():
+    """独立的测试数据库（真实 Database 实例，临时文件隔离）
+
+    conftest 中的 `db` fixture 返回的是数据库文件路径（供 Database(path) 使用），
+    本文件的用例需要的是已建好 SCADA 表/复合索引的 Database 实例，因此在此覆盖。
+    """
+    from 存储层.database import Database
+
+    fd, path = tempfile.mkstemp(suffix='.db')
+    os.close(fd)
+    database = Database(path)
+    try:
+        yield database
+    finally:
+        database.close()
+        gc.collect()
+        for suffix in ('', '-wal', '-shm'):
+            try:
+                os.unlink(path + suffix)
+            except OSError:
+                pass
 
 
 class TestAPIStandardization:
@@ -17,8 +45,9 @@ class TestAPIStandardization:
         # 验证响应包含devices字段
         assert 'devices' in data or 'data' in data
 
-    def test_api_error_response_format(self, client, auth_headers):
+    def test_api_error_response_format(self, client, auth_headers, app):
         """验证错误响应格式标准化"""
+        app.device_manager.get_device_status.return_value = {'error': '设备不存在'}
         resp = client.get('/api/devices/nonexistent_device', headers=auth_headers)
         assert resp.status_code == 404
         data = resp.get_json()
@@ -30,10 +59,17 @@ class TestAPIStandardization:
         resp = client.get('/api/devices')
         assert resp.status_code == 401
 
-    def test_api_forbidden_response(self, client, auth_headers):
+    def test_api_forbidden_response(self, client, auth_headers, app):
         """验证权限不足响应"""
-        # 使用viewer角色尝试访问admin端点
-        resp = client.post('/api/devices', json={'id': 'test'}, headers=auth_headers)
+        # 使用viewer角色尝试访问admin/engineer端点
+        app.auth_manager.verify_token.return_value = {
+            'username': 'viewer',
+            'role': 'viewer',
+            'display_name': 'Viewer User',
+            'permissions': ['read'],
+        }
+        resp = client.post('/api/devices', json={'id': 'test', 'name': 'test'},
+                           headers=auth_headers)
         # 根据角色可能返回403或401
         assert resp.status_code in [401, 403]
 
@@ -63,31 +99,34 @@ class TestErrorCodes:
 class TestAPIResponseHelpers:
     """API响应辅助函数测试"""
 
-    def test_api_success_function(self):
+    def test_api_success_function(self, app):
         """验证api_success函数"""
         from 展示层.api._common import api_success
-        result = api_success({'key': 'value'}, '测试成功')
-        data = result.get_json()
+        with app.app_context():
+            result = api_success({'key': 'value'}, '测试成功')
+            data = result.get_json()
         assert data['success'] is True
         assert data['message'] == '测试成功'
         assert data['data'] == {'key': 'value'}
 
-    def test_api_error_function(self):
+    def test_api_error_function(self, app):
         """验证api_error函数"""
         from 展示层.api._common import api_error
-        result = api_error('测试错误', 400, 'E1001')
-        data = result.get_json()
+        with app.app_context():
+            result = api_error('测试错误', 400, 'E1001')
+            data = result.get_json()
         assert data['success'] is False
         assert data['error'] == '测试错误'
         assert data['error_code'] == 'E1001'
         assert result.status_code == 400
 
-    def test_api_paginated_function(self):
+    def test_api_paginated_function(self, app):
         """验证api_paginated函数"""
         from 展示层.api._common import api_paginated
         items = [{'id': 1}, {'id': 2}]
-        result = api_paginated(items, total=10, page=1, per_page=2)
-        data = result.get_json()
+        with app.app_context():
+            result = api_paginated(items, total=10, page=1, per_page=2)
+            data = result.get_json()
         assert data['success'] is True
         assert len(data['data']) == 2
         assert data['pagination']['total'] == 10
@@ -99,9 +138,10 @@ class TestDatabaseIndexes:
 
     def test_composite_indexes_exist(self, db):
         """验证复合索引已创建"""
-        cursor = db.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
-        indexes = {row[0] for row in cursor.fetchall()}
+        with db.get_connection(readonly=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+            indexes = {row[0] for row in cursor.fetchall()}
         assert 'idx_alarm_device_ack' in indexes
         assert 'idx_alarm_id_device_register' in indexes
         assert 'idx_history_device_register_time' in indexes

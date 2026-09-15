@@ -44,17 +44,17 @@ def login():
 
     # 构建响应并在服务端设置cookie（GB/T 33008: 令牌安全传递）
     from flask import make_response
-    if result.get('status') == 'must_change_password':
+    # 首次登录需强制改密：返回403，令牌仍在响应体中供前端调用改密接口
+    must_change = result.get('status') == 'must_change_password'
+    if must_change:
         # 兼容前端：同时返回 must_change_password 字段和 status 字段
         result['must_change_password'] = True
-        resp = make_response(jsonify(result), 200)
-    else:
-        resp = make_response(jsonify(result), 200)
+    resp = make_response(jsonify(result), 403 if must_change else 200)
 
     token = result.get('token', '')
     if token:
-        from config import SCADAConfig
-        secure_flag = SCADAConfig.TLS_ENABLED
+        from config import SecurityConfig
+        secure_flag = SecurityConfig.TLS_ENABLED
         resp.set_cookie('token', token, path='/', samesite='Strict', httponly=True, secure=secure_flag)
     return resp
 

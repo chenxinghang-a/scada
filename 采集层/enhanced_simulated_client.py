@@ -560,7 +560,7 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
         """获取最新数据"""
         with self._data_lock:
             if self.connected:
-                self._do_generate_data()
+                self._generate_data()
             # 停机设备返回空数据
             if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
                 return {}

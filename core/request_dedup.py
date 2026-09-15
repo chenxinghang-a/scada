@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 # 去重窗口（秒）
 DEDUP_WINDOW = 2.0
 
-# 已处理请求的指纹缓存（指纹 → 过期时间）
-_fingerprints: dict[str, float] = {}
-_fingerprints_lock = threading.Lock()
+# 缓存按 Flask app 隔离，避免测试实例/多应用相互污染。
+# 每个进程内仍只负责当前 app；多进程部署应使用共享存储实现跨进程去重。
+_STATE_KEY = 'request_dedup'
 
 
 def _make_fingerprint() -> str:
@@ -39,13 +39,13 @@ def _make_fingerprint() -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _cleanup_expired():
+def _cleanup_expired(fingerprints: dict[str, float], lock: threading.Lock):
     """清理过期的指纹缓存"""
     now = time.time()
-    with _fingerprints_lock:
-        expired = [k for k, v in _fingerprints.items() if v < now]
+    with lock:
+        expired = [k for k, v in fingerprints.items() if v < now]
         for k in expired:
-            del _fingerprints[k]
+            del fingerprints[k]
 
 
 def init_request_dedup(app: Flask):
@@ -56,7 +56,12 @@ def init_request_dedup(app: Flask):
     - 相同指纹在 DEDUP_WINDOW 内的重复请求返回 409
     - 每10秒清理一次过期缓存
     """
-    _last_cleanup = [time.time()]
+    state = app.extensions.setdefault(
+        _STATE_KEY,
+        {'fingerprints': {}, 'lock': threading.Lock(), 'last_cleanup': time.time()},
+    )
+    fingerprints: dict[str, float] = state['fingerprints']
+    fingerprints_lock: threading.Lock = state['lock']
 
     @app.before_request
     def _check_duplicate():
@@ -65,15 +70,21 @@ def init_request_dedup(app: Flask):
             return None
 
         # 跳过不需要去重的路径
-        skip_paths = ('/api/health', '/api/csrf-token', '/api/system/client-errors')
+        skip_paths = (
+            '/api/health',
+            '/api/csrf-token',
+            '/api/system/client-errors',
+            # 登录请求不是重复写入；同一凭据的快速重试必须交给认证/限流层处理。
+            '/api/auth/login',
+        )
         if any(request.path.startswith(p) for p in skip_paths):
             return None
 
         fingerprint = _make_fingerprint()
         now = time.time()
 
-        with _fingerprints_lock:
-            expiry = _fingerprints.get(fingerprint)
+        with fingerprints_lock:
+            expiry = fingerprints.get(fingerprint)
             if expiry and expiry > now:
                 logger.debug("重复请求被拒绝: %s %s (fingerprint=%s)", request.method, request.path, fingerprint[:8])
                 from flask import jsonify
@@ -83,12 +94,12 @@ def init_request_dedup(app: Flask):
                     'retry_after': round(expiry - now, 1),
                 }), 409
 
-            _fingerprints[fingerprint] = now + DEDUP_WINDOW
+            fingerprints[fingerprint] = now + DEDUP_WINDOW
 
         # 定期清理
-        if now - _last_cleanup[0] > 10:
-            _last_cleanup[0] = now
-            _cleanup_expired()
+        if now - state['last_cleanup'] > 10:
+            state['last_cleanup'] = now
+            _cleanup_expired(fingerprints, fingerprints_lock)
 
         return None
 
