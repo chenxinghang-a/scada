@@ -37,6 +37,9 @@ desktop.ini
 # PyInstaller
 *.exe
 *.spec
+# 例外：后端打包配方必须进 git，否则新克隆的仓库无法复现打包
+# （此前它被 *.spec 规则挡在 git 外面，磁盘上有文件但 git 里没有）
+!scada-backend.spec
 build/
 dist/
 
@@ -57,3 +60,7 @@ htmlcov/
 backup/
 stderr*.txt
 stdout*.txt
+
+# 运行期产物：审计日志由服务端与测试追加写入（每跑一次测试就多几十条），
+# 不是源码，不进 git。此前被跟踪导致每轮提交都夹带测试垃圾。
+data/audit_log.jsonl
