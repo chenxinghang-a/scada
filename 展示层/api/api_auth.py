@@ -71,9 +71,14 @@ def logout():
 
         # GB/T 35718: 撤销当前JWT令牌
         auth_header = request.headers.get('Authorization', '')
+        revoked = True
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
-            auth_manager.blacklist_token(token, 'logout')
+            # 撤销结果必须检查：此前忽略返回值，落库失败也照样回 "已登出"，
+            # 客户端以为令牌死了，其实还能继续用（静默假成功）。
+            revoked = auth_manager.blacklist_token(token, 'logout')
+            if not revoked:
+                logger.error("登出时撤销令牌失败，令牌仍可继续使用 user=%s", username)
 
         # 记录登出
         auth_manager.log_operation(
@@ -83,10 +88,16 @@ def logout():
             ip_address=request.remote_addr
         )
 
+        if not revoked:
+            return jsonify({
+                'success': False,
+                'message': '登出失败：令牌未能撤销，请重试',
+            }), 500
         return jsonify({'success': True, 'message': '已登出'})
     except Exception as e:
         logger.error(f"登出失败: {e}")
-        return jsonify({'success': True, 'message': '已登出'})
+        # 此前这里**硬编码返回 success:True** —— 登出异常时对外仍宣称"已登出"。
+        return jsonify({'success': False, 'message': '登出失败，请重试'}), 500
 
 
 @auth_bp.route('/auth/register', methods=['POST'])

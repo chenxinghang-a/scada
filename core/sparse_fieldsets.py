@@ -112,8 +112,9 @@ def sparse_fields_decorator(f):
                     new_response = jsonify(data)
                     new_response.status_code = result.status_code
                     return new_response
-            except Exception:
-                pass
+            except Exception as e:
+                # 异常被吞掉后本响应会原样返回，客户端请求的 fields 过滤静默失效（返回全字段）
+                logger.warning(f"稀疏字段过滤失败(该响应将返回未裁剪的全字段): fields={fields}: {e}")
 
         # 处理tuple响应
         if isinstance(result, tuple) and len(result) >= 1:

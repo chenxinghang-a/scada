@@ -140,8 +140,9 @@ def validate_startup_config() -> Tuple[bool, List[ConfigValidationError]]:
                 f'Web端口 {web_port} 已被占用',
                 'warning'
             ))
-    except Exception:
-        pass
+    except Exception as e:
+        # 端口探测本身失败 → 该项检查被跳过，本次配置验证结果不完整
+        logger.warning("Web端口 %s 可用性检查被跳过(验证结果不完整): %s", web_port, e)
 
     # 汇总结果
     has_errors = any(e.severity == 'error' for e in errors)

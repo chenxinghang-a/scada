@@ -284,12 +284,14 @@ class IEC104Client:
         if self.socket:
             try:
                 self._send_u_frame(0x0008)   # STOPDT
-            except Exception:
-                pass
+            except Exception as e:
+                # 发送停止帧失败通常因连接已断开，属预期内且无副作用
+                self.logger.debug("发送STOPDT失败 %s:%s: %s", self.host, self.port, e)
             try:
                 self.socket.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # 关闭已失效的 socket 可能抛错，属预期内且无副作用
+                self.logger.debug("关闭socket失败 %s:%s: %s", self.host, self.port, e)
         self.connected = False
         self.logger.info("已断开连接")
 
@@ -598,8 +600,9 @@ class IEC104Gateway(BaseGateway):
         if old_client:
             try:
                 old_client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                # 重连前关闭旧连接失败：旧连接可能残留，但不影响新连接建立
+                self.logger.debug("重连前关闭旧连接失败 device=%s: %s", device_id, e)
 
         # 创建新连接
         host = device_config.get('host', '127.0.0.1')

@@ -59,7 +59,7 @@ class DataAccessAuditor:
 
     # 敏感表定义
     SENSITIVE_TABLES = {
-        'users', 'audit_logs', 'alarm_records',
+        'users', 'audit_log', 'alarm_records',
         'device_config', 'system_config',
     }
 

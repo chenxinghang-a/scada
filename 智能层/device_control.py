@@ -409,8 +409,11 @@ class DeviceControlSafety:
                 if not getattr(client, 'connected', False):
                     try:
                         client.connect()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # 连接失败由下方 connected 检查统一处理（模拟模式或返回失败），
+                        # 此处异常仅作记录，无副作用
+                        logger.debug("批量控制前连接设备失败 device=%s action=%s: %s",
+                                     device_id, action, e)
                     # 模拟模式下强制标记连接
                     if not getattr(client, 'connected', False):
                         if self.device_manager and getattr(self.device_manager, 'simulation_mode', False):
@@ -1009,6 +1012,8 @@ class DeviceControlSafety:
         try:
             return int(register_name)
         except (ValueError, TypeError):
+            # 传入的是寄存器名称（非数字字符串）而非地址，转换失败属预期，
+            # 继续走下方按名称查表的逻辑，安全忽略
             pass
 
         # 从设备配置中查找寄存器名称对应的地址

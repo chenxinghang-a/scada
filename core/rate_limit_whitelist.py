@@ -101,11 +101,22 @@ class RateLimitWhitelist:
         # 网段匹配
         try:
             addr = ip_address(ip)
-            for network in self._whitelisted_networks:
+        except ValueError:
+            # 请求方 IP 本身非法 → 无法匹配任何网段，按"不在白名单"处理（fail-closed，
+            # 即照常限流），不会误放行；ip_address 对非法输入抛的就是 ValueError。
+            logger.debug("IP 白名单匹配：请求 IP 非法，按不在白名单处理: %r", ip)
+            return False
+
+        for network in self._whitelisted_networks:
+            try:
                 if addr in ip_network(network, strict=False):
                     return True
-        except ValueError:
-            pass
+            except ValueError:
+                # 单个配置网段非法不能让整轮遍历中断 —— 此前 try 包在 for **外面**，
+                # 一条坏网段会让排在它后面的**所有合法网段静默失效**（白名单配了却不生效）。
+                # 属 fail-closed，不是安全漏洞，但是静默功能缺陷，故逐条 warning 留痕。
+                logger.warning("IP 白名单配置项非法，已跳过该项: %r", network)
+                continue
 
         return False
 

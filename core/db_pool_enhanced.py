@@ -198,8 +198,9 @@ class EnhancedConnectionPool:
                 if not pooled.in_use and not pooled.is_alive():
                     try:
                         pooled.conn.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # 预期内且无副作用：该连接已被判定失效并将从池中移除，关闭失败不影响后续逻辑
+                        logger.debug(f"健康检查中关闭失效连接失败(连接将丢弃): {pooled.conn_id}: {e}")
                     self._pool.remove(pooled)
                     self._stats['health_failures'] += 1
                     logger.warning(f"连接池健康检查: 移除失效连接 {pooled.conn_id}")
@@ -222,8 +223,9 @@ class EnhancedConnectionPool:
                         self._stats['liveness_failures'] += 1
                         try:
                             pooled.conn.close()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            # 预期内且无副作用：探测已失败的连接即将被移除，关闭失败不影响后续逻辑
+                            logger.debug(f"存活探测中关闭失败连接失败(连接将丢弃): {pooled.conn_id}: {e}")
                         self._pool.remove(pooled)
 
         if failed > 0:
@@ -260,8 +262,9 @@ class EnhancedConnectionPool:
             for pooled in to_remove:
                 try:
                     pooled.conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 预期内且无副作用：该连接已过期并将从池中移除，关闭失败不影响后续逻辑
+                    logger.debug(f"关闭过期连接失败(连接将丢弃): {pooled.conn_id}: {e}")
                 self._pool.remove(pooled)
                 self._stats['expired'] += 1
 
@@ -299,8 +302,9 @@ class EnhancedConnectionPool:
             for pooled in self._pool:
                 try:
                     pooled.conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 预期内且无副作用：池即将整体清空，个别连接关闭失败不影响关闭流程
+                    logger.debug(f"关闭连接池连接失败(池将清空): {pooled.conn_id}: {e}")
             self._pool.clear()
 
 

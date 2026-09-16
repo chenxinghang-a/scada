@@ -80,6 +80,46 @@ class ModuleRegistry:
             cls._modules[name] = module_info
 
         logger.info(f"注册模块: {name} ({module_class.__name__})")
+
+    @classmethod
+    def register_instance(cls, name: str, instance: Any,
+                          config: Dict[str, Any] = None,
+                          dependencies: List[str] = None) -> Any:
+        """注册**已经构造好**的实例，并直接标记为已初始化。
+
+        为什么需要它：``register()`` + ``initialize()`` 走的是"给类 + 参数，
+        由注册表自己 new 出来"的路径。但 ``database`` / ``alarm_manager`` /
+        ``data_collector`` 这类对象在 ``run.py`` 里已经构造好了，而且**必须全局
+        唯一** —— 再用 ``initialize()`` 造一遍等于第二个 Database（第二套连接池、
+        两份线程本地连接）、第二个报警管理器（重复的定时器与热重载线程）。
+
+        生产环境此前**从未注册过任何模块**（``ModuleRegistry.register`` 只在测试里
+        被调用过），导致：
+          - ``/modules`` API 永远返回空
+          - ``chaos_engineering`` / ``health_checker`` 里的
+            ``get_instance('alarm_manager' | 'database' | 'data_collector')``
+            每次抛 ``KeyError`` 并被吞掉 → 这些检查实际上退化成常量
+
+        Args:
+            name: 模块名称
+            instance: 已构造好的实例
+            config: 该模块的配置（可选，仅用于展示）
+            dependencies: 依赖的其他模块名称列表
+
+        Returns:
+            传入的 ``instance``（便于链式书写）
+        """
+        with cls._lock:
+            module_info = ModuleInfo(name, type(instance), config)
+            module_info.dependencies = dependencies or []
+            module_info.instance = instance
+            module_info.status = ModuleStatus.INITIALIZED
+            cls._modules[name] = module_info
+            if name not in cls._initialization_order:
+                cls._initialization_order.append(name)
+
+        logger.info(f"注册模块实例: {name} ({type(instance).__name__})")
+        return instance
     
     @classmethod
     def initialize(cls, name: str, **kwargs) -> bool:
@@ -193,19 +233,34 @@ class ModuleRegistry:
         """
         获取模块实例
 
+        只要模块**已经成功构造出实例**就返回它，包括 RUNNING / PAUSED 状态。
+        此前只允许 INITIALIZED，导致模块一旦 ``start()`` 就再也取不到实例 ——
+        对 ``chaos_engineering`` / ``health_checker`` 这类"运行期才去查依赖"的
+        调用方是致命的（它们只会拿到 RuntimeError 并被静默吞掉）。
+        仍会拒绝 REGISTERED（还没构造实例）与 ERROR / DISABLED。
+
         Args:
             name: 模块名称
 
         Returns:
             模块实例
+
+        Raises:
+            KeyError: 模块未注册
+            RuntimeError: 模块没有可用实例（未初始化 / 出错 / 已禁用）
         """
+        usable = (ModuleStatus.INITIALIZED, ModuleStatus.RUNNING,
+                  ModuleStatus.PAUSED)
+
         with cls._lock:
             module_info = cls._modules.get(name)
             if not module_info:
                 raise KeyError(f"模块 '{name}' 未注册")
 
-            if module_info.status != ModuleStatus.INITIALIZED:
-                raise RuntimeError(f"模块 '{name}' 未初始化 (状态: {module_info.status.value})")
+            if module_info.instance is None or module_info.status not in usable:
+                raise RuntimeError(
+                    f"模块 '{name}' 无可用实例 (状态: {module_info.status.value})"
+                )
 
             return module_info.instance
 

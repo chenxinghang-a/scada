@@ -310,8 +310,9 @@ class OPCUADiscovery:
                     }
                     servers.append(server_info)
                     await client.disconnect()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 安全忽略：端口探测，该端口无 OPC UA 服务属预期内，继续试下一个
+                    logger.debug(f"OPC UA 端口探测 {url} 失败: {e}")
 
         except Exception as e:
             logger.error(f"OPC UA发现异常: {e}")

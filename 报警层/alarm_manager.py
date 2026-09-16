@@ -10,6 +10,7 @@
 """
 
 import logging
+import shutil
 import yaml
 import time
 import threading
@@ -323,8 +324,11 @@ class AlarmManager:
         self._config_mtime: float = 0
         try:
             self._config_mtime = Path(self.config_path).stat().st_mtime
-        except Exception:
-            pass
+        except Exception as e:
+            # 首次启动时配置文件可能尚不存在，属预期内且无副作用
+            # （mtime 保持 0，配置文件生成后会被热重载线程捕获）
+            logger.debug("读取报警配置文件修改时间失败（文件可能尚不存在）%s: %s",
+                         self.config_path, e)
         self._config_watcher_running = True
         self._start_config_watcher()
 
@@ -1235,20 +1239,54 @@ class AlarmManager:
             logger.error(f"移除报警规则异常: {e}")
             return False
 
-    def _save_config(self):
-        """保存报警配置到文件（保留dedup/escalation等非规则配置段）"""
+    def _save_config(self) -> bool:
+        """保存报警配置到文件（保留 dedup/escalation 等非规则配置段）。
+
+        Returns:
+            bool: 是否成功写入。
+
+        **数据安全**：配置文件已存在却读不出来（YAML 语法错、编码错、写到一半
+        被截断）时，绝不能拿空 dict 直接覆盖 —— 那会把 dedup / escalation 等
+        非规则配置段**不可逆地抹掉**。此时先把坏文件另存为 ``.corrupt-<时间戳>``，
+        确认备份成功后再写新配置；连备份都做不出来就放弃本次写入。
+        """
         try:
             config_file = Path(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
 
             # 读取已有配置，保留非规则段
-            config = {}
+            config: Dict[str, Any] = {}
+            read_failed = False
             if config_file.exists():
                 try:
                     with open(config_file, 'r', encoding='utf-8') as f:
                         config = yaml.safe_load(f) or {}
-                except Exception:
-                    pass
+                    if not isinstance(config, dict):
+                        read_failed = True
+                        logger.error("已有报警配置不是 YAML 映射，内容类型为 %s: %s",
+                                     type(config).__name__, config_file)
+                        config = {}
+                except Exception as e:
+                    read_failed = True
+                    config = {}
+                    logger.error("读取已有报警配置失败（文件存在但无法解析）%s: %s",
+                                 config_file, e)
+
+            if read_failed:
+                backup = config_file.with_name(
+                    '%s.corrupt-%s' % (config_file.name,
+                                       datetime.now().strftime('%Y%m%d-%H%M%S'))
+                )
+                try:
+                    shutil.copy2(config_file, backup)
+                    logger.error(
+                        "报警配置已损坏，已另存备份再覆盖（避免静默丢失 dedup/escalation "
+                        "等配置段）: %s -> %s", config_file, backup)
+                except Exception as backup_err:
+                    # 连备份都失败 → 宁可这次规则存不下，也不能毁掉整份配置
+                    logger.error("报警配置损坏且备份失败，已放弃本次写入以防配置丢失 %s: %s",
+                                 config_file, backup_err)
+                    return False
 
             config['alarm_rules'] = list(self.rules.values())
 
@@ -1256,9 +1294,11 @@ class AlarmManager:
                 yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
 
             logger.info("报警配置已保存")
+            return True
 
         except Exception as e:
             logger.error(f"保存报警配置异常: {e}")
+            return False
 
     # ================================================================
     # ISA-18.2 报警管理扩展

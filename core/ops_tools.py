@@ -71,10 +71,13 @@ class OpsAuditLogger:
                         if line:
                             try:
                                 entries.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                pass
-        except Exception:
-            pass
+                            except json.JSONDecodeError as e:
+                                # 安全忽略：审计日志为追加写入，进程被中断时会残留半行，
+                                # 单行解析失败跳过即可，不应影响其余记录的读取。
+                                logger.debug(f"运维审计日志单行解析失败(跳过该行): {e}")
+        except Exception as e:
+            # 整文件读取失败 → get_recent 返回空/不完整列表，会被误读为"无运维操作记录"
+            logger.warning(f"读取运维审计日志失败(返回结果可能不完整): file={self._audit_file}: {e}")
         return entries[-limit:]
 
 
@@ -419,7 +422,7 @@ class DataCleaner:
             cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat(sep=' ')
             conn = sqlite3.connect(self._db_path, timeout=30)
             cursor = conn.execute(
-                "DELETE FROM audit_logs WHERE timestamp < ?",
+                "DELETE FROM audit_log WHERE timestamp < ?",
                 (cutoff,)
             )
             deleted = cursor.rowcount
@@ -596,14 +599,16 @@ class DiagnosticExporter:
         try:
             from core.module_registry import ModuleRegistry
             state['modules'] = ModuleRegistry.get_status()
-        except Exception:
-            pass
+        except Exception as e:
+            # 该段失败会使诊断包缺少 modules 段，导出结果不完整
+            logger.warning(f"诊断导出: 收集模块状态失败(诊断包将缺少 modules 段): {e}")
 
         try:
             from core.health_checker import HealthChecker
             state['health'] = HealthChecker.get_status()
-        except Exception:
-            pass
+        except Exception as e:
+            # 该段失败会使诊断包缺少 health 段，导出结果不完整
+            logger.warning(f"诊断导出: 收集健康状态失败(诊断包将缺少 health 段): {e}")
 
         return state
 
@@ -624,8 +629,9 @@ class DiagnosticExporter:
         try:
             from core.ops_tools import runtime_config_manager
             config['runtime'] = runtime_config_manager.get_all()
-        except Exception:
-            pass
+        except Exception as e:
+            # 该段失败会使诊断包缺少运行时配置，导出结果不完整
+            logger.warning(f"诊断导出: 收集运行时配置失败(诊断包将缺少 runtime 配置): {e}")
 
         return config
 
@@ -655,8 +661,9 @@ class DiagnosticExporter:
                             sql = 'SELECT COUNT(*) FROM ' + safe_id
                             count = conn.execute(sql).fetchone()[0]
                             table_stats[table] = count
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            # 预期内：个别表可能损坏或不可读，跳过该表不影响其余统计
+                            logger.debug(f"诊断导出: 统计表行数失败(跳过该表): db={db_file.name}, table={table}: {e}")
                     stats[db_file.name]['tables'] = table_stats
                     conn.close()
                 except Exception as e:
@@ -677,8 +684,9 @@ class DiagnosticExporter:
                 # 只复制最近修改的（24小时内）
                 if time.time() - log_file.stat().st_mtime < 86400:
                     shutil.copy2(log_file, out_dir / log_file.name)
-            except Exception:
-                pass
+            except Exception as e:
+                # 预期内：单文件复制失败（如文件被占用）不影响其余日志，诊断包将少该文件
+                logger.debug(f"诊断导出: 复制日志文件失败(该文件将缺失): {log_file.name}: {e}")
 
 
 # 全局实例

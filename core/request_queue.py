@@ -121,6 +121,7 @@ class RequestQueue:
             try:
                 task_id, func, args, kwargs = self._queue.get(timeout=300)
             except Empty:
+                # 安全忽略：队列 300s 超时无任务的正常空转路径，非错误，用于让工作线程持续待命。
                 continue
 
             with self._worker_lock:

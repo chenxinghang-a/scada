@@ -195,8 +195,12 @@ class SmartRetry:
                 if self.on_retry:
                     try:
                         self.on_retry(attempt + 1, e, delay)
-                    except Exception:
-                        pass
+                    except Exception as cb_err:
+                        # 回调异常不能打断重试主流程；但回调未执行意味着外部观测/统计缺失
+                        logger.warning(
+                            f"on_retry 回调执行失败(该次重试通知已丢失): "
+                            f"func={getattr(func, '__name__', func)}, attempt={attempt + 1}: {cb_err}"
+                        )
 
                 time.sleep(delay)
 
@@ -206,8 +210,13 @@ class SmartRetry:
         if self.on_failure:
             try:
                 self.on_failure(last_exception, self.max_retries)
-            except Exception:
-                pass
+            except Exception as cb_err:
+                # 回调异常不能覆盖原始异常（下面仍会 raise last_exception）；但失败通知已丢失
+                logger.warning(
+                    f"on_failure 回调执行失败(最终失败通知已丢失): "
+                    f"func={getattr(func, '__name__', func)}, "
+                    f"last_exception={type(last_exception).__name__ if last_exception else None}: {cb_err}"
+                )
 
         raise last_exception
 

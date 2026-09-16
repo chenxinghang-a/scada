@@ -90,6 +90,7 @@ class DataStreamManager:
                 self._deliver_message(message)
                 self._message_queue.task_done()
             except Empty:
+                # 安全忽略：队列 1s 超时轮询的正常空转路径，非错误；在此打日志会每秒刷屏。
                 continue
             except Exception as e:
                 logger.error(f"消息处理异常: {e}")

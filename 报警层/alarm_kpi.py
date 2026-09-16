@@ -252,8 +252,11 @@ class AlarmKPI:
                     dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                     hour_key = dt.strftime('%Y-%m-%d %H:00')
                     hourly_count[hour_key] += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 时间戳无法解析 → 该条报警不计入小时趋势，KPI 统计值偏小，
+                    # 属于数据不完整，必须留痕
+                    logger.warning("报警趋势统计跳过非法时间戳 alarm_id=%s timestamp=%r: %s",
+                                   alarm.get('id') or alarm.get('alarm_id'), timestamp, e)
         
         # 生成趋势数据
         trend = []

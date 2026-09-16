@@ -90,8 +90,10 @@ def create_app(database, device_manager, alarm_manager, data_collector,
                 return DegradationLevel.MODERATE
             elif unhealthy_count >= 1:
                 return DegradationLevel.LIGHT
-        except Exception:
-            pass
+        except Exception as e:
+            # 健康检查读取失败会导致降级触发器失明：系统实际已不健康却不会降级，
+            # 属于安全机制失效（功能降级），必须留痕
+            logger.warning("健康降级触发器执行失败，本次将不做降级判定: %s", e)
         return None
 
     degradation_manager.register_trigger(_health_degrade_trigger)

@@ -291,8 +291,10 @@ class BroadcastSystem:
             try:
                 self._mqtt_client.loop_stop()
                 self._mqtt_client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                # 关闭已失效的MQTT客户端可能抛错，属预期内且无副作用
+                # （引用随后被置空，不会继续使用）
+                logger.debug("关闭广播MQTT客户端失败: %s", e)
             self._mqtt_client = None
             self._mqtt_connected = False
         logger.info("广播系统已断开")

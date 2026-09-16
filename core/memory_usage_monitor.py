@@ -37,8 +37,9 @@ class MemoryUsageMonitor:
             try:
                 self._process = psutil.Process(os.getpid())
                 self._baseline = self._take_sample()
-            except Exception:
-                pass
+            except Exception as e:
+                # 初始化失败后 _process/_baseline 保持为空 → 内存监控整体静默不可用（功能降级）
+                logger.warning(f"内存监控初始化失败(将无法采集内存指标): pid={os.getpid()}: {e}")
 
     def _take_sample(self) -> Dict[str, float]:
         """采集内存样本"""

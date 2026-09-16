@@ -458,8 +458,11 @@ def batch_control():
             if not getattr(client, 'connected', False):
                 try:
                     client.connect()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 连接失败由下方 connected 检查统一处理并返回“设备连接失败”，
+                    # 此处异常仅作记录，无副作用
+                    logger.debug("批量控制前连接设备失败 device=%s action=%s: %s",
+                                 device_id, action, e)
 
             if not getattr(client, 'connected', False):
                 results[device_id] = {'success': False, 'message': '设备连接失败'}

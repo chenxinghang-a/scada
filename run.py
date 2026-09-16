@@ -76,6 +76,19 @@ def main():
         logger.info("初始化数据库...")
         database = Database(db_path)
 
+        # 补齐缺失索引（P1-6）。必须放在建库之后、开始采集之前：
+        # 采集一旦跑起来，history_data/alarm_records 就会持续写入，
+        # 事后补索引要在大表上重建、代价高得多。
+        # ensure_indexes 是幂等的——已有索引原样跳过，单条失败不影响其它索引。
+        from core.index_bootstrap import ensure_indexes
+        index_result = ensure_indexes(database)
+        logger.info(
+            "数据库索引就绪: 新建 %d 个, 已存在 %d 个, 失败 %d 个",
+            len(index_result['created']),
+            len(index_result['already_existed']),
+            len(index_result['failed']),
+        )
+
         # 初始化设备管理器（根据模式选择不同的管理器）
         logger.info("加载设备配置...")
         if simulation_mode:
@@ -242,6 +255,19 @@ def main():
             data_collector=data_collector,
         )
         HealthChecker.start_periodic_checks(interval=30)
+
+        # 把核心模块实例注册进模块注册表。
+        # 此前生产环境从未注册过任何模块 → /modules API 恒返回空；
+        # chaos_engineering / health_checker 里的 get_instance('alarm_manager'
+        # | 'database' | 'data_collector') 每次抛 KeyError 被吞掉，
+        # 导致这些检查实际上退化成常量。
+        logger.info("注册核心模块到模块注册表...")
+        from core.module_registry import ModuleRegistry
+        ModuleRegistry.register_instance('database', database)
+        ModuleRegistry.register_instance('device_manager', device_manager)
+        ModuleRegistry.register_instance('alarm_manager', alarm_manager)
+        ModuleRegistry.register_instance('data_collector', data_collector)
+        logger.info(f"模块注册表已就绪: {len(ModuleRegistry.get_status())} 个模块")
 
         # 初始化高可用管理器
         logger.info("初始化高可用管理器...")

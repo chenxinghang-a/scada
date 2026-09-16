@@ -300,8 +300,10 @@ class OPCUAGateway(BaseGateway):
                     self._loop
                 )
                 future.result(timeout=10)
-            except Exception:
-                pass
+            except Exception as e:
+                # 重连前关闭旧连接失败（超时/协程异常）：旧连接可能残留，
+                # 但不影响后续新连接建立，属预期内
+                self.logger.debug("重连前关闭旧连接失败 device=%s: %s", device_id, e)
 
         # 创建新连接
         try:

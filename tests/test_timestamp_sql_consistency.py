@@ -165,11 +165,11 @@ def test_clean_audit_logs_keeps_same_day_records(tmp_path):
 
     db = tmp_path / 'audit.db'
     conn = sqlite3.connect(str(db))
-    conn.execute('CREATE TABLE audit_logs (id INTEGER PRIMARY KEY, timestamp DATETIME)')
+    conn.execute('CREATE TABLE audit_log (id INTEGER PRIMARY KEY, timestamp DATETIME)')
     now = datetime.now()
     cutoff = now - timedelta(days=30)
-    conn.execute('INSERT INTO audit_logs VALUES (1, ?)', (_ts(cutoff + timedelta(hours=1)),))
-    conn.execute('INSERT INTO audit_logs VALUES (2, ?)', (_ts(cutoff - timedelta(days=1)),))
+    conn.execute('INSERT INTO audit_log VALUES (1, ?)', (_ts(cutoff + timedelta(hours=1)),))
+    conn.execute('INSERT INTO audit_log VALUES (2, ?)', (_ts(cutoff - timedelta(days=1)),))
     conn.commit()
     conn.close()
 
@@ -177,7 +177,7 @@ def test_clean_audit_logs_keeps_same_day_records(tmp_path):
     assert result['status'] == 'success', result
 
     conn = sqlite3.connect(str(db))
-    left = [r[0] for r in conn.execute('SELECT id FROM audit_logs').fetchall()]
+    left = [r[0] for r in conn.execute('SELECT id FROM audit_log').fetchall()]
     conn.close()
     assert left == [1], "保留期内的同日审计日志被误删"
 

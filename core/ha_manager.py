@@ -207,8 +207,9 @@ class HAManager:
             if sock:
                 try:
                     sock.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 预期内且无副作用：心跳已发送完毕，套接字即将废弃，关闭失败不影响后续逻辑
+                    logger.debug(f"关闭心跳发送套接字失败(套接字将废弃): {e}")
 
     def _listen_loop(self):
         """监听心跳"""
@@ -226,6 +227,7 @@ class HAManager:
                     if msg.get('type') == 'heartbeat':
                         self._handle_heartbeat(msg, addr)
                 except socket.timeout:
+                    # 安全忽略：套接字 2s 接收超时的正常空转路径，用于周期性检查 _running，非错误。
                     continue
                 except Exception as e:
                     logger.debug(f"心跳接收异常: {e}")
@@ -234,8 +236,9 @@ class HAManager:
         finally:
             try:
                 sock.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # 预期内且无副作用：监听循环已退出，套接字即将废弃，关闭失败不影响后续逻辑
+                logger.debug(f"关闭心跳监听套接字失败(套接字将废弃): {e}")
 
     def _handle_heartbeat(self, msg: dict, addr: tuple):
         """处理收到的心跳（验证 HMAC 签名）"""

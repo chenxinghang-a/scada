@@ -276,15 +276,19 @@ class SecurityConfig:
                     if line.startswith('CSRF_SECRET='):
                         CSRF_SECRET = line.split('=', 1)[1].strip().strip('"').strip("'")
                         break
-        except Exception:
-            pass
+        except Exception as e:
+            # 读取 .env 失败：无法复用已持久化的 CSRF 密钥，将退化为本次随机生成，
+            # 重启后 CSRF 令牌全部失效（功能降级），必须留痕。
+            logger.warning("读取 %s 中的 CSRF_SECRET 失败，将重新生成: %s", _env_file, e)
         if not CSRF_SECRET:
             CSRF_SECRET = _generated
             try:
                 with open(_env_file, 'a', encoding='utf-8') as f:
                     f.write(f'\nCSRF_SECRET={_generated}\n')
-            except Exception:
-                pass
+            except Exception as e:
+                # 写入 .env 失败：CSRF 密钥仅存在于本次进程内存中，未持久化，
+                # 重启后密钥变化会导致已有 CSRF 令牌失效（功能降级），必须留痕。
+                logger.warning("写入 CSRF_SECRET 到 %s 失败，密钥未能持久化: %s", _env_file, e)
     # TLS/HTTPS 配置 (GB/T 35718 + GB/T 37980)
     TLS_ENABLED = os.environ.get('SCADA_TLS_ENABLED', 'false').lower() == 'true'
     TLS_CERT_FILE = os.environ.get('SCADA_TLS_CERT', str(BASE_DIR / 'certs' / 'server.crt'))

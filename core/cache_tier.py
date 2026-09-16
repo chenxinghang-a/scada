@@ -135,8 +135,9 @@ class SQLiteCache:
                 conn.execute('DELETE FROM cache WHERE key = ?', (key,))
                 conn.commit()
                 conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # 删除失败意味着该 key 仍留在 L2，后续 get() 可能命中陈旧值
+                logger.warning(f"SQLite缓存删除失败(陈旧数据可能残留): key={key}: {e}")
 
     def cleanup_expired(self) -> int:
         """清理过期缓存"""
@@ -222,8 +223,9 @@ class TieredCache:
             conn.execute('DELETE FROM cache WHERE key LIKE ?', (pattern + '%',))
             conn.commit()
             conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # 按前缀失效失败 → 相关 key 未被清理，后续可能读到陈旧缓存
+            logger.warning(f"L2缓存按前缀失效失败(陈旧数据可能残留): pattern={pattern}: {e}")
 
     def invalidate_table(self, table: str):
         """按表名失效所有相关缓存"""

@@ -358,8 +358,9 @@ class ModbusClient:
 
         try:
             self.disconnect()
-        except Exception:
-            pass
+        except Exception as e:
+            # 安全忽略：紧接着就要重连，旧连接清理失败不影响重连流程
+            logger.debug(f"设备 {self.device_name} 重连前断开旧连接失败: {e}")
 
         logger.info(f"设备 {self.device_name} 尝试重连 (第{self._reconnect_attempts}次)")
         success = self.connect()
@@ -372,8 +373,9 @@ class ModbusClient:
         if self.client:
             try:
                 self.client.close()
-            except Exception:
-                pass  # socket 可能已经坏了
+            except Exception as e:
+                # socket 可能已经坏了，关闭失败无副作用；连接对象随后被置空丢弃
+                logger.debug(f"设备 {self.device_name} Modbus 连接关闭失败: {e}")
             self.connected = False
 
     def read_holding_registers(self, address: int, count: int,

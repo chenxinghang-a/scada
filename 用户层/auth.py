@@ -90,14 +90,16 @@ class AuthManager:
             # 为已有表添加 must_change_password 列（兼容升级）
             try:
                 cursor.execute('ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 0')
-            except Exception:
-                pass  # 列已存在
+            except Exception as e:
+                # 列已存在时 ALTER 必然失败，属预期内且无副作用
+                logger.debug("users.must_change_password 列已存在或无需升级: %s", e)
 
             # 为已有表添加 password_changed_at 列（GB/T 35718: 密码变更时间戳）
             try:
                 cursor.execute('ALTER TABLE users ADD COLUMN password_changed_at DATETIME')
-            except Exception:
-                pass  # 列已存在
+            except Exception as e:
+                # 列已存在时 ALTER 必然失败，属预期内且无副作用
+                logger.debug("users.password_changed_at 列已存在或无需升级: %s", e)
 
             # 创建操作日志表
             cursor.execute('''
@@ -435,21 +437,36 @@ class AuthManager:
         except Exception as e:
             logger.error(f"清理黑名单失败: {e}")
 
-    def _blacklist_user_tokens(self, username: str, reason: str = 'user_action'):
+    def _blacklist_user_tokens(self, username: str, reason: str = 'user_action') -> bool:
         """
-        将用户当前请求的令牌加入黑名单
-        注意：无法枚举所有活跃令牌，仅标记当前操作的令牌
-        依赖verify_token中的黑名单检查来拒绝已撤销的令牌
+        将用户当前请求的令牌加入黑名单。
+        注意：无法枚举所有活跃令牌，仅标记当前操作的令牌；
+        依赖 verify_token 中的黑名单检查来拒绝已撤销的令牌。
+
+        Returns:
+            bool: True  = 已撤销（或当前不在 HTTP 上下文 / 未携带令牌，本就无令牌可撤销）；
+                  False = **取到了令牌但落库失败**，令牌实际仍然有效。
         """
-        # 从Flask request上下文获取当前令牌
+        # 第一步：取当前请求令牌。非 HTTP 上下文（定时任务 / 脚本 / 测试）属正常情况。
         try:
             from flask import request as flask_request
             auth_header = flask_request.headers.get('Authorization', '')
-            if auth_header.startswith('Bearer '):
-                token = auth_header[7:]
-                self.blacklist_token(token, reason)
-        except Exception:
-            pass  # 非HTTP上下文时忽略
+        except Exception as e:
+            logger.debug("非 HTTP 上下文，无当前请求令牌可撤销 user=%s: %s", username, e)
+            return True
+
+        if not auth_header.startswith('Bearer '):
+            logger.debug("当前请求未携带 Bearer 令牌，无可撤销 user=%s", username)
+            return True
+
+        # 第二步：落库。**刻意不包在同一个 try 里** —— 落库失败必须能被调用方感知，
+        # 否则撤销"看起来成功了"，而已撤销令牌仍可继续使用（静默放行）。
+        if not self.blacklist_token(auth_header[7:], reason):
+            logger.error(
+                "撤销令牌失败：令牌未被加入黑名单，仍可继续使用 user=%s reason=%s",
+                username, reason)
+            return False
+        return True
 
     def refresh_token(self, refresh_token: str) -> dict[str, Any] | None:
         """使用刷新令牌获取新的访问令牌。
@@ -510,11 +527,18 @@ class AuthManager:
             if password_changed:
                 try:
                     pwd_time = datetime.fromisoformat(password_changed).timestamp()
-                    if pwd_time > token_iat:
-                        logger.warning(f"密码已变更，刷新令牌失效: user={user['username']}")
-                        return None
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as e:
+                    # fail-closed：解析不出"密码变更时间"时，**不能假定密码没改过** ——
+                    # 那等于让已改密用户的旧刷新令牌继续续期（静默放行）。
+                    # 拒绝续期，并要求人工核查该用户的 password_changed_at 数据。
+                    logger.error(
+                        "password_changed_at 非法，无法确认密码是否已变更，拒绝刷新 "
+                        "user=%s value=%r: %s", user.get('username'), password_changed, e)
+                    return None
+
+                if pwd_time > token_iat:
+                    logger.warning(f"密码已变更，刷新令牌失效: user={user['username']}")
+                    return None
 
             new_token = self._generate_token(user)
 
@@ -586,10 +610,15 @@ class AuthManager:
             ''', (new_hash.decode('utf-8'), now, now.isoformat(sep=' '), username))
 
         # GB/T 35718: 密码修改后撤销该用户的所有活跃令牌
-        self._blacklist_user_tokens(username, 'password_changed')
+        revoked = self._blacklist_user_tokens(username, 'password_changed')
+        if not revoked:
+            logger.error("密码已修改但旧令牌撤销失败，旧令牌仍可继续使用 user=%s", username)
 
         self._log_operation(username, 'change_password', None, '修改密码成功')
-        return {'success': True, 'message': '密码修改成功'}
+        result = {'success': True, 'message': '密码修改成功'}
+        if not revoked:
+            result['warning'] = '旧令牌撤销失败，旧令牌可能仍然有效，建议立即重新登录'
+        return result
 
     def force_change_password(self, username: str, new_password: str) -> dict[str, Any]:
         """

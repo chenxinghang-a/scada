@@ -202,7 +202,10 @@ class DiskBackedQueue:
                                 recovered += 1
                             else:
                                 logger.warning(f"磁盘恢复: 跳过无value字段的记录 keys={list(item.keys())}")
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as e:
+                            # 安全忽略并跳过该行：崩溃时可能留下半行不完整 JSON，
+                            # 只丢这一条，不影响后续行恢复
+                            logger.debug(f"磁盘恢复: 跳过损坏记录行: {e} | {line[:200]}")
                             continue
                         except queue.Full:
                             queue_full = True
@@ -214,8 +217,12 @@ class DiskBackedQueue:
         if recovered > 0 and not queue_full:
             try:
                 self._persist_file.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                # 删除失败 → 持久化文件残留，下次启动会把这些记录再恢复一遍（重复数据）
+                logger.warning(
+                    f"磁盘恢复后删除持久化文件失败，下次启动可能重复恢复 "
+                    f"{self._persist_file}: {e}"
+                )
 
         if recovered > 0:
             logger.info(f"从磁盘恢复 {recovered} 条未处理数据" +
@@ -226,8 +233,12 @@ class DiskBackedQueue:
         try:
             if self._persist_file.exists():
                 self._persist_file.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            # 删除失败 → 文件残留，下次启动会重复恢复这批已处理的数据
+            logger.warning(
+                f"清除持久化文件失败，下次启动可能重复恢复数据 "
+                f"{self._persist_file}: {e}"
+            )
 
 
 class DataCollector:
@@ -327,6 +338,8 @@ class DataCollector:
             try:
                 self.data_queue.get_nowait()
             except queue.Empty:
+                # 安全忽略：full() 与 get_nowait() 之间消费线程可能已把队列取空，
+                # 此时无需再丢弃，直接走下面的入队即可
                 pass
         try:
             self.data_queue.put_nowait(item)
@@ -917,10 +930,16 @@ class DataCollector:
                         try:
                             self.data_queue.get_nowait()
                         except queue.Empty:
+                            # 安全忽略：full() 与 get_nowait() 之间消费线程可能已取空队列
                             pass
                     self.data_queue.put_nowait(item)
-                except (ValueError, TypeError, queue.Full):
-                    pass
+                except (ValueError, TypeError, queue.Full) as e:
+                    # 本条数据被丢弃：value 非数值(float()失败) 或 队列满。
+                    # 属于"丢数据"，必须留痕，否则表现为数据缺口却查不到原因
+                    logger.warning(
+                        f"缓存采集数据丢弃 device={device_id} register={name} "
+                        f"value={value!r}: {type(e).__name__}: {e}"
+                    )
 
     def _read_register(self, client, register: dict[str, Any]) -> float | None:
         """读取单个Modbus寄存器数据"""
@@ -1001,6 +1020,7 @@ class DataCollector:
                 try:
                     data = intel_queue.get(timeout=1)
                 except queue.Empty:
+                    # 安全忽略：1秒轮询超时，队列暂时没数据属正常，继续下一轮
                     continue
                 try:
                     self._dispatch_intelligence(data)
@@ -1020,6 +1040,7 @@ class DataCollector:
                 first = self.data_queue.get(timeout=1)
                 batch.append(first)
             except queue.Empty:
+                # 安全忽略：1秒内没有新数据属正常空转，继续下一轮批量
                 continue
 
             # 非阻塞取剩余（凑满批次或等超时）

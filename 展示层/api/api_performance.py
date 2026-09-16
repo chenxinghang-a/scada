@@ -4,6 +4,7 @@
 """
 import os
 import json
+import logging
 import sqlite3
 import threading
 from datetime import datetime, timedelta
@@ -11,6 +12,8 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request, current_app
 from 用户层.auth import jwt_required
 from core.service_response import error_response
+
+logger = logging.getLogger(__name__)
 
 performance_bp = Blueprint('performance', __name__, url_prefix='/api/performance')
 
@@ -163,7 +166,11 @@ class PerformanceCollector:
                     timestamp = datetime.fromisoformat(data['timestamp'])
                     if timestamp >= cutoff:
                         history.append(data)
-                except Exception:
+                except Exception as e:
+                    # 单行指标记录损坏（JSON/时间戳非法）→ 该条历史指标丢失，
+                    # 返回的曲线会缺数据点，属于数据不完整，必须留痕
+                    logger.warning("跳过无法解析的指标记录 %s: %s | 原始行=%s",
+                                   metrics_file, e, line.strip()[:200])
                     continue
 
         return history

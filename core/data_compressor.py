@@ -150,6 +150,8 @@ class DataCompressor:
 
         try:
             rows_restored = 0
+            rows_skipped = 0
+            skip_reasons: Dict[str, int] = {}
             target_table = table
 
             with gzip.open(archive, 'rt', encoding='utf-8') as gz:
@@ -174,14 +176,31 @@ class DataCompressor:
                     try:
                         conn.execute(f'INSERT OR IGNORE INTO "{target_table}" ({col_names}) VALUES ({placeholders})', values)
                         rows_restored += 1
-                    except sqlite3.Error:
-                        pass  # 跳过冲突行
+                    except sqlite3.Error as e:
+                        # 注意：INSERT OR IGNORE 自身已消化唯一约束冲突，所以这里真正捕获到的
+                        # sqlite3.Error 多半是"表/列不存在"这类**结构性错误** —— 这些行会被
+                        # 整批跳过，rows_restored 静默偏少，函数却仍返回 success，
+                        # 运维侧看不出"恢复不完整"。故升级为 warning，并把跳过行数计入返回值。
+                        rows_skipped += 1
+                        skip_reasons[str(e)] = skip_reasons.get(str(e), 0) + 1
+                        logger.warning(
+                            "恢复归档时跳过无法写入的行: table=%s, rows_skipped=%d, error=%s",
+                            target_table, rows_skipped, e,
+                        )
 
                 conn.commit()
+
+            if rows_skipped:
+                logger.warning(
+                    "归档恢复不完整: table=%s, rows_restored=%d, rows_skipped=%d",
+                    target_table, rows_restored, rows_skipped,
+                )
 
             return {
                 'table': target_table,
                 'rows_restored': rows_restored,
+                'rows_skipped': rows_skipped,
+                'skip_reasons': skip_reasons,
                 'archive_file': str(archive),
             }
 

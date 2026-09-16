@@ -146,8 +146,9 @@ class TDengineClient:
         if self._connection:
             try:
                 self._connection.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # 关闭失败不影响断开语义：连接对象随后被置空丢弃
+                self.logger.debug(f"TDengine 连接关闭失败 {self.host}:{self.port}: {e}")
             self._connection = None
 
     def _create_database(self):

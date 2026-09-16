@@ -280,8 +280,9 @@ class DNP3Client:
         if self.socket:
             try:
                 self.socket.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # 关闭已失效的 socket 可能抛错（对端已断开等），属预期内且无副作用
+                self.logger.debug("关闭socket失败 %s:%s: %s", self.host, self.port, e)
         self.connected = False
         self.logger.info("已断开连接")
 
@@ -532,8 +533,9 @@ class DNP3Gateway(BaseGateway):
         if old_client:
             try:
                 old_client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                # 重连前关闭旧连接失败：旧连接可能残留，但不影响新连接建立
+                self.logger.debug("重连前关闭旧连接失败 device=%s: %s", device_id, e)
 
         # 创建新连接
         host = device_config.get('host', '127.0.0.1')

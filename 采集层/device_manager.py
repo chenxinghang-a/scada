@@ -421,8 +421,10 @@ class DeviceManager:
                     if device_config.get('enabled', True):
                         try:
                             client.connect()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            # 连接失败不影响返回状态（connected 字段仍为 False），
+                            # 但状态查询是高频轮询路径，故用 debug 避免刷屏
+                            logger.debug(f"设备 {device_id} 自动重连失败: {e}")
 
             status['connected'] = getattr(client, 'connected', False)
             status['stats'] = getattr(client, 'stats', {})

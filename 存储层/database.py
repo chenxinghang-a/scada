@@ -55,8 +55,9 @@ class Database:
         if hasattr(self._local, 'connection') and self._local.connection:
             try:
                 self._local.connection.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # 关闭失败只影响本线程连接的回收，连接对象随后会被丢弃，无数据风险
+                logger.debug(f"关闭数据库连接失败（连接将被丢弃）: {e}")
             self._local.connection = None
 
     # 向后兼容别名
@@ -136,8 +137,12 @@ class Database:
             if not readonly:
                 try:
                     conn.rollback()
-                except Exception:
-                    pass
+                except Exception as rollback_err:
+                    # 回滚失败意味着本线程连接可能残留未提交事务，后续复用会出错
+                    logger.warning(
+                        f"事务回滚失败，本线程连接可能残留未提交事务 "
+                        f"(原始错误: {e}; 回滚错误: {rollback_err})"
+                    )
             raise e
 
     def check_health(self) -> Dict[str, Any]:
@@ -320,8 +325,13 @@ class Database:
             try:
                 cursor.execute(sql)
                 logger.info(f"数据库迁移: 添加列 alarm_records.{col_name}")
-            except Exception:
-                pass  # 列已存在，忽略
+            except Exception as e:
+                # 最常见原因是列已存在（预期内）；但也可能是磁盘/锁等真失败，
+                # 此时迁移没做成，故把错误原文一并记录以便区分
+                logger.debug(
+                    f"迁移列 alarm_records.{col_name} 未执行"
+                    f"（通常为列已存在，需排查时看此错误原文）: {e}"
+                )
 
     def insert_data(self, device_id: str, register_name: str,
                     value: float, timestamp: datetime, unit: str = ''):

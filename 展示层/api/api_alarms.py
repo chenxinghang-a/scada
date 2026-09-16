@@ -512,8 +512,10 @@ def update_broadcast_config():
                 try:
                     bs._mqtt_client.loop_stop()
                     bs._mqtt_client.disconnect()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 旧MQTT客户端停止失败：连接可能残留并继续收发，
+                    # 配置已热更新但旧连接未断开（功能降级），必须留痕
+                    logger.warning("停止旧MQTT客户端失败（可能残留连接）: %s", e)
                 bs._mqtt_client = None
                 bs._mqtt_connected = False
 

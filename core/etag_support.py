@@ -41,6 +41,22 @@ def etag_required(f):
         if hasattr(result, 'get_json'):
             try:
                 data = result.get_json()
+
+                if data is None:
+                    # 非 JSON 响应（text/html、二进制、空 body）时 Flask 的 get_json()
+                    # 返回 None 而**不抛异常**（已实测 flask 3.1.3）。此前会继续执行
+                    # generate_etag(None) → sha256(str(None))，于是所有非 JSON 响应都拿到
+                    # **同一个常量 ETag**（dc937b59892604f5）。客户端把这个值带到**别的**
+                    # 非 JSON 接口上，If-None-Match 命中 → 服务端返回 304 空 body，
+                    # 浏览器于是拿着陈旧/错误的内容当最新内容用 —— 典型"静默假成功"。
+                    # 故：无有效 payload 时不生成 ETag（Cache-Control 保持原样）。
+                    logger.debug(
+                        "etag_required: 响应非 JSON (mimetype=%s)，跳过 ETag 以避免常量 ETag 造成跨接口 304",
+                        getattr(result, 'mimetype', 'unknown'),
+                    )
+                    result.headers['Cache-Control'] = 'private, max-age=0, must-revalidate'
+                    return result
+
                 etag = generate_etag(data)
 
                 # 检查If-None-Match
@@ -54,8 +70,9 @@ def etag_required(f):
                 result.headers['ETag'] = etag
                 result.headers['Cache-Control'] = 'private, max-age=0, must-revalidate'
                 return result
-            except Exception:
-                pass
+            except Exception as e:
+                # 异常被吞掉后本响应不会带 ETag 头 → 条件请求缓存对该接口静默失效（功能降级）
+                logger.warning(f"etag_required 生成/设置ETag失败(该响应将不带ETag): {e}")
 
         # 处理tuple响应
         if isinstance(result, tuple) and len(result) >= 1:
@@ -111,8 +128,10 @@ def conditional_request(f):
 
                     result.headers['Last-Modified'] = last_modified
                     result.headers['Cache-Control'] = 'private, max-age=0, must-revalidate'
-            except Exception:
-                pass
+            except Exception as e:
+                # 预期内：非 JSON 响应时 get_json() 返回 None，取 last_modified 必然失败，属正常分支；
+                # 其余失败只会导致 Last-Modified 未设置，故用 debug 避免刷屏。
+                logger.debug(f"conditional_request 设置Last-Modified失败(该响应将不带Last-Modified): {e}")
 
         return result
 

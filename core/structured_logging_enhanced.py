@@ -76,7 +76,10 @@ class ContextFilter(logging.Filter):
                 if not record.user_id:
                     record.user_id = getattr(g, 'user_id', '')
         except RuntimeError:
-            pass  # 非请求上下文
+            # 安全忽略：RuntimeError 是 Flask 在"非请求上下文"（如后台线程）访问 request/g 时的
+            # 正常表现，此时本就取不到 request_id/user_id，保持为空即可。
+            # 另外此处位于 logging.Filter 内，在此打日志会造成日志递归，故只加注释不打日志。
+            pass
 
         return True
 

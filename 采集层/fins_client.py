@@ -156,8 +156,9 @@ class FINSClient:
         if self._sock:
             try:
                 self._sock.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # 安全忽略：即将断开连接，socket 可能已损坏，关闭失败无副作用
+                logger.debug(f"[FINS] 设备 {self.device_name} socket 关闭失败: {e}")
             self._sock = None
         self.connected = False
         logger.info(f"[FINS] 设备 {self.device_name} 已断开")

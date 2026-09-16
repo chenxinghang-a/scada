@@ -261,8 +261,9 @@ class S7Gateway(BaseGateway):
         if old_client:
             try:
                 old_client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                # 重连前关闭旧连接失败：旧连接可能残留，但不影响新连接建立
+                self.logger.debug("重连前关闭旧连接失败 device=%s: %s", device_id, e)
 
         # 创建新连接
         try:

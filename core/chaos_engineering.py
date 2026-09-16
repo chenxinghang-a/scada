@@ -190,8 +190,9 @@ class ChaosEngine:
             alarm_manager = ModuleRegistry.get_instance('alarm_manager')
             if alarm_manager:
                 return hasattr(alarm_manager, 'get_active_alarms')
-        except Exception:
-            pass
+        except Exception as e:
+            # 检查本身失败被吞掉会导致稳态结论不可信，必须留痕
+            logger.warning("稳态检查 alarm_system_responsive 执行失败(将判定为未通过): %s", e)
         return False
 
     def _check_database_accessible(self) -> bool:
@@ -203,8 +204,9 @@ class ChaosEngine:
                 with database.get_connection() as conn:
                     conn.execute("SELECT 1")
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            # 检查本身失败被吞掉会导致稳态结论不可信，必须留痕
+            logger.warning("稳态检查 database_accessible 执行失败(将判定为未通过): %s", e)
         return False
 
     def _check_collector_running(self) -> bool:
@@ -215,8 +217,9 @@ class ChaosEngine:
             if collector:
                 stats = collector.get_stats()
                 return stats.get('running', False)
-        except Exception:
-            pass
+        except Exception as e:
+            # 检查本身失败被吞掉会导致稳态结论不可信，必须留痕
+            logger.warning("稳态检查 collector_running 执行失败(将判定为未通过): %s", e)
         return False
 
     def _check_api_responsive(self) -> bool:
@@ -232,7 +235,13 @@ class ChaosEngine:
             return False
 
     def _check_no_critical_alarms(self) -> bool:
-        """检查无新增严重报警"""
+        """检查无新增严重报警。
+
+        异常路径必须返回 ``False``（fail-safe）。此前返回 ``True``（fail-open），
+        等于把"检查压根没跑成"当成"没有严重报警"，混沌实验会据此误判稳态通过 ——
+        而本方法在 ``module_registry`` 从未注册的生产环境里**每次都抛异常**，
+        所以这个检查实际上是一个恒真的常量。
+        """
         try:
             from core.module_registry import ModuleRegistry
             alarm_manager = ModuleRegistry.get_instance('alarm_manager')
@@ -240,9 +249,12 @@ class ChaosEngine:
                 active = alarm_manager.get_active_alarms()
                 critical = [a for a in active if a.get('alarm_level') == 'critical']
                 return len(critical) < 5  # 少于5个严重报警视为正常
-        except Exception:
-            pass
-        return True
+        except Exception as e:
+            # fail-safe：检查执行失败 = 无法确认无严重报警，按"非稳态"处理。
+            # 与同文件 _check_api_responsive / _check_database_accessible 等保持一致。
+            logger.warning("稳态检查 no_critical_alarms 执行失败，按非稳态处理: %s", e)
+            return False
+        return False
 
     def register_check(self, name: str, check_func: Callable[[], bool], description: str = ""):
         """注册稳态检查"""

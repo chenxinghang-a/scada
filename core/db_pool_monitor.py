@@ -125,6 +125,7 @@ def monitored_connection(db_path: str, timeout: float = 30):
         if conn:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # 预期内且无副作用：上下文即将退出，连接对象不再被使用，关闭失败不影响调用方
+                logger.debug(f"关闭被监控连接失败(连接将释放): db_path={db_path}: {e}")
             pool_monitor.on_release()

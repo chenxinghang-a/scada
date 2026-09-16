@@ -116,8 +116,12 @@ class ConsistencyChecker:
             invalid_values = cursor.fetchone()[0]
             if invalid_values > 0:
                 issues.append(f"realtime_data 中有 {invalid_values} 条无效数值")
-        except Exception:
-            pass
+        except Exception as e:
+            # 查询失败说明该项检查没跑成，但 issues 为空会让本项被判定为 pass
+            logger.warning(
+                f"一致性检查[data_formats]查询 realtime_data 数值格式失败，"
+                f"该项检查被跳过、结果不可信: {e}"
+            )
 
         # 检查 history_data 的时间戳格式
         try:
@@ -128,8 +132,12 @@ class ConsistencyChecker:
             null_timestamps = cursor.fetchone()[0]
             if null_timestamps > 0:
                 issues.append(f"history_data 中有 {null_timestamps} 条空时间戳")
-        except Exception:
-            pass
+        except Exception as e:
+            # 查询失败说明该项检查没跑成，但 issues 为空会让本项被判定为 pass
+            logger.warning(
+                f"一致性检查[data_formats]查询 history_data 空时间戳失败，"
+                f"该项检查被跳过、结果不可信: {e}"
+            )
 
         return {
             'check_name': 'data_formats',
@@ -154,8 +162,12 @@ class ConsistencyChecker:
             duplicates = cursor.fetchall()
             if duplicates:
                 issues.append(f"realtime_data 中有 {len(duplicates)} 组重复数据")
-        except Exception:
-            pass
+        except Exception as e:
+            # 查询失败说明该项检查没跑成，但 issues 为空会让本项被判定为 pass
+            logger.warning(
+                f"一致性检查[duplicates]查询 realtime_data 重复数据失败，"
+                f"该项检查被跳过、结果不可信: {e}"
+            )
 
         # 检查 users 的重复用户名
         try:
@@ -168,8 +180,12 @@ class ConsistencyChecker:
             duplicates = cursor.fetchall()
             if duplicates:
                 issues.append(f"users 表中有 {len(duplicates)} 个重复用户名")
-        except Exception:
-            pass
+        except Exception as e:
+            # 查询失败说明该项检查没跑成，但 issues 为空会让本项被判定为 pass
+            logger.warning(
+                f"一致性检查[duplicates]查询 users 重复用户名失败，"
+                f"该项检查被跳过、结果不可信: {e}"
+            )
 
         return {
             'check_name': 'duplicates',
@@ -192,8 +208,12 @@ class ConsistencyChecker:
             orphaned = cursor.fetchone()[0]
             if orphaned > 0:
                 issues.append(f"alarm_records 中有 {orphaned} 条孤立记录（设备不存在）")
-        except Exception:
-            pass
+        except Exception as e:
+            # 查询失败说明该项检查没跑成，但 issues 为空会让本项被判定为 pass
+            logger.warning(
+                f"一致性检查[orphaned_records]查询 alarm_records 孤立记录失败，"
+                f"该项检查被跳过、结果不可信: {e}"
+            )
 
         return {
             'check_name': 'orphaned_records',
@@ -217,8 +237,12 @@ class ConsistencyChecker:
             future_count = cursor.fetchone()[0]
             if future_count > 0:
                 issues.append(f"history_data 中有 {future_count} 条未来时间戳")
-        except Exception:
-            pass
+        except Exception as e:
+            # 查询失败说明该项检查没跑成，但 issues 为空会让本项被判定为 pass
+            logger.warning(
+                f"一致性检查[timestamps]查询 history_data 未来时间戳失败，"
+                f"该项检查被跳过、结果不可信: {e}"
+            )
 
         # 检查过旧时间戳
         try:
@@ -230,8 +254,12 @@ class ConsistencyChecker:
             old_count = cursor.fetchone()[0]
             if old_count > 0:
                 issues.append(f"history_data 中有 {old_count} 条过旧时间戳（<2020）")
-        except Exception:
-            pass
+        except Exception as e:
+            # 查询失败说明该项检查没跑成，但 issues 为空会让本项被判定为 pass
+            logger.warning(
+                f"一致性检查[timestamps]查询 history_data 过旧时间戳失败，"
+                f"该项检查被跳过、结果不可信: {e}"
+            )
 
         return {
             'check_name': 'timestamps',

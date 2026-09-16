@@ -372,15 +372,17 @@ class SQLiteToTDengineMigrator:
             try:
                 cursor.execute("SELECT COUNT(*) FROM oee_records")
                 results['oee']['sqlite_count'] = cursor.fetchone()[0]
-            except Exception:
-                pass
+            except Exception as e:
+                # oee_records 为可选表，旧库可能不存在；计数保持 0，match 仍为 False
+                self.logger.debug(f"验证 oee_records 跳过（表不存在或查询失败）: {e}")
 
             # 验证能源数据
             try:
                 cursor.execute("SELECT COUNT(*) FROM energy_records")
                 results['energy']['sqlite_count'] = cursor.fetchone()[0]
-            except Exception:
-                pass
+            except Exception as e:
+                # energy_records 为可选表，旧库可能不存在；计数保持 0，match 仍为 False
+                self.logger.debug(f"验证 energy_records 跳过（表不存在或查询失败）: {e}")
 
             self.logger.info("验证完成")
             return results
