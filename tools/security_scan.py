@@ -1,9 +1,11 @@
 """
-安全扫描自动化工�?自动执行安全检查并生成报告
+安全扫描自动化工具
+自动执行安全检查并生成报告
 
 使用方法:
     python tools/security_scan.py full         # 完整扫描
-    python tools/security_scan.py quick        # 快速扫�?    python tools/security_scan.py report       # 生成报告
+    python tools/security_scan.py quick        # 快速扫描
+    python tools/security_scan.py report       # 生成报告
 """
 
 import os
@@ -22,7 +24,7 @@ sys.path.insert(0, str(project_root))
 
 
 class SecurityScanner:
-    """安全扫描�?""
+    """安全扫描器"""
 
     def __init__(self):
         self.project_root = project_root
@@ -32,7 +34,8 @@ class SecurityScanner:
         """运行完整安全扫描"""
         self.findings = []
 
-        # 1. 检查敏感文�?        self._check_sensitive_files()
+        # 1. 检查敏感文件
+        self._check_sensitive_files()
 
         # 2. 检查硬编码凭证
         self._check_hardcoded_credentials()
@@ -43,28 +46,33 @@ class SecurityScanner:
         # 4. 检查XSS风险
         self._check_xss_risks()
 
-        # 5. 检查权限配�?        self._check_permissions()
+        # 5. 检查权限配置
+        self._check_permissions()
 
-        # 6. 检查依赖安�?        self._check_dependencies()
+        # 6. 检查依赖安全
+        self._check_dependencies()
 
-        # 7. 检查配置安�?        self._check_config_security()
+        # 7. 检查配置安全
+        self._check_config_security()
 
-        # 8. 检查日志安�?        self._check_logging_security()
+        # 8. 检查日志安全
+        self._check_logging_security()
 
         return self._generate_report()
 
     def run_quick_scan(self) -> Dict[str, Any]:
-        """运行快速扫�?""
+        """运行快速扫描"""
         self.findings = []
 
-        # 只检查最关键的问�?        self._check_hardcoded_credentials()
+        # 只检查最关键的问题
+        self._check_hardcoded_credentials()
         self._check_sensitive_files()
         self._check_permissions()
 
         return self._generate_report()
 
     def _check_sensitive_files(self):
-        """检查敏感文�?""
+        """检查敏感文件"""
         sensitive_patterns = [
             '.env',
             '.env.local',
@@ -80,20 +88,21 @@ class SecurityScanner:
         for pattern in sensitive_patterns:
             for file in self.project_root.rglob(pattern):
                 if file.is_file() and '.git' not in str(file):
-                    # 检查是否在.gitignore�?                    if not self._is_gitignored(file):
+                    # 检查是否在.gitignore中
+                    if not self._is_gitignored(file):
                         self.findings.append({
                             'severity': 'high',
                             'type': 'sensitive_file',
                             'file': str(file.relative_to(self.project_root)),
                             'message': f'敏感文件未被.gitignore忽略: {file.name}',
-                            'recommendation': '将此文件添加�?gitignore',
+                            'recommendation': '将此文件添加到.gitignore',
                         })
 
     def _check_hardcoded_credentials(self):
         """检查硬编码凭证"""
         credential_patterns = [
-            (r'password\s*=\s*["\'][^"\']+["\']', '硬编码密�?),
-            (r'secret\s*=\s*["\'][^"\']+["\']', '硬编码密�?),
+            (r'password\s*=\s*["\'][^"\']+["\']', '硬编码密码'),
+            (r'secret\s*=\s*["\'][^"\']+["\']', '硬编码密钥'),
             (r'api_key\s*=\s*["\'][^"\']+["\']', '硬编码API密钥'),
             (r'token\s*=\s*["\'][^"\']+["\']', '硬编码token'),
         ]
@@ -118,7 +127,7 @@ class SecurityScanner:
                             'type': 'hardcoded_credential',
                             'file': str(py_file.relative_to(self.project_root)),
                             'message': message,
-                            'recommendation': '使用环境变量或配置文件存储凭�?,
+                            'recommendation': '使用环境变量或配置文件存储凭证',
                         })
             except Exception:
                 pass
@@ -146,7 +155,7 @@ class SecurityScanner:
                             'file': str(py_file.relative_to(self.project_root)),
                             'line': content[:match.start()].count('\n') + 1,
                             'message': f'SQL注入风险: {message}',
-                            'recommendation': '使用参数化查�?,
+                            'recommendation': '使用参数化查询',
                         })
             except Exception:
                 pass
@@ -180,7 +189,7 @@ class SecurityScanner:
                 pass
 
     def _check_permissions(self):
-        """检查权限配�?""
+        """检查权限配置"""
         # 检查是否有默认密码
         config_files = list(self.project_root.rglob('*.yaml')) + list(self.project_root.rglob('*.yml'))
 
@@ -191,29 +200,31 @@ class SecurityScanner:
             try:
                 content = config_file.read_text(encoding='utf-8', errors='ignore')
 
-                # 检查默认密�?                if 'admin123' in content or 'password123' in content:
+                # 检查默认密码
+                if 'admin123' in content or 'password123' in content:
                     self.findings.append({
                         'severity': 'critical',
                         'type': 'default_password',
                         'file': str(config_file.relative_to(self.project_root)),
                         'message': '使用默认密码',
-                        'recommendation': '更改所有默认密�?,
+                        'recommendation': '更改所有默认密码',
                     })
 
-                # 检查通配符权�?                if 'host: "' in content or "host: '" in content:
+                # 检查通配符权限
+                if 'host: "' in content or "host: '" in content:
                     if '0.0.0.0' in content:
                         self.findings.append({
                             'severity': 'medium',
                             'type': 'open_access',
                             'file': str(config_file.relative_to(self.project_root)),
-                            'message': '绑定到所有网络接�?,
+                            'message': '绑定到所有网络接口',
                             'recommendation': '限制到特定IP地址',
                         })
             except Exception:
                 pass
 
     def _check_dependencies(self):
-        """检查依赖安�?""
+        """检查依赖安全"""
         requirements_file = self.project_root / 'requirements.txt'
 
         if requirements_file.exists():
@@ -226,19 +237,20 @@ class SecurityScanner:
                     if not line or line.startswith('#'):
                         continue
 
-                    # 检查是否固定版�?                    if '==' not in line and '>=' not in line and '<=' not in line:
+                    # 检查是否固定版本
+                    if '==' not in line and '>=' not in line and '<=' not in line:
                         self.findings.append({
                             'severity': 'low',
                             'type': 'dependency_version',
                             'file': 'requirements.txt',
-                            'message': f'依赖未固定版�? {line}',
-                            'recommendation': '使用==固定版本�?,
+                            'message': f'依赖未固定版本: {line}',
+                            'recommendation': '使用==固定版本号',
                         })
             except Exception:
                 pass
 
     def _check_config_security(self):
-        """检查配置安�?""
+        """检查配置安全"""
         # 检查debug模式
         for py_file in self.project_root.rglob('*.py'):
             if '.git' in str(py_file) or 'test' in str(py_file).lower():
@@ -259,7 +271,7 @@ class SecurityScanner:
                 pass
 
     def _check_logging_security(self):
-        """检查日志安�?""
+        """检查日志安全"""
         for py_file in self.project_root.rglob('*.py'):
             if '.git' in str(py_file) or 'test' in str(py_file).lower():
                 continue
@@ -267,10 +279,11 @@ class SecurityScanner:
             try:
                 content = py_file.read_text(encoding='utf-8', errors='ignore')
 
-                # 检查是否记录敏感信�?                sensitive_log_patterns = [
-                    (r'logger\.\w+\(.*password', '日志中记录密�?),
+                # 检查是否记录敏感信息
+                sensitive_log_patterns = [
+                    (r'logger\.\w+\(.*password', '日志中记录密码'),
                     (r'logger\.\w+\(.*token', '日志中记录token'),
-                    (r'logger\.\w+\(.*secret', '日志中记录密�?),
+                    (r'logger\.\w+\(.*secret', '日志中记录密钥'),
                 ]
 
                 for pattern, message in sensitive_log_patterns:
@@ -309,12 +322,13 @@ class SecurityScanner:
 
     def _generate_report(self) -> Dict[str, Any]:
         """生成扫描报告"""
-        # 按严重程度统�?        severity_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+        # 按严重程度统计
+        severity_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
         for finding in self.findings:
             severity = finding.get('severity', 'low')
             severity_counts[severity] = severity_counts.get(severity, 0) + 1
 
-        # 计算安全分数 (100分满�?
+        # 计算安全分数 (100分满分)
         score = 100
         score -= severity_counts['critical'] * 20
         score -= severity_counts['high'] * 10
@@ -334,7 +348,7 @@ class SecurityScanner:
 
 
 def format_report(report: Dict[str, Any]) -> str:
-    """格式化报�?""
+    """格式化报告"""
     lines = []
     lines.append("=" * 60)
     lines.append("安全扫描报告")
@@ -368,7 +382,7 @@ def format_report(report: Dict[str, Any]) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='安全扫描自动化工�?)
+    parser = argparse.ArgumentParser(description='安全扫描自动化工具')
     parser.add_argument('command', choices=['full', 'quick', 'report'], help='扫描类型')
     parser.add_argument('--output', help='输出文件路径')
 
@@ -396,7 +410,7 @@ def main():
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
 
-    print(f"\n报告已保�? {output_path}")
+    print(f"\n报告已保存: {output_path}")
 
 
 if __name__ == '__main__':

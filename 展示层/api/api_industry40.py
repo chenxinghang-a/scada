@@ -15,6 +15,7 @@ from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
 from core.service_response import ServiceResponse, success_response, error_response, module_unavailable_response
+from ._common import clamp_limit
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ def get_maintenance_alerts():
         if err:
             return err
         
-        limit = request.args.get('limit', 50, type=int)
+        limit = clamp_limit(request.args.get('limit', 50, type=int), default=50, maximum=500)
         alerts = pm.get_maintenance_alerts(limit)
         logger.debug(f"获取维护建议: {len(alerts) if alerts else 0} 条")
         return success_response(alerts if alerts else [], message="获取维护建议成功")
@@ -211,7 +212,7 @@ def get_spc_violations():
             return err
         
         device_id = request.args.get('device_id')
-        limit = request.args.get('limit', 50, type=int)
+        limit = clamp_limit(request.args.get('limit', 50, type=int), default=50, maximum=500)
         violations = spc.get_violations(device_id, limit)
         logger.debug(f"获取SPC判异结果: {len(violations) if violations else 0} 条")
         return success_response(violations if violations else [], message="获取SPC判异结果成功")
@@ -438,7 +439,7 @@ def get_edge_log():
         if err:
             return err
         
-        limit = request.args.get('limit', 50, type=int)
+        limit = clamp_limit(request.args.get('limit', 50, type=int), default=50, maximum=500)
         result = edge.get_decision_log(limit)
         logger.debug(f"获取决策日志: {len(result) if result else 0} 条")
         return success_response(result if result else [], message="获取决策日志成功")

@@ -8,8 +8,8 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 from datetime import datetime, timedelta
 
-from 用户层.auth import jwt_required
-from ._common import api_error_handler, api_error
+from 用户层.auth import jwt_required, permission_required
+from ._common import api_error_handler, api_error, clamp_limit
 from .error_codes import DATA_NOT_FOUND
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 data_bp = Blueprint('api_data', __name__, url_prefix='/api')
 
 _require_auth = jwt_required
+
+# 导出接口需要 export_data 权限（engineer 及以上）；viewer 只有 read，
+# 不应能把生产数据整体导出。permission_required 内部已含 jwt_required。
+_require_export = permission_required('export_data')
 
 
 def _parse_time(time_str, default):
@@ -37,8 +41,9 @@ def _parse_time(time_str, default):
 def get_realtime_data():
     """获取实时数据（realtime_data 是 UPSERT 表，每设备每寄存器只有一行）"""
     device_id = request.args.get('device_id')
-    # 不限制：realtime_data 数据量 = 设备数 × 寄存器数，通常 < 500
-    limit = request.args.get('limit', 10000, type=int)
+    # 不限制条数上限（realtime_data 数据量 = 设备数 × 寄存器数，通常 < 500），
+    # 但必须挡住 `?limit=999999999` 这种把整库往内存里搬的请求。
+    limit = clamp_limit(request.args.get('limit', 10000, type=int), default=10000, maximum=10000)
     return jsonify({'data': current_app.database.get_realtime_data(device_id=device_id, limit=limit)})
 
 
@@ -80,6 +85,7 @@ def get_history_data(device_id, register_name):
 
 @data_bp.route('/export/device/<device_id>', methods=['POST'])
 @_require_auth
+@_require_export
 @api_error_handler
 def export_device_data(device_id):
     """导出设备数据"""
@@ -110,6 +116,7 @@ def export_device_data(device_id):
 
 @data_bp.route('/export/alarms', methods=['POST'])
 @_require_auth
+@_require_export
 @api_error_handler
 def export_alarms():
     """导出报警记录"""

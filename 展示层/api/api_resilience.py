@@ -12,7 +12,7 @@ from core.degradation_manager import degradation_manager, DegradationLevel
 from core.fault_injection import fault_injector, FaultType, FaultSeverity
 from core.chaos_engineering import chaos_engine
 from core.service_response import success_response, error_response
-from 用户层.auth import jwt_required
+from 用户层.auth import jwt_required, role_required
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ def get_circuit_breaker(name):
 
 @resilience_bp.route('/circuit-breaker/<name>/reset', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def reset_circuit_breaker(name):
     """重置指定熔断器"""
     try:
@@ -70,6 +71,7 @@ def reset_circuit_breaker(name):
 
 @resilience_bp.route('/circuit-breaker/reset-all', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def reset_all_circuit_breakers():
     """重置所有熔断器"""
     try:
@@ -111,6 +113,7 @@ def get_rate_limiter_profiles():
 
 @resilience_bp.route('/rate-limiter/profile', methods=['PUT'])
 @jwt_required
+@role_required('admin')
 def update_rate_limiter_profile():
     """覆盖某等级的限流参数"""
     try:
@@ -170,6 +173,7 @@ def get_degradation_levels():
 
 @resilience_bp.route('/degradation/degrade', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def manual_degrade():
     """手动降级"""
     try:
@@ -197,6 +201,7 @@ def manual_degrade():
 
 @resilience_bp.route('/degradation/restore', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def manual_restore():
     """恢复自动管理"""
     try:
@@ -241,6 +246,7 @@ def get_fault_injection_status():
 
 @resilience_bp.route('/fault-injection/inject', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def inject_fault():
     """注入故障"""
     try:
@@ -283,6 +289,7 @@ def inject_fault():
 
 @resilience_bp.route('/fault-injection/<target>', methods=['DELETE'])
 @jwt_required
+@role_required('admin')
 def remove_fault(target):
     """移除故障注入"""
     try:
@@ -297,6 +304,7 @@ def remove_fault(target):
 
 @resilience_bp.route('/fault-injection/clear', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def clear_all_faults():
     """清除所有故障注入"""
     try:
@@ -325,6 +333,7 @@ def get_chaos_status():
 
 @resilience_bp.route('/chaos/experiment', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def create_experiment():
     """创建混沌实验"""
     try:
@@ -353,6 +362,7 @@ def create_experiment():
 
 @resilience_bp.route('/chaos/experiment/<name>/run', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def run_experiment(name):
     """运行混沌实验"""
     try:

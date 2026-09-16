@@ -12,6 +12,7 @@ from core.ops_tools import (
 )
 from core.service_response import success_response, error_response
 from 用户层.auth import jwt_required, role_required
+from ._common import clamp_limit
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ def get_runtime_config():
 
 @ops_bp.route('/config', methods=['PUT'])
 @jwt_required
+@role_required('admin')
 def update_runtime_config():
     """更新运行时配置"""
     try:
@@ -81,6 +83,7 @@ def get_config_key(key):
 
 @ops_bp.route('/config/<key>', methods=['PUT'])
 @jwt_required
+@role_required('admin')
 def set_config_key(key):
     """设置单个配置值"""
     try:
@@ -109,7 +112,7 @@ def set_config_key(key):
 def get_config_history():
     """获取配置变更历史"""
     try:
-        limit = request.args.get('limit', 50, type=int)
+        limit = clamp_limit(request.args.get('limit', 50, type=int), default=50, maximum=500)
         return success_response(runtime_config_manager.get_history(limit))
     except Exception as e:
         logger.error(f"获取配置历史失败: {e}", exc_info=True)
@@ -246,6 +249,7 @@ def cleanup_logs():
 
 @ops_bp.route('/diagnostics/export', methods=['POST'])
 @jwt_required
+@role_required('admin')
 def export_diagnostics():
     """一键导出系统诊断信息"""
     try:
@@ -272,7 +276,7 @@ def export_diagnostics():
 def get_ops_audit():
     """获取运维操作审计记录"""
     try:
-        limit = request.args.get('limit', 50, type=int)
+        limit = clamp_limit(request.args.get('limit', 50, type=int), default=50, maximum=500)
         return success_response(ops_audit.get_recent(limit))
     except Exception as e:
         logger.error(f"获取审计记录失败: {e}", exc_info=True)

@@ -111,6 +111,10 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     # 注册API蓝图（模块化拆分后的多个Blueprint）
     register_api_blueprints(app)
 
+    # 分级限流绑定：登录/改密接口严格限流，防暴力破解与令牌被盗后暴力改密
+    from core.rate_limiter import apply_endpoint_limits
+    apply_endpoint_limits(app, limiter)
+
     # 初始化WebSocket
     socketio = init_socketio(app, database, data_collector)
 

@@ -1,0 +1,120 @@
+{
+  "timestamp": "2026-09-16T00:42:11.333335",
+  "summary": {
+    "total_findings": 15,
+    "severity_counts": {
+      "critical": 12,
+      "high": 3,
+      "medium": 0,
+      "low": 0
+    },
+    "security_score": 0
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "type": "hardcoded_credential",
+      "file": "config.py",
+      "message": "硬编码密钥",
+      "recommendation": "使用环境变量或配置文件存储凭证"
+    },
+    {
+      "severity": "critical",
+      "type": "hardcoded_credential",
+      "file": "展示层\\api\\error_codes.py",
+      "message": "硬编码token",
+      "recommendation": "使用环境变量或配置文件存储凭证"
+    },
+    {
+      "severity": "critical",
+      "type": "hardcoded_credential",
+      "file": ".venv\\Lib\\site-packages\\werkzeug\\debug\\tbtools.py",
+      "message": "硬编码密钥",
+      "recommendation": "使用环境变量或配置文件存储凭证"
+    },
+    {
+      "severity": "critical",
+      "type": "hardcoded_credential",
+      "file": ".venv\\Lib\\site-packages\\pip\\_internal\\utils\\misc.py",
+      "message": "硬编码密码",
+      "recommendation": "使用环境变量或配置文件存储凭证"
+    },
+    {
+      "severity": "critical",
+      "type": "hardcoded_credential",
+      "file": ".venv\\Lib\\site-packages\\dateutil\\parser\\_parser.py",
+      "message": "硬编码token",
+      "recommendation": "使用环境变量或配置文件存储凭证"
+    },
+    {
+      "severity": "high",
+      "type": "sensitive_file",
+      "file": "dist\\scada-backend\\_internal\\certifi\\cacert.pem",
+      "message": "敏感文件未被.gitignore忽略: cacert.pem",
+      "recommendation": "将此文件添加到.gitignore"
+    },
+    {
+      "severity": "high",
+      "type": "sensitive_file",
+      "file": ".venv\\Lib\\site-packages\\certifi\\cacert.pem",
+      "message": "敏感文件未被.gitignore忽略: cacert.pem",
+      "recommendation": "将此文件添加到.gitignore"
+    },
+    {
+      "severity": "high",
+      "type": "sensitive_file",
+      "file": ".venv\\Lib\\site-packages\\pip\\_vendor\\certifi\\cacert.pem",
+      "message": "敏感文件未被.gitignore忽略: cacert.pem",
+      "recommendation": "将此文件添加到.gitignore"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "配置\\devices.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "配置\\devices_simulated.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "配置\\simulation_presets.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "dist\\scada-backend\\_internal\\配置\\devices.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "dist\\scada-backend\\_internal\\配置\\devices_simulated.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "dist\\scada-backend\\_internal\\配置\\simulation_presets.yaml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    },
+    {
+      "severity": "critical",
+      "type": "default_password",
+      "file": "docker-compose.yml",
+      "message": "使用默认密码",
+      "recommendation": "更改所有默认密码"
+    }
+  ]
+}

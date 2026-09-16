@@ -1,6 +1,7 @@
 """
 性能指标API端点
-提供JSON格式的系统性能指标，供前端仪表盘使�?"""
+提供JSON格式的系统性能指标，供前端仪表盘使用
+"""
 import os
 import json
 import sqlite3
@@ -8,19 +9,20 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Blueprint, jsonify, request, current_app
-from 用户�?auth import jwt_required
+from 用户层.auth import jwt_required
 from core.service_response import api_error
 
 performance_bp = Blueprint('performance', __name__, url_prefix='/api/performance')
 
 
 class PerformanceCollector:
-    """性能指标采集�?""
+    """性能指标采集器"""
 
     def __init__(self):
         self._metrics_cache = {}
         self._cache_time = 0
-        self._cache_ttl = 5  # 缓存5�?        self._lock = threading.Lock()
+        self._cache_ttl = 5  # 缓存5秒
+        self._lock = threading.Lock()
         self._project_root = Path(__file__).parent.parent.parent
         self._data_dir = self._project_root / 'data'
 
@@ -28,7 +30,8 @@ class PerformanceCollector:
         """采集系统指标"""
         metrics = {}
 
-        # CPU使用�?        try:
+        # CPU使用率
+        try:
             import psutil
             metrics['cpu_percent'] = psutil.cpu_percent(interval=0.5)
             metrics['cpu_count'] = psutil.cpu_count()
@@ -57,12 +60,13 @@ class PerformanceCollector:
         except Exception:
             metrics['disk_percent'] = -1
 
-        # 线程�?        metrics['thread_count'] = threading.active_count()
+        # 线程数
+        metrics['thread_count'] = threading.active_count()
 
         return metrics
 
     def _collect_database_metrics(self) -> dict:
-        """采集数据库指�?""
+        """采集数据库指标"""
         db_path = self._data_dir / 'scada.db'
         if not db_path.exists():
             return {'status': 'missing', 'size_mb': 0}
@@ -75,7 +79,8 @@ class PerformanceCollector:
             conn = sqlite3.connect(str(db_path), timeout=5)
             cursor = conn.cursor()
 
-            # 表统�?            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            # 表统计
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = [row[0] for row in cursor.fetchall()]
 
             table_counts = {}
@@ -207,7 +212,7 @@ def get_metrics_summary():
             return jsonify({
                 'hours': hours,
                 'samples': 0,
-                'message': '无历史数�?,
+                'message': '无历史数据',
             })
 
         cpu_values = [m.get('system', {}).get('cpu_percent', 0) for m in history if m.get('system', {}).get('cpu_percent', -1) > 0]

@@ -346,6 +346,13 @@ class AuthManager:
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
 
+            # 只接受 access 令牌。refresh 令牌生命周期更长（见 create_refresh_token），
+            # 若被当作 access 令牌接受，等于绕过短时效限制，必须显式拒绝。
+            token_type = payload.get('type')
+            if token_type != 'access':
+                logger.warning("拒绝非 access 类型令牌: type=%s", token_type)
+                return None
+
             # 检查令牌是否在黑名单中 (GB/T 35718)
             jti = payload.get('jti')
             if jti:
@@ -360,7 +367,7 @@ class AuthManager:
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT username, role, display_name, is_active
+                    SELECT username, role, display_name, is_active, must_change_password
                     FROM users WHERE username = ?
                 ''', (payload.get('username'),))
                 user = cursor.fetchone()
@@ -372,7 +379,9 @@ class AuthManager:
                 'username': user['username'],
                 'role': user['role'],
                 'display_name': user['display_name'],
-                'permissions': ROLES.get(user['role'], {}).get('permissions', [])
+                'permissions': ROLES.get(user['role'], {}).get('permissions', []),
+                # 供 jwt_required 判断是否只放行改密接口
+                'must_change_password': bool(user['must_change_password'])
             }
 
         except jwt.ExpiredSignatureError:
@@ -605,6 +614,16 @@ class AuthManager:
         if not user:
             return {'success': False, 'message': '用户不存在'}
 
+        # 该接口专用于「首次登录 / 密码被管理员重置后」的强制改密场景，不校验旧密码。
+        # 因此必须确认账号确实处于强制改密状态，否则等于允许仅凭一个令牌就静默改密，
+        # 绕过了 change_password 的旧密码校验。非强制改密状态一律打回常规接口。
+        if not user['must_change_password']:
+            logger.warning("用户 %s 非强制改密状态，拒绝 force_change_password", username)
+            return {
+                'success': False,
+                'message': '当前账号无需强制改密，请使用常规改密接口（需验证原密码）'
+            }
+
         new_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
 
         with self.database.get_connection() as conn:
@@ -794,6 +813,26 @@ def jwt_required(f):
 
         # 将用户信息附加到请求上下文
         request.current_user = user
+
+        # 强制改密闸门（GB/T 22239 身份鉴别）：首次登录/密码被重置后，
+        # 在完成改密前只放行改密、登出和令牌自检接口，其余一律拒绝。
+        if user.get('must_change_password'):
+            allowed_paths = (
+                '/api/auth/force-change-password',
+                '/api/auth/change-password',
+                '/api/auth/logout',
+                '/api/auth/verify',
+            )
+            if request.path not in allowed_paths:
+                logger.warning(
+                    "用户 %s 未完成强制改密，拒绝访问 %s",
+                    user.get('username'), request.path
+                )
+                return jsonify({
+                    'error': '首次登录必须先修改密码',
+                    'code': 'MUST_CHANGE_PASSWORD'
+                }), 403
+
         return f(*args, **kwargs)
 
     return decorated

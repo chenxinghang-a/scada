@@ -268,6 +268,7 @@ def _start_device_collection(device_id: str):
 
 @devices_bp.route('/devices/<device_id>/test', methods=['POST'])
 @_require_auth
+@_require_engineer
 def test_device_connection(device_id):
     """测试设备连接（支持所有协议）"""
     device_manager = current_app.device_manager

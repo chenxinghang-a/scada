@@ -4,7 +4,8 @@
 
 使用方法:
     python tools/performance_baseline.py establish  # 建立基线
-    python tools/performance_baseline.py compare    # 与基线对�?    python tools/performance_baseline.py report     # 生成报告
+    python tools/performance_baseline.py compare    # 与基线对比
+    python tools/performance_baseline.py report     # 生成报告
 """
 
 import os
@@ -23,7 +24,7 @@ sys.path.insert(0, str(project_root))
 
 
 class PerformanceBaseline:
-    """性能基线管理�?""
+    """性能基线管理器"""
 
     def __init__(self, baseline_file: str = None):
         self.baseline_file = baseline_file or str(project_root / '.performance_baseline.json')
@@ -45,10 +46,11 @@ class PerformanceBaseline:
 
     def establish_baseline(self, duration_minutes: int = 5) -> Dict[str, Any]:
         """建立性能基线"""
-        print(f"建立性能基线（{duration_minutes}分钟�?..")
+        print(f"建立性能基线（{duration_minutes}分钟）...")
 
         samples = []
-        interval = 10  # �?0秒采样一�?        num_samples = duration_minutes * 60 // interval
+        interval = 10  # 每10秒采样一次
+        num_samples = duration_minutes * 60 // interval
 
         for i in range(num_samples):
             sample = self._take_sample()
@@ -92,7 +94,8 @@ class PerformanceBaseline:
                 'max_ms': max(db_values),
             }
 
-        # 线程�?        thread_values = [s['thread_count'] for s in samples]
+        # 线程数
+        thread_values = [s['thread_count'] for s in samples]
         baseline['metrics']['threads'] = {
             'avg': round(sum(thread_values) / len(thread_values), 0),
             'max': max(thread_values),
@@ -101,7 +104,7 @@ class PerformanceBaseline:
         self.baseline = baseline
         self._save_baseline()
 
-        print(f"\n基线已建�? {self.baseline_file}")
+        print(f"\n基线已建立: {self.baseline_file}")
         return baseline
 
     def _take_sample(self) -> Dict[str, Any]:
@@ -138,9 +141,9 @@ class PerformanceBaseline:
         return sample
 
     def compare_with_baseline(self) -> Dict[str, Any]:
-        """与基线对�?""
+        """与基线对比"""
         if not self.baseline:
-            return {'error': '没有基线数据，请先建立基�?}
+            return {'error': '没有基线数据，请先建立基线'}
 
         current = self._take_sample()
         baseline_metrics = self.baseline.get('metrics', {})
@@ -182,7 +185,8 @@ class PerformanceBaseline:
         # 数据库性能对比
         if 'database' in baseline_metrics and current.get('db_query_time_ms'):
             baseline_avg = baseline_metrics['database']['avg_ms']
-            if current['db_query_time_ms'] > baseline_avg * 3:  # �?�?                comparison['deviations'].append({
+            if current['db_query_time_ms'] > baseline_avg * 3:  # 慢3倍
+                comparison['deviations'].append({
                     'metric': 'database',
                     'baseline': baseline_avg,
                     'current': current['db_query_time_ms'],
@@ -190,7 +194,8 @@ class PerformanceBaseline:
                     'severity': 'warning',
                 })
 
-        # 计算总体状�?        if any(d['severity'] == 'critical' for d in comparison['deviations']):
+        # 计算总体状态
+        if any(d['severity'] == 'critical' for d in comparison['deviations']):
             comparison['status'] = 'critical'
         elif comparison['deviations']:
             comparison['status'] = 'warning'
@@ -216,15 +221,15 @@ class PerformanceBaseline:
             if deviation['metric'] == 'cpu':
                 recommendations.append(f"CPU使用率偏高（{deviation['current']}% vs 基线{deviation['baseline']}%），建议检查高CPU进程")
             elif deviation['metric'] == 'memory':
-                recommendations.append(f"内存使用率偏高（{deviation['current']}% vs 基线{deviation['baseline']}%），建议检查内存泄�?)
+                recommendations.append(f"内存使用率偏高（{deviation['current']}% vs 基线{deviation['baseline']}%），建议检查内存泄漏")
             elif deviation['metric'] == 'database':
-                recommendations.append(f"数据库查询变慢（{deviation['current']}ms vs 基线{deviation['baseline']}ms），建议优化查询或清理数�?)
+                recommendations.append(f"数据库查询变慢（{deviation['current']}ms vs 基线{deviation['baseline']}ms），建议优化查询或清理数据")
 
         return recommendations
 
 
 def format_report(report: Dict[str, Any]) -> str:
-    """格式化报�?""
+    """格式化报告"""
     lines = []
     lines.append("=" * 60)
     lines.append("性能基线报告")
@@ -233,19 +238,19 @@ def format_report(report: Dict[str, Any]) -> str:
 
     baseline = report.get('baseline', {})
     if baseline:
-        lines.append(f"\n基线（{baseline.get('timestamp', 'N/A')}�?")
+        lines.append(f"\n基线（{baseline.get('timestamp', 'N/A')}）:")
         for metric, values in baseline.get('metrics', {}).items():
             lines.append(f"  {metric}: {values}")
 
     comparison = report.get('comparison', {})
     if comparison:
-        lines.append(f"\n当前状�? {comparison.get('status', 'unknown').upper()}")
+        lines.append(f"\n当前状态: {comparison.get('status', 'unknown').upper()}")
 
         current = comparison.get('current', {})
         lines.append(f"  CPU: {current.get('cpu_percent', '?')}%")
         lines.append(f"  内存: {current.get('memory_percent', '?')}%")
         lines.append(f"  线程: {current.get('thread_count', '?')}")
-        lines.append(f"  数据库查�? {current.get('db_query_time_ms', '?')}ms")
+        lines.append(f"  数据库查询: {current.get('db_query_time_ms', '?')}ms")
 
         if comparison.get('deviations'):
             lines.append(f"\n偏差:")

@@ -9,7 +9,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
-from ._common import get_auth_manager, api_error_handler, api_error, safe_int, safe_float
+from ._common import get_auth_manager, api_error_handler, api_error, safe_int, safe_float, clamp_limit
 from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
@@ -234,7 +234,7 @@ def write_endpoint(device_id):
 @_require_auth
 def get_control_logs():
     """获取控制操作日志（含安全审计）"""
-    limit = request.args.get('limit', 50, type=int)
+    limit = clamp_limit(request.args.get('limit', 50, type=int), default=50, maximum=500)
     logs = get_auth_manager().get_operation_logs(limit=limit)
     control_logs = [log for log in logs if log.get('action') in (
         'write_register', 'write_coil', 'stop_device', 'start_device',
@@ -509,7 +509,7 @@ def batch_control():
 @_require_auth
 def get_audit_log():
     """获取操作审计日志"""
-    limit = request.args.get('limit', 100, type=int)
+    limit = clamp_limit(request.args.get('limit', 100, type=int), default=100, maximum=500)
     action_filter = request.args.get('action')
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:

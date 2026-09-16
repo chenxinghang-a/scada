@@ -1,10 +1,14 @@
 """
-自动化运维脚�?用于日常运维任务的自动化执行
+自动化运维脚本
+用于日常运维任务的自动化执行
 
 使用方法:
-    python tools/auto_ops.py health-check      # 健康检�?    python tools/auto_ops.py backup            # 自动备份
-    python tools/auto_ops.py cleanup           # 清理旧数�?    python tools/auto_ops.py report            # 生成日报
-    python tools/auto_ops.py all               # 执行所有任�?"""
+    python tools/auto_ops.py health-check      # 健康检查
+    python tools/auto_ops.py backup            # 自动备份
+    python tools/auto_ops.py cleanup           # 清理旧数据
+    python tools/auto_ops.py report            # 生成日报
+    python tools/auto_ops.py all               # 执行所有任务
+"""
 
 import os
 import sys
@@ -22,7 +26,7 @@ sys.path.insert(0, str(project_root))
 
 
 class AutoOps:
-    """自动化运�?""
+    """自动化运维"""
 
     def __init__(self):
         self.project_root = project_root
@@ -35,7 +39,7 @@ class AutoOps:
         self.backup_dir.mkdir(exist_ok=True)
 
     def health_check(self) -> Dict[str, Any]:
-        """执行健康检�?""
+        """执行健康检查"""
         results = {
             'timestamp': datetime.now().isoformat(),
             'checks': {},
@@ -63,7 +67,8 @@ class AutoOps:
             results['checks']['database'] = {'status': 'missing'}
             results['status'] = 'unhealthy'
 
-        # 2. 检查日志目�?        log_files = list(self.log_dir.glob('*.log'))
+        # 2. 检查日志目录
+        log_files = list(self.log_dir.glob('*.log'))
         total_log_size = sum(f.stat().st_size for f in log_files)
         results['checks']['logs'] = {
             'status': 'ok',
@@ -71,7 +76,8 @@ class AutoOps:
             'total_size_mb': round(total_log_size / (1024 * 1024), 2),
         }
 
-        # 3. 检查配置文�?        config_dir = project_root / '配置'
+        # 3. 检查配置文件
+        config_dir = project_root / '配置'
         if config_dir.exists():
             config_files = list(config_dir.glob('*.yaml'))
             results['checks']['config'] = {
@@ -82,7 +88,8 @@ class AutoOps:
             results['checks']['config'] = {'status': 'missing'}
             results['status'] = 'degraded'
 
-        # 4. 检查磁盘空�?        try:
+        # 4. 检查磁盘空间
+        try:
             import shutil
             total, used, free = shutil.disk_usage(str(self.project_root))
             results['checks']['disk'] = {
@@ -113,7 +120,8 @@ class AutoOps:
             'files': [],
         }
 
-        # 1. 备份数据�?        db_path = self.data_dir / 'scada.db'
+        # 1. 备份数据库
+        db_path = self.data_dir / 'scada.db'
         if db_path.exists():
             import shutil
             dest = backup_path / 'scada.db'
@@ -158,7 +166,7 @@ class AutoOps:
         return result
 
     def cleanup(self, days: int = 30) -> Dict[str, Any]:
-        """清理旧数�?""
+        """清理旧数据"""
         result = {
             'timestamp': datetime.now().isoformat(),
             'cleaned': {},
@@ -166,14 +174,16 @@ class AutoOps:
 
         cutoff = datetime.now() - timedelta(days=days)
 
-        # 1. 清理旧日�?        log_cleaned = 0
+        # 1. 清理旧日志
+        log_cleaned = 0
         for log_file in self.log_dir.glob('*.log'):
             if datetime.fromtimestamp(log_file.stat().st_mtime) < cutoff:
                 log_file.unlink()
                 log_cleaned += 1
         result['cleaned']['logs'] = log_cleaned
 
-        # 2. 清理旧备�?        backup_cleaned = 0
+        # 2. 清理旧备份
+        backup_cleaned = 0
         for backup_file in self.backup_dir.glob('*.zip'):
             if datetime.fromtimestamp(backup_file.stat().st_mtime) < cutoff:
                 backup_file.unlink()
@@ -215,9 +225,11 @@ class AutoOps:
             'timestamp': datetime.now().isoformat(),
         }
 
-        # 健康检�?        report['health'] = self.health_check()
+        # 健康检查
+        report['health'] = self.health_check()
 
-        # 数据库统�?        db_path = self.data_dir / 'scada.db'
+        # 数据库统计
+        db_path = self.data_dir / 'scada.db'
         if db_path.exists():
             try:
                 conn = sqlite3.connect(str(db_path))
@@ -245,20 +257,22 @@ class AutoOps:
         return report
 
     def run_all(self) -> Dict[str, Any]:
-        """执行所有运维任�?""
+        """执行所有运维任务"""
         results = {
             'timestamp': datetime.now().isoformat(),
             'tasks': {},
         }
 
-        # 1. 健康检�?        print("执行健康检�?..")
+        # 1. 健康检查
+        print("执行健康检查...")
         results['tasks']['health_check'] = self.health_check()
 
         # 2. 自动备份
         print("执行自动备份...")
         results['tasks']['backup'] = self.backup()
 
-        # 3. 清理旧数�?        print("清理旧数�?..")
+        # 3. 清理旧数据
+        print("清理旧数据...")
         results['tasks']['cleanup'] = self.cleanup()
 
         # 4. 生成报告
@@ -269,9 +283,9 @@ class AutoOps:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='自动化运维脚�?)
+    parser = argparse.ArgumentParser(description='自动化运维脚本')
     parser.add_argument('command', choices=['health-check', 'backup', 'cleanup', 'report', 'all'],
-                       help='执行的命�?)
+                       help='执行的命令')
     parser.add_argument('--days', type=int, default=30, help='清理天数')
 
     args = parser.parse_args()
@@ -292,7 +306,8 @@ def main():
     # 输出结果
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
-    # 保存到日�?    log_file = ops.log_dir / f'ops_{datetime.now().strftime("%Y%m%d")}.json'
+    # 保存到日志
+    log_file = ops.log_dir / f'ops_{datetime.now().strftime("%Y%m%d")}.json'
     with open(log_file, 'a', encoding='utf-8') as f:
         f.write(json.dumps(result, ensure_ascii=False) + '\n')
 

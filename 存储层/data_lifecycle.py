@@ -2,7 +2,8 @@
 数据生命周期管理模块
 管理数据的创建、存储、归档、删除全流程
 
-功能�?- 数据保留策略
+功能：
+- 数据保留策略
 - 自动归档
 - 数据清理
 - 生命周期报告
@@ -41,7 +42,7 @@ class RetentionPolicy:
 
 
 class DataLifecycleManager:
-    """数据生命周期管理�?""
+    """数据生命周期管理器"""
 
     def __init__(self, db_path: str, config: Dict[str, Any] = None):
         self.db_path = db_path
@@ -127,11 +128,13 @@ class DataLifecycleManager:
 
         cursor = conn.cursor()
 
-        # 1. 统计当前数据�?        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+        # 1. 统计当前数据量
+        cursor.execute(f"SELECT COUNT(*) FROM {table}")
         total_count = cursor.fetchone()[0]
         result['total_records'] = total_count
 
-        # 2. 归档旧数�?        if policy.archive_enabled:
+        # 2. 归档旧数据
+        if policy.archive_enabled:
             archive_cutoff = datetime.now() - timedelta(days=policy.archive_days)
             archive_table = f"{table}_archive"
 
@@ -196,7 +199,8 @@ class DataLifecycleManager:
                     cursor.execute(f"SELECT COUNT(*) FROM {table}")
                     count = cursor.fetchone()[0]
 
-                    # 获取最早和最新记�?                    cursor.execute(f"SELECT MIN(timestamp), MAX(timestamp) FROM {table}")
+                    # 获取最早和最新记录
+                    cursor.execute(f"SELECT MIN(timestamp), MAX(timestamp) FROM {table}")
                     min_ts, max_ts = cursor.fetchone()
 
                     table_stats[table] = {

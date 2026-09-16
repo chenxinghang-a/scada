@@ -1,7 +1,13 @@
 """
-数据一致性检查模�?检查数据库中数据的一致性和完整�?
-功能�?- 外键一致性检�?- 数据格式验证
-- 重复数据检�?- 一致性报�?"""
+数据一致性检查模块
+检查数据库中数据的一致性和完整性
+
+功能：
+- 外键一致性检查
+- 数据格式验证
+- 重复数据检测
+- 一致性报告
+"""
 
 import time
 import logging
@@ -21,7 +27,7 @@ class ConsistencyChecker:
         self.checks: List[Dict[str, Any]] = []
 
     def run_all_checks(self) -> Dict[str, Any]:
-        """运行所有一致性检�?""
+        """运行所有一致性检查"""
         results = {
             'timestamp': datetime.now().isoformat(),
             'checks': [],
@@ -32,15 +38,20 @@ class ConsistencyChecker:
         try:
             conn = sqlite3.connect(self.db_path, timeout=10)
 
-            # 1. 检查表结构完整�?            results['checks'].append(self._check_table_integrity(conn))
+            # 1. 检查表结构完整性
+            results['checks'].append(self._check_table_integrity(conn))
 
-            # 2. 检查数据格�?            results['checks'].append(self._check_data_formats(conn))
+            # 2. 检查数据格式
+            results['checks'].append(self._check_data_formats(conn))
 
-            # 3. 检查重复数�?            results['checks'].append(self._check_duplicates(conn))
+            # 3. 检查重复数据
+            results['checks'].append(self._check_duplicates(conn))
 
-            # 4. 检查孤立记�?            results['checks'].append(self._check_orphaned_records(conn))
+            # 4. 检查孤立记录
+            results['checks'].append(self._check_orphaned_records(conn))
 
-            # 5. 检查时间戳一致�?            results['checks'].append(self._check_timestamps(conn))
+            # 5. 检查时间戳一致性
+            results['checks'].append(self._check_timestamps(conn))
 
             conn.close()
 
@@ -58,7 +69,7 @@ class ConsistencyChecker:
         return results
 
     def _check_table_integrity(self, conn: sqlite3.Connection) -> Dict[str, Any]:
-        """检查表结构完整�?""
+        """检查表结构完整性"""
         cursor = conn.cursor()
         issues = []
 
@@ -79,7 +90,7 @@ class ConsistencyChecker:
                 columns = [row[1] for row in cursor.fetchall()]
 
                 if 'id' not in columns and table not in ['sqlite_sequence']:
-                    issues.append(f"�?{table} 缺少 id �?)
+                    issues.append(f"表 {table} 缺少 id 列")
 
             except Exception as e:
                 issues.append(f"检查表 {table} 结构失败: {e}")
@@ -92,22 +103,23 @@ class ConsistencyChecker:
         }
 
     def _check_data_formats(self, conn: sqlite3.Connection) -> Dict[str, Any]:
-        """检查数据格�?""
+        """检查数据格式"""
         cursor = conn.cursor()
         issues = []
 
-        # 检�?realtime_data 的值格�?        try:
+        # 检查 realtime_data 的值格式
+        try:
             cursor.execute("""
                 SELECT COUNT(*) FROM realtime_data
                 WHERE value IS NOT NULL AND typeof(value) != 'real' AND typeof(value) != 'integer'
             """)
             invalid_values = cursor.fetchone()[0]
             if invalid_values > 0:
-                issues.append(f"realtime_data 中有 {invalid_values} 条无效数�?)
+                issues.append(f"realtime_data 中有 {invalid_values} 条无效数值")
         except Exception:
             pass
 
-        # 检�?history_data 的时间戳格式
+        # 检查 history_data 的时间戳格式
         try:
             cursor.execute("""
                 SELECT COUNT(*) FROM history_data
@@ -115,7 +127,7 @@ class ConsistencyChecker:
             """)
             null_timestamps = cursor.fetchone()[0]
             if null_timestamps > 0:
-                issues.append(f"history_data 中有 {null_timestamps} 条空时间�?)
+                issues.append(f"history_data 中有 {null_timestamps} 条空时间戳")
         except Exception:
             pass
 
@@ -127,11 +139,12 @@ class ConsistencyChecker:
         }
 
     def _check_duplicates(self, conn: sqlite3.Connection) -> Dict[str, Any]:
-        """检查重复数�?""
+        """检查重复数据"""
         cursor = conn.cursor()
         issues = []
 
-        # 检�?realtime_data 的重复（device_id + register_name 应该唯一�?        try:
+        # 检查 realtime_data 的重复（device_id + register_name 应该唯一）
+        try:
             cursor.execute("""
                 SELECT device_id, register_name, COUNT(*) as cnt
                 FROM realtime_data
@@ -140,11 +153,11 @@ class ConsistencyChecker:
             """)
             duplicates = cursor.fetchall()
             if duplicates:
-                issues.append(f"realtime_data 中有 {len(duplicates)} 组重复数�?)
+                issues.append(f"realtime_data 中有 {len(duplicates)} 组重复数据")
         except Exception:
             pass
 
-        # 检�?users 的重复用户名
+        # 检查 users 的重复用户名
         try:
             cursor.execute("""
                 SELECT username, COUNT(*) as cnt
@@ -154,7 +167,7 @@ class ConsistencyChecker:
             """)
             duplicates = cursor.fetchall()
             if duplicates:
-                issues.append(f"users 表中�?{len(duplicates)} 个重复用户名")
+                issues.append(f"users 表中有 {len(duplicates)} 个重复用户名")
         except Exception:
             pass
 
@@ -166,11 +179,11 @@ class ConsistencyChecker:
         }
 
     def _check_orphaned_records(self, conn: sqlite3.Connection) -> Dict[str, Any]:
-        """检查孤立记�?""
+        """检查孤立记录"""
         cursor = conn.cursor()
         issues = []
 
-        # 检�?alarm_records 中的孤立记录（引用不存在的设备）
+        # 检查 alarm_records 中的孤立记录（引用不存在的设备）
         try:
             cursor.execute("""
                 SELECT COUNT(*) FROM alarm_records
@@ -190,7 +203,7 @@ class ConsistencyChecker:
         }
 
     def _check_timestamps(self, conn: sqlite3.Connection) -> Dict[str, Any]:
-        """检查时间戳一致�?""
+        """检查时间戳一致性"""
         cursor = conn.cursor()
         issues = []
 
@@ -216,7 +229,7 @@ class ConsistencyChecker:
             """, (old,))
             old_count = cursor.fetchone()[0]
             if old_count > 0:
-                issues.append(f"history_data 中有 {old_count} 条过旧时间戳�?2020�?)
+                issues.append(f"history_data 中有 {old_count} 条过旧时间戳（<2020）")
         except Exception:
             pass
 
@@ -228,7 +241,7 @@ class ConsistencyChecker:
         }
 
     def generate_report(self) -> Dict[str, Any]:
-        """生成一致性报�?""
+        """生成一致性报告"""
         results = self.run_all_checks()
 
         report = {

@@ -5,7 +5,8 @@
 使用方法:
     python tools/auto_metrics.py collect   # 采集指标
     python tools/auto_metrics.py report    # 生成报告
-    python tools/auto_metrics.py alert     # 检查告�?"""
+    python tools/auto_metrics.py alert     # 检查告警
+"""
 
 import os
 import sys
@@ -24,7 +25,7 @@ sys.path.insert(0, str(project_root))
 
 
 class MetricsCollector:
-    """性能指标采集�?""
+    """性能指标采集器"""
 
     def __init__(self):
         self.project_root = project_root
@@ -42,7 +43,8 @@ class MetricsCollector:
             'type': 'system',
         }
 
-        # CPU使用�?        try:
+        # CPU使用率
+        try:
             import psutil
             metrics['cpu_percent'] = psutil.cpu_percent(interval=1)
             metrics['cpu_count'] = psutil.cpu_count()
@@ -70,13 +72,14 @@ class MetricsCollector:
         except Exception:
             metrics['disk_percent'] = -1
 
-        # 线程�?        import threading
+        # 线程数
+        import threading
         metrics['thread_count'] = threading.active_count()
 
         return metrics
 
     def collect_database_metrics(self) -> Dict[str, Any]:
-        """采集数据库指�?""
+        """采集数据库指标"""
         db_path = self.data_dir / 'scada.db'
 
         if not db_path.exists():
@@ -91,7 +94,8 @@ class MetricsCollector:
         try:
             conn = sqlite3.connect(str(db_path), timeout=5)
 
-            # 表统�?            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            # 表统计
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = [row[0] for row in cursor.fetchall()]
 
             table_counts = {}
@@ -141,7 +145,7 @@ class MetricsCollector:
         return metrics
 
     def collect_all(self) -> Dict[str, Any]:
-        """采集所有指�?""
+        """采集所有指标"""
         return {
             'timestamp': datetime.now().isoformat(),
             'system': self.collect_system_metrics(),
@@ -150,7 +154,7 @@ class MetricsCollector:
         }
 
     def save_metrics(self, metrics: Dict[str, Any]):
-        """保存指标到文�?""
+        """保存指标到文件"""
         with open(self.metrics_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(metrics, ensure_ascii=False) + '\n')
 
@@ -175,7 +179,7 @@ class MetricsCollector:
         return metrics
 
     def check_alerts(self, metrics: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """检查告警条�?""
+        """检查告警条件"""
         alerts = []
 
         # CPU告警
@@ -184,7 +188,7 @@ class MetricsCollector:
             alerts.append({
                 'level': 'critical',
                 'type': 'cpu',
-                'message': f'CPU使用率过�? {cpu}%',
+                'message': f'CPU使用率过高: {cpu}%',
                 'value': cpu,
                 'threshold': 90,
             })
@@ -192,7 +196,7 @@ class MetricsCollector:
             alerts.append({
                 'level': 'warning',
                 'type': 'cpu',
-                'message': f'CPU使用率较�? {cpu}%',
+                'message': f'CPU使用率较高: {cpu}%',
                 'value': cpu,
                 'threshold': 70,
             })
@@ -203,7 +207,7 @@ class MetricsCollector:
             alerts.append({
                 'level': 'critical',
                 'type': 'memory',
-                'message': f'内存使用率过�? {memory}%',
+                'message': f'内存使用率过高: {memory}%',
                 'value': memory,
                 'threshold': 90,
             })
@@ -211,7 +215,7 @@ class MetricsCollector:
             alerts.append({
                 'level': 'warning',
                 'type': 'memory',
-                'message': f'内存使用率较�? {memory}%',
+                'message': f'内存使用率较高: {memory}%',
                 'value': memory,
                 'threshold': 80,
             })
@@ -222,7 +226,7 @@ class MetricsCollector:
             alerts.append({
                 'level': 'critical',
                 'type': 'disk',
-                'message': f'磁盘使用率过�? {disk}%',
+                'message': f'磁盘使用率过高: {disk}%',
                 'value': disk,
                 'threshold': 90,
             })
@@ -230,7 +234,7 @@ class MetricsCollector:
             alerts.append({
                 'level': 'warning',
                 'type': 'disk',
-                'message': f'磁盘使用率较�? {disk}%',
+                'message': f'磁盘使用率较高: {disk}%',
                 'value': disk,
                 'threshold': 80,
             })
@@ -242,7 +246,7 @@ class MetricsCollector:
         metrics_list = self.load_metrics(hours)
 
         if not metrics_list:
-            return {'message': '无历史数�?}
+            return {'message': '无历史数据'}
 
         # 计算统计
         cpu_values = [m.get('system', {}).get('cpu_percent', 0) for m in metrics_list]
@@ -268,7 +272,7 @@ class MetricsCollector:
 def main():
     parser = argparse.ArgumentParser(description='性能指标自动采集工具')
     parser.add_argument('command', choices=['collect', 'report', 'alert'],
-                       help='执行的命�?)
+                       help='执行的命令')
     parser.add_argument('--hours', type=int, default=24, help='报告时间范围（小时）')
 
     args = parser.parse_args()
@@ -293,7 +297,7 @@ def main():
             for alert in alerts:
                 print(f"  [{alert['level'].upper()}] {alert['message']}")
         else:
-            print("无告�?)
+            print("无告警")
 
 
 if __name__ == '__main__':

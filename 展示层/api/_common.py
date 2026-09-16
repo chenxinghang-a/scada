@@ -54,6 +54,32 @@ def safe_float(val, name='value'):
         raise ValueError(f'Invalid {name}: must be number')
 
 
+# 查询类接口 limit 参数的硬上限。未设上限时，`?limit=999999999` 会直接
+# 打穿到数据库层（全表扫描 + 大对象分配），是最省事的一种 DoS 面。
+MAX_QUERY_LIMIT = 10000
+
+
+def clamp_limit(val, default: int = 50, maximum: int = MAX_QUERY_LIMIT) -> int:
+    """把查询参数 limit 规整到 [1, maximum]。
+
+    - val 为 None / 不可转换 → 返回 default（并同样受 maximum 约束）
+    - 负数 / 0 → 1
+    - 超过上限 → 上限
+
+    调用方传入的 default 若本身大于 maximum，会被一起夹紧，保证任何路径
+    都不可能拿到超过上限的值。
+    """
+    upper = max(1, int(maximum))
+    base = max(1, min(int(default), upper))
+    if val is None:
+        return base
+    try:
+        n = int(val)
+    except (ValueError, TypeError):
+        return base
+    return max(1, min(n, upper))
+
+
 def load_yaml_config(config_path: str) -> dict[str, Any]:
     """加载YAML配置文件"""
     path = Path(config_path)

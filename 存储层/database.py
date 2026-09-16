@@ -14,6 +14,22 @@ from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 
 
+def adapt_datetime(dt: datetime) -> str:
+    """把 datetime 适配为 SQLite 文本（写入路径）。
+
+    输出格式与 Python 3.12 之前 sqlite3 默认适配器完全一致，即
+    ``'YYYY-MM-DD HH:MM:SS.ffffff'``（空格分隔、微秒为 0 时省略小数部分），
+    因此库中已有字符串的格式保持不变，新旧数据可以混用、可直接比较排序。
+    """
+    return dt.isoformat(sep=' ')
+
+
+# 显式注册适配器，替代 Python 3.12 起废弃的 sqlite3 默认 datetime 适配器。
+# 注册后本进程内所有 sqlite3 连接（含本项目其它模块）写 datetime 参数时
+# 都走这里，不再触发 DeprecationWarning。
+sqlite3.register_adapter(datetime, adapt_datetime)
+
+
 class Database:
     """
     SQLite数据库管理类

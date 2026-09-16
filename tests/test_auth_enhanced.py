@@ -268,11 +268,26 @@ class TestPasswordChange:
         assert result['success'] is False
 
     def test_force_change_password(self, auth):
-        """force_change_password works without old password"""
+        """force_change_password works without old password, but only in forced state"""
         auth.register('forcepw', 'Abcdef12', role='viewer', display_name='Force User')
+        # 该接口专用于「首次登录 / 密码被重置」场景，必须先把用户置为强制改密态
+        with auth.database.get_connection() as conn:
+            conn.cursor().execute(
+                'UPDATE users SET must_change_password = 1 WHERE username = ?', ('forcepw',)
+            )
         result = auth.force_change_password('forcepw', 'NewPass456')
         assert result['success'] is True
         assert 'token' in result
+
+    def test_force_change_password_rejected_when_not_forced(self, auth):
+        """非强制改密态必须走常规改密接口，防止仅凭令牌静默改密（安全回归）"""
+        auth.register('noforce', 'Abcdef12', role='viewer')
+        result = auth.force_change_password('noforce', 'NewPass456')
+        assert result['success'] is False
+        # 原密码应当仍然有效，说明密码没被改掉
+        assert auth.login('noforce', 'Abcdef12')['success'] is True
+        # 而"新密码"不该生效
+        assert auth.login('noforce', 'NewPass456')['success'] is False
 
     def test_force_change_password_nonexistent(self, auth):
         """force_change_password fails for nonexistent user"""

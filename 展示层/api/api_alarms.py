@@ -8,7 +8,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
-from ._common import get_auth_manager, load_yaml_config, save_yaml_config, api_error_handler, api_error
+from ._common import get_auth_manager, load_yaml_config, save_yaml_config, api_error_handler, api_error, clamp_limit
 from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def get_alarms():
     device_id = request.args.get('device_id')
     alarm_level = request.args.get('alarm_level')
     acknowledged = request.args.get('acknowledged')
-    limit = min(request.args.get('limit', 100, type=int), 10000)
+    limit = clamp_limit(request.args.get('limit', 100, type=int), default=100, maximum=10000)
 
     if acknowledged is not None:
         acknowledged = acknowledged.lower() == 'true'
@@ -97,6 +97,7 @@ def get_alarm_output_status():
 
 @alarms_bp.route('/alarm-output/acknowledge', methods=['POST'])
 @_require_auth
+@_require_operator
 @api_error_handler
 def alarm_output_acknowledge():
     """消音 — 关闭蜂鸣器，报警灯保持闪烁"""
@@ -111,6 +112,7 @@ def alarm_output_acknowledge():
 
 @alarms_bp.route('/alarm-output/reset', methods=['POST'])
 @_require_auth
+@_require_operator
 @api_error_handler
 def alarm_output_reset():
     """复位 — 全部清零，恢复绿灯正常状态"""
@@ -153,6 +155,7 @@ def alarm_output_manual():
 
 @alarms_bp.route('/broadcast/speak', methods=['POST'])
 @_require_auth
+@_require_operator
 @api_error_handler
 def broadcast_speak():
     """手动广播喊话"""
@@ -192,7 +195,7 @@ def get_broadcast_areas():
 @api_error_handler
 def get_broadcast_history():
     """获取广播历史"""
-    limit = request.args.get('limit', 50, type=int)
+    limit = clamp_limit(request.args.get('limit', 50, type=int), default=50, maximum=500)
     alarm_manager = current_app.alarm_manager
     if not alarm_manager.broadcast_system:
         return module_unavailable_response('broadcast_system')
