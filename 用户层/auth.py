@@ -255,7 +255,7 @@ class AuthManager:
             attempts = (user['login_attempts'] or 0) + 1
             locked_until = None
             if attempts >= AuthConfig.MAX_LOGIN_ATTEMPTS:
-                locked_until = (datetime.now() + timedelta(minutes=AuthConfig.LOCKOUT_MINUTES)).isoformat()
+                locked_until = (datetime.now() + timedelta(minutes=AuthConfig.LOCKOUT_MINUTES)).isoformat(sep=' ')
 
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
@@ -425,7 +425,7 @@ class AuthManager:
     def cleanup_expired_blacklist(self):
         """清理过期的黑名单条目（7天前的记录）"""
         try:
-            cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+            cutoff = (datetime.now() - timedelta(days=7)).isoformat(sep=' ')
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('DELETE FROM jwt_blacklist WHERE blacklisted_at < ?', (cutoff,))
@@ -583,7 +583,7 @@ class AuthManager:
             cursor.execute('''
                 UPDATE users SET password_hash = ?, updated_at = ?, password_changed_at = ?
                 WHERE username = ?
-            ''', (new_hash.decode('utf-8'), now, now.isoformat(), username))
+            ''', (new_hash.decode('utf-8'), now, now.isoformat(sep=' '), username))
 
         # GB/T 35718: 密码修改后撤销该用户的所有活跃令牌
         self._blacklist_user_tokens(username, 'password_changed')

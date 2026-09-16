@@ -152,7 +152,7 @@ class DataLifecycleManager:
                     SELECT * FROM {table}
                     WHERE timestamp < ?
                     AND id NOT IN (SELECT id FROM {archive_table})
-                """, (archive_cutoff.isoformat(),))
+                """, (archive_cutoff.isoformat(sep=' '),))
                 archived_count = cursor.rowcount
                 result['archived_count'] = archived_count
 
@@ -161,7 +161,7 @@ class DataLifecycleManager:
         cursor.execute(f"""
             DELETE FROM {table}
             WHERE timestamp < ?
-        """, (delete_cutoff.isoformat(),))
+        """, (delete_cutoff.isoformat(sep=' '),))
         deleted_count = cursor.rowcount
         result['deleted_count'] = deleted_count
 

@@ -118,7 +118,7 @@ class DataArchive:
                 SELECT device_id, register_name, value, unit, timestamp
                 FROM history_data
                 WHERE timestamp < ?
-            ''', (cutoff_date.isoformat(),))
+            ''', (cutoff_date.isoformat(sep=' '),))
             
             moved_count = cursor.rowcount
             
@@ -491,15 +491,17 @@ class DataArchive:
             
             if start_time:
                 conditions.append("timestamp >= ?")
-                params.append(start_time.isoformat())
+                params.append(start_time.isoformat(sep=' '))
             
             if end_time:
                 conditions.append("timestamp <= ?")
-                params.append(end_time.isoformat())
+                params.append(end_time.isoformat(sep=' '))
             
             where_clause = " AND ".join(conditions) if conditions else "1=1"
             
             # 查询历史数据统计
+            # 注意：where_clause 里是 ? 占位符，必须把 params 传进去，
+            # 否则一旦带筛选条件就会抛 sqlite3.ProgrammingError。
             cursor.execute(f'''
                 SELECT 
                     device_id,
@@ -510,7 +512,7 @@ class DataArchive:
                 FROM history_data
                 WHERE {where_clause}
                 GROUP BY device_id, register_name
-            ''')
+            ''', params)
             
             stats = []
             for row in cursor.fetchall():

@@ -38,7 +38,13 @@ tdengine = [
 include = ["配置*", "模板*", "静态资源*"]
 
 [tool.pytest.ini_options]
-testpaths = ["测试"]
+# 真正的测试套件在 tests/（约 1880 个用例）。
+# 历史配置指向 测试/，那里只有 13 个 2026-05 的遗留脚本，其中 4 个直接 ERROR、
+# 其余用 `return True` 而非 assert（pytest 会警告 PytestReturnNotNone），
+# 等于永远不会失败。结果就是裸跑 `pytest` 得到"13 个全绿"的假信号。
+# 遗留目录待清理，先用 norecursedirs 排除，避免误收集。
+testpaths = ["tests"]
+norecursedirs = ["测试", "dist", "build", ".venv", "node_modules", "managed_components"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

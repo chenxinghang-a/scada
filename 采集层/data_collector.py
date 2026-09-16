@@ -6,6 +6,7 @@
 
 import json
 import math
+import os
 import time
 import queue
 import logging
@@ -110,11 +111,22 @@ class DataQualityAssessor:
 
 
 class DiskBackedQueue:
-    """磁盘持久化队列 - 崩溃恢复"""
+    """磁盘持久化队列 - 崩溃恢复
 
-    def __init__(self, maxsize: int = 50000, persist_dir: str = 'data/queue'):
+    持久化目录可用 ``persist_dir`` 显式指定，或用环境变量
+    ``SCADA_QUEUE_PERSIST_DIR`` 覆盖（测试会话用它指向临时目录，
+    避免多个测试共用同一个 pending_data.jsonl 造成相互污染）。
+    """
+
+    DEFAULT_PERSIST_DIR = 'data/queue'
+
+    def __init__(self, maxsize: int = 50000, persist_dir: str | None = None):
         self.maxsize = maxsize
         self._queue = queue.Queue(maxsize=maxsize)
+        if persist_dir is None:
+            persist_dir = os.environ.get(
+                'SCADA_QUEUE_PERSIST_DIR', self.DEFAULT_PERSIST_DIR
+            )
         self._persist_dir = Path(persist_dir)
         self._persist_dir.mkdir(parents=True, exist_ok=True)
         self._persist_file = self._persist_dir / 'pending_data.jsonl'

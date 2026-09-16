@@ -209,7 +209,7 @@ class ConsistencyChecker:
 
         # 检查未来时间戳
         try:
-            now = datetime.now().isoformat()
+            now = datetime.now().isoformat(sep=' ')
             cursor.execute(f"""
                 SELECT COUNT(*) FROM history_data
                 WHERE timestamp > ?
