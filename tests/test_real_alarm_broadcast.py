@@ -155,7 +155,11 @@ class TestRealAlarmOutputFlash:
 
     def test_stop_flash_no_thread(self, alarm_output):
         alarm_output._flash_thread = None
+        alarm_output._flash_running = True
         alarm_output._stop_flash()
+        # 原测试只调用不校验（恒过）。没有闪烁线程时也必须把运行标志清掉，
+        # 否则上层会一直认为还在闪烁。
+        assert alarm_output._flash_running is False, "_stop_flash 未清除运行标志"
 
 
 class TestRealAlarmOutputBuzzerPulse:
@@ -170,7 +174,10 @@ class TestRealAlarmOutputBuzzerPulse:
 
     def test_stop_buzzer_no_thread(self, alarm_output):
         alarm_output._buzzer_thread = None
+        alarm_output._buzzer_running = True
         alarm_output._stop_buzzer_pulse()
+        # 原测试只调用不校验（恒过）。没有脉冲线程时也必须清除运行标志。
+        assert alarm_output._buzzer_running is False, "_stop_buzzer_pulse 未清除运行标志"
 
 
 class TestRealAlarmOutputActivate:

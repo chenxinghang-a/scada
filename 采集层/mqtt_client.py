@@ -193,10 +193,14 @@ class MQTTClient:
         try:
             self.client.loop_stop()
             self.client.disconnect()
-            self.connected = False
             logger.info("MQTT连接已断开")
         except Exception as e:
             logger.error(f"MQTT断开失败: {e}")
+        finally:
+            # 无论底层 loop_stop/disconnect 是否报错，状态都必须收敛为"未连接"。
+            # 原实现把 self.connected = False 放在 try 内：一旦 loop_stop 抛异常，
+            # 状态就停留在 True，上层会继续往可能已经死掉的连接 publish。
+            self.connected = False
 
     def subscribe(self, topic: str, qos: int = 1) -> bool:
         """订阅主题"""

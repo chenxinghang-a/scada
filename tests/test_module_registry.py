@@ -217,6 +217,10 @@ class TestStatusManagement:
     def test_set_status_not_found(self):
         """set_status is no-op for unknown module"""
         ModuleRegistry.set_status('unknown', ModuleStatus.ERROR)  # should not raise
+        # 原测试只调用不校验（恒过）。对未注册模块必须彻底 no-op，
+        # 不能凭空创建出一条状态记录。
+        assert 'unknown' not in ModuleRegistry._modules, \
+            "set_status 为未注册模块凭空创建了记录"
 
 
 # ============================================================
@@ -244,6 +248,10 @@ class TestDisableEnable:
         """enable is no-op for non-disabled module"""
         ModuleRegistry.register('enable_nd', dict)
         ModuleRegistry.enable('enable_nd')  # should not raise
+        # 原测试只调用不校验（恒过）。对非 DISABLED 模块，enable 不得改动其状态。
+        info = ModuleRegistry._modules['enable_nd']
+        assert info.status == ModuleStatus.REGISTERED, \
+            f"enable 把非 DISABLED 模块的状态改成了 {info.status}"
 
 
 # ============================================================
@@ -442,14 +450,30 @@ class TestClear:
     def test_clear_stops_running_modules(self):
         """clear stops running modules before removing"""
         class HasStop:
+            # 用类级列表收集实例：ModuleRegistry.get_instance() 在模块处于
+            # running 状态时会抛 RuntimeError（只允许取 INITIALIZED 的实例），
+            # 所以这里不能靠它拿实例。
+            instances = []
+
             def __init__(self):
                 self.stopped = False
+                HasStop.instances.append(self)
+
             def start(self):
                 pass
+
             def stop(self):
                 self.stopped = True
+
         ModuleRegistry.register('clear_stop', HasStop)
         ModuleRegistry.initialize('clear_stop')
         ModuleRegistry.start('clear_stop')
+
+        assert HasStop.instances, "模块实例未创建"
+        inst = HasStop.instances[-1]
+        assert inst.stopped is False, "clear 前不应已停止"
+
         ModuleRegistry.clear()
-        # Module should have been stopped
+        # 原测试只留了一句注释 "Module should have been stopped"，没有任何断言。
+        assert inst.stopped is True, "clear 未停止正在运行的模块"
+        assert ModuleRegistry.get_status('clear_stop')['status'] == 'not_found'

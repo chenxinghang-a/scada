@@ -199,7 +199,8 @@ class CapacityPlanner:
                 cursor = conn.cursor()
 
                 # 获取最近7天的数据增长
-                week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+                # sep=' ' 与库内写入格式一致；用默认的 'T' 分隔会漏掉同一天的数据
+                week_ago = (datetime.now() - timedelta(days=7)).isoformat(sep=' ')
                 cursor.execute("SELECT COUNT(*) FROM history_data WHERE timestamp > ?", (week_ago,))
                 weekly_records = cursor.fetchone()[0]
 

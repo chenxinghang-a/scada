@@ -199,7 +199,12 @@ class TestConnectDisconnect:
 
     def test_disconnect_unknown_device(self, device_manager):
         """disconnect_device is safe for unknown device (no-op)"""
+        before = dict(device_manager.clients)
         device_manager.disconnect_device('nonexistent')  # should not raise
+        # 原测试只调用不校验（恒过）。断开未知设备必须是 no-op，
+        # 不得误删其它设备的客户端。
+        assert device_manager.clients == before, \
+            "disconnect_device 对未知设备不是 no-op（设备表被改动）"
 
     def test_connect_all(self, device_manager):
         """connect_all connects all enabled devices"""

@@ -118,8 +118,13 @@ class TestAlarmOutput:
         """复位报警"""
         from 报警层.alarm_manager import AlarmManager
         am = AlarmManager(mock_db)
-        # Should not raise
+        # 先制造报警状态，才能验证复位真的清掉了它
+        am.alarm_states[('dev1', 'temp')] = {'level': 'critical', 'active': True}
+        am.alarm_states[('dev2', 'pressure')] = {'level': 'warning', 'active': True}
+        assert len(am.alarm_states) == 2, "前置状态未建立"
         am.reset_alarm()
+        # 原测试只调用不校验（恒过）。全量复位必须清空所有报警状态。
+        assert am.alarm_states == {}, "reset_alarm() 未清空报警状态"
 
 
 class TestAlarmCheck:
@@ -131,6 +136,9 @@ class TestAlarmCheck:
         am = AlarmManager(mock_db)
         # Should not raise even with no rules
         am.check_alarm('dev1', 'temp', 25.0, datetime.now())
+        # 原测试只调用不校验（恒过）。没有匹配规则时不得凭空产生报警状态。
+        assert am.alarm_states == {}, "无规则时 check_alarm 产生了报警状态"
+        assert am.get_active_alarms() == [], "无规则时出现了活动报警"
 
     def test_rules_attribute(self, mock_db):
         """rules属性存在"""
@@ -143,5 +151,16 @@ class TestAlarmCheck:
         """重建规则索引"""
         from 报警层.alarm_manager import AlarmManager
         am = AlarmManager(mock_db)
+        am.rules = {
+            'r_enabled': {'id': 'r_enabled', 'device_id': 'dev1',
+                          'register_name': 'temp', 'enabled': True},
+            'r_disabled': {'id': 'r_disabled', 'device_id': 'dev2',
+                           'register_name': 'temp', 'enabled': False},
+        }
+        am._rules_index.clear()
         am._rebuild_rules_index()
-        # Should not raise
+        # 原测试只调用不校验（恒过）。索引必须按 (device_id, register_name)
+        # 建好，且跳过 enabled=False 的规则。
+        assert ('dev1', 'temp') in am._rules_index, "启用规则未进入索引"
+        assert ('dev2', 'temp') not in am._rules_index, "已禁用规则被错误地建入索引"
+        assert [rid for rid, _ in am._rules_index[('dev1', 'temp')]] == ['r_enabled']

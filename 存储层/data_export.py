@@ -19,14 +19,22 @@ class DataExport:
     支持多种格式的数据导出
     """
 
-    def __init__(self, export_dir: str = 'exports'):
+    def __init__(self, export_dir: str | Path | None = None):
         """
         初始化数据导出
 
         Args:
-            export_dir: 导出目录
+            export_dir: 导出目录。缺省使用 paths.EXPORT_DIR（项目根的 exports/）。
         """
-        self.export_dir = Path(export_dir)
+        if export_dir is None:
+            # 必须给绝对路径：api_data.export_device_data() 会把这里返回的路径
+            # 直接交给 flask.send_file()，而 werkzeug 对相对路径是按
+            # current_app.root_path 解析的，不是按 cwd。用相对 'exports' 时
+            # 写文件在 cwd/exports、读文件却在 app_root/exports，
+            # 必然 FileNotFoundError → 导出接口恒 500。
+            from paths import EXPORT_DIR
+            export_dir = EXPORT_DIR
+        self.export_dir = Path(export_dir).resolve()
         self.export_dir.mkdir(parents=True, exist_ok=True)
 
     def export_csv(self, data: list[dict[str, Any]], filename: str | None = None) -> str:

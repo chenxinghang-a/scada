@@ -709,6 +709,9 @@ class TestAlarmRules:
 
     def test_remove_rule_not_found(self, rules):
         rules.remove_rule('nonexistent')  # Should not raise
+        # 原测试只调用不校验（恒过）。删除不存在的规则必须是 no-op，
+        # 不能误删其他规则、也不能凭空插入键。
+        assert rules.rules == {}, "remove_rule 删除不存在的规则时改动了规则表"
 
     def test_get_rules_for_device(self, rules):
         rules.add_rule(AlarmRule('r1', 'A', 'd1', 'temp', 'greater_than', 80.0))

@@ -117,8 +117,10 @@ class TestAuthAPI:
         }
         resp = client.post('/api/auth/login',
                            json={'username': 'admin', 'password': 'wrong'})
-        # Should return 401 (bad credentials) not 404 (endpoint not found)
-        assert resp.status_code in (401, 400, 403)
+        # 凭据错误必须 401，且绝不能是 404（端点不存在）。
+        # 原断言 `in (401, 400, 403)` 把 400/403 也放过，与 docstring 说的
+        # "not 404" 相比仍不够精确。
+        assert resp.status_code == 401
 
 
 class TestMetricsAPI:

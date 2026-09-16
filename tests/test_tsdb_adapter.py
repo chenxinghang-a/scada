@@ -147,15 +147,24 @@ class TestAdapterStartStop:
 
         adapter = TSDBAdapter(mock_tdengine, config={'sync_interval': 60, 'result_interval': 60})
         adapter.start()
+        sync_thread = adapter._sync_thread
         adapter.start()  # Should warn and return
+        # 原测试只调用不校验。第二次 start 必须是 no-op：不能重复起线程。
+        assert adapter._running is True
+        assert adapter._sync_thread is sync_thread, "重复 start 重建了同步线程"
 
         adapter.stop()
+        assert adapter._running is False
 
     def test_stop_when_not_running(self, mock_tdengine):
         from 智能层.tsdb_adapter import TSDBAdapter
 
         adapter = TSDBAdapter(mock_tdengine)
         adapter.stop()  # Should be a no-op
+        # 原测试只调用不校验。未运行时 stop 必须安全且不留下运行态。
+        assert adapter._running is False
+        assert adapter._sync_thread is None
+        assert adapter._result_thread is None
 
 
 class TestFeedToModules:
@@ -323,6 +332,10 @@ class TestWriteResults:
 
         adapter = TSDBAdapter(mock_tdengine)
         adapter._write_oee_results()  # Should not raise
+        # 原测试只调用不校验。没有 OEE 计算器时不能写任何东西，也不能累加计数。
+        mock_tdengine.write_oee.assert_not_called()
+        assert adapter.stats['results_written'] == 0
+        assert adapter.stats['errors'] == 0
 
     def test_write_oee_error(self, mock_tdengine, mock_oee):
         from 智能层.tsdb_adapter import TSDBAdapter
@@ -346,6 +359,9 @@ class TestWriteResults:
 
         adapter = TSDBAdapter(mock_tdengine)
         adapter._write_predictive_results()
+        # 原测试只调用不校验。无预测性维护模块时不得产生任何写入。
+        mock_tdengine.write_predictive.assert_not_called()
+        assert adapter.stats['results_written'] == 0
 
     def test_write_predictive_no_device_id(self, mock_tdengine, mock_predictive):
         from 智能层.tsdb_adapter import TSDBAdapter
@@ -353,6 +369,10 @@ class TestWriteResults:
         mock_predictive.get_health_scores.return_value = {'key': {'health_score': 80}}
         adapter = TSDBAdapter(mock_tdengine, predictive_maintenance=mock_predictive)
         adapter._write_predictive_results()
+        # 原测试只调用不校验。健康评分里没有 device_id 时必须跳过该条，
+        # 不能写出 device_id=None 的脏记录。
+        mock_tdengine.write_predictive.assert_not_called()
+        assert adapter.stats['results_written'] == 0
 
     def test_write_predictive_error(self, mock_tdengine, mock_predictive):
         from 智能层.tsdb_adapter import TSDBAdapter
@@ -377,6 +397,9 @@ class TestWriteResults:
 
         adapter = TSDBAdapter(mock_tdengine)
         adapter._write_energy_results()
+        # 原测试只调用不校验。无能源管理模块时不得产生任何写入。
+        mock_tdengine.write_energy.assert_not_called()
+        assert adapter.stats['results_written'] == 0
 
     def test_write_energy_no_power_data(self, mock_tdengine, mock_energy):
         from 智能层.tsdb_adapter import TSDBAdapter
@@ -385,6 +408,9 @@ class TestWriteResults:
         adapter = TSDBAdapter(mock_tdengine, energy_manager=mock_energy)
         adapter._registered_devices = {'dev1': {'registers': []}}
         adapter._write_energy_results()
+        # 原测试只调用不校验。设备没有实时功率数据时必须跳过，不能写出全 0 的假记录。
+        mock_tdengine.write_energy.assert_not_called()
+        assert adapter.stats['results_written'] == 0
 
     def test_write_energy_error(self, mock_tdengine, mock_energy):
         from 智能层.tsdb_adapter import TSDBAdapter
@@ -461,9 +487,13 @@ class TestRealtimeDataBridge:
 
         bridge = RealtimeDataBridge(mock_tdengine)
         bridge.start()
+        assert bridge._running is True
         bridge.start()  # Should be no-op
+        # 原测试只调用不校验。重复 start 不得改变运行态。
+        assert bridge._running is True, "重复 start 后 bridge 意外停止"
 
         bridge.stop()
+        assert bridge._running is False
 
     def test_feed(self, mock_tdengine):
         from 智能层.tsdb_adapter import RealtimeDataBridge

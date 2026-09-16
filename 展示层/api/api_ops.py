@@ -281,3 +281,45 @@ def get_ops_audit():
     except Exception as e:
         logger.error(f"获取审计记录失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
+
+
+# ================================================================
+# 后台维护任务 API
+# ================================================================
+
+@ops_bp.route('/maintenance/tasks', methods=['GET'])
+@jwt_required
+def get_maintenance_tasks():
+    """查看后台维护任务（归档/缓存清理/黑名单清理）的运行状态
+
+    这些任务负责清理会无界增长的结构（JWT 黑名单、API 缓存、nonce、
+    限流计数、离线消息队列、分层缓存），并用例程归档历史数据。
+    """
+    try:
+        from core.maintenance import get_maintenance_status
+        return success_response(get_maintenance_status())
+    except Exception as e:
+        logger.error(f"获取维护任务状态失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)
+
+
+@ops_bp.route('/maintenance/tasks/<name>/run', methods=['POST'])
+@jwt_required
+@role_required('admin')
+def run_maintenance_task(name):
+    """立即执行一次指定的维护任务（不等调度周期）"""
+    try:
+        from core.maintenance import get_maintenance_status, run_task_now
+
+        if name not in (get_maintenance_status() or {}):
+            return error_response(f"未注册的维护任务: {name}", 404)
+
+        operator = request.current_user.get('username', 'unknown')
+        accepted = run_task_now(name)
+        ops_audit.log_operation(
+            'maintenance_task_run', operator=operator, details={'task': name})
+
+        return success_response({'task': name, 'accepted': accepted})
+    except Exception as e:
+        logger.error(f"执行维护任务失败: {e}", exc_info=True)
+        return error_response("服务器内部错误", 500)

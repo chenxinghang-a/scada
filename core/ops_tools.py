@@ -386,7 +386,8 @@ class DataCleaner:
         """清理过期历史数据"""
         start = time.time()
         try:
-            cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+            # sep=' ' 与库内写入格式一致；用默认的 'T' 分隔会多删同日的记录
+            cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat(sep=' ')
             conn = sqlite3.connect(self._db_path, timeout=30)
             cursor = conn.execute(
                 "DELETE FROM history_data WHERE timestamp < ?",
@@ -414,7 +415,8 @@ class DataCleaner:
         """清理过期审计日志"""
         start = time.time()
         try:
-            cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+            # sep=' ' 与库内写入格式一致；用默认的 'T' 分隔会多删同日的记录
+            cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat(sep=' ')
             conn = sqlite3.connect(self._db_path, timeout=30)
             cursor = conn.execute(
                 "DELETE FROM audit_logs WHERE timestamp < ?",

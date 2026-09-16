@@ -322,7 +322,9 @@ class AlertRuleGenerator:
             conn = sqlite3.connect(str(db_path), timeout=5)
 
             # 获取最近7天的数据
-            cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+            # sep=' ' 与库内写入格式一致；用默认的 'T' 分隔会漏掉同一天的记录，
+            # 让告警统计静默少算（不是报错，是"看起来正常"）
+            cutoff = (datetime.now() - timedelta(days=7)).isoformat(sep=' ')
             cursor = conn.execute('''
                 SELECT AVG(value), MIN(value), MAX(value), COUNT(*)
                 FROM history_data

@@ -52,7 +52,10 @@ class DataCompressor:
             压缩结果统计
         """
         cutoff = datetime.now() - timedelta(days=days)
-        cutoff_str = cutoff.isoformat()
+        # 必须用空格分隔（sep=' '），与 sqlite3 适配器写入库中的格式一致。
+        # datetime.isoformat() 默认产出 'T' 分隔，ASCII 中 'T'(0x54) > ' '(0x20)，
+        # 直接拿去比较会让同一天里更晚的记录也被判为"过旧"，导致多删数据。
+        cutoff_str = cutoff.isoformat(sep=' ')
 
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row

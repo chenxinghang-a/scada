@@ -198,16 +198,17 @@ class AutoOps:
                 cursor = conn.cursor()
 
                 # 清理旧的历史数据
+                # sep=' ' 与库内写入格式一致；默认的 'T' 分隔会让同日的记录被多删
                 cursor.execute(
                     "DELETE FROM history_data WHERE timestamp < ?",
-                    (cutoff.isoformat(),)
+                    (cutoff.isoformat(sep=' '),)
                 )
                 result['cleaned']['history_rows'] = cursor.rowcount
 
                 # 清理旧的报警记录
                 cursor.execute(
                     "DELETE FROM alarm_records WHERE timestamp < ? AND acknowledged = 1",
-                    (cutoff.isoformat(),)
+                    (cutoff.isoformat(sep=' '),)
                 )
                 result['cleaned']['alarm_rows'] = cursor.rowcount
 

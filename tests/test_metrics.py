@@ -67,13 +67,22 @@ class TestDeviceMetrics:
         """update_device_metrics doesn't raise on bad input"""
         dm = MagicMock()
         dm.get_all_status.side_effect = RuntimeError('fail')
+        # 预置已知值，用来验证异常路径不会把指标写坏
+        DEVICES_CONNECTED.set(7)
         collector.update_device_metrics(dm)  # should not raise
+        # 原测试只调用不校验（"should not raise" = 恒过）。异常路径的正确契约是
+        # 保留既有指标值，而不是清零或写脏。
+        assert DEVICES_CONNECTED._value.get() == 7, \
+            "get_all_status 抛异常时指标被改写，应保持原值"
 
     def test_update_device_metrics_empty_list(self, collector):
         """update_device_metrics handles empty list"""
         dm = MagicMock()
         dm.get_all_status.return_value = []
+        DEVICES_CONNECTED.set(99)
         collector.update_device_metrics(dm)
+        # 空列表是合法输入：0 台设备在线，指标必须被显式归零
+        assert DEVICES_CONNECTED._value.get() == 0, "空设备列表时在线数应为 0"
 
 
 # ============================================================
@@ -102,7 +111,11 @@ class TestAlarmMetrics:
         """update_alarm_metrics doesn't raise on error"""
         am = MagicMock()
         am.get_active_alarms.side_effect = RuntimeError('fail')
+        ALARMS_ACTIVE.set(5)
         collector.update_alarm_metrics(am)  # should not raise
+        # 原测试只调用不校验。异常时必须保留既有值，不能把活跃告警数写坏。
+        assert ALARMS_ACTIVE._value.get() == 5, \
+            "get_active_alarms 抛异常时活跃告警数被改写"
 
 
 # ============================================================
@@ -124,7 +137,11 @@ class TestQueueMetrics:
         dc = MagicMock()
         dc.data_queue = MagicMock()
         dc.data_queue.qsize.side_effect = RuntimeError('fail')
+        QUEUE_SIZE.set(11)
         collector.update_queue_metrics(dc)  # should not raise
+        # 原测试只调用不校验。qsize() 抛异常时必须保留既有队列长度指标。
+        assert QUEUE_SIZE._value.get() == 11, \
+            "qsize() 抛异常时队列长度指标被改写"
 
 
 # ============================================================

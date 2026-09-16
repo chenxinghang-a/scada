@@ -44,7 +44,11 @@ class TestDIContainer:
         """清除所有"""
         from core.di_container import DIContainer
         DIContainer.register_instance('key1', 'value1')
+        assert DIContainer.is_registered('key1') is True, "注册未生效"
         DIContainer.clear_all()
+        # 原测试只调用 clear_all 不校验 —— 容器没被清空也照样通过
+        assert DIContainer.is_registered('key1') is False, "clear_all 后仍能查到已注册服务"
+        assert DIContainer.get_registered_services() == {}, "clear_all 后服务表非空"
 
     def test_get_registered_services(self):
         """获取已注册服务"""
@@ -71,13 +75,28 @@ class TestEventBus:
     def test_clear_all(self):
         """清除所有"""
         from core.event_bus import EventBus
-        EventBus.subscribe('test', lambda: None)
         EventBus.clear_all()
+        EventBus.subscribe('test', lambda: None)
+        assert EventBus.get_subscribers_count('test') == {'test': 1}, "订阅未生效"
+        EventBus.clear_all()
+        # 原测试只调用 clear_all 不校验 —— 订阅者没被清掉也照样通过
+        assert EventBus.get_subscribers_count() == {}, "clear_all 后订阅者表非空"
 
     def test_clear_history(self):
         """清除历史"""
         from core.event_bus import EventBus
+        EventBus.clear_all()
+        EventBus.publish('test', {'v': 1})
+        assert len(EventBus.get_history()) == 1, "事件未进入历史"
         EventBus.clear_history()
+        # 原测试只调用 clear_history 不校验 —— 历史没被清掉也照样通过
+        assert EventBus.get_history() == [], "clear_history 后历史仍非空"
+        # 清历史不应清掉订阅者
+        EventBus.subscribe('keep', lambda: None)
+        EventBus.clear_history()
+        assert EventBus.get_subscribers_count('keep') == {'keep': 1}, \
+            "clear_history 误清除了订阅者"
+        EventBus.clear_all()
 
 
 class TestConfigManager:
@@ -86,7 +105,13 @@ class TestConfigManager:
     def test_clear(self):
         """清除配置"""
         from core.config_manager import ConfigManager
+        ConfigManager.set('test_cfg.yaml', 'key', 'value')
+        assert ConfigManager.get('test_cfg.yaml', 'key') == 'value', "配置未写入缓存"
         ConfigManager.clear()
+        # 原测试只调用 clear 不校验 —— 缓存没被清掉也照样通过
+        assert ConfigManager.get_all_configs() == {}, "clear 后配置缓存非空"
+        assert ConfigManager.get('test_cfg.yaml', 'key', 'DEFAULT') == 'DEFAULT', \
+            "clear 后仍能读到旧配置"
 
 
 class TestHealthChecker:
@@ -95,7 +120,11 @@ class TestHealthChecker:
     def test_clear(self):
         """清除"""
         from core.health_checker import HealthChecker
+        HealthChecker.register('test_check', lambda: {'status': 'healthy'})
+        assert HealthChecker.get_status()['total_checks'] == 1, "健康检查未注册"
         HealthChecker.clear()
+        # 原测试只调用 clear 不校验 —— 检查项没被清掉也照样通过
+        assert HealthChecker.get_status()['total_checks'] == 0, "clear 后仍有已注册检查"
 
     def test_get_status(self):
         """获取状态"""
@@ -116,7 +145,15 @@ class TestModuleRegistry:
     def test_clear(self):
         """清除"""
         from core.module_registry import ModuleRegistry
+
+        class _DummyModule:
+            pass
+
+        ModuleRegistry.register('dummy_mod', _DummyModule)
+        assert 'dummy_mod' in ModuleRegistry.get_status(), "模块未注册"
         ModuleRegistry.clear()
+        # 原测试只调用 clear 不校验 —— 模块表没被清掉也照样通过
+        assert ModuleRegistry.get_status() == {}, "clear 后模块表非空"
 
     def test_get_status(self):
         """获取状态"""

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Blueprint, jsonify, request, current_app
 from 用户层.auth import jwt_required
-from core.service_response import api_error
+from core.service_response import error_response
 
 performance_bp = Blueprint('performance', __name__, url_prefix='/api/performance')
 
@@ -181,7 +181,7 @@ def get_realtime_metrics():
         metrics = collector.collect_all()
         return jsonify(metrics)
     except Exception as e:
-        return api_error(f'获取指标失败: {str(e)}', 500)
+        return error_response(f'获取指标失败: {str(e)}', 500)
 
 
 @performance_bp.route('/metrics/history', methods=['GET'])
@@ -197,7 +197,7 @@ def get_metrics_history():
             'data': history,
         })
     except Exception as e:
-        return api_error(f'获取历史指标失败: {str(e)}', 500)
+        return error_response(f'获取历史指标失败: {str(e)}', 500)
 
 
 @performance_bp.route('/metrics/summary', methods=['GET'])
@@ -236,7 +236,7 @@ def get_metrics_summary():
 
         return jsonify(summary)
     except Exception as e:
-        return api_error(f'获取指标摘要失败: {str(e)}', 500)
+        return error_response(f'获取指标摘要失败: {str(e)}', 500)
 
 
 # 需要导入time模块

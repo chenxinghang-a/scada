@@ -337,9 +337,10 @@ class TestExportExcel:
         with patch.dict('sys.modules', {'pandas': None}):
             with patch('builtins.__import__', side_effect=ImportError("no pandas")):
                 result = exporter.export_excel(data)
-                # Should return None if pandas not available
-                # Actually it uses import pandas in the function - let's test with real pandas
-                pass
+                # 原测试拿到 result 后只写了 `pass`，没有任何断言 —— 恒过。
+                # pandas 不可用时必须优雅降级返回 None，而不是把 ImportError 抛出去。
+                assert result is None, \
+                    f"pandas 不可用时 export_excel 应返回 None，实际 {result!r}"
 
 
 class TestExportJSON:

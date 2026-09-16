@@ -55,6 +55,19 @@ def _has_keyword(register_name: str, keywords: tuple) -> bool:
     return any(kw in name_lower for kw in keywords)
 
 
+def _read_is_stale(client) -> bool:
+    """本次读取是否由客户端的陈旧缓存兜底返回。
+
+    ``ModbusClient`` 在读取失败时会返回缓存中的最后已知良好值，此时会把
+    ``last_read_source`` 置为 ``'cache'``。返回值本身无法区分新鲜数据与
+    陈旧数据，所以采集侧必须显式查询该标记，并把数据质量码降级为
+    ``UNCERTAIN_LAST_USABLE``。
+
+    不支持该属性的客户端（如模拟客户端）视为新鲜数据。
+    """
+    return getattr(client, 'last_read_source', 'fresh') == 'cache'
+
+
 class DataQualityAssessor:
     """数据质量评估器 - OPC UA质量码"""
 
@@ -286,6 +299,8 @@ class DataCollector:
             'failed_collections': 0,
             'last_collection_time': None,
             'queue_size': 0,
+            # 队列满时被丢弃的数据项数（含"丢最旧"与被拒两种）
+            'dropped_items': 0,
             'protocols_active': {}
         }
 
@@ -296,6 +311,29 @@ class DataCollector:
         """线程安全地增加统计计数"""
         with self._stats_lock:
             self.stats[key] = self.stats.get(key, 0) + amount
+
+    def _enqueue_drop_oldest(self, item: dict) -> bool:
+        """非阻塞入队；队列满时丢弃最旧的一条，仍满则丢弃本条。
+
+        **绝不能用阻塞式 ``data_queue.put()``** —— 队列有上限（默认 200000），
+        一旦消费端卡住，``put()`` 会永久阻塞。采集链路是"采集完 → 在回调里
+        ``_schedule_next()``"的串行结构，阻塞在那里意味着**该设备从此再也不采集**，
+        而且不报错、不告警（典型的"静默假死"）。
+
+        Returns:
+            bool: 是否成功入队（False 表示本条被丢弃）
+        """
+        if self.data_queue.full():
+            try:
+                self.data_queue.get_nowait()
+            except queue.Empty:
+                pass
+        try:
+            self.data_queue.put_nowait(item)
+            return True
+        except queue.Full:
+            self._inc_stat('dropped_items')
+            return False
 
     def start(self) -> None:
         """启动数据采集"""
@@ -486,21 +524,13 @@ class DataCollector:
             if math.isnan(value) or math.isinf(value):
                 return
             # 队列满时丢弃最旧数据，绝不阻塞回调线程
-            if self.data_queue.full():
-                try:
-                    self.data_queue.get_nowait()
-                except queue.Empty:
-                    pass
-            try:
-                self.data_queue.put_nowait({
-                    'device_id': device_id,
-                    'register_name': name,
-                    'value': value,
-                    'timestamp': datetime.now(),
-                    'unit': unit
-                })
-            except queue.Full:
-                pass  # 静默丢弃，不打日志（高频场景日志本身也卡）
+            self._enqueue_drop_oldest({
+                'device_id': device_id,
+                'register_name': name,
+                'value': value,
+                'timestamp': datetime.now(),
+                'unit': unit
+            })
 
         if hasattr(client, 'add_data_callback'):
             client.add_data_callback(on_data)
@@ -547,9 +577,15 @@ class DataCollector:
                 if FALLBACK_SIMULATION_ENABLED:
                     try:
                         fallback = self._generate_fallback_data(device_id, device_config)
+                        accepted = 0
                         for item in fallback:
-                            self.data_queue.put(item)
-                        logger.debug(f"设备 {device_id} 故障降级: 生成 {len(fallback)} 条模拟数据")
+                            # 必须非阻塞：这里用阻塞式 put() 会让整条采集链
+                            # 永久挂起（队列满时），该设备从此静默停止采集
+                            if self._enqueue_drop_oldest(item):
+                                accepted += 1
+                        logger.debug(
+                            f"设备 {device_id} 故障降级: 生成 {len(fallback)} 条模拟数据"
+                            f"（入队 {accepted} 条）")
                     except Exception as fe:
                         logger.debug(f"设备 {device_id} 降级数据生成失败: {fe}")
                 remaining = CIRCUIT_BREAKER_COOLDOWN_S - elapsed
@@ -773,15 +809,7 @@ class DataCollector:
 
         def _enqueue(item):
             """非阻塞入队，满则丢最旧"""
-            if self.data_queue.full():
-                try:
-                    self.data_queue.get_nowait()
-                except queue.Empty:
-                    pass
-            try:
-                self.data_queue.put_nowait(item)
-            except queue.Full:
-                pass
+            return self._enqueue_drop_oldest(item)
 
         # 单次 FC03 读取整个范围（规范限制 125，超出则分段）
         if total_count <= 125:
@@ -791,6 +819,7 @@ class DataCollector:
                 logger.debug(f"设备 {device_id} Modbus读取返回None")
                 return
             self._inc_stat('successful_collections')
+            stale = _read_is_stale(client)
             for reg in registers:
                 offset = reg['address'] - min_addr
                 size = reg_sizes[reg['address']]
@@ -799,13 +828,17 @@ class DataCollector:
                     continue
                 value = self._decode_register(client, raw, reg)
                 if value is not None:
-                    _enqueue({
+                    item = {
                         'device_id': device_id,
                         'register_name': reg['name'],
                         'value': value,
                         'timestamp': timestamp,
                         'unit': reg.get('unit', '')
-                    })
+                    }
+                    if stale:
+                        # 值是陈旧缓存兜底，交给质量评估降级为 UNCERTAIN_LAST_USABLE
+                        item['stale'] = True
+                    _enqueue(item)
         else:
             # 分块读取，块边界预留重叠区防止多寄存器值被截断
             max_reg_size = max(reg_sizes.values()) if reg_sizes else 1
@@ -816,6 +849,7 @@ class DataCollector:
                 chunk = client.read_holding_registers(start, count)
                 if chunk is None:
                     continue
+                stale = _read_is_stale(client)
                 for reg in registers:
                     if reg['address'] < start or reg['address'] >= start + count:
                         continue
@@ -826,13 +860,16 @@ class DataCollector:
                         continue
                     value = self._decode_register(client, raw, reg)
                     if value is not None:
-                        _enqueue({
+                        item = {
                             'device_id': device_id,
                             'register_name': reg['name'],
                             'value': value,
                             'timestamp': timestamp,
                             'unit': reg.get('unit', '')
-                        })
+                        }
+                        if stale:
+                            item['stale'] = True
+                        _enqueue(item)
 
     def _decode_register(self, client, raw_regs: list[int], register: dict) -> float | None:
         """从原始寄存器值解码为工程值"""
@@ -1039,6 +1076,13 @@ class DataCollector:
                         last_value=self._last_values.get(key),
                         last_time=self._last_times.get(key)
                     )
+
+                    # 读取虽"成功"返回，但内容来自客户端陈旧缓存（设备实际
+                    # 已读不到），必须降级为 UNCERTAIN_LAST_USABLE 而不是 GOOD，
+                    # 否则操作员会把几天前的旧值当成实时数据。
+                    if data.get('stale'):
+                        quality = DataQualityAssessor.UNCERTAIN_LAST_USABLE
+
                     data['quality'] = quality
 
                     # 更新跟踪状态

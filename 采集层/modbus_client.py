@@ -74,6 +74,15 @@ class ModbusClient:
         # Fix 2: 最后已知良好值缓存 — 读取失败时返回缓存值而非 None，
         # 避免重连期间数据断流。key = (address, count), value = list[int]
         self._last_good_values: dict[tuple, list[int]] = {}
+        # 缓存写入时刻（time.time()），key 与 _last_good_values 一致。
+        # 没有它就无法回答"这个值到底有多旧"——这正是"静默假成功"的根源。
+        self._last_good_at: dict[tuple, float] = {}
+
+        # 可观测读取状态（线程安全，由 _stats_lock 保护）
+        # last_read_source: 'fresh' 本次新读到 / 'cache' 陈旧缓存兜底 / 'none' 无数据
+        # 调用方必须检查它才能区分"新值"与"几天前的旧值"。
+        self.last_read_source: str = 'none'
+        self.last_read_ok: bool = False
 
         # 通信日志（线程安全，保留最近 1000 条）
         self._log_lock = threading.Lock()
@@ -90,6 +99,8 @@ class ModbusClient:
             'total_writes': 0,
             'successful_reads': 0,
             'failed_reads': 0,
+            # 用陈旧缓存兜底返回的次数（"静默假成功"的可观测计数）
+            'stale_reads': 0,
             'successful_writes': 0,
             'failed_writes': 0,
             'last_read_time': None,
@@ -106,6 +117,76 @@ class ModbusClient:
     def _inc_stat(self, key: str):
         with self._stats_lock:
             self.stats[key] = self.stats.get(key, 0) + 1
+
+    def get_cache_age(self, address: int, count: int) -> float | None:
+        """
+        查询指定寄存器缓存值的年龄（秒）
+
+        用于判断一次读取返回的到底是新鲜值还是陈旧缓存。
+
+        Args:
+            address: 起始地址
+            count: 读取数量
+
+        Returns:
+            float: 缓存年龄（秒）；该 (address, count) 从未成功读取过时返回 None
+        """
+        cached_at = self._last_good_at.get((address, count))
+        if cached_at is None:
+            return None
+        return max(0.0, time.time() - cached_at)
+
+    def _mark_read_fresh(self, cache_key: tuple, registers: list[int]):
+        """成功读取：写入缓存 + 时间戳，并标记本次读取为新鲜数据"""
+        self._last_good_values[cache_key] = registers
+        self._last_good_at[cache_key] = time.time()
+        with self._stats_lock:
+            self.last_read_source = 'fresh'
+            self.last_read_ok = True
+
+    def _fallback_to_cache(self, cache_key: tuple, address: int, count: int,
+                           reason: str) -> list[int] | None:
+        """
+        失败路径统一兜底：返回陈旧缓存值（若有），并显式暴露陈旧性
+
+        这是"静默假成功"缺陷的修复点。旧实现直接 ``return 缓存值``，
+        调用方无法区分新值与几天前的旧值，上游熔断器也永远不跳闸。
+        现在每次兜底都会：
+          - 自增 ``stats['stale_reads']``；
+          - 置 ``last_read_source='cache'`` / ``last_read_ok=False``；
+          - 以 WARNING 级别记录日志，并带上缓存年龄秒数。
+
+        Args:
+            cache_key: (address, count) 缓存键
+            address: 起始地址
+            count: 读取数量
+            reason: 失败原因（写入日志，便于定位）
+
+        Returns:
+            list[int]: 陈旧缓存值；无缓存时返回 None
+        """
+        cached = self._last_good_values.get(cache_key)
+
+        if cached is None:
+            with self._stats_lock:
+                self.last_read_source = 'none'
+                self.last_read_ok = False
+            logger.warning(
+                f"设备 {self.device_name} 读取失败，无缓存可用 "
+                f"({address},{count}) — {reason}"
+            )
+            return None
+
+        age = self.get_cache_age(address, count) or 0.0
+        self._inc_stat('stale_reads')
+        with self._stats_lock:
+            self.last_read_source = 'cache'
+            self.last_read_ok = False
+        logger.warning(
+            f"设备 {self.device_name} 读取失败，返回 {age:.1f}s 前的陈旧缓存值 "
+            f"({address},{count}) — {reason}"
+        )
+        return cached
 
     def _raw_to_engineering(self, address: int, raw_value: int) -> float:
         """将原始寄存器值转换为工程值（用于安全验证）"""
@@ -308,6 +389,16 @@ class ModbusClient:
         Returns:
             list[int]: 寄存器值列表。读取失败时返回最后已知良好值（缓存）；
                        仅当缓存中也没有该寄存器的值时才返回 None。
+
+        Warning:
+            **返回值可能是陈旧数据。** 本方法在读取失败时会返回缓存中的
+            最后已知良好值，该值可能是数秒前、也可能是数天前的数据，
+            且其内容与一次成功的实时读取**无法从返回值本身区分**。
+            调用方必须检查 ``last_read_source`` / ``last_read_ok``
+            （或调用 ``get_cache_age()`` 查询缓存年龄）来判断数据新鲜度；
+            ``last_read_source == 'cache'`` 表示本次返回的是陈旧缓存，
+            应据此降低数据质量码（例如 OPC UA ``UNCERTAIN_LAST_USABLE``）
+            或触发告警，而不是当作正常数据使用。
         """
         cache_key = (address, count)
 
@@ -317,14 +408,14 @@ class ModbusClient:
         except ValueError as e:
             logger.error(str(e))
             self._log_operation('read_holding_registers', address, count, False, str(e))
-            return self._last_good_values.get(cache_key)
+            return self._fallback_to_cache(
+                cache_key, address, count, f'地址校验失败: {e}'
+            )
 
         if not self.connected:
-            cached = self._last_good_values.get(cache_key)
-            if cached is not None:
-                return cached
-            logger.error(f"设备 {self.device_name} 未连接")
-            return None
+            return self._fallback_to_cache(
+                cache_key, address, count, '设备未连接'
+            )
 
         slave = slave_id or self.slave_id
         self._inc_stat('total_reads')
@@ -346,7 +437,9 @@ class ModbusClient:
                 with self._stats_lock:
                     self.stats['last_error'] = str(result)
                 self._log_operation('read_holding_registers', address, count, False, str(result))
-                return self._last_good_values.get(cache_key)
+                return self._fallback_to_cache(
+                    cache_key, address, count, f'Modbus 错误响应: {result}'
+                )
 
             self._inc_stat('successful_reads')
             self._consecutive_failures = 0  # 成功读取，重置失败计数
@@ -354,8 +447,8 @@ class ModbusClient:
                 self.stats['last_read_time'] = time.time()
             self._log_operation('read_holding_registers', address, count, True)
 
-            # Fix 2: 缓存成功读取的值
-            self._last_good_values[cache_key] = result.registers
+            # Fix 2: 缓存成功读取的值（含时间戳），并标记本次为新鲜数据
+            self._mark_read_fresh(cache_key, result.registers)
             return result.registers
 
         except ConnectionException as e:
@@ -372,7 +465,9 @@ class ModbusClient:
             else:
                 logger.debug(f"设备 {self.device_name} 读取失败 ({self._consecutive_failures}/3): {e}")
             self._log_operation('read_holding_registers', address, count, False, str(e))
-            return self._last_good_values.get(cache_key)
+            return self._fallback_to_cache(
+                cache_key, address, count, f'连接异常: {e}'
+            )
 
         except Exception as e:
             logger.error(f"读取异常: {e}")
@@ -380,7 +475,9 @@ class ModbusClient:
             with self._stats_lock:
                 self.stats['last_error'] = str(e)
             self._log_operation('read_holding_registers', address, count, False, str(e))
-            return self._last_good_values.get(cache_key)
+            return self._fallback_to_cache(
+                cache_key, address, count, f'读取异常: {e}'
+            )
 
     def read_input_registers(self, address: int, count: int,
                              slave_id: int | None = None) -> list[int] | None:
@@ -395,6 +492,16 @@ class ModbusClient:
         Returns:
             list[int]: 寄存器值列表。读取失败时返回最后已知良好值（缓存）；
                        仅当缓存中也没有该寄存器的值时才返回 None。
+
+        Warning:
+            **返回值可能是陈旧数据。** 本方法在读取失败时会返回缓存中的
+            最后已知良好值，该值可能是数秒前、也可能是数天前的数据，
+            且其内容与一次成功的实时读取**无法从返回值本身区分**。
+            调用方必须检查 ``last_read_source`` / ``last_read_ok``
+            （或调用 ``get_cache_age()`` 查询缓存年龄）来判断数据新鲜度；
+            ``last_read_source == 'cache'`` 表示本次返回的是陈旧缓存，
+            应据此降低数据质量码（例如 OPC UA ``UNCERTAIN_LAST_USABLE``）
+            或触发告警，而不是当作正常数据使用。
         """
         cache_key = (address, count)
 
@@ -404,14 +511,14 @@ class ModbusClient:
         except ValueError as e:
             logger.error(str(e))
             self._log_operation('read_input_registers', address, count, False, str(e))
-            return self._last_good_values.get(cache_key)
+            return self._fallback_to_cache(
+                cache_key, address, count, f'地址校验失败: {e}'
+            )
 
         if not self.connected:
-            cached = self._last_good_values.get(cache_key)
-            if cached is not None:
-                return cached
-            logger.error(f"设备 {self.device_name} 未连接")
-            return None
+            return self._fallback_to_cache(
+                cache_key, address, count, '设备未连接'
+            )
 
         slave = slave_id or self.slave_id
         self._inc_stat('total_reads')
@@ -427,7 +534,9 @@ class ModbusClient:
                 logger.error(f"读取输入寄存器失败: {result}")
                 self._inc_stat('failed_reads')
                 self._log_operation('read_input_registers', address, count, False, str(result))
-                return self._last_good_values.get(cache_key)
+                return self._fallback_to_cache(
+                    cache_key, address, count, f'Modbus 错误响应: {result}'
+                )
 
             self._inc_stat('successful_reads')
             self._consecutive_failures = 0  # 成功读取，重置失败计数
@@ -435,8 +544,8 @@ class ModbusClient:
                 self.stats['last_read_time'] = time.time()
             self._log_operation('read_input_registers', address, count, True)
 
-            # Fix 2: 缓存成功读取的值
-            self._last_good_values[cache_key] = result.registers
+            # Fix 2: 缓存成功读取的值（含时间戳），并标记本次为新鲜数据
+            self._mark_read_fresh(cache_key, result.registers)
             return result.registers
 
         except ConnectionException as e:
@@ -451,13 +560,17 @@ class ModbusClient:
             else:
                 logger.debug(f"设备 {self.device_name} 读取失败 ({self._consecutive_failures}/3): {e}")
             self._log_operation('read_input_registers', address, count, False, str(e))
-            return self._last_good_values.get(cache_key)
+            return self._fallback_to_cache(
+                cache_key, address, count, f'连接异常: {e}'
+            )
 
         except Exception as e:
             logger.error(f"读取异常: {e}")
             self._inc_stat('failed_reads')
             self._log_operation('read_input_registers', address, count, False, str(e))
-            return self._last_good_values.get(cache_key)
+            return self._fallback_to_cache(
+                cache_key, address, count, f'读取异常: {e}'
+            )
 
     def read_coils(self, address: int, count: int,
                    slave_id: int | None = None) -> list[bool] | None:

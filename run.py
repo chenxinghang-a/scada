@@ -307,25 +307,14 @@ def main():
                 tsdb_adapter.start()
                 logger.info("TDengine智能层适配器已启动")
 
-            # 自动归档+checkpoint：每24小时清理超过7天的历史数据
-            def _auto_archive_loop():
-                import time as _time
-                while True:
-                    _time.sleep(86400)  # 24小时
-                    try:
-                        result = database.archive_old_data(archive_days=7, delete_days=30)
-                        logger.info(f"自动归档完成: {result}")
-                    except Exception as e:
-                        logger.error(f"自动归档失败: {e}")
-                    try:
-                        database.wal_checkpoint()
-                    except Exception as e:
-                        logger.error(f"WAL checkpoint失败: {e}")
-
-            import threading as _threading
-            _archive_thread = _threading.Thread(target=_auto_archive_loop, daemon=True)
-            _archive_thread.start()
-            logger.info("自动归档线程已启动（每24小时，归档7天前数据）")
+            # 后台维护任务：数据归档 + WAL checkpoint + 各类缓存/黑名单清理。
+            # 统一交给 core.maintenance（基于 core.scheduled_tasks.task_manager），
+            # 取代原先手写的 while True: sleep(86400) 裸线程 —— 那种写法没有
+            # 停止路径，而且令牌黑名单/缓存等清理根本没被调度过，会无界增长。
+            from core.maintenance import start_maintenance
+            maintenance_started = start_maintenance(
+                database=database, auth_manager=getattr(app, 'auth_manager', None))
+            logger.info(f"后台维护任务已启动: {', '.join(maintenance_started) or '（无）'}")
 
             # 注入WebSocket推送函数到报警管理器
             from 展示层.websocket import emit_alarm, emit_broadcast
@@ -402,12 +391,15 @@ def main():
         if 'device_manager' in locals():
             device_manager.disconnect_all()
         if 'alarm_manager' in locals():
-            alarm_manager.stop_escalation_timer()
-            alarm_manager.stop_flood_timer()
+            # 停止升级/洪水定时器 + 配置热重载线程（stop() 幂等）
+            alarm_manager.stop()
         if 'ha_manager' in locals():
             ha_manager.stop()
         if 'HealthChecker' in locals():
             HealthChecker.stop_periodic_checks()
+        # 停止后台维护任务（幂等）
+        from core.maintenance import stop_maintenance
+        stop_maintenance()
         logger.info("系统已关闭")
 
     except Exception as e:

@@ -273,8 +273,18 @@ class TestDevicesAPIExtended:
 class TestSwaggerAPI:
 
     def test_swagger_json(self, client):
-        """GET /api/swagger.json or /swagger.json"""
-        resp = client.get('/api/swagger.json')
-        if resp.status_code == 404:
-            resp = client.get('/swagger.json')
-        assert resp.status_code in (200, 404)
+        """Swagger/OpenAPI 文档必须真实可访问。
+
+        原实现先试 /api/swagger.json，404 再试 /swagger.json，最后断言
+        `status_code in (200, 404)` —— 两个 URL 都不存在时也照样通过，等于没测。
+
+        真实路由见 展示层/api/swagger.py（flask_restx，Api(prefix='/api/v1')）：
+        Swagger UI 在 GET /docs。
+        注意：OpenAPI spec 的 /api/v1/swagger.json 当前返回 404 —— 被
+        APIVersionMiddleware（展示层/api/__init__.py:46 的 /api/v1/* → /api/*
+        重写）遮蔽，属已发现的真实缺陷，已上报，不在本测试职责内修复。
+        """
+        resp = client.get('/docs')
+        assert resp.status_code == 200, "Swagger UI 文档页不可访问"
+        body = resp.get_data(as_text=True).lower()
+        assert 'swagger' in body, "Swagger UI 页面内容异常"

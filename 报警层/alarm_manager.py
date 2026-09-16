@@ -303,10 +303,18 @@ class AlarmManager:
         # 报警升级定时器（后台自动检查）
         self._escalation_timer: threading.Timer | None = None
         self._escalation_interval = 30  # 每30秒检查一次升级
+        # 定时器停止标志：置位后 _tick 不再自我重排（防止永久泄漏）
+        self._escalation_timer_stop = threading.Event()
 
         # 告警洪水检查定时器
         self._flood_timer: threading.Timer | None = None
         self._flood_check_interval = 15  # 每15秒检查一次洪水是否结束
+        self._flood_timer_stop = threading.Event()
+
+        # 配置文件热重载线程（可停止）
+        self._config_watcher_thread: threading.Thread | None = None
+        self._config_watch_interval = 10  # 每10秒检查一次文件修改时间
+        self._config_watcher_stop = threading.Event()
 
         # 加载报警配置
         self.load_config()
@@ -327,12 +335,20 @@ class AlarmManager:
         self._start_flood_timer()
 
     def _start_config_watcher(self):
-        """启动配置文件热重载后台线程（每10秒检查文件修改时间）"""
+        """启动配置文件热重载后台线程（默认每10秒检查文件修改时间）"""
+        if self._config_watcher_thread is not None and self._config_watcher_thread.is_alive():
+            logger.warning("报警配置热重载监控已在运行，忽略重复启动")
+            return
+
+        self._config_watcher_stop.clear()
+        self._config_watcher_running = True
+
         def _watch_loop():
-            while self._config_watcher_running:
+            # 可中断等待：stop_config_watcher() 后立即退出，无需等满一个轮询周期
+            while self._config_watcher_running and not self._config_watcher_stop.is_set():
+                if self._config_watcher_stop.wait(self._config_watch_interval):
+                    break
                 try:
-                    import time as _time
-                    _time.sleep(10)
                     config_file = Path(self.config_path)
                     if config_file.exists():
                         current_mtime = config_file.stat().st_mtime
@@ -343,12 +359,26 @@ class AlarmManager:
                             logger.info("报警配置热重载完成")
                 except Exception as e:
                     logger.debug(f"配置文件监控异常: {e}")
-        t = threading.Thread(target=_watch_loop, daemon=True)
-        t.start()
-        logger.info("报警配置文件热重载监控已启动（每10秒检查）")
+
+        self._config_watcher_thread = threading.Thread(
+            target=_watch_loop, daemon=True, name="alarm-config-watcher")
+        self._config_watcher_thread.start()
+        logger.info(f"报警配置文件热重载监控已启动（每{self._config_watch_interval}秒检查）")
+
+    def stop_config_watcher(self, timeout: float = 5) -> None:
+        """停止配置文件热重载监控线程（幂等）"""
+        self._config_watcher_running = False
+        self._config_watcher_stop.set()
+
+        thread = self._config_watcher_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+        self._config_watcher_thread = None
+        logger.info("报警配置文件热重载监控已停止")
 
     def _start_escalation_timer(self):
         """启动报警升级后台检查定时器"""
+        self._escalation_timer_stop.clear()
         if self._escalation_timer is not None:
             self._escalation_timer.cancel()
 
@@ -358,12 +388,13 @@ class AlarmManager:
             except Exception as e:
                 logger.error(f"报警升级定时检查异常: {e}")
             finally:
-                # 重新调度下一次
-                self._escalation_timer = threading.Timer(
-                    self._escalation_interval, _tick
-                )
-                self._escalation_timer.daemon = True
-                self._escalation_timer.start()
+                # 停止后不再重排，否则定时器会自我复活、永久泄漏
+                if not self._escalation_timer_stop.is_set():
+                    self._escalation_timer = threading.Timer(
+                        self._escalation_interval, _tick
+                    )
+                    self._escalation_timer.daemon = True
+                    self._escalation_timer.start()
 
         self._escalation_timer = threading.Timer(
             self._escalation_interval, _tick
@@ -373,7 +404,8 @@ class AlarmManager:
         logger.info(f"报警升级定时器已启动（间隔{self._escalation_interval}秒）")
 
     def stop_escalation_timer(self):
-        """停止报警升级定时器"""
+        """停止报警升级定时器（幂等；停止后不会自我复活）"""
+        self._escalation_timer_stop.set()
         if self._escalation_timer is not None:
             self._escalation_timer.cancel()
             self._escalation_timer = None
@@ -381,6 +413,7 @@ class AlarmManager:
 
     def _start_flood_timer(self):
         """启动告警洪水检查后台定时器"""
+        self._flood_timer_stop.clear()
         if self._flood_timer is not None:
             self._flood_timer.cancel()
 
@@ -390,11 +423,13 @@ class AlarmManager:
             except Exception as e:
                 logger.error(f"告警洪水检查异常: {e}")
             finally:
-                self._flood_timer = threading.Timer(
-                    self._flood_check_interval, _flood_tick
-                )
-                self._flood_timer.daemon = True
-                self._flood_timer.start()
+                # 停止后不再重排，否则定时器会自我复活、永久泄漏
+                if not self._flood_timer_stop.is_set():
+                    self._flood_timer = threading.Timer(
+                        self._flood_check_interval, _flood_tick
+                    )
+                    self._flood_timer.daemon = True
+                    self._flood_timer.start()
 
         self._flood_timer = threading.Timer(
             self._flood_check_interval, _flood_tick
@@ -404,11 +439,36 @@ class AlarmManager:
         logger.info(f"告警洪水检查定时器已启动（间隔{self._flood_check_interval}秒）")
 
     def stop_flood_timer(self):
-        """停止告警洪水检查定时器"""
+        """停止告警洪水检查定时器（幂等；停止后不会自我复活）"""
+        self._flood_timer_stop.set()
         if self._flood_timer is not None:
             self._flood_timer.cancel()
             self._flood_timer = None
             logger.info("告警洪水检查定时器已停止")
+
+    def stop(self) -> None:
+        """
+        停止报警管理器全部后台资源（幂等）
+
+        停止配置热重载线程、报警升级定时器、告警洪水检查定时器，
+        并停止告警升级管理器。进程退出 / 模块重载时应调用，
+        避免线程与定时器泄漏。
+        """
+        self.stop_config_watcher()
+        self.stop_escalation_timer()
+        self.stop_flood_timer()
+
+        if self._escalation_manager is not None:
+            try:
+                self._escalation_manager.stop()
+            except Exception as e:
+                logger.debug(f"告警升级管理器停止跳过: {e}")
+
+        logger.info("报警管理器后台资源已停止")
+
+    def shutdown(self) -> None:
+        """停止报警管理器（stop() 的语义别名）"""
+        self.stop()
 
     def set_websocket_emit(self, emit_func: Callable[..., Any]):
         """注入WebSocket emit函数（由run.py启动时调用）"""

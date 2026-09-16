@@ -144,7 +144,10 @@ class TestSimulatedDeviceManager:
         assert client.connected is False
 
     def test_disconnect_device_not_connected(self, mgr):
+        before = dict(mgr.clients)
         mgr.disconnect_device('nonexistent')  # should not raise
+        # 原测试只调用不校验（恒过）。断开不存在的设备必须是 no-op。
+        assert mgr.clients == before, "disconnect_device 对未知设备不是 no-op"
 
     def test_connect_all(self, mgr):
         results = mgr.connect_all()
@@ -215,8 +218,13 @@ class TestSimulatedDeviceManager:
         assert result['success'] is False
 
     def test_set_estop_override(self, mgr):
+        import 采集层.simulated_client as _sc
         mgr.set_estop_override(True)
+        # 原测试只调用不校验（恒过）。E-STOP 覆盖必须真正写进模拟客户端的全局状态，
+        # 否则"紧急停机"是个空动作。
+        assert _sc._ESTOP_ACTIVE is True, "set_estop_override(True) 未激活 E-STOP"
         mgr.set_estop_override(False)
+        assert _sc._ESTOP_ACTIVE is False, "set_estop_override(False) 未解除 E-STOP"
 
     def test_get_protocol_summary(self, mgr):
         summary = mgr.get_protocol_summary()

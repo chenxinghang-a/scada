@@ -154,6 +154,20 @@ class TestOPCUADatachangeNotification:
 
         # Should not raise
         opcua_client.datachange_notification(mock_node, 25.5, None)
+        # 原测试只验证"不抛异常"（恒过）。回调抛异常时：
+        # 1) 缓存仍必须更新（数据不能因为下游回调出错而丢）
+        # 2) 回调确实被调用过（不是被静默跳过）
+        #
+        # 注意：latest_data 的 key 是**映射后的寄存器名**（本 fixture 里
+        # ns=2;s=Temperature → temperature），不是 nodeid 字符串，
+        # 所以这里按"缓存里有本次读数 25.5"来断言，不写死 key。
+        assert opcua_client.latest_data, "回调异常导致数据缓存未更新（缓存为空）"
+        assert any(entry.get('value') == 25.5
+                   for entry in opcua_client.latest_data.values()), \
+            f"缓存里没有本次读数 25.5: {opcua_client.latest_data}"
+        assert opcua_client.stats['data_updates'] == 1
+        assert cb.call_count == 1, "回调未被调用"
+        assert 25.5 in cb.call_args.args, f"回调未收到本次读数: {cb.call_args}"
 
     def test_datachange_processing_exception(self, opcua_client):
         mock_node = MagicMock()
@@ -166,10 +180,20 @@ class TestOPCUADatachangeNotification:
 
 class TestOPCUAEventNotifications:
     def test_event_notification(self, opcua_client):
+        before_stats = dict(opcua_client.stats)
+        before_data = dict(opcua_client.latest_data)
         opcua_client.event_notification("test_event")
+        # 原测试只调用不校验（恒过）。事件回调是纯日志，不得改变采集状态。
+        assert opcua_client.stats == before_stats, "事件回调改变了统计"
+        assert opcua_client.latest_data == before_data, "事件回调改变了数据缓存"
 
     def test_status_change_notification(self, opcua_client):
+        before_stats = dict(opcua_client.stats)
+        before_data = dict(opcua_client.latest_data)
         opcua_client.status_change_notification("test_status")
+        # 原测试只调用不校验（恒过）。状态变更回调是纯日志，不得改变采集状态。
+        assert opcua_client.stats == before_stats, "状态变更回调改变了统计"
+        assert opcua_client.latest_data == before_data, "状态变更回调改变了数据缓存"
 
 
 class TestOPCUARunLoop:

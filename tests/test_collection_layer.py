@@ -268,7 +268,11 @@ class TestIDeviceManagerInterface:
             def get_protocol_summary(self): return {}
 
         mgr = ConcreteMgr()
-        mgr.set_estop_override(True)  # no-op
+        # 原测试只调用不校验（恒过）。默认实现（采集层/interfaces.py:124）是 no-op：
+        # 必须无返回值、且不在实例上留下任何 E-STOP 副作用。
+        assert mgr.set_estop_override(True) is None, "默认实现不应有返回值"
+        assert mgr.set_estop_override(False) is None, "默认实现不应有返回值"
+        assert not hasattr(mgr, '_estop_active'), "默认实现不应产生 E-STOP 副作用"
 
     def test_stop_device_default_returns_false(self):
         class ConcreteMgr(IDeviceManager):

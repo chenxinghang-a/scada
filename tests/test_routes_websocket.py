@@ -97,8 +97,20 @@ class TestCreateApp:
                 data_collector=MagicMock()
             )
             client = app.test_client()
-            resp = client.get('/metrics')
-            assert resp.status_code in (200, 302, 500)
+
+            # 未带令牌：/metrics 不在 /api/ 前缀下，会命中 create_app 里的
+            # check_page_auth（展示层/routes.py:168），必须重定向到 /login。
+            # 原断言 `in (200, 302, 500)` 把 500 也当通过 —— "端点挂了也算测过"。
+            anon = client.get('/metrics')
+            assert anon.status_code == 302, \
+                f"未认证访问 /metrics 应重定向，实际 {anon.status_code}"
+            assert '/login' in anon.headers.get('Location', ''), \
+                f"重定向目标异常: {anon.headers.get('Location')}"
+
+            # 带令牌：应真正拿到 Prometheus 指标，返回 200
+            auth = client.get('/metrics', headers={'Authorization': 'Bearer dummy'})
+            assert auth.status_code == 200, \
+                f"认证后 /metrics 应返回 200，实际 {auth.status_code}"
 
 
 class TestRateLimiter:

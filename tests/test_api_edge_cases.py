@@ -128,7 +128,8 @@ class TestSystemAPIEdgeCases:
             resp = client.post('/api/system/simulation-mode',
                                json={'simulation_mode': True},
                                headers=auth_headers)
-        assert resp.status_code in (200, 500)
+        # 正常切换必须 200；原 `in (200, 500)` 把 500 也当通过 = 假绿
+        assert resp.status_code == 200
 
     def test_update_config_success(self, client, auth_headers, app):
         """PUT /api/config 成功"""

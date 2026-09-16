@@ -72,11 +72,22 @@ class TestDatabaseConnection:
         database.close()
 
     def test_close_connection(self, db):
-        """关闭连接不抛异常"""
+        """关闭连接不抛异常，且关闭后能懒重建"""
         from 存储层.database import Database
         database = Database(db)
+        # 注意：get_connection() 是 @contextmanager 生成器，**必须用 with 进入**
+        # 才会真正建连接；直接调用只是拿到一个生成器对象，函数体不会执行。
+        with database.get_connection():
+            pass
+        assert database._local.connection is not None, "连接未建立，前置条件不成立"
         database.close()
-        # Should not raise
+        # 原测试只调用不校验（恒过）。close 必须真正释放线程本地连接句柄。
+        assert database._local.connection is None, "close() 未释放连接句柄"
+        # 关闭后应能懒重建连接，否则后续查询全部失效
+        with database.get_connection() as conn:
+            assert conn is not None, "close() 后重建的连接不可用"
+        assert database._local.connection is not None, "close() 后无法重建连接"
+        database.close()
 
     def test_close_thread_connection_alias(self, db):
         """close_thread_connection 是 close 的别名"""
@@ -143,6 +154,11 @@ class TestDatabaseInsertData:
         from 存储层.database import Database
         database = Database(db)
         database.insert_data_batch([])
+        # 原测试只调用不校验（恒过）。空批次必须不写入任何数据。
+        assert database.get_realtime_data() == [], "空批次插入了实时数据"
+        with database.get_connection(readonly=True) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM history_data").fetchone()[0] == 0, \
+                "空批次插入了历史数据"
         database.close()
 
 
@@ -414,7 +430,16 @@ class TestDatabaseMaintenance:
         database = Database(db)
         old_time = datetime.now() - timedelta(days=60)
         database.insert_data('dev1', 'temp', 25.0, old_time, 'C')
+        database.insert_data('dev1', 'temp', 30.0, datetime.now(), 'C')
+        with database.get_connection(readonly=True) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM history_data").fetchone()[0] == 2, \
+                "前置数据未写入"
         database.cleanup_old_data(retention_days=30)
+        # 原测试只调用不校验（恒过）。60 天前的历史必须被清掉，新数据必须保留。
+        with database.get_connection(readonly=True) as conn:
+            remaining = conn.execute("SELECT value FROM history_data").fetchall()
+        assert len(remaining) == 1, f"清理后应只剩 1 条新数据，实际 {len(remaining)} 条"
+        assert remaining[0][0] == 30.0, "cleanup_old_data 误删了保留期内的数据"
         database.close()
 
     def test_get_database_stats(self, db):

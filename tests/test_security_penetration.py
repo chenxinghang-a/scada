@@ -109,10 +109,13 @@ class TestXSS:
             'host': '192.168.1.1',
             'port': 502
         }, headers=auth_headers)
-        # 应该成功但内容被转义或拒绝
-        if resp.status_code == 200:
-            data = resp.get_json()
-            assert '<script>' not in str(data)
+        # 只允许"接受并转义"或"直接拒绝"两种结果，且响应里绝不能出现原始脚本标签。
+        # 原先写成 `if resp.status_code == 200:` 才断言，接口返回 400/403/500 时
+        # 断言整段被跳过，测试恒过（条件断言 = 假绿）。
+        assert resp.status_code in (200, 201, 400, 403), \
+            f"未预期的状态码 {resp.status_code}: {resp.get_data(as_text=True)[:200]}"
+        assert '<script>' not in resp.get_data(as_text=True), \
+            "响应体中原样回显了 XSS payload"
 
 
 class TestAuthenticationBypass:
@@ -166,19 +169,62 @@ class TestAuthorization:
 class TestRateLimit:
     """速率限制测试"""
 
-    def test_rate_limit_login(self, client):
-        """测试登录速率限制"""
-        # 快速发送多个登录请求
-        for i in range(10):
-            resp = client.post('/api/auth/login', json={
+    def test_rate_limit_login(self, db):
+        """测试登录速率限制：连续失败登录必须触发 429。
+
+        原实现用 conftest 的 `client` fixture —— 那是一个裸 Flask app，
+        不经过 create_app()，flask-limiter 从未绑定到任何视图；循环 10 次
+        永远拿不到 429，最后无条件的 pytest.skip() 让这条测试永远"绿"
+        （既不通过也不失败，等于没测）。
+
+        这里改用 create_app() 构建真实应用，让 core.rate_limiter 的分级限流
+        （login: 5 per minute）真正生效，并断言：
+        - 前 5 次失败登录是 401（凭据错误）
+        - 第 6 次必须被限流器拦下，返回 429
+        """
+        import sqlite3
+        import tempfile
+
+        class _TestDatabase:
+            """AuthManager 只需要 database.get_connection()"""
+
+            def __init__(self, path):
+                self._path = path
+
+            def get_connection(self):
+                conn = sqlite3.connect(self._path)
+                conn.row_factory = sqlite3.Row
+                return conn
+
+        tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+
+        from 展示层.routes import create_app
+
+        real_app = create_app(
+            database=_TestDatabase(tmp_path),
+            device_manager=MagicMock(),
+            alarm_manager=MagicMock(),
+            data_collector=MagicMock(),
+        )
+
+        # 限流器与登录视图都必须真实存在，否则后面的断言会退化成"接口不存在"
+        assert real_app.limiter is not None, "create_app 未创建限流器"
+        assert real_app.limiter.enabled, "限流器未启用"
+        assert 'api_auth.login' in real_app.view_functions, "登录端点未注册"
+
+        test_client = real_app.test_client()
+        codes = [
+            test_client.post('/api/auth/login', json={
                 'username': 'admin',
-                'password': 'wrong_password'
-            })
-            if resp.status_code == 429:
-                # 速率限制生效
-                return
-        # 如果没有触发速率限制，可能是配置问题
-        pytest.skip("速率限制未触发，检查配置")
+                'password': 'wrong_password',
+            }).status_code
+            for _ in range(6)
+        ]
+
+        assert codes[:5] == [401] * 5, f"前 5 次失败登录应为 401，实际 {codes}"
+        assert codes[5] == 429, f"第 6 次失败登录应被限流为 429，实际 {codes}"
 
 
 class TestInputValidation:

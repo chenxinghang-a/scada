@@ -17,6 +17,17 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 
+def _sql_ts(dt: datetime) -> str:
+    """把 datetime 转成与库内存储格式一致的字符串，供 SQL 比较使用。
+
+    sqlite3 适配器（``存储层/database.py::adapt_datetime``）把 datetime 写成
+    空格分隔的 ``'YYYY-MM-DD HH:MM:SS'``；而 ``datetime.isoformat()`` 默认产出
+    ``'T'`` 分隔。SQLite 按文本比较，ASCII 中 ``'T'(0x54) > ' '(0x20)``，
+    两者混用会让 ``BETWEEN ? AND ?`` 在**同一天内**漏掉或误纳记录。
+    """
+    return dt.isoformat(sep=' ')
+
+
 class ReportTemplate:
     """报告模板"""
 
@@ -186,14 +197,14 @@ class ReportGenerator:
             # 数据点数量
             cursor = conn.execute(
                 'SELECT COUNT(*) as cnt FROM history_data WHERE device_id = ? AND timestamp BETWEEN ? AND ?',
-                (device_id, start.isoformat(), end.isoformat())
+                (device_id, _sql_ts(start), _sql_ts(end))
             )
             data_count = cursor.fetchone()['cnt']
 
             # 报警数量
             cursor = conn.execute(
                 'SELECT COUNT(*) as cnt FROM alarm_records WHERE device_id = ? AND timestamp BETWEEN ? AND ?',
-                (device_id, start.isoformat(), end.isoformat())
+                (device_id, _sql_ts(start), _sql_ts(end))
             )
             alarm_count = cursor.fetchone()['cnt']
 
@@ -214,7 +225,7 @@ class ReportGenerator:
         try:
             cursor = conn.execute(
                 'SELECT * FROM alarm_records WHERE device_id = ? AND timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT 50',
-                (device_id, start.isoformat(), end.isoformat())
+                (device_id, _sql_ts(start), _sql_ts(end))
             )
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
@@ -233,7 +244,7 @@ class ReportGenerator:
                    FROM history_data
                    WHERE device_id = ? AND timestamp BETWEEN ? AND ?
                    GROUP BY register_name''',
-                (device_id, start.isoformat(), end.isoformat())
+                (device_id, _sql_ts(start), _sql_ts(end))
             )
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
@@ -249,12 +260,12 @@ class ReportGenerator:
             if device_id:
                 cursor = conn.execute(
                     'SELECT COUNT(*) as cnt FROM alarm_records WHERE device_id = ? AND timestamp BETWEEN ? AND ?',
-                    (device_id, start.isoformat(), end.isoformat())
+                    (device_id, _sql_ts(start), _sql_ts(end))
                 )
             else:
                 cursor = conn.execute(
                     'SELECT COUNT(*) as cnt FROM alarm_records WHERE timestamp BETWEEN ? AND ?',
-                    (start.isoformat(), end.isoformat())
+                    (_sql_ts(start), _sql_ts(end))
                 )
             total = cursor.fetchone()['cnt']
 
@@ -263,7 +274,7 @@ class ReportGenerator:
                 '''SELECT alarm_level, COUNT(*) as cnt FROM alarm_records
                    WHERE timestamp BETWEEN ? AND ?
                    GROUP BY alarm_level''',
-                (start.isoformat(), end.isoformat())
+                (_sql_ts(start), _sql_ts(end))
             )
             by_level = {row['alarm_level']: row['cnt'] for row in cursor.fetchall()}
 
@@ -286,7 +297,7 @@ class ReportGenerator:
                    FROM alarm_records
                    WHERE timestamp BETWEEN ? AND ?
                    GROUP BY DATE(timestamp) ORDER BY date''',
-                (start.isoformat(), end.isoformat())
+                (_sql_ts(start), _sql_ts(end))
             )
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
@@ -304,7 +315,7 @@ class ReportGenerator:
                    FROM alarm_records
                    WHERE timestamp BETWEEN ? AND ?
                    GROUP BY device_id ORDER BY alarm_count DESC LIMIT ?''',
-                (start.isoformat(), end.isoformat(), limit)
+                (_sql_ts(start), _sql_ts(end), limit)
             )
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:

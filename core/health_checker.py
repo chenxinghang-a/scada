@@ -6,7 +6,6 @@
 import logging
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 
@@ -43,63 +42,95 @@ class HealthCheck:
         self._history_lock = threading.Lock()
         self.history = []
         self.max_history = 100
-    
-    def run(self) -> Dict[str, Any]:
-        """
-        运行健康检查（带超时强制执行）
+        # 当前正在执行检查的守护线程（用于检测上一次检查是否卡死）
+        self._worker: Optional[threading.Thread] = None
 
-        Returns:
-            检查结果
-        """
-        start_time = time.time()
-
-        # 用 ThreadPoolExecutor 执行检查，超时后自动清理线程（不泄漏）
-        try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(self.check_func)
-                check_result = future.result(timeout=self.timeout)
-            duration = time.time() - start_time
-            result = {
-                'status': HealthStatus.HEALTHY,
-                'message': 'OK',
-                'details': check_result if isinstance(check_result, dict) else {},
-                'duration': duration,
-                'timestamp': datetime.now().isoformat()
-            }
-            # 检查返回值是否标记了不健康
-            if isinstance(check_result, dict) and check_result.get('status'):
-                result['status'] = check_result['status']
-                result['message'] = check_result.get('message', 'OK')
-        except FuturesTimeout:
-            duration = time.time() - start_time
-            result = {
-                'status': HealthStatus.UNHEALTHY,
-                'message': f'健康检查超时（{self.timeout}秒）',
-                'details': {'error': 'TimeoutError'},
-                'duration': duration,
-                'timestamp': datetime.now().isoformat()
-            }
-        except Exception as e:
-            duration = time.time() - start_time
-            result = {
-                'status': HealthStatus.UNHEALTHY,
-                'message': str(e),
-                'details': {'error': type(e).__name__},
-                'duration': duration,
-                'timestamp': datetime.now().isoformat()
-            }
-
-        # 更新状态
+    def _record_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """记录检查结果到状态与历史"""
         self.last_check = datetime.now()
         self.last_result = result
 
-        # 记录历史
         with self._history_lock:
             self.history.append(result)
             if len(self.history) > self.max_history:
                 self.history.pop(0)
 
         return result
+
+    def run(self) -> Dict[str, Any]:
+        """
+        运行健康检查（带超时强制执行）
+
+        超时必须有明确结果：检查项被标记为 unhealthy + TimeoutError，
+        绝不允许静默忽略超时（否则健康检查自身会永久挂死）。
+
+        Returns:
+            检查结果
+        """
+        start_time = time.monotonic()
+
+        # 上一次检查仍未返回（检查函数卡死）：不再叠加新线程，直接判定超时
+        if self._worker is not None and self._worker.is_alive():
+            return self._record_result({
+                'status': HealthStatus.UNHEALTHY,
+                'message': f'健康检查超时（{self.timeout}秒），上一次检查仍未结束',
+                'details': {'error': 'TimeoutError'},
+                'duration': 0.0,
+                'timestamp': datetime.now().isoformat()
+            })
+
+        outcome: Dict[str, Any] = {}
+
+        def _target():
+            try:
+                outcome['value'] = self.check_func()
+            except BaseException as e:  # noqa: BLE001 - 检查函数任意异常都要转成结果
+                outcome['error'] = e
+
+        # 用守护线程执行：join(timeout) 到点即返回，守护线程不会阻塞进程退出。
+        # 不能用 `with ThreadPoolExecutor(...)`：其 __exit__ 会 shutdown(wait=True)，
+        # 卡死的检查函数会让超时形同虚设、run() 永久阻塞。
+        self._worker = threading.Thread(
+            target=_target, daemon=True, name=f'health-check-{self.name}')
+        self._worker.start()
+        self._worker.join(timeout=self.timeout)
+
+        duration = time.monotonic() - start_time
+
+        if self._worker.is_alive():
+            # 超时：明确标记为不健康，不静默忽略
+            return self._record_result({
+                'status': HealthStatus.UNHEALTHY,
+                'message': f'健康检查超时（{self.timeout}秒）',
+                'details': {'error': 'TimeoutError'},
+                'duration': duration,
+                'timestamp': datetime.now().isoformat()
+            })
+
+        if 'error' in outcome:
+            e = outcome['error']
+            return self._record_result({
+                'status': HealthStatus.UNHEALTHY,
+                'message': str(e),
+                'details': {'error': type(e).__name__},
+                'duration': duration,
+                'timestamp': datetime.now().isoformat()
+            })
+
+        check_result = outcome.get('value')
+        result = {
+            'status': HealthStatus.HEALTHY,
+            'message': 'OK',
+            'details': check_result if isinstance(check_result, dict) else {},
+            'duration': duration,
+            'timestamp': datetime.now().isoformat()
+        }
+        # 检查返回值是否标记了不健康
+        if isinstance(check_result, dict) and check_result.get('status'):
+            result['status'] = check_result['status']
+            result['message'] = check_result.get('message', 'OK')
+
+        return self._record_result(result)
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""

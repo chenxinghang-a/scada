@@ -59,7 +59,10 @@ class TaskManager:
 
     def __init__(self):
         self._tasks: Dict[str, ScheduledTask] = {}
-        self._lock = threading.Lock()
+        # 必须是可重入锁：start_all()/stop_all() 在持锁状态下遍历并调用
+        # self.start()/self.stop()，而后者内部又会获取同一把锁。
+        # 用普通 threading.Lock 会**直接死锁**（启动所有任务时永久挂住）。
+        self._lock = threading.RLock()
 
     def register(self, name: str, interval: float, description: str = ''):
         """注册定时任务装饰器"""
@@ -72,11 +75,22 @@ class TaskManager:
         return decorator
 
     def add(self, name: str, func: Callable, interval: float, description: str = ''):
-        """直接添加任务"""
-        task = ScheduledTask(name, func, interval, description)
+        """直接添加任务
+
+        若同名任务**已在运行/暂停中**，保留原任务不做替换 —— 否则旧任务的
+        线程仍在跑却已从 ``_tasks`` 里被摘掉，从此再也停不掉（永久泄漏），
+        而且 ``start_maintenance()`` 这类幂等启动会凭空多出一套线程。
+        """
         with self._lock:
+            existing = self._tasks.get(name)
+            if existing is not None and existing.status in ('running', 'paused'):
+                logger.warning("定时任务 %s 已在运行，忽略重复注册", name)
+                return existing
+
+            task = ScheduledTask(name, func, interval, description)
             self._tasks[name] = task
         logger.info("添加定时任务: %s (间隔=%ds)", name, int(interval))
+        return task
 
     def start(self, name: str) -> bool:
         """启动任务"""

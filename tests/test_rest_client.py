@@ -175,6 +175,10 @@ class TestRESTAuth:
         client._session = mock_session
 
         client._setup_auth()
+        # 原测试只调用不校验（恒过）。auth_type='none' 时不得写入任何认证头，
+        # 否则会往第三方系统发送凭据。
+        assert dict(mock_session.headers) == {}, \
+            f"auth_type=none 时写入了认证头: {dict(mock_session.headers)}"
 
 
 class TestRESTReadEndpoint:
@@ -346,27 +350,41 @@ class TestRESTGetLatestData:
 class TestRESTPollLoop:
     @patch('采集层.rest_client.time.sleep')
     def test_poll_loop_processes_endpoints(self, mock_sleep, rest_client):
-        rest_client._running = True
         call_count = [0]
+
         def side_effect(*args, **kwargs):
             call_count[0] += 1
-            if call_count[0] > 2:
-                rest_client._running = False
-            return MagicMock(raise_for_status=MagicMock(), json=MagicMock(return_value={'data': {'value': 25}}))
+            rest_client._running = False  # 跑完第一轮就退出，避免死循环
+            return MagicMock(raise_for_status=MagicMock(),
+                             json=MagicMock(return_value={'data': {'value': 25}}))
 
         mock_session = MagicMock()
         mock_session.request.side_effect = side_effect
         rest_client._session = mock_session
 
-        # Just test that the loop runs without error
-        # We'll do one iteration by setting _running = False after the first poll
         rest_client._running = True
-        rest_client._running = False
-        rest_client._poll_loop()  # Should return immediately since _running is False
+        rest_client._poll_loop()
+        # 原测试先把 _running 置 True 再立刻置 False，_poll_loop 直接返回，
+        # 轮询体一行都没执行 —— 等于没测。这里断言真的发出了请求并写入了缓存。
+        assert call_count[0] >= 1, "轮询循环未发出任何 HTTP 请求"
+        assert rest_client.latest_data, "轮询结果未写入 latest_data"
 
     @patch('采集层.rest_client.time.sleep')
     def test_poll_loop_with_callback(self, mock_sleep, rest_client):
         cb = MagicMock()
         rest_client._data_callbacks = [cb]
-        rest_client._running = False
-        rest_client._poll_loop()  # Should return immediately
+
+        def side_effect(*args, **kwargs):
+            rest_client._running = False
+            return MagicMock(raise_for_status=MagicMock(),
+                             json=MagicMock(return_value={'data': {'value': 25}}))
+
+        mock_session = MagicMock()
+        mock_session.request.side_effect = side_effect
+        rest_client._session = mock_session
+
+        rest_client._running = True
+        rest_client._poll_loop()
+        # 原测试把 _running 直接置 False 后调用 _poll_loop，什么都没跑。
+        # 必须验证数据回调被真正触发。
+        assert cb.called, "轮询到数据后未触发数据回调"

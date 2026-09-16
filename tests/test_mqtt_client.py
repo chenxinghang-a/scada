@@ -102,7 +102,12 @@ class TestMQTTSubscribe:
 
     def test_unsubscribe_not_in_list(self, mqtt_client):
         mqtt_client.connected = True
+        mqtt_client._subscriptions = {'other/topic': 1}
         mqtt_client.unsubscribe('nonexistent')
+        # 原测试只调用不校验（恒过）。未订阅过的主题被 unsubscribe 时，
+        # 本地订阅表必须原样保留，不能被破坏。
+        assert mqtt_client._subscriptions == {'other/topic': 1}, \
+            "unsubscribe 未订阅的主题时破坏了本地订阅表"
 
 
 class TestMQTTPublish:
@@ -204,8 +209,13 @@ class TestMQTTDisconnect:
         mqtt_client.client.disconnect.assert_called_once()
 
     def test_disconnect_failure(self, mqtt_client):
+        mqtt_client.connected = True
         mqtt_client.client.loop_stop.side_effect = Exception("fail")
         mqtt_client.disconnect()
+        # 原测试只调用不校验（恒过）。底层 loop_stop 抛异常时，disconnect()
+        # 仍必须把连接状态置为未连接，否则上层会继续往已死的连接 publish。
+        assert mqtt_client.connected is False, \
+            "loop_stop 抛异常后 connected 仍为 True（MQTT 断连状态未收敛）"
 
 
 class TestMQTTOnConnect:
@@ -299,8 +309,11 @@ class TestMQTTOnMessage:
 
         mqtt_client._on_message(mqtt_client.client, None, msg)
 
-        # "abc25.5" doesn't contain '=' so goes to float(payload.strip()) which fails
-        # so no callback but also no crash
+        # "abc25.5" 不含 '='，走 float(payload.strip()) 解析失败：
+        # 必须不崩溃、不触发回调、也不能把消息计成"已解析"。
+        cb.assert_not_called()
+        assert mqtt_client.stats['messages_received'] == 1
+        assert mqtt_client.stats['messages_parsed'] == 0
 
     def test_on_message_raw_unparseable(self, mqtt_client):
         msg = MagicMock()
@@ -323,7 +336,13 @@ class TestMQTTOnMessage:
 
 class TestMQTTOnSubscribe:
     def test_on_subscribe(self, mqtt_client):
+        before_stats = dict(mqtt_client.stats)
+        before_subs = dict(mqtt_client._subscriptions)
         mqtt_client._on_subscribe(mqtt_client.client, None, 1, [1])
+        # 原测试只调用不校验（恒过）。_on_subscribe 是纯日志回调，
+        # 不得改变统计或订阅表。
+        assert mqtt_client.stats == before_stats, "订阅确认回调改变了统计"
+        assert mqtt_client._subscriptions == before_subs, "订阅确认回调改变了订阅表"
 
 
 class TestMQTTNotifyCallbacks:
@@ -342,6 +361,12 @@ class TestMQTTNotifyCallbacks:
 
         # Should not raise
         mqtt_client._notify_callbacks('dev1', 'temp', 25.5, 'C')
+        # 原测试只验证"不抛异常"（恒过）。回调抛异常时：
+        # 1) 缓存仍必须更新（数据不能因为下游回调出错而丢）
+        # 2) 回调确实被调用过（不是被静默跳过）
+        assert 'temp' in mqtt_client.latest_data, "回调异常导致数据缓存未更新"
+        assert mqtt_client.latest_data['temp']['value'] == 25.5
+        cb.assert_called_once_with('dev1', 'temp', 25.5, 'C')
 
 
 class TestMQTTGetDataAndStats:

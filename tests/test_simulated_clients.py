@@ -106,7 +106,15 @@ class TestSimulatedMQTTClient:
         """添加数据回调"""
         client = self._make_client()
         client.connect()
-        client.add_data_callback(lambda *args: None)
+        # 原测试只调用不校验（恒过）。SimulatedMQTTClient 是推送型客户端，
+        # add_data_callback 必须把回调真正登记进 _data_callbacks。
+        def _cb(*args):
+            pass
+
+        before = len(client._data_callbacks)
+        client.add_data_callback(_cb)
+        assert len(client._data_callbacks) == before + 1, "回调未被登记"
+        assert client._data_callbacks[-1] is _cb, "登记的不是传入的回调对象"
 
 
 class TestSimulatedRESTClient:

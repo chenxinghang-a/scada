@@ -198,7 +198,7 @@ class TestDataAPIComprehensive:
             'end_time': '2024-12-31T23:59:59',
             'format': 'csv'
         }, headers=auth_headers)
-        assert resp.status_code in (200, 500)
+        assert resp.status_code == 200  # 导出接口必须真的返回文件；原 `in (200, 500)` 把 500 也放过 = 假绿
 
     def test_export_alarms(self, client, auth_headers, app):
         """POST /api/export/alarms"""
@@ -274,17 +274,17 @@ class TestControlAPIComprehensive:
     def test_estop_status_no_module(self, client, auth_headers):
         """GET /api/control/estop/status 无安全模块"""
         resp = client.get('/api/control/estop/status', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_interlocks_no_module(self, client, auth_headers):
         """GET /api/control/interlocks 无安全模块"""
         resp = client.get('/api/control/interlocks', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_health_no_module(self, client, auth_headers):
         """GET /api/control/health 无安全模块"""
         resp = client.get('/api/control/health', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_batch_control_invalid_action(self, client, auth_headers):
         """POST /api/control/batch 无效操作"""
@@ -355,12 +355,12 @@ class TestControlAPIComprehensive:
     def test_audit_no_module(self, client, auth_headers):
         """GET /api/control/audit 无模块"""
         resp = client.get('/api/control/audit', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_status_no_module(self, client, auth_headers):
         """GET /api/control/status 无模块"""
         resp = client.get('/api/control/status', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
 
 # ============================================================
@@ -391,13 +391,13 @@ class TestAlarmAPIComprehensive:
         """GET /api/broadcast/areas 无广播系统"""
         app.alarm_manager.broadcast_system = None
         resp = client.get('/api/broadcast/areas', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_broadcast_history_no_system(self, client, auth_headers, app):
         """GET /api/broadcast/history 无广播系统"""
         app.alarm_manager.broadcast_system = None
         resp = client.get('/api/broadcast/history', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_broadcast_speak_no_body(self, client, auth_headers):
         """POST /api/broadcast/speak 无数据"""
@@ -450,7 +450,7 @@ class TestAuthAPIComprehensive:
         resp = client.post('/api/auth/register', json={
             'username': 'admin', 'password': 'pass123', 'role': 'admin'
         })
-        assert resp.status_code in (200, 201)
+        assert resp.status_code == 201  # register 成功返回 201
 
     def test_register_no_auth_has_users(self, client, app):
         """POST /api/auth/register 非首个用户无权限"""
@@ -496,7 +496,8 @@ class TestSystemAPIComprehensive:
         """GET /api/config"""
         with patch('展示层.api.api_system.load_yaml_config', return_value={'system': {}}):
             resp = client.get('/api/config', headers=auth_headers)
-        assert resp.status_code in (200, 404)
+        # 配置端点存在且配置可读 → 必须 200；原 `in (200, 404)` 让"端点不存在"也算通过
+        assert resp.status_code == 200
 
     def test_update_config_no_data(self, client, auth_headers):
         """PUT /api/config 无数据"""
@@ -513,118 +514,118 @@ class TestIndustry40APIComprehensive:
     def test_health_overview(self, client, auth_headers):
         """GET /api/industry40/health"""
         resp = client.get('/api/industry40/health', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_health_device(self, client, auth_headers):
         """GET /api/industry40/health/<device_id>"""
         resp = client.get('/api/industry40/health/dev1', headers=auth_headers)
-        assert resp.status_code in (200, 404, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_maintenance_alerts(self, client, auth_headers):
         """GET /api/industry40/maintenance-alerts"""
         resp = client.get('/api/industry40/maintenance-alerts', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_trend_data(self, client, auth_headers):
         """GET /api/industry40/trend/<id>/<reg>"""
         resp = client.get('/api/industry40/trend/dev1/temp', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_oee_all(self, client, auth_headers):
         """GET /api/industry40/oee"""
         resp = client.get('/api/industry40/oee', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_oee_device(self, client, auth_headers):
         """GET /api/industry40/oee/<device_id>"""
         resp = client.get('/api/industry40/oee/dev1', headers=auth_headers)
-        assert resp.status_code in (200, 404, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_spc_chart(self, client, auth_headers):
         """GET /api/industry40/spc/<id>/<reg>"""
         resp = client.get('/api/industry40/spc/dev1/temp', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_spc_violations(self, client, auth_headers):
         """GET /api/industry40/spc/violations"""
         resp = client.get('/api/industry40/spc/violations', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_energy_summary(self, client, auth_headers):
         """GET /api/industry40/energy"""
         resp = client.get('/api/industry40/energy', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_energy_cost(self, client, auth_headers):
         """GET /api/industry40/energy/cost"""
         resp = client.get('/api/industry40/energy/cost', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_energy_carbon(self, client, auth_headers):
         """GET /api/industry40/energy/carbon"""
         resp = client.get('/api/industry40/energy/carbon', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_energy_power(self, client, auth_headers):
         """GET /api/industry40/energy/power"""
         resp = client.get('/api/industry40/energy/power', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_energy_tariff_get(self, client, auth_headers):
         """GET /api/industry40/energy/tariff"""
         resp = client.get('/api/industry40/energy/tariff', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_energy_tariff_update_no_data(self, client, auth_headers):
         """PUT /api/industry40/energy/tariff 无数据"""
         resp = client.put('/api/industry40/energy/tariff', json={},
                           headers=auth_headers)
-        assert resp.status_code in (400, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_energy_anomaly_config_get(self, client, auth_headers):
         """GET /api/industry40/energy/anomaly-config"""
         resp = client.get('/api/industry40/energy/anomaly-config', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_edge_status(self, client, auth_headers):
         """GET /api/industry40/edge/status"""
         resp = client.get('/api/industry40/edge/status', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_edge_rules(self, client, auth_headers):
         """GET /api/industry40/edge/rules"""
         resp = client.get('/api/industry40/edge/rules', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_edge_log(self, client, auth_headers):
         """GET /api/industry40/edge/log"""
         resp = client.get('/api/industry40/edge/log', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_devices_status(self, client, auth_headers):
         """GET /api/industry40/devices/status"""
         resp = client.get('/api/industry40/devices/status', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_vibration_scores(self, client, auth_headers):
         """GET /api/industry40/vibration"""
         resp = client.get('/api/industry40/vibration', headers=auth_headers)
-        assert resp.status_code in (200, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_vibration_device(self, client, auth_headers):
         """GET /api/industry40/vibration/<id>"""
         resp = client.get('/api/industry40/vibration/dev1', headers=auth_headers)
-        assert resp.status_code in (200, 404, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_vibration_spectrum(self, client, auth_headers):
         """GET /api/industry40/vibration/<id>/spectrum"""
         resp = client.get('/api/industry40/vibration/dev1/spectrum', headers=auth_headers)
-        assert resp.status_code in (200, 404, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_vibration_bearing(self, client, auth_headers):
         """GET /api/industry40/vibration/<id>/bearing"""
         resp = client.get('/api/industry40/vibration/dev1/bearing', headers=auth_headers)
-        assert resp.status_code in (200, 404, 503)
+        assert resp.status_code == 503  # 智能层模块未挂载 → 必须 503，原 `in (200, 503)` 把 200 也放过 = 假绿
 
     def test_overview(self, client, auth_headers):
         """GET /api/industry40/overview"""

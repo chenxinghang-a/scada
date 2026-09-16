@@ -75,9 +75,15 @@ class TestValueRangeValidation:
         resp = client.post('/api/devices/test_dev/write-register',
                            json={'address': -1, 'value': 100},
                            headers={'Authorization': f'Bearer {token}'})
-        # The API converts to int; negative address may be passed through
-        # but the device client should reject it. At minimum it must not crash.
-        assert resp.status_code in (200, 400, 403, 404)
+        # 负地址必须被基础安全校验拦下（api_control.REGISTER_ADDRESS_MIN = 0），
+        # 返回 400 且错误信息指明是地址越界。
+        # 原断言 `status_code in (200, 400, 403, 404)` 把"写入被接受(200)"、
+        # "端点根本不存在(404)" 也当成通过 —— 等于这条安全测试什么都没验。
+        assert resp.status_code == 400, \
+            f"负寄存器地址应被拒绝(400)，实际 {resp.status_code}: {resp.get_data(as_text=True)[:200]}"
+        data = resp.get_json()
+        assert data['success'] is False
+        assert '地址超出范围' in data['error'], f"错误信息未指明地址越界: {data}"
 
     def test_missing_value_param_rejected(self, client, app):
         """Request missing 'value' parameter returns 400."""
