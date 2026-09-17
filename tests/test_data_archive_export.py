@@ -281,7 +281,18 @@ def exporter(export_dir):
 class TestDataExportInit:
     def test_init(self, export_dir):
         exporter = DataExport(export_dir)
-        assert exporter.export_dir == Path(export_dir)
+        # 必须比较 resolve() 之后的结果。
+        # DataExport.__init__ 内部会 `Path(export_dir).resolve()`，而 Windows 的
+        # resolve() 会把 8.3 短名规范化成长名：
+        #   C:\Users\RUNNER~1\AppData\Local\Temp\tmpXXXX
+        #     -> C:\Users\runneradmin\AppData\Local\Temp\tmpXXXX
+        # GitHub 的 Windows runner 恰好把 TEMP 设成短名形式，而 tempfile.mkdtemp()
+        # 直接沿用 TEMP，于是「已 resolve」与「未 resolve」的字符串不相等 ——
+        # 本机（TEMP 本来就是长名）永远看不出来，只有目标平台才暴露。
+        # 生产代码是对的（规范化路径是期望行为），错的是这里比较方式太脆。
+        assert exporter.export_dir == Path(export_dir).resolve()
+        # 顺带确认两条路径确实指向同一个目录（即使字符串形式不同）
+        assert exporter.export_dir.samefile(Path(export_dir))
 
 
 class TestExportCSV:
