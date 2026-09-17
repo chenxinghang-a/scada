@@ -28,6 +28,7 @@ from typing import Any
 from collections import defaultdict
 
 import yaml
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class EnergyManager:
             config_path: YAML配置文件路径
         """
         self.database = database
-        self.config_path = Path(config_path)
+        self.config_path = paths.resolve(config_path)
         self._lock = threading.RLock()
 
         # 加载配置（YAML文件 -> 默认值 -> 外部config覆盖）

@@ -11,6 +11,7 @@ from typing import Any
 from .interfaces import IDeviceManager
 from .simulated_device_manager import SimulatedDeviceManager
 from .real_device_manager import RealDeviceManager
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class DeviceManagerFactory:
         # 读取系统配置
         simulation_mode = True  # 默认模拟模式
         
-        config_file = Path(config_path)
+        config_file = paths.resolve(config_path)
         if config_file.exists():
             try:
                 with open(config_file, 'r', encoding='utf-8') as f:

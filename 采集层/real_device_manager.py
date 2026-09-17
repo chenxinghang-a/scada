@@ -14,6 +14,7 @@ from .modbus_client import ModbusClient
 from .opcua_client import OPCUAClient
 from .mqtt_client import MQTTClient
 from .rest_client import RESTDeviceClient
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class RealDeviceManager(IDeviceManager):
     def load_config(self):
         """加载设备配置文件"""
         try:
-            config_file = Path(self.config_path)
+            config_file = paths.resolve(self.config_path)
             if not config_file.exists():
                 logger.error(f"配置文件不存在: {self.config_path}")
                 return
@@ -509,7 +510,7 @@ class RealDeviceManager(IDeviceManager):
         """保存设备配置到文件"""
         try:
             config = {'devices': list(self.devices.values())}
-            config_file = Path(self.config_path)
+            config_file = paths.resolve(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
             with open(config_file, 'w', encoding='utf-8') as f:
                 yaml.dump(config, f, allow_unicode=True, default_flow_style=False)

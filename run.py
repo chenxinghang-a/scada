@@ -113,7 +113,7 @@ def main():
 
         # 从alarms.yaml读取灯控设备配置
         import yaml
-        alarms_config_path = Path('配置/alarms.yaml')
+        alarms_config_path = paths.resolve('配置/alarms.yaml')
         alarm_output_cfg = {'enabled': True, 'simulation': simulation_mode}
         if alarms_config_path.exists():
             with open(alarms_config_path, 'r', encoding='utf-8') as f:

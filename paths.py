@@ -58,6 +58,37 @@ CONFIG_DIR = _BASE / '配置'
 LOG_DIR = _BASE / 'logs'
 EXPORT_DIR = _BASE / 'exports'
 
+#: 存放 `配置/`、`data/`、`logs/` 等运行时目录的基准目录。
+#: 冻结（PyInstaller）时是 `_internal/`，开发时是仓库根目录。
+#: 用于把历史代码里散落的相对路径字面量统一解析成绝对路径。
+BASE_DIR = _BASE
+
+
+def resolve(p) -> Path:
+    """把项目内相对路径解析为绝对路径；已是绝对路径则原样返回。
+
+    为什么需要它
+    ------------
+    代码库里散落着 ``'配置/alarms.yaml'``、``'data/scada.db'`` 这类相对路径字面量。
+    它们**只在「当前工作目录恰好是项目根目录」时才成立** —— 从别处启动
+    （系统服务、计划任务、PyInstaller 产物、被别的模块 import）就会找不到文件。
+    而且失败方式通常是静默的：``load_yaml_config`` 读不到文件返回 ``{}``，
+    接口照常回 200，只是配置"莫名变空"。
+
+    基准取 :data:`BASE_DIR`（由 ``__file__`` / ``sys.executable`` 推导，
+    与 CWD 无关），因此解析结果稳定。
+
+    Args:
+        p: 相对路径（``str`` 或 ``Path``）或绝对路径。
+
+    Returns:
+        Path: 绝对路径。
+    """
+    path = Path(p)
+    if path.is_absolute():
+        return path
+    return BASE_DIR / path
+
 # 数据库路径（按模式区分）
 DB_PATHS = {
     'simulated': DATA_DIR / 'scada_simulated.db',

@@ -8,6 +8,8 @@ import yaml
 from typing import Any
 from pathlib import Path
 
+import paths
+
 from .interfaces import IDeviceManager, IDeviceClient
 from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
 from .simulated_client import set_estop_state, set_device_stopped
@@ -54,7 +56,7 @@ class SimulatedDeviceManager(IDeviceManager):
     def load_config(self) -> None:
         """加载设备配置文件"""
         try:
-            config_file = Path(self.config_path)
+            config_file = paths.resolve(self.config_path)
             if not config_file.exists():
                 logger.error(f"配置文件不存在: {self.config_path}")
                 return
@@ -362,7 +364,7 @@ class SimulatedDeviceManager(IDeviceManager):
         """保存设备配置到文件"""
         try:
             config = {'devices': list(self.devices.values())}
-            config_file = Path(self.config_path)
+            config_file = paths.resolve(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
             with open(config_file, 'w', encoding='utf-8') as f:
                 yaml.dump(config, f, allow_unicode=True, default_flow_style=False)

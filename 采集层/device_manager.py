@@ -14,6 +14,7 @@ from typing import Any
 from pathlib import Path
 
 from core.connection_pool import ConnectionPool
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ class DeviceManager:
     def load_config(self):
         """加载设备配置文件"""
         try:
-            config_file = Path(self.config_path)
+            config_file = paths.resolve(self.config_path)
             if not config_file.exists():
                 logger.error(f"配置文件不存在: {self.config_path}")
                 return
@@ -550,7 +551,7 @@ class DeviceManager:
         try:
             with self._lock:
                 config = {'devices': list(self.devices.values())}
-            config_file = Path(self.config_path)
+            config_file = paths.resolve(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
             # 原子写入：先写临时文件再 rename，防止崩溃时配置损坏
             tmp_file = config_file.with_suffix('.tmp')

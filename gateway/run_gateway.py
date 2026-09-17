@@ -25,6 +25,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from gateway import ModbusGateway, S7Gateway, OPCUAGateway
+import paths
 
 
 def setup_logging(log_level: str = "INFO"):
@@ -34,7 +35,7 @@ def setup_logging(log_level: str = "INFO"):
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler('logs/gateway.log', encoding='utf-8')
+            logging.FileHandler(str(paths.resolve('logs/gateway.log')), encoding='utf-8')
         ]
     )
 

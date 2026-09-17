@@ -43,6 +43,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class AuditLogger:
     """操作审计日志"""
 
     def __init__(self, db_path: str = "data/audit.db"):
-        self.db_path = db_path
+        self.db_path = str(paths.resolve(db_path))
         self._chain_lock = threading.Lock()
         self._local = threading.local()
         self._init_db()
@@ -169,7 +170,7 @@ class AuditLogger:
 
     def _backup_log(self):
         """备份审计日志到安全目录"""
-        backup_dir = Path('data/audit_backup')
+        backup_dir = paths.resolve('data/audit_backup')
         backup_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         shutil.copy2(self.db_path, backup_dir / f'audit_{timestamp}.db')

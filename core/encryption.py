@@ -16,6 +16,7 @@ import logging
 import json
 from typing import Dict, Any, Optional, Union
 from pathlib import Path
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -232,7 +233,7 @@ def create_encryption_manager(config: Dict[str, Any] = None) -> Optional[Encrypt
     config = config or {}
 
     master_key = config.get('master_key')
-    key_file = config.get('key_file', 'data/encryption.key')
+    key_file = str(paths.resolve(config.get('key_file', 'data/encryption.key')))
 
     try:
         return EncryptionManager(master_key=master_key, key_file=key_file)

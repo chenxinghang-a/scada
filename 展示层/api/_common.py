@@ -9,6 +9,8 @@ from pathlib import Path
 from functools import wraps
 from flask import current_app, jsonify, make_response
 
+import paths
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,8 +83,14 @@ def clamp_limit(val, default: int = 50, maximum: int = MAX_QUERY_LIMIT) -> int:
 
 
 def load_yaml_config(config_path: str) -> dict[str, Any]:
-    """加载YAML配置文件"""
-    path = Path(config_path)
+    """加载YAML配置文件
+
+    相对路径一律按项目根目录解析（见 ``paths.resolve``）。历史调用方传的是
+    ``'配置/alarms.yaml'`` 这类字面量，只在 CWD 恰好是项目根目录时才成立；
+    从别处启动会读不到文件 → 返回 ``{}`` → 接口回 200 但配置"莫名变空"，
+    属于典型的静默失败。
+    """
+    path = paths.resolve(config_path)
     if not path.exists():
         return {}
     with open(path, 'r', encoding='utf-8') as f:
@@ -140,9 +148,12 @@ def get_pagination_params(default_page: int = 1, default_per_page: int = 20, max
 
 
 def save_yaml_config(config_path: str, config: dict[str, Any]) -> bool:
-    """保存YAML配置文件（原子写入：先写临时文件再 rename）"""
+    """保存YAML配置文件（原子写入：先写临时文件再 rename）
+
+    相对路径同样按项目根目录解析，理由见 ``load_yaml_config``。
+    """
     try:
-        path = Path(config_path)
+        path = paths.resolve(config_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_suffix('.tmp')
         with open(tmp_path, 'w', encoding='utf-8') as f:

@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ class DeviceControlSafety:
 
         # ===== 操作审计 =====
         self._audit_log = deque(maxlen=AUDIT_LOG_CAPACITY)
-        self._audit_file = Path('data/audit_log.jsonl')
+        self._audit_file = paths.resolve('data/audit_log.jsonl')
 
         # ===== 通信监控 =====
         self._comm_failures: dict[str, int] = {}  # device_id -> consecutive failures

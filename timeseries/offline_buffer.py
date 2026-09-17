@@ -23,6 +23,7 @@ import logging
 import threading
 from datetime import datetime
 from typing import Any
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class OfflineBuffer:
             batch_size: 每次补传的批量大小
         """
         self.tdengine = tdengine_client
-        self.db_path = db_path
+        self.db_path = str(paths.resolve(db_path))
         self.max_buffer_size = max_buffer_size
         self.flush_interval = flush_interval
         self.batch_size = batch_size

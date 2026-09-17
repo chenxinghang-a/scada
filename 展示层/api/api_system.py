@@ -12,6 +12,7 @@ from datetime import datetime
 
 from 用户层.auth import role_required, jwt_required
 from ._common import load_yaml_config, save_yaml_config, api_error
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ def toggle_simulation_mode():
     result = dm.switch_simulation_mode(new_mode)
 
     # 同时更新配置文件（持久化）
-    config_path = Path('配置/system.yaml')
+    config_path = paths.resolve('配置/system.yaml')
     if config_path.exists():
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f) or {}

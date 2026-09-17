@@ -10,6 +10,7 @@ from typing import Any, Dict
 from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import contextmanager
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +38,11 @@ class Database:
     """
 
     def __init__(self, db_path: str = 'data/scada.db'):
-        self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        # 解析为绝对路径：库文件必须落在项目根下，而不是「当前工作目录」
+        # （从服务/计划任务/冻结产物启动时 CWD 并非项目根，会导致开错库或新建空库）。
+        # 注意保持 str：下面第 70 行用 `self.db_path + '-wal'` 做字符串拼接。
+        self.db_path = str(paths.resolve(db_path))
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
         # 线程本地存储：每个线程复用一个连接
         self._local = threading.local()
@@ -1052,7 +1056,7 @@ class Database:
         from pathlib import Path
 
         try:
-            backup_path = Path(backup_dir)
+            backup_path = paths.resolve(backup_dir)
             backup_path.mkdir(parents=True, exist_ok=True)
 
             # 生成备份文件名

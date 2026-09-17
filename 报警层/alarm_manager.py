@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +245,7 @@ class AlarmManager:
             broadcast_system: 广播系统实例（BroadcastSystem，可选）
         """
         self.database = database
-        self.config_path = config_path
+        self.config_path = str(paths.resolve(config_path))
 
         # 报警规则
         self.rules: dict[str, dict] = {}  # rule_id -> rule_config
@@ -394,11 +395,26 @@ class AlarmManager:
             finally:
                 # 停止后不再重排，否则定时器会自我复活、永久泄漏
                 if not self._escalation_timer_stop.is_set():
-                    self._escalation_timer = threading.Timer(
-                        self._escalation_interval, _tick
-                    )
-                    self._escalation_timer.daemon = True
-                    self._escalation_timer.start()
+                    # 在**局部变量**上构造-设daemon-启动，最后才发布到 self。
+                    # 原先三步都走 `self._escalation_timer`：本回调运行在定时器线程里，
+                    # 而 stop_escalation_timer() / _start_escalation_timer() 会在别的线程
+                    # 改写同一个属性 —— 于是中间某步可能作用到另一个对象（甚至 None）上，
+                    # 抛 `RuntimeError: Thread.__init__() not called` / AttributeError，
+                    # 异常逃出 finally 直接杀掉该线程，报警升级定时器从此静默失效。
+                    #
+                    # 启动后必须**再查一次**停止标志：stop 可能刚好在上面的窗口里跑完，
+                    # 那时得把新定时器撤掉，否则它会继续回调、且属性被写回非 None
+                    # ——即测试里的"stop 之后自我复活"。
+                    try:
+                        timer = threading.Timer(self._escalation_interval, _tick)
+                        timer.daemon = True
+                        timer.start()
+                        if self._escalation_timer_stop.is_set():
+                            timer.cancel()
+                        else:
+                            self._escalation_timer = timer
+                    except Exception as e:
+                        logger.error(f"报警升级定时器重排失败，升级检查已停止: {e}")
 
         self._escalation_timer = threading.Timer(
             self._escalation_interval, _tick
@@ -427,13 +443,20 @@ class AlarmManager:
             except Exception as e:
                 logger.error(f"告警洪水检查异常: {e}")
             finally:
-                # 停止后不再重排，否则定时器会自我复活、永久泄漏
+                # 停止后不再重排，否则定时器会自我复活、永久泄漏。
+                # 用局部变量构造-设daemon-启动，理由同 _tick（避免跨线程改写 self 属性）。
                 if not self._flood_timer_stop.is_set():
-                    self._flood_timer = threading.Timer(
-                        self._flood_check_interval, _flood_tick
-                    )
-                    self._flood_timer.daemon = True
-                    self._flood_timer.start()
+                    try:
+                        timer = threading.Timer(self._flood_check_interval, _flood_tick)
+                        timer.daemon = True
+                        timer.start()
+                        # 启动后二次确认停止标志（理由同 _tick）
+                        if self._flood_timer_stop.is_set():
+                            timer.cancel()
+                        else:
+                            self._flood_timer = timer
+                    except Exception as e:
+                        logger.error(f"告警洪水定时器重排失败，洪水检查已停止: {e}")
 
         self._flood_timer = threading.Timer(
             self._flood_check_interval, _flood_tick

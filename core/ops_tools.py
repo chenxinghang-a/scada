@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime, timedelta
 from contextlib import contextmanager
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -528,7 +529,7 @@ class DiagnosticExporter:
     """
 
     def __init__(self, output_dir: str = "data/diagnostics"):
-        self._output_dir = Path(output_dir)
+        self._output_dir = paths.resolve(output_dir)
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
     def export_diagnostics(

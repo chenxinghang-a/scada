@@ -60,6 +60,50 @@ def cleanup_smoke_test_dbs():
     _quarantine_smoke_test_dbs(data_dir)
 
 
+#: 会被接口写回、但属于**受版本控制的配置文件**。
+#: 测试打到这些接口时会把改动持久化进仓库，导致每次跑完测试工作区都变脏。
+_POLLUTABLE_CONFIGS = (
+    "配置/system.yaml",   # POST /api/system/simulation-mode 会整份重写
+    "配置/alarms.yaml",   # 报警规则增删改会整份重写
+    "配置/devices.yaml",
+    "配置/devices_simulated.yaml",
+    "配置/energy.yaml",
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def restore_polluted_configs():
+    """会话结束时把被测试写脏的配置文件恢复原状。
+
+    背景：`展示层/api/api_system.py` 的 `POST /api/system/simulation-mode` 会把
+    `simulation_mode` 写进 `配置/system.yaml`，`api_alarms.py` 的规则增删改同理。
+    测试打这些接口时改动会落到**受版本控制的真实配置文件**上 ——
+    跑完一次全量测试，工作区就多出若干 `M 配置/*.yaml`，很容易被误提交。
+
+    这里只做「快照 → 会话结束还原」，不改变任何生产行为。
+    之所以用 session 粒度：2000+ 个测试逐条还原开销不划算，
+    而这些配置在单次会话内被读到中间态的风险很低（现有测试只断言字段存在）。
+    """
+    snapshots = {}
+    for rel in _POLLUTABLE_CONFIGS:
+        p = Path(PROJECT_ROOT) / rel
+        if p.is_file():
+            snapshots[p] = p.read_bytes()
+
+    yield
+
+    restored = []
+    for p, original in snapshots.items():
+        try:
+            if p.read_bytes() != original:
+                p.write_bytes(original)
+                restored.append(str(p.relative_to(PROJECT_ROOT)))
+        except OSError:
+            pass
+    if restored:
+        print(f"\n[conftest] 已还原被测试写脏的配置文件: {', '.join(restored)}")
+
+
 @pytest.fixture(autouse=True)
 def _reset_singletons():
     """Reset all class-based singletons between tests"""

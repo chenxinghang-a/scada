@@ -12,6 +12,7 @@ from flask import request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime
 from core.ws_compress import compress_message
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ socketio = None
 def _load_cors_origins():
     """从配置文件加载CORS允许的源"""
     try:
-        config_path = Path('配置/system.yaml')
+        config_path = paths.resolve('配置/system.yaml')
         if config_path.exists():
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f) or {}
