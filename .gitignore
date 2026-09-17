@@ -52,6 +52,9 @@ dist/
 # Testing
 .pytest_cache/
 .coverage
+# pytest-cov 在并行/异常路径下会留下 .coverage.<host>.<pid>.<随机串> 临时文件，
+# 只写 `.coverage` 拦不住它们
+.coverage.*
 coverage.xml
 htmlcov/
 

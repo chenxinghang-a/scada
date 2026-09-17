@@ -126,6 +126,14 @@ class DeviceManager:
         self._status_cache_time: dict[str, float] = {}
         self._status_cache_ttl = 5.0
 
+        # 断线自动重连循环的状态。
+        # 此前这两个属性**从未在 __init__ 里初始化**，只靠 disconnect_all() /
+        # start_reconnect_loop() 赋值 —— 任何在两者之前读取它的路径都会
+        # AttributeError。这里显式声明，顺带把间隔记下来，
+        # 供 switch_simulation_mode() 原样恢复（见该方法内注释）。
+        self._reconnect_running = False
+        self._reconnect_interval = 30
+
         # 连接池 - 复用连接，避免频繁创建/销毁
         self._connection_pool = ConnectionPool(
             factory=self._create_client_for_pool,
@@ -295,6 +303,7 @@ class DeviceManager:
         Args:
             interval: 检查间隔秒数（默认30s）
         """
+        self._reconnect_interval = interval
         self._reconnect_running = True
         def _reconnect_loop():
             while self._reconnect_running:
@@ -340,6 +349,14 @@ class DeviceManager:
 
         logger.info(f"切换模式: {'模拟' if old_mode else '真实'} → {'模拟' if new_mode else '真实'}")
 
+        # 0. 记住重连循环此前是否在跑。
+        # `disconnect_all()` 会把 `_reconnect_running` 置 False —— 这在一处是正确的
+        # （它同时服务于 run.py 的关停路径），但**模式切换不是关停**。
+        # 原先切换后从不重启重连循环，后果是**自动重连永久静默失效**：
+        # 切一次模式，之后任何设备掉线都不会再重连，也没有任何报错，
+        # 运维只看到设备一直离线。
+        reconnect_was_running = self._reconnect_running
+
         # 1. 断开所有现有连接并关闭连接池
         self.disconnect_all()
 
@@ -365,12 +382,18 @@ class DeviceManager:
 
         logger.info(f"模式切换完成: {connected}个设备连接成功, {failed}个失败")
 
+        # 6. 恢复第 0 步记下的重连循环（模式切换不该把自动重连关掉）
+        if reconnect_was_running:
+            self.start_reconnect_loop(interval=self._reconnect_interval)
+            logger.info("模式切换后已恢复断线自动重连循环")
+
         return {
             'success': True,
             'message': f'已切换到{"模拟" if new_mode else "真实"}模式',
             'simulation_mode': new_mode,
             'reconnected': connected,
-            'failed': failed
+            'failed': failed,
+            'reconnect_loop_restored': reconnect_was_running,
         }
 
     def get_device_status(self, device_id: str) -> dict[str, Any]:

@@ -25,6 +25,17 @@ from flask import jsonify, request
 
 logger = logging.getLogger(__name__)
 
+#: `_tasks` 里最多保留多少条**已结束**任务的历史记录。
+#
+# 背景（2026-09 审计）：`submit()` 每次都往 `self._tasks` 写一条记录，
+# 而全文件**没有任何 pop/del/clear** —— 每条记录还持有 `result` 引用。
+# 长期运行的服务（报表生成、批量导出、数据迁移都走这个队列）会因此
+# 无界增长，最终 OOM。
+#
+# 取值权衡：太小则运维刚提交完就查不到结果，太大则起不到回收作用。
+# 500 条足够覆盖「最近一批任务」的查询需求，且单条记录很小。
+MAX_RETAINED_TASKS = 500
+
 
 class TaskStatus:
     PENDING = 'pending'
@@ -69,6 +80,7 @@ class RequestQueue:
         task_id = str(uuid.uuid4())[:8]
 
         with self._tasks_lock:
+            self._evict_finished_tasks()
             self._tasks[task_id] = {
                 'id': task_id,
                 'status': TaskStatus.PENDING,
@@ -90,6 +102,29 @@ class RequestQueue:
 
         logger.info("任务已入队: %s/%s (队列长度=%d)", self.name, task_id, self._queue.qsize())
         return task_id
+
+    def _evict_finished_tasks(self) -> None:
+        """回收已结束的旧任务记录，避免 `_tasks` 无界增长。
+
+        **调用方必须已持有 `self._tasks_lock`。**
+
+        只淘汰终态（COMPLETED / FAILED）的记录，且优先淘汰最老的 ——
+        排队中/执行中的任务绝不能动，否则 `get_status()` 会突然查不到任务。
+        保留最近 ``MAX_RETAINED_TASKS`` 条，保证运维仍能查到近期结果。
+        """
+        if len(self._tasks) <= MAX_RETAINED_TASKS:
+            return
+
+        finished = [
+            (tid, t) for tid, t in self._tasks.items()
+            if t.get('status') in (TaskStatus.COMPLETED, TaskStatus.FAILED)
+        ]
+        # 以「完成时间」排序，没有完成时间的退回创建时间
+        finished.sort(key=lambda kv: kv[1].get('completed_at') or kv[1].get('created_at') or 0)
+
+        overflow = len(self._tasks) - MAX_RETAINED_TASKS
+        for tid, _ in finished[:overflow]:
+            self._tasks.pop(tid, None)
 
     def get_status(self, task_id: str) -> Optional[dict]:
         """获取任务状态"""

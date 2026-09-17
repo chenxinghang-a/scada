@@ -69,20 +69,36 @@ def test_load_yaml_config_works_from_other_cwd(elsewhere):
     assert isinstance(config, dict)
 
 
-def test_save_yaml_config_writes_to_project_root(elsewhere, tmp_path):
-    """保存也必须落到项目根下的目标文件，而不是当前 CWD"""
+def test_save_yaml_config_writes_under_base_dir(elsewhere, tmp_path, monkeypatch):
+    """保存也必须落到 BASE_DIR 下，而不是当前 CWD。
+
+    刻意用 monkeypatch 把 `paths.BASE_DIR` 指到临时目录，而不是往真实的
+    `配置/` 写探针文件：
+      - 不污染工作区（真实配置目录是受版本控制的）
+      - 不需要在 finally 里 unlink 清理 —— 本机环境对删除有批量保护，
+        连单个 unlink 都可能因「本轮累计删除数」超阈值被拦，
+        表现为这个测试莫名其妙地红（断言其实全过了，只有清理那步炸）。
+    """
+    import paths
     from 展示层.api._common import save_yaml_config, load_yaml_config
 
-    rel = '配置/.pytest_write_probe.yaml'
-    target = PROJECT_ROOT / rel
-    try:
-        assert save_yaml_config(rel, {'probe': 1}) is True
-        # 落点必须在项目根，不能在 CWD
-        assert target.exists(), '文件没有写到项目根下'
-        assert not (tmp_path / rel).exists(), '文件被错误地写到了当前工作目录'
-        assert load_yaml_config(rel) == {'probe': 1}
-    finally:
-        target.unlink(missing_ok=True)
+    # 关键：BASE_DIR 必须与 CWD **不同**，否则测不出「解析到 BASE_DIR 而非 CWD」。
+    # 注意 `elsewhere` fixture 是 chdir 到 `tmp_path`，所以这两个是同一个目录 ——
+    # 不能再拿 tmp_path 当 BASE_DIR，要单独建一个。
+    base_dir = tmp_path / 'fake_project_root'
+    base_dir.mkdir()
+    assert Path.cwd() == elsewhere != base_dir
+
+    monkeypatch.setattr(paths, 'BASE_DIR', base_dir)
+
+    assert save_yaml_config('配置/probe.yaml', {'probe': 1}) is True
+    # 落点必须在 BASE_DIR 下
+    assert (base_dir / '配置' / 'probe.yaml').exists(), '文件没有写到 BASE_DIR 下'
+    # 且不能落到当前工作目录
+    assert not (elsewhere / '配置' / 'probe.yaml').exists(), (
+        '文件被错误地写到了当前工作目录'
+    )
+    assert load_yaml_config('配置/probe.yaml') == {'probe': 1}
 
 
 def test_get_config_path_helper():

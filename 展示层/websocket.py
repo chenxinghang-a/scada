@@ -19,6 +19,23 @@ logger = logging.getLogger(__name__)
 # 全局SocketIO实例
 socketio = None
 
+# 已连接的 WebSocket 客户端 sid 集合。
+#
+# 放在**模块级**（而不是 init_socketio 内部的闭包局部变量）是为了让
+# `get_connected_count()` 能被外部 import —— `展示层/api/api_health.py`
+# 一直尝试 `from 展示层.websocket import get_connected_count`，
+# 但该函数此前**根本不存在**，于是健康检查里的 `except Exception`
+# 每次都吞掉 ImportError，`/api/health` 的 websocket 状态**永远是 'unknown'**，
+# WebSocket 是否可用在监控里完全不可见。
+_connected_clients: set[str] = set()
+_clients_lock = threading.Lock()
+
+
+def get_connected_count() -> int:
+    """当前 WebSocket 连接数（线程安全）。供 /api/health 等监控端点使用。"""
+    with _clients_lock:
+        return len(_connected_clients)
+
 
 def _load_cors_origins():
     """从配置文件加载CORS允许的源"""
@@ -83,17 +100,15 @@ def init_socketio(app, database, data_collector):
 
     # 连接数限制配置
     MAX_CONNECTIONS = 100
+    # 说明：`_connected_clients` / `_clients_lock` / `_client_count()` 已提升到
+    # **模块级**（见文件顶部），供 `get_connected_count()` 对外暴露。
+    # 这里**不能**再定义同名局部变量 —— 那会遮蔽模块级对象，
+    # 导致模块级的计数永远为空、而健康检查读到 0。
     # socketio 是 threading 模式，connect/disconnect 在各自的工作线程里跑，
     # 对 set 的读-改-写必须加锁，否则并发连接时会出现「检查时未满、写入时已满」，
     # 实际连接数突破 MAX_CONNECTIONS；纯 len() 的读在 CPython 下虽不会崩，
     # 但和写入交错仍会拿到过期计数，日志与限流判断都不可信。
-    _connected_clients = set()
-    _clients_lock = threading.Lock()
-
-    def _client_count() -> int:
-        """线程安全地读取当前连接数"""
-        with _clients_lock:
-            return len(_connected_clients)
+    _client_count = get_connected_count
 
     # 注册事件处理
     @socketio.on('connect')
@@ -141,7 +156,13 @@ def init_socketio(app, database, data_collector):
     @socketio.on('subscribe')
     def handle_subscribe(data):
         """订阅设备数据"""
-        device_id = data.get('device_id')
+        # `data` 可能是 None（客户端发了空包），此时 `data.get` 会抛 AttributeError，
+        # 在事件处理器里表现为服务端刷堆栈、客户端收不到任何回应。
+        device_id = (data or {}).get('device_id')
+        if not device_id:
+            logger.warning("订阅请求缺少 device_id，已忽略")
+            emit('error', {'message': '订阅需要 device_id'})
+            return
         logger.info(f"客户端订阅设备: {device_id}")
 
         # 加入设备房间
@@ -155,7 +176,11 @@ def init_socketio(app, database, data_collector):
     @socketio.on('unsubscribe')
     def handle_unsubscribe(data):
         """取消订阅"""
-        device_id = data.get('device_id')
+        device_id = (data or {}).get('device_id')
+        if not device_id:
+            logger.warning("取消订阅请求缺少 device_id，已忽略")
+            emit('error', {'message': '取消订阅需要 device_id'})
+            return
         logger.info(f"客户端取消订阅设备: {device_id}")
 
         # 离开设备房间
