@@ -1,4 +1,5 @@
 name: SCADA CI
+
 on:
   push:
     branches: [main]
@@ -7,28 +8,66 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.12', '3.13']
+    # 为什么跑 windows-latest 而不是 ubuntu-latest
+    # ---------------------------------------------------------------
+    # 这个产品的交付物是 **Windows 桌面应用**（PyInstaller 打后端 exe +
+    # Electron 打包安装程序）。在 ubuntu 上跑测试，等于**从来没有验证过
+    # 目标平台**：路径分隔符、`os.name == 'nt'` 分支、Windows 文件锁语义
+    # （SQLite 的 `-wal` / `-shm`）、大小写不敏感的文件系统，
+    # 以及 pywin32 这类平台专属依赖，只有在这里才真正被执行到。
+    #
+    # 只跑 Python 3.13：这是实际开发与打包使用的版本。
+    # 保留 3.12 矩阵的收益（多一个次要版本兼容性信号）远小于
+    # Windows runner 翻倍的成本，而"目标平台正确"优先级更高。
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: pip install -r requirements.txt
-      - run: pip install pytest pytest-cov
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
       - name: Run test suite
-        run: pytest tests/ -q --cov=. --cov-report=xml --cov-report=term-missing
+        # --cov 不传值：源码范围读 pyproject.toml 的 [tool.coverage.run].source
+        # （显式列出源码包，排除 dist/ 里那份约 248 MB 的重复源码 ——
+        # 旧写法 `--cov=.` 会把整份 PyInstaller 产物统计进去，既慢又严重失真）。
+        #
+        # --cov-fail-under=45：当前实测 46%，留 1 个点余量避免跨平台抖动造成
+        # 假红，同时足以拦住"覆盖率明显倒退"。
+        # 待补的短板模块：real_device_manager(22%) / modbus_client(43%) /
+        # opcua_client(60%)。
+        run: pytest tests/ -q --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=45
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
 
   lint:
+    # lint 与平台无关，放 ubuntu 跑得更快、更省额度。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
+          cache: pip
+
       - run: pip install ruff
+
       - name: Ruff (advisory, non-blocking)
+        # 有意保持非阻断：历史代码存在大量可自动修的风格问题，
+        # 一次性开成阻断会淹没真正有价值的信号。先当趋势看。
         continue-on-error: true
         run: ruff check . --select E,W,F --ignore E501,W503

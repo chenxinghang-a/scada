@@ -49,6 +49,33 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 
+[tool.coverage.run]
+# 显式列出源码包。不写 `source = ["."]` 是因为仓库根下还有：
+#   dist/       —— PyInstaller 产物，内含**整份重复源码**（约 248 MB），
+#                  统计进去既极慢又严重失真
+#   legacy/     —— 已归档的游离脚本
+#   测试/       —— 2026-05 遗留目录，非当前测试套件
+#   tests/      —— 测试自身，不计入被测代码
+source = [
+    "core", "采集层", "报警层", "存储层", "展示层",
+    "用户层", "智能层", "gateway", "timeseries",
+]
+omit = [
+    "*/tests/*",
+    "*/测试/*",
+    "legacy/*",
+    "dist/*",
+    "build/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
 [tool.black]
 line-length = 120
 target-version = ["py312"]

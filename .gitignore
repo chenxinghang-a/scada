@@ -52,6 +52,7 @@ dist/
 # Testing
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 
 # Type checking
