@@ -10,23 +10,57 @@ CI 挂在远端时，本机看不到任何细节：
   check-runs API 的 `output.summary` 字段里，脚本读不到；
 - artifacts（`pytest.log`）下载同样需要认证。
 
-唯一**公开可读**的通道是 annotation：通过
-`GET /repos/{owner}/{repo}/check-runs/{id}/annotations` 匿名就能拿到。
+唯一**公开可读**的通道是 annotation：
+`GET /repos/{owner}/{repo}/check-runs/{id}/annotations`。
 
-所以这里把 `pytest.log` 的末尾若干行转义后以 `::error::` 形式输出，
-让「CI 为什么红」这件事在远端也能查到，而不是只能看到一句
-"Process completed with exit code 1"。
+为什么要"提取关键行"而不是直接截末尾
+------------------------------------
+第一版取「末尾 60 行」，结果拿到的是 **coverage 表格的中段** ——
+GitHub 对单条 annotation 的长度有限制，末尾的 `N passed, M failed` 汇总行
+反而被截掉了。而 coverage 表格有 168 行，纯属噪声。
+
+所以这里**先按模式筛出有信息量的行**，再兜底附上最后几行，
+保证 `FAILED` / `ERROR` / 汇总行 / Traceback 一定落在限额内。
 """
 
 import pathlib
+import re
 import sys
 
 LOG = pathlib.Path('pytest.log')
 
-#: 只取末尾这些行 —— annotation 有总量上限，且真正的报错总在最后
-MAX_LINES = 60
-#: 再按字符数兜一层，避免单条 annotation 过长被丢弃
-MAX_CHARS = 60000
+#: 单条 annotation 的字符上限（GitHub 侧还有更严格的总量限制，这里留足余量）
+MAX_CHARS = 8000
+
+#: 值得保留的行
+_PATTERNS = (
+    re.compile(r'^FAILED\b'),
+    re.compile(r'^ERROR\b'),
+    re.compile(r'^E\s'),                       # pytest 的断言失败行
+    re.compile(r'^_{5,}.*_{5,}$'),             # 失败用例的分隔标题
+    re.compile(r'\b\d+ (passed|failed|error|skipped)'),  # 汇总行
+    re.compile(r'Required test coverage'),
+    re.compile(r'^Traceback \(most recent call last\)'),
+    re.compile(r'^(UnicodeEncodeError|UnicodeDecodeError|RuntimeError|AssertionError|ImportError|ModuleNotFoundError)'),
+    re.compile(r'^short test summary info'),
+)
+
+
+def extract(text: str) -> list[str]:
+    """筛出有信息量的行；一条都没筛到时退回最后 20 行。"""
+    lines = text.splitlines()
+    picked = [ln for ln in lines if any(p.search(ln) for p in _PATTERNS)]
+
+    # 去重但保持顺序（pytest 有时会把同一行重复输出）
+    seen: set[str] = set()
+    unique = [ln for ln in picked if not (ln in seen or seen.add(ln))]
+
+    # 汇总行往往在最后，取尾部；同时补上原始末尾 5 行做兜底
+    result = unique[-60:]
+    for ln in lines[-5:]:
+        if ln not in result:
+            result.append(ln)
+    return result
 
 
 def main() -> int:
@@ -35,12 +69,12 @@ def main() -> int:
         return 0
 
     text = LOG.read_text(encoding='utf-8', errors='replace')
-    tail = '\n'.join(text.splitlines()[-MAX_LINES:])
+    body = '\n'.join(extract(text)) or '(pytest.log 里没有筛出关键行)'
 
     # GitHub annotation 的转义要求：% 必须写成 %25，换行写成 %0A
-    escaped = tail.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+    escaped = body.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
 
-    print(f'::error title=pytest 失败详情（末 {MAX_LINES} 行）::{escaped[:MAX_CHARS]}')
+    print(f'::error title=pytest 失败关键行::{escaped[:MAX_CHARS]}')
     return 0
 
 
