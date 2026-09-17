@@ -21,9 +21,9 @@ jobs:
     # Windows runner 翻倍的成本，而"目标平台正确"优先级更高。
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
           cache: pip
@@ -35,31 +35,60 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run test suite
+        # shell 用 bash：Windows runner 自带 Git Bash，`set -o pipefail` 才能让
+        # pytest 的非零退出码穿过 `tee` 传出去（否则管道会吞掉失败，CI 假绿）。
+        shell: bash
         # --cov 不传值：源码范围读 pyproject.toml 的 [tool.coverage.run].source
         # （显式列出源码包，排除 dist/ 里那份约 248 MB 的重复源码 ——
         # 旧写法 `--cov=.` 会把整份 PyInstaller 产物统计进去，既慢又严重失真）。
         #
-        # --cov-fail-under=45：当前实测 46%，留 1 个点余量避免跨平台抖动造成
-        # 假红，同时足以拦住"覆盖率明显倒退"。
+        # --cov-fail-under=45：本地实测 46.72%，留余量避免跨平台抖动造成假红，
+        # 同时足以拦住"覆盖率明显倒退"。
         # 待补的短板模块：real_device_manager(22%) / modbus_client(43%) /
         # opcua_client(60%)。
-        run: pytest tests/ -q --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=45
+        run: |
+          set -o pipefail
+          pytest tests/ -q --cov --cov-report=term-missing --cov-report=xml \
+            --cov-fail-under=45 2>&1 | tee pytest.log
+
+      - name: Publish failure detail to step summary
+        # 失败时把 pytest 输出写进 step summary。
+        # 这样即使拿不到 job log（下载日志需要仓库管理员权限），
+        # 也能通过 check-runs API 的 output.summary 看到真实报错。
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '## 测试失败详情'
+            echo ''
+            echo '```text'
+            tail -250 pytest.log 2>/dev/null || echo '(没有 pytest.log)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: coverage.xml
+          if-no-files-found: warn
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-log
+          path: pytest.log
           if-no-files-found: warn
 
   lint:
     # lint 与平台无关，放 ubuntu 跑得更快、更省额度。
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
           cache: pip
