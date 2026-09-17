@@ -51,20 +51,19 @@ jobs:
           pytest tests/ -q --cov --cov-report=term-missing --cov-report=xml \
             --cov-fail-under=45 2>&1 | tee pytest.log
 
-      - name: Publish failure detail to step summary
-        # 失败时把 pytest 输出写进 step summary。
-        # 这样即使拿不到 job log（下载日志需要仓库管理员权限），
-        # 也能通过 check-runs API 的 output.summary 看到真实报错。
+      - name: Publish failure detail as annotation
+        # 失败时把 pytest 输出末尾若干行发成 annotation。
+        #
+        # 为什么要走 annotation 而不是 step summary / job log：
+        #   - 下载 job log 需要仓库管理员权限（只读访问 403）
+        #   - `$GITHUB_STEP_SUMMARY` 不会出现在 check-runs API 的
+        #     `output.summary` 字段里，脚本读不到
+        #   - artifact 下载同样需要认证
+        # 只有 annotation 是公开可读的：
+        #   GET /repos/{owner}/{repo}/check-runs/{id}/annotations
+        # 这样"CI 为什么红"在远端也能查到，而不是只有一句 exit code 1。
         if: failure()
-        shell: bash
-        run: |
-          {
-            echo '## 测试失败详情'
-            echo ''
-            echo '```text'
-            tail -250 pytest.log 2>/dev/null || echo '(没有 pytest.log)'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: python .github/scripts/emit_failure_annotation.py
 
       - name: Upload coverage report
         if: always()
