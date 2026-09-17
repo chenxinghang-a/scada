@@ -146,8 +146,12 @@ class DeviceManager:
         # 加载设备配置
         self.load_config()
 
-    def load_config(self):
-        """加载设备配置文件"""
+    def _load_config_into(self, target: dict) -> None:
+        """把配置文件解析进 `target`（**不触碰 `self.devices`**）。
+
+        之所以拆出来：热重载必须「先解析完、再原子替换」，
+        不能直接往正在被别的线程迭代的 `self.devices` 里写。
+        """
         try:
             config_file = paths.resolve(self.config_path)
             if not config_file.exists():
@@ -155,33 +159,53 @@ class DeviceManager:
                 return
 
             with open(config_file, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
+                config = yaml.safe_load(f) or {}
 
             # 解析设备配置
             devices_config = config.get('devices', [])
             for device_config in devices_config:
                 device_id = device_config.get('id')
                 if device_id:
-                    self.devices[device_id] = device_config
+                    target[device_id] = device_config
                     protocol = device_config.get('protocol', 'modbus_tcp')
                     logger.info(f"加载设备配置: {device_id} [{protocol}] - {device_config.get('name')}")
 
             # 按协议统计
             proto_count = {}
-            for d in self.devices.values():
+            for d in target.values():
                 p = d.get('protocol', 'modbus_tcp')
                 proto_count[p] = proto_count.get(p, 0) + 1
             summary = ', '.join(f"{k}:{v}" for k, v in proto_count.items())
-            logger.info(f"共加载 {len(self.devices)} 个设备 ({summary})")
+            logger.info(f"共加载 {len(target)} 个设备 ({summary})")
 
         except Exception as e:
             logger.error(f"加载配置文件异常: {e}")
 
+    def load_config(self):
+        """加载设备配置文件（整体替换，保证读取方永远看到完整的一张表）"""
+        new_devices: dict[str, Any] = {}
+        self._load_config_into(new_devices)
+        with self._lock:
+            self.devices = new_devices
+
     def reload_config(self):
-        """热重载设备配置（运行时调用，不会中断已有连接）"""
+        """热重载设备配置（运行时调用，不会中断已有连接）
+
+        实现要点：**先在临时字典里解析完，再一次性原子替换** `self.devices`。
+
+        不能写成 `self.devices.clear()` 然后逐条填 —— 重连循环正在
+        `for device_id, config in self.devices.items()`（见 start_reconnect_loop），
+        中间态（空表或半张表）会让它抛
+        `RuntimeError: dictionary changed size during iteration`，
+        或者静默漏掉一整批设备（表现为「重载后一段时间内某些设备不采集」）。
+        """
         old_ids = set(self.devices.keys())
-        self.devices.clear()
-        self.load_config()
+
+        new_devices: dict[str, Any] = {}
+        self._load_config_into(new_devices)
+        with self._lock:
+            self.devices = new_devices
+
         new_ids = set(self.devices.keys())
 
         added = new_ids - old_ids

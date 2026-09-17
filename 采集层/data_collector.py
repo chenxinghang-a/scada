@@ -489,15 +489,21 @@ class DataCollector:
         if timer:
             timer.cancel()
             logger.info(f"已停止设备 {device_id} 的采集任务")
-        # 清理追踪数据，防止内存泄漏
-        prefix = f"{device_id}:"
-        stale_keys = [k for k in self._last_values if k.startswith(prefix)]
-        for k in stale_keys:
-            self._last_values.pop(k, None)
-            self._last_times.pop(k, None)
-        # 清理断路器和失败计数
-        self._circuit_state.pop(device_id, None)
-        self._failure_counts.pop(device_id, None)
+        # 清理追踪数据，防止内存泄漏。
+        # **必须在 `_tracking_lock` 内** —— 这几个字典被采集线程并发写
+        # （见 _handle_normal_collection 里的 `self._last_values[key] = value`）。
+        # 不加锁时，这里对 `_last_values` 的迭代会和采集线程的写入撞上，
+        # 抛 `RuntimeError: dictionary changed size during iteration`，
+        # 导致**设备删除失败、追踪数据残留**（也就是这段代码本来要防的内存泄漏）。
+        with self._tracking_lock:
+            prefix = f"{device_id}:"
+            stale_keys = [k for k in self._last_values if k.startswith(prefix)]
+            for k in stale_keys:
+                self._last_values.pop(k, None)
+                self._last_times.pop(k, None)
+            # 清理断路器和失败计数
+            self._circuit_state.pop(device_id, None)
+            self._failure_counts.pop(device_id, None)
 
     def _setup_push_device(self, device_id: str, device_config: dict[str, Any]):
         """设置推送型设备（OPC UA / MQTT）的回调和连接。
@@ -1090,12 +1096,18 @@ class DataCollector:
                             device_status = 'unknown'
                         _device_status_cache[device_id] = device_status
 
+                    # 读-用必须在同一临界区内：否则「读到 last_value」与
+                    # 「它被别人改掉」之间会出现撕裂，质量判定会基于不一致的快照。
+                    with self._tracking_lock:
+                        _prev_value = self._last_values.get(key)
+                        _prev_time = self._last_times.get(key)
+
                     quality = DataQualityAssessor.assess(
                         value=value,
                         register_name=register_name,
                         device_status=_device_status_cache[device_id],
-                        last_value=self._last_values.get(key),
-                        last_time=self._last_times.get(key)
+                        last_value=_prev_value,
+                        last_time=_prev_time
                     )
 
                     # 读取虽"成功"返回，但内容来自客户端陈旧缓存（设备实际
@@ -1106,10 +1118,12 @@ class DataCollector:
 
                     data['quality'] = quality
 
-                    # 更新跟踪状态
+                    # 更新跟踪状态（与其他访问 _last_values/_last_times 的路径共用
+                    # 同一把 `_tracking_lock`；这两个键必须一起更新，不能只写一半）
                     if value is not None and not (isinstance(value, float) and math.isnan(value)):
-                        self._last_values[key] = value
-                        self._last_times[key] = time.time()
+                        with self._tracking_lock:
+                            self._last_values[key] = value
+                            self._last_times[key] = time.time()
 
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
                 try:
