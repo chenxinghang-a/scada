@@ -20,6 +20,25 @@ jobs:
     # 保留 3.12 矩阵的收益（多一个次要版本兼容性信号）远小于
     # Windows runner 翻倍的成本，而"目标平台正确"优先级更高。
     runs-on: windows-latest
+    env:
+      # ── 根因修复：Windows runner 的编码环境不是 UTF-8 ──────────────────
+      # 本项目的目录名（采集层/报警层/存储层/展示层/用户层/智能层）、日志、
+      # 配置内容全是中文。GitHub 的 Windows runner 默认使用系统 ANSI 代码页
+      # （cp1252），于是：
+      #   - `print()` / logging 到控制台的中文 → UnicodeEncodeError
+      #   - `open()` / `Path.read_text()` 未显式指定 encoding 时按 cp1252 解码
+      #     → 读中文文件 UnicodeDecodeError
+      #   - subprocess text 模式同理
+      # 表现就是「本机全绿、CI 全红」，而且报错信息本身也可能编不出来。
+      #
+      # 实测证据：把 annotation 诊断脚本在 PYTHONIOENCODING=cp1252 下运行，
+      # 立刻在 print 中文标题处抛 UnicodeEncodeError，与 CI 上该步骤失败一致。
+      #
+      # PYTHONUTF8=1 开启 Python 的 UTF-8 模式：stdio、文件系统编码、
+      # open() 默认编码全部走 UTF-8，一次解决上面三类问题。
+      # PYTHONIOENCODING 再加一道保险（某些三方库会自己看这个变量）。
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
     steps:
       - uses: actions/checkout@v7
 
