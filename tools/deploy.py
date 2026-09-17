@@ -82,8 +82,17 @@ class Deployer:
                 'value': f'{free_gb:.1f}GB',
                 'message': f'可用空间: {free_gb:.1f}GB',
             })
-        except Exception:
-            pass
+        except Exception as e:
+            # 原为 `except Exception: pass` —— 检查失败时「磁盘空间」这一项
+            # **直接从报告里消失**，部署前检查于是报告"一切正常"，
+            # 而实际上**根本没检查过磁盘**（磁盘满是部署最常见的翻车原因）。
+            # 与上面「依赖检查」保持一致的写法：失败也要作为一条 error 进报告。
+            checks['checks'].append({
+                'name': '磁盘空间',
+                'status': 'error',
+                'value': 'N/A',
+                'message': f'磁盘空间检查失败: {type(e).__name__}: {e}',
+            })
 
         # 4. 检查数据库
         db_path = self.project_root / 'data' / 'scada.db'

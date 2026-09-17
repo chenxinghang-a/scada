@@ -166,15 +166,27 @@ class MetricsCollector:
         cutoff = datetime.now() - timedelta(hours=hours)
         metrics = []
 
+        skipped = 0
         with open(self.metrics_file, 'r', encoding='utf-8') as f:
             for line in f:
+                if not line.strip():
+                    continue
                 try:
                     data = json.loads(line.strip())
                     timestamp = datetime.fromisoformat(data['timestamp'])
-                    if timestamp >= cutoff:
-                        metrics.append(data)
-                except Exception:
+                except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                    # 窄化到「这一条记录坏了」这一类可枚举异常。
+                    # 原为 `except Exception: continue` —— 连 OSError / MemoryError
+                    # 这类"整份文件都读不下去"的错误也会被当成"这行格式不对"吞掉，
+                    # 表现为指标条数莫名其妙变少，而没有任何提示。
+                    skipped += 1
                     continue
+                if timestamp >= cutoff:
+                    metrics.append(data)
+
+        if skipped:
+            print(f'[auto_metrics] 加载指标时跳过 {skipped} 条损坏记录'
+                  f'（有效 {len(metrics)} 条）', file=sys.stderr)
 
         return metrics
 

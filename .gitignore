@@ -22,6 +22,8 @@ exports/*.csv
 # Logs
 logs/*.log
 logs/*.log.*
+# 运行期审计流水（每跑一次服务/测试都会追加）—— 与 data/audit_log.jsonl 同一口径
+logs/ops_audit.jsonl
 
 # IDE
 .vscode/

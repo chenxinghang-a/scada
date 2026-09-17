@@ -6,12 +6,24 @@
     python tools/security_scan.py full         # 完整扫描
     python tools/security_scan.py quick        # 快速扫描
     python tools/security_scan.py report       # 生成报告
+
+设计要点（round 162 修复）
+--------------------------
+本工具的失效模式不是"崩掉"，而是**报告"未发现问题"**。
+原来每个检查阶段都是 `for 文件: try: 扫描 except Exception: pass` ——
+单个文件读不了就被静默跳过，扫描器照常输出「安全分数 100 / 发现问题 0」。
+调用方看到的是"安全"，实际是"根本没扫"。
+
+现在所有跳过都记进 `self.scan_errors`，并随报告一起输出
+（`summary.scan_error_count` + `report.scan_errors`），
+`format_report()` 会在开头显著提示"本次扫描不完整，结论不覆盖这些目标"。
 """
 
 import os
 import sys
 import json
 import re
+import logging
 import sqlite3
 import argparse
 from datetime import datetime
@@ -22,6 +34,8 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+logger = logging.getLogger(__name__)
+
 
 class SecurityScanner:
     """安全扫描器"""
@@ -29,10 +43,30 @@ class SecurityScanner:
     def __init__(self):
         self.project_root = project_root
         self.findings: List[Dict[str, Any]] = []
+        #: 扫描过程中「本应扫描但失败」的目标。
+        #: **必须随报告一起输出** —— 否则扫描器自己读不了文件、却报告「未发现问题」，
+        #: 这是本项目最危险的静默失效（安全扫描器说"安全"，实际它压根没扫）。
+        self.scan_errors: List[Dict[str, str]] = []
+
+    def _note_scan_error(self, stage: str, target: Any, exc: BaseException) -> None:
+        """记录一次「本应扫描但失败」。
+
+        刻意**不中断整体扫描**（单个文件读不了不该让整次扫描作废），
+        但会进 ``self.scan_errors`` 并被 ``_generate_report`` / ``format_report`` 输出，
+        使「未发现问题」这个结论带上它自己的覆盖率说明。
+        """
+        entry = {
+            'stage': stage,
+            'target': str(target),
+            'error': f'{type(exc).__name__}: {exc}',
+        }
+        self.scan_errors.append(entry)
+        logger.warning("安全扫描 [%s] 跳过 %s：%s", stage, entry['target'], entry['error'])
 
     def run_full_scan(self) -> Dict[str, Any]:
         """运行完整安全扫描"""
         self.findings = []
+        self.scan_errors = []
 
         # 1. 检查敏感文件
         self._check_sensitive_files()
@@ -63,6 +97,7 @@ class SecurityScanner:
     def run_quick_scan(self) -> Dict[str, Any]:
         """运行快速扫描"""
         self.findings = []
+        self.scan_errors = []
 
         # 只检查最关键的问题
         self._check_hardcoded_credentials()
@@ -129,8 +164,8 @@ class SecurityScanner:
                             'message': message,
                             'recommendation': '使用环境变量或配置文件存储凭证',
                         })
-            except Exception:
-                pass
+            except Exception as e:
+                self._note_scan_error('hardcoded_credentials', py_file, e)
 
     def _check_sql_injection(self):
         """检查SQL注入风险"""
@@ -157,8 +192,8 @@ class SecurityScanner:
                             'message': f'SQL注入风险: {message}',
                             'recommendation': '使用参数化查询',
                         })
-            except Exception:
-                pass
+            except Exception as e:
+                self._note_scan_error('sql_injection', py_file, e)
 
     def _check_xss_risks(self):
         """检查XSS风险"""
@@ -185,8 +220,8 @@ class SecurityScanner:
                             'message': f'XSS风险: {message}',
                             'recommendation': '使用安全的DOM操作方式',
                         })
-            except Exception:
-                pass
+            except Exception as e:
+                self._note_scan_error('xss_risks', vue_file, e)
 
     def _check_permissions(self):
         """检查权限配置"""
@@ -220,8 +255,8 @@ class SecurityScanner:
                             'message': '绑定到所有网络接口',
                             'recommendation': '限制到特定IP地址',
                         })
-            except Exception:
-                pass
+            except Exception as e:
+                self._note_scan_error('permissions', config_file, e)
 
     def _check_dependencies(self):
         """检查依赖安全"""
@@ -246,8 +281,8 @@ class SecurityScanner:
                             'message': f'依赖未固定版本: {line}',
                             'recommendation': '使用==固定版本号',
                         })
-            except Exception:
-                pass
+            except Exception as e:
+                self._note_scan_error('dependencies', requirements_file, e)
 
     def _check_config_security(self):
         """检查配置安全"""
@@ -267,8 +302,8 @@ class SecurityScanner:
                         'message': '生产代码中启用debug模式',
                         'recommendation': '生产环境禁用debug模式',
                     })
-            except Exception:
-                pass
+            except Exception as e:
+                self._note_scan_error('config_security', py_file, e)
 
     def _check_logging_security(self):
         """检查日志安全"""
@@ -295,8 +330,8 @@ class SecurityScanner:
                             'message': message,
                             'recommendation': '避免在日志中记录敏感信息',
                         })
-            except Exception:
-                pass
+            except Exception as e:
+                self._note_scan_error('logging_security', py_file, e)
 
     def _is_gitignored(self, file_path: Path) -> bool:
         """检查文件是否被.gitignore忽略"""
@@ -317,7 +352,11 @@ class SecurityScanner:
                     return True
 
             return False
-        except Exception:
+        except Exception as e:
+            # 忽略规则读不了 → 只能按「不忽略」处理（宁可多报、不可漏报），
+            # 但**必须记录**：否则会以「敏感文件未被忽略」的形式产生误报，
+            # 而调用方无从知道这条结论来自一次失败的读取。
+            self._note_scan_error('gitignore_check', file_path, e)
             return False
 
     def _generate_report(self) -> Dict[str, Any]:
@@ -342,8 +381,12 @@ class SecurityScanner:
                 'total_findings': len(self.findings),
                 'severity_counts': severity_counts,
                 'security_score': score,
+                # 扫描覆盖率：被跳过的目标数。非 0 表示本次扫描**不完整**，
+                # 「未发现问题」的结论不覆盖这些目标。
+                'scan_error_count': len(self.scan_errors),
             },
             'findings': self.findings,
+            'scan_errors': self.scan_errors,
         }
 
 
@@ -367,6 +410,18 @@ def format_report(report: Dict[str, Any]) -> str:
         lines.append(f"  中危: {summary['severity_counts']['medium']}")
     if summary['severity_counts']['low'] > 0:
         lines.append(f"  低危: {summary['severity_counts']['low']}")
+
+    # 扫描不完整时必须在最显眼处说明 —— 否则「0 问题」会被误读成「安全」。
+    scan_error_count = summary.get('scan_error_count', 0)
+    if scan_error_count:
+        lines.append("")
+        lines.append("!" * 60)
+        lines.append(f"警告：本次扫描**不完整** —— {scan_error_count} 个目标被跳过")
+        lines.append("上面的「发现问题」数字**不覆盖**这些目标，不能据此判定安全。")
+        lines.append("!" * 60)
+        for err in report.get('scan_errors', []):
+            lines.append(f"  - [{err['stage']}] {err['target']}")
+            lines.append(f"    {err['error']}")
 
     if report['findings']:
         lines.append("\n详细发现:")

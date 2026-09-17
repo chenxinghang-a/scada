@@ -52,6 +52,14 @@ class PerformanceBaseline:
         interval = 10  # 每10秒采样一次
         num_samples = duration_minutes * 60 // interval
 
+        # 时长太短 → 采样次数为 0 → 下面 sum([])/len([]) 会抛 ZeroDivisionError，
+        # 堆栈指向算术行，完全看不出是"时长参数不对"。这里显式报错。
+        if num_samples <= 0:
+            raise ValueError(
+                f'duration_minutes 太小，无法建立基线：'
+                f'duration_minutes={duration_minutes} → 采样次数 {num_samples}（采样间隔 {interval}s，至少需要 1 分钟）'
+            )
+
         for i in range(num_samples):
             sample = self._take_sample()
             samples.append(sample)
@@ -135,8 +143,17 @@ class PerformanceBaseline:
                 conn.execute("SELECT COUNT(*) FROM history_data")
                 conn.close()
                 sample['db_query_time_ms'] = round((time.time() - start) * 1000, 1)
-        except Exception:
-            pass
+        except Exception as e:
+            # 原为 `except Exception: pass` —— 采样失败时 db_query_time_ms 保持 0，
+            # 而 _build_baseline 里 `if s.get('db_query_time_ms')` 会把 0 当成
+            # "没有这个维度"过滤掉 → **数据库性能维度从基线里整段消失**，
+            # 调用方完全不知道（compare_with_baseline 里
+            # `current.get('db_query_time_ms')` 同理，整块 DB 对比被跳过）。
+            # 现在显式置 None 并留下错误原因，让缺失变得可诊断。
+            sample['db_query_time_ms'] = None
+            sample['db_query_error'] = f'{type(e).__name__}: {e}'
+            print(f'[performance_baseline] 数据库查询采样失败: '
+                  f'{type(e).__name__}: {e}', file=sys.stderr)
 
         return sample
 

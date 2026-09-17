@@ -45,8 +45,11 @@ class SystemTester:
                             values.append(data['pressure']['value'])
                         elif 'voltage' in data:
                             values.append(data['voltage']['value'])
-                except:
-                    pass
+                except Exception as e:
+                    # 裸 except 会连 KeyboardInterrupt / SystemExit 一起吞掉，
+                    # 导致脚本跑起来 Ctrl-C 杀不掉。单次采样失败本就该继续下一轮，
+                    # 但必须留痕 —— 否则"一个点都没采到"会被当成"波动为 0"。
+                    print(f'  采样失败（已跳过）: {type(e).__name__}: {e}')
                 time.sleep(0.1)
 
             if values:
@@ -96,8 +99,10 @@ class SystemTester:
                         r = requests.post(f'{BASE_URL}{url}', json={}, timeout=5)
                     elapsed = (time.time() - start) * 1000  # 毫秒
                     times.append(elapsed)
-                except:
-                    pass
+                except Exception as e:
+                    # 同 test_collection_accuracy：不用裸 except（会吞掉 Ctrl-C），
+                    # 且失败要留痕，否则"根本没测到"和"0ms 极快"分不清。
+                    print(f'  {name} 请求失败（已跳过）: {type(e).__name__}: {e}')
 
             if times:
                 avg = statistics.mean(times)
@@ -138,8 +143,11 @@ class SystemTester:
                     data_points.append(len(data.get('data', [])))
                 else:
                     fail_count += 1
-            except:
+            except Exception as e:
+                # 裸 except 会吞掉 KeyboardInterrupt（Ctrl-C 停不下来）。
+                # 失败计数逻辑保留，另打印原因便于定位。
                 fail_count += 1
+                print(f'  请求失败: {type(e).__name__}: {e}')
 
             time.sleep(1)
 

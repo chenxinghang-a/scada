@@ -89,6 +89,16 @@ def main():
             len(index_result['failed']),
         )
 
+        # 运维清理工具接线（round 162）。`core/ops_tools.py` 的全局单例 `data_cleaner`
+        # 默认 `_db_path = None`，而 `set_db_path()` 此前**全仓库无任何调用方** ——
+        # 结果是管理端 `POST /api/ops/cleanup/history` 100% 失败：`sqlite3.connect(None)`
+        # 抛 TypeError，被 `except Exception` 收成 `{'status': 'error'}`，
+        # 再被 `success_response` 包成 HTTP 200 → 界面显示"清理成功"，实际一行没删。
+        # 与 ensure_indexes 同理，必须放在建库之后。
+        from core.ops_tools import data_cleaner
+        data_cleaner.set_db_path(str(db_path))
+        logger.info("运维清理工具已接线: %s", db_path)
+
         # 初始化设备管理器（根据模式选择不同的管理器）
         logger.info("加载设备配置...")
         if simulation_mode:

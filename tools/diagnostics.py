@@ -154,21 +154,36 @@ class SystemDiagnostics:
 
         # 检查最近的错误
         recent_errors = 0
+        unreadable_logs = []
         for log_file in log_files[-5:]:  # 检查最近5个日志文件
             try:
                 with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
                         if 'ERROR' in line or 'CRITICAL' in line:
                             recent_errors += 1
-            except Exception:
-                pass
+            except Exception as e:
+                # 原为 `except Exception: pass` —— 读不了的日志被静默跳过，
+                # recent_errors 因此**偏小**，诊断结论给出"ok"，
+                # 而真相是"这几个日志文件我压根没读到"。
+                unreadable_logs.append(f'{log_file.name}: {type(e).__name__}: {e}')
+                print(f'[diagnostics] 日志文件读取失败，错误计数不完整: '
+                      f'{log_file.name}: {type(e).__name__}: {e}', file=sys.stderr)
 
-        return {
+        result = {
             'status': 'warning' if recent_errors > 10 else 'ok',
             'file_count': len(log_files),
             'total_size_mb': round(total_size / (1024 * 1024), 2),
             'recent_errors': recent_errors,
         }
+        if unreadable_logs:
+            # 有日志读不了 → 「错误数正常」这个结论不成立：必须降级为 warning 并说明原因，
+            # 否则调用方会把"少读了几百行 ERROR"误读成"系统很健康"。
+            result['status'] = 'warning'
+            result['unreadable_logs'] = unreadable_logs
+            result['message'] = (
+                f'{len(unreadable_logs)} 个日志文件读取失败，recent_errors 计数不完整'
+            )
+        return result
 
     def _check_network(self) -> Dict[str, Any]:
         """检查网络连接"""

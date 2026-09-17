@@ -21,13 +21,21 @@
 ``continue`` 上方写一行中文注释说明为什么安全忽略；本测试不强制校验注释
 （注释不是可机检的契约），由 code review 把关。
 
-扫描范围
---------
-仓库内全部 ``.py``，排除：
-- ``tests/``（测试里的 try/except 有自己的语义，且经常故意吞异常）
-- ``tools/``（运维脚本，不是常驻服务代码）
-- ``.venv`` / ``node_modules`` / ``build`` / ``dist`` / ``__pycache__``
-- ``测试``（旧的中文名测试目录，已被 pyproject 排除）
+扫描范围（round 162 调整）
+------------------------
+两条规则的扫描范围**不一样**，这是刻意的：
+
+- **禁裸 ``except:``** —— 覆盖几乎全库（只排除第三方 / 构建产物 / 归档区）。
+  裸 except 会吞掉 ``KeyboardInterrupt`` / ``SystemExit``，导致 Ctrl-C 杀不掉进程，
+  这个危害**不区分生产代码还是测试代码**。
+- **禁 ``except Exception/BaseException: pass|continue``** —— 只扫生产代码，
+  额外排除 ``tests/`` / ``测试/``（测试里故意吞异常是常见写法，且测试崩了会直接变红）。
+  **``tools/`` 已在 round 162 纳入管辖** —— 此前它整目录被排除，结果藏了 11 处，
+  其中 ``security_scan.py`` 一家 7 处，表现为"扫描器读不了文件就静默跳过，
+  然后报告『未发现问题』"。
+
+永久排除：``.venv`` / ``node_modules`` / ``build`` / ``dist`` / ``__pycache__`` /
+``legacy``（round 161 建立的归档区：历史死代码与一次性脚本）。
 """
 
 from __future__ import annotations
@@ -43,7 +51,10 @@ import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-EXCLUDED_DIRS = {
+#: 任何规则都不扫的目录：第三方依赖 / 构建产物 / 归档区。
+#: ``legacy/`` 是 round 161 建立的归档区（历史死代码与一次性脚本），
+#: 按定义是废弃代码，不适用生产标准。
+ALWAYS_SKIP = {
     ".git",
     ".venv",
     "venv",
@@ -53,12 +64,27 @@ EXCLUDED_DIRS = {
     "build",
     "dist",
     "managed_components",
-    "tests",      # 测试自身允许吞异常
-    "tools",      # 运维脚本，非常驻服务代码
-    "测试",        # 旧中文名测试目录
     "pytest-quarantine",
-    "legacy",     # 归档区：历史死代码与一次性脚本，不参与构建/打包，已明确标记为废弃
+    "legacy",
 }
+
+#: 「宽异常被静默丢弃」规则的额外排除集。
+#:
+#: 只排除测试目录 —— 测试里故意吞异常是常见写法（而且测试崩了会直接变红，
+#: 不存在"静默"问题）。
+#:
+#: **``tools/`` 已在 round 162 从本集合移除。** 此前它整目录被排除，
+#: 结果 11 处 `except Exception: pass` 藏在运维脚本里躲过守卫 ——
+#: 其中 `security_scan.py` 一家占 7 处，表现为"扫描器读不了文件就静默跳过，
+#: 然后报告『未发现问题』"。这些已全部修掉，现在 `tools/` 纳入管辖。
+BROAD_RULE_SKIP = ALWAYS_SKIP | {"tests", "测试"}
+
+#: 「裸 except」规则的排除集：**只排除 ALWAYS_SKIP，不额外排除测试目录**。
+#:
+#: 理由：裸 ``except:`` 会连 ``KeyboardInterrupt`` / ``SystemExit`` 一起吞掉，
+#: 导致脚本跑起来 Ctrl-C 杀不掉进程 —— 这个危害**不区分生产代码还是测试代码**。
+#: round 162 已把全库裸 except 清零（含 `测试/实验测试.py` 的 3 处）。
+BARE_RULE_SKIP = ALWAYS_SKIP
 
 #: 宽异常类型 —— 这些被 ``pass`` 掉就是静默失效
 BROAD_EXCEPTIONS = {"Exception", "BaseException"}
@@ -68,10 +94,14 @@ BROAD_EXCEPTIONS = {"Exception", "BaseException"}
 ALLOWED_SILENT_BROAD: dict[tuple[str, int], str] = {}
 
 
-def _iter_production_py():
-    """遍历生产代码里的全部 .py 文件，产出 (相对路径, 绝对路径)。"""
+def _iter_py(skip_dirs: set[str]):
+    """遍历仓库里的全部 .py 文件，产出 (相对路径, 绝对路径)。
+
+    Args:
+        skip_dirs: 要跳过的目录名集合（按**目录名**匹配，不做路径前缀匹配）。
+    """
     for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
         for name in files:
             if not name.endswith(".py"):
                 continue
@@ -118,7 +148,7 @@ def _is_silent(handler: ast.ExceptHandler) -> bool:
 
 def _collect_bare_except() -> list[str]:
     hits: list[str] = []
-    for rel, abs_path in _iter_production_py():
+    for rel, abs_path in _iter_py(BARE_RULE_SKIP):
         try:
             tree = _parse(rel, abs_path)
         except SyntaxError as exc:  # pragma: no cover - 语法错误应被其它测试抓到
@@ -131,7 +161,7 @@ def _collect_bare_except() -> list[str]:
 
 def _collect_silent_broad() -> list[str]:
     hits: list[str] = []
-    for rel, abs_path in _iter_production_py():
+    for rel, abs_path in _iter_py(BROAD_RULE_SKIP):
         try:
             tree = _parse(rel, abs_path)
         except SyntaxError as exc:  # pragma: no cover
@@ -153,13 +183,46 @@ def _collect_silent_broad() -> list[str]:
 
 def test_scan_covers_real_files():
     """先证明扫描器真的在扫东西 —— 防止 exclude 写错导致"扫了 0 个文件"的假绿。"""
-    files = list(_iter_production_py())
-    assert len(files) > 100, f"只扫到 {len(files)} 个文件，EXCLUDED_DIRS 可能写错了"
+    files = list(_iter_py(BROAD_RULE_SKIP))
+    assert len(files) > 100, f"只扫到 {len(files)} 个文件，跳过集可能写错了"
     rels = {rel for rel, _ in files}
     # 抽查几个必须被扫到的核心模块
     for must in ("run.py", "config.py", "core/module_registry.py",
                  "采集层/data_collector.py", "存储层/database.py"):
         assert must in rels, f"{must} 没有被扫到"
+
+
+def test_tools_directory_is_scanned():
+    """``tools/`` 必须在管辖范围内（round 162 把它从排除集里移除了）。
+
+    回归背景：``tools/`` 曾整目录被排除，结果 11 处 ``except Exception: pass``
+    藏在运维脚本里躲过守卫，其中 ``security_scan.py`` 一家占 7 处 ——
+    表现是"扫描器读不了文件就静默跳过，然后报告『未发现问题』"。
+    这条测试防止有人图省事再把 ``tools/`` 加回排除集。
+    """
+    files = list(_iter_py(BROAD_RULE_SKIP))
+    tools_files = [rel for rel, _ in files if rel.startswith("tools/")]
+    assert len(tools_files) >= 15, (
+        f"只扫到 {len(tools_files)} 个 tools/ 下的文件，tools/ 可能又被排除了"
+    )
+    # 这几个是 round 162 实际修过的，必须被扫到
+    for must in ("tools/security_scan.py", "tools/deploy.py",
+                 "tools/diagnostics.py", "tools/performance_baseline.py",
+                 "tools/auto_metrics.py"):
+        assert must in tools_files, f"{must} 没有被扫到"
+
+
+def test_bare_except_rule_covers_tests_and_tools():
+    """裸 except 规则要覆盖 tests/ 与 tools/ —— 它的危害不区分生产/测试。
+
+    裸 ``except:`` 会吞掉 ``KeyboardInterrupt`` / ``SystemExit``，导致 Ctrl-C
+    杀不掉进程。实测 `测试/实验测试.py` 曾有 3 处，round 162 已清零。
+    """
+    rels = {rel for rel, _ in _iter_py(BARE_RULE_SKIP)}
+    assert any(r.startswith("tools/") for r in rels), "tools/ 未纳入裸 except 扫描"
+    assert any(r.startswith("tests/") for r in rels), "tests/ 未纳入裸 except 扫描"
+    assert any(r.startswith("测试/") for r in rels), "测试/ 未纳入裸 except 扫描"
+    assert not any(r.startswith("legacy/") for r in rels), "legacy/ 归档区不应被扫"
 
 
 def test_no_bare_except():

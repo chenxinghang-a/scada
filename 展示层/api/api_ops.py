@@ -19,6 +19,23 @@ logger = logging.getLogger(__name__)
 ops_bp = Blueprint('api_ops', __name__, url_prefix='/api/ops')
 
 
+def _cleanup_response(result):
+    """清理类接口的统一返回：`status == 'error'` 必须变成**错误响应**。
+
+    round 162 修复。`DataCleaner` 的方法是"吞异常 + 返回结果字典"的契约
+    （失败时给 `{'status': 'error', 'error': ...}`，不抛异常）。原先三个清理接口
+    无条件把它包进 `success_response()` —— 于是清理失败时接口回 **HTTP 200**、
+    只在 body 里带一个 `status:'error'`，前端只看 HTTP 状态就会显示"清理成功"。
+    这是本项目最典型的"静默假成功"。
+
+    修复后：失败一律 `error_response(..., 500)`，让调用方**没法**忽略。
+    """
+    if isinstance(result, dict) and result.get('status') == 'error':
+        logger.error("运维清理失败: %s", result)
+        return error_response(f"清理失败: {result.get('error', '未知错误')}", 500)
+    return success_response(result)
+
+
 # ================================================================
 # 运行时配置 API
 # ================================================================
@@ -205,7 +222,7 @@ def cleanup_history():
         days = data.get('retention_days', 90)
         result = data_cleaner.clean_history_data(days)
         ops_audit.log_operation('cleanup_history', details=result)
-        return success_response(result)
+        return _cleanup_response(result)
     except Exception as e:
         logger.error(f"清理历史数据失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -221,7 +238,7 @@ def cleanup_backups():
         keep = data.get('keep_count', 5)
         result = data_cleaner.clean_old_backups(keep_count=keep)
         ops_audit.log_operation('cleanup_backups', details=result)
-        return success_response(result)
+        return _cleanup_response(result)
     except Exception as e:
         logger.error(f"清理备份失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -237,7 +254,7 @@ def cleanup_logs():
         days = data.get('retention_days', 30)
         result = data_cleaner.clean_log_files(retention_days=days)
         ops_audit.log_operation('cleanup_logs', details=result)
-        return success_response(result)
+        return _cleanup_response(result)
     except Exception as e:
         logger.error(f"清理日志失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)

@@ -385,13 +385,35 @@ class DataCleaner:
     def set_db_path(self, path: str):
         self._db_path = path
 
+    def _require_db_path(self) -> str:
+        """返回已配置的库路径；未配置时给出**明确**报错。
+
+        round 162 修复。原先这里直接把 `self._db_path` 交给 `sqlite3.connect()`：
+        未接线时抛的是 `TypeError: expected str, bytes or os.PathLike object,
+        not NoneType`，被下面的 `except Exception` 收成 `{'status': 'error'}`，
+        再被 `展示层/api/api_ops.py` 无条件包进 `success_response` →
+        **HTTP 200 + body 里 `status:'error'`**，即本项目最典型的"静默假成功"：
+        管理员点「清理历史数据」，接口回 200，界面显示成功，而一行都没删。
+
+        实测（修复前）：`DataCleaner().clean_history_data(90)` →
+        `{'status': 'error', 'error': 'expected str, bytes or os.PathLike object,
+        not NoneType'}`，且 `set_db_path()` 全仓库**无任何调用方**。
+        生产接线见 `run.py` 建库之后。
+        """
+        if not self._db_path:
+            raise RuntimeError(
+                'DataCleaner 未配置数据库路径 —— 请先调用 set_db_path()。'
+                '（生产环境由 run.py 在建库后接线；测试请显式传 db_path）'
+            )
+        return self._db_path
+
     def clean_history_data(self, retention_days: int = 90) -> Dict[str, Any]:
         """清理过期历史数据"""
         start = time.time()
         try:
             # sep=' ' 与库内写入格式一致；用默认的 'T' 分隔会多删同日的记录
             cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat(sep=' ')
-            conn = sqlite3.connect(self._db_path, timeout=30)
+            conn = sqlite3.connect(self._require_db_path(), timeout=30)
             cursor = conn.execute(
                 "DELETE FROM history_data WHERE timestamp < ?",
                 (cutoff,)
@@ -415,12 +437,19 @@ class DataCleaner:
             return {'operation': 'clean_history_data', 'status': 'error', 'error': str(e), 'duration_sec': time.time() - start}
 
     def clean_audit_logs(self, retention_days: int = 30) -> Dict[str, Any]:
-        """清理过期审计日志"""
+        """清理过期审计日志
+
+        ⚠️ 注意：审计日志在**独立**的库（`用户层/audit_logger.py`，
+        默认 `data/audit.db`），不是业务库。本方法用的是同一个 `_db_path`，
+        所以生产环境直接调用它会报 `no such table: audit_log` ——
+        这是**如实失败**，好过静默假成功。
+        审计系统该收敛到哪一套属 P2-8 的产品口径，见队列「待主人确认」第 8 条。
+        """
         start = time.time()
         try:
             # sep=' ' 与库内写入格式一致；用默认的 'T' 分隔会多删同日的记录
             cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat(sep=' ')
-            conn = sqlite3.connect(self._db_path, timeout=30)
+            conn = sqlite3.connect(self._require_db_path(), timeout=30)
             cursor = conn.execute(
                 "DELETE FROM audit_log WHERE timestamp < ?",
                 (cutoff,)
