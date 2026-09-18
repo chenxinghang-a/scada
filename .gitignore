@@ -17,6 +17,10 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/queue/
+# 运行时发现文件（run.py 每次启动写入实际端口/pid/mode）
+data/runtime.json
+# 运行期标准输出/错误转储（历史误跟踪，建议 git rm --cached 清理）
+data/run_*.log
 exports/*.csv
 
 # Logs

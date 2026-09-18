@@ -65,26 +65,43 @@ def main():
             simulation_mode = False
             config_path = paths.get_config_path('devices_real.yaml')
             db_path = paths.get_db_path('real')
-            # devices_real.yaml 长期是空壳（内容只有 `devices: []`），而真正的
-            # 真实设备清单（25 台，含真实 IP / 型号 / 认证）在 devices.yaml 里 ——
-            # config_validator 一直把 devices.yaml 当 critical 配置校验，
-            # 但运行时**没有任何模式读它**。
-            # 后果：真实模式起来后 0 台设备，而且不报任何错，界面一片空白，
-            # 操作员只会以为"设备都没上线"（实测确认）。
-            # 这里在 devices_real.yaml 为空时回退到 devices.yaml。
-            try:
-                import yaml as _yaml
-                with open(config_path, encoding='utf-8') as _f:
-                    _cfg = _yaml.safe_load(_f) or {}
-                if not _cfg.get('devices'):
+            # 生产配置不得静默回退（审计 P0：生产配置自动回退 = 0）。
+            # devices_real.yaml 为空（devices: []）或文件缺失时，必须明确报错并退出，
+            # 绝不允许悄悄改用混合了真实 IP 的 devices.yaml。
+            # 显式逃生口：--allow-fallback 允许临时回退，但必须在日志中高亮警告。
+            import yaml as _yaml
+            _real_cfg_file = paths.resolve(config_path)
+            _allow_fallback = '--allow-fallback' in sys.argv
+            _real_devices = []
+            if _real_cfg_file.exists():
+                try:
+                    with open(_real_cfg_file, encoding='utf-8') as _f:
+                        _real_cfg = _yaml.safe_load(_f) or {}
+                    _real_devices = _real_cfg.get('devices') or []
+                except Exception as _e:
+                    logger.error("解析 %s 失败: %s", config_path, _e)
+                    print(f"ERROR: 解析真实设备清单 {config_path} 失败: {_e}")
+                    sys.exit(1)
+            else:
+                logger.error("真实设备清单文件不存在: %s", config_path)
+                print(f"ERROR: 真实设备清单 {config_path} 不存在。")
+
+            if not _real_devices:
+                if _allow_fallback:
                     _fallback = paths.get_config_path('devices.yaml')
-                    if os.path.exists(_fallback):
-                        logger.warning(
-                            "devices_real.yaml 中没有设备（devices: []），"
-                            "已回退到 devices.yaml")
-                        config_path = _fallback
-            except Exception as _e:
-                logger.warning("检查 devices_real.yaml 失败，按原路径继续: %s", _e)
+                    logger.warning(
+                        "!! 生产配置回退已触发 !! devices_real.yaml 为空，"
+                        "因 --allow-fallback 显式回退到 devices.yaml（混合清单，含真实 IP，仅限临时排障）")
+                    config_path = _fallback
+                else:
+                    logger.error(
+                        "真实设备清单 %s 为空（devices: []），已禁止静默回退到 devices.yaml",
+                        config_path)
+                    print(
+                        "ERROR: 真实设备清单为空，请先按 文档/ 的 schema 填写 "
+                        f"{config_path}；\n"
+                        "       如需临时用混合配置（含真实 IP，存在误连风险）请显式加 --allow-fallback")
+                    sys.exit(1)
             logger.info("真实设备模式：使用真实设备配置")
         else:
             simulation_mode = True
@@ -322,67 +339,86 @@ def main():
 
         # ---- 后台连接设备 + 启动采集（不阻塞Web服务启动） ----
         def _background_start():
-            """后台线程：连接设备 → 启动采集"""
-            # 连接所有设备（带20s超时，避免阻塞太久）
-            logger.info("后台连接设备...")
-            connection_results = device_manager.connect_all(timeout=20)
-            for device_id, success in connection_results.items():
-                status = "成功" if success else "失败"
-                logger.info(f"  设备 {device_id}: {status}")
+            """后台线程：连接设备 → 启动采集。
 
-            # 启动断线自动重连（每30秒检查一次）
-            device_manager.start_reconnect_loop(interval=30)
+            整体包在 try/except 中：此前一旦 device_manager.start_reconnect_loop()
+            等方法缺失或抛错，线程会静默崩溃，data_collector/报警/智能层全都不会启动，
+            外部无任何提示。现在任何异常都会被明确记录，并写进 app.background_start_error
+            以便运维查询（如 /api/system/status 读取）。
+            """
+            try:
+                # 连接所有设备（带20s超时，避免阻塞太久）
+                logger.info("后台连接设备...")
+                connection_results = device_manager.connect_all(timeout=20)
+                for device_id, success in connection_results.items():
+                    status = "成功" if success else "失败"
+                    logger.info(f"  设备 {device_id}: {status}")
 
-            # 启动数据采集
-            logger.info("启动数据采集...")
-            data_collector.start()
+                # 启动断线自动重连（每30秒检查一次）
+                device_manager.start_reconnect_loop(interval=30)
 
-            # 启动智能层模块
-            logger.info("启动智能层模块...")
-            predictive_maintenance.start()
-            oee_calculator.start()
-            energy_manager.start()
-            edge_decision.start()
-            vibration_analyzer.start()
+                # 启动数据采集
+                logger.info("启动数据采集...")
+                data_collector.start()
 
-            # 注册边缘决策PID输出回调
-            def edge_write_register(device_id, address, value):
-                """边缘决策PID输出回调：实际写入设备"""
+                # 启动智能层模块
+                logger.info("启动智能层模块...")
+                predictive_maintenance.start()
+                oee_calculator.start()
+                energy_manager.start()
+                edge_decision.start()
+                vibration_analyzer.start()
+
+                # 注册边缘决策PID输出回调
+                def edge_write_register(device_id, address, value):
+                    """边缘决策PID输出回调：实际写入设备"""
+                    try:
+                        device_manager.adjust_device(device_id, str(address), float(value))
+                    except Exception as e:
+                        logger.error(f"边缘决策写入失败: {e}")
+
+                edge_decision.register_action('write_register', edge_write_register)
+
+                # 启动TDengine适配器（如果可用）
+                if realtime_bridge:
+                    realtime_bridge.start()
+                    logger.info("TDengine实时数据桥接器已启动")
+                if tsdb_adapter:
+                    devices = device_manager.get_all_devices()
+                    for dev_id, dev_config in devices.items():
+                        registers = dev_config.get('registers', [])
+                        if registers:
+                            tsdb_adapter.register_device(dev_id, registers)
+                    tsdb_adapter.start()
+                    logger.info("TDengine智能层适配器已启动")
+
+                # 后台维护任务：数据归档 + WAL checkpoint + 各类缓存/黑名单清理。
+                # 统一交给 core.maintenance（基于 core.scheduled_tasks.task_manager），
+                # 取代原先手写的 while True: sleep(86400) 裸线程 —— 那种写法没有
+                # 停止路径，而且令牌黑名单/缓存等清理根本没被调度过，会无界增长。
+                from core.maintenance import start_maintenance
+                maintenance_started = start_maintenance(
+                    database=database, auth_manager=getattr(app, 'auth_manager', None))
+                logger.info(f"后台维护任务已启动: {', '.join(maintenance_started) or '（无）'}")
+
+                # 注入WebSocket推送函数到报警管理器
+                from 展示层.websocket import emit_alarm, emit_broadcast
+                alarm_manager.set_websocket_emit(emit_alarm)
+                broadcast_system.add_callback(lambda msg: emit_broadcast(msg))
+
+                logger.info("后台采集服务已就绪")
+            except Exception as _bg_err:
+                # 关键：禁止把异常吞成静默。明确记录 + 把失败状态写到 app 上。
+                logger.error("后台采集服务启动失败: %s", _bg_err, exc_info=True)
                 try:
-                    device_manager.adjust_device(device_id, str(address), float(value))
-                except Exception as e:
-                    logger.error(f"边缘决策写入失败: {e}")
-
-            edge_decision.register_action('write_register', edge_write_register)
-
-            # 启动TDengine适配器（如果可用）
-            if realtime_bridge:
-                realtime_bridge.start()
-                logger.info("TDengine实时数据桥接器已启动")
-            if tsdb_adapter:
-                devices = device_manager.get_all_devices()
-                for dev_id, dev_config in devices.items():
-                    registers = dev_config.get('registers', [])
-                    if registers:
-                        tsdb_adapter.register_device(dev_id, registers)
-                tsdb_adapter.start()
-                logger.info("TDengine智能层适配器已启动")
-
-            # 后台维护任务：数据归档 + WAL checkpoint + 各类缓存/黑名单清理。
-            # 统一交给 core.maintenance（基于 core.scheduled_tasks.task_manager），
-            # 取代原先手写的 while True: sleep(86400) 裸线程 —— 那种写法没有
-            # 停止路径，而且令牌黑名单/缓存等清理根本没被调度过，会无界增长。
-            from core.maintenance import start_maintenance
-            maintenance_started = start_maintenance(
-                database=database, auth_manager=getattr(app, 'auth_manager', None))
-            logger.info(f"后台维护任务已启动: {', '.join(maintenance_started) or '（无）'}")
-
-            # 注入WebSocket推送函数到报警管理器
-            from 展示层.websocket import emit_alarm, emit_broadcast
-            alarm_manager.set_websocket_emit(emit_alarm)
-            broadcast_system.add_callback(lambda msg: emit_broadcast(msg))
-
-            logger.info("后台采集服务已就绪")
+                    app.background_start_error = {
+                        'error': str(_bg_err),
+                        'type': type(_bg_err).__name__,
+                        'timestamp': datetime.now().isoformat(),
+                    }
+                except Exception:
+                    # 写状态失败也不应掩盖原始异常
+                    pass
 
         bg_thread = threading.Thread(target=_background_start, daemon=True, name="bg_device_connect")
         bg_thread.start()
@@ -400,20 +436,44 @@ def main():
 
         # 立即启动Web服务（不等待设备连接）
 
+        # 先确定实际监听地址（模拟=5000，真实/模拟器=5001），供横幅与 runtime.json 使用
+        from config import WebConfig, SecurityConfig
+        host = WebConfig.HOST
+        port = WebConfig.REAL_PORT if not simulation_mode else WebConfig.PORT
+
+        # 写入运行时端口文件，供 Electron 发现真实端口（避免 5000/5001 错配）。
+        # 格式：{"port": int, "host": str, "pid": int, "mode": "real"|"simulated", "started_at": ISO}
+        # 路径：<DATA_DIR>/runtime.json（paths.RUNTIME_JSON_PATH）。
+        # Electron 通过 <backend_dir>/data/runtime.json 读取；读不到则回退 5000 并探测 5000/5001。
+        try:
+            import json as _json
+            _runtime = {
+                'port': int(port),
+                'host': host,
+                'pid': os.getpid(),
+                'mode': 'real' if not simulation_mode else 'simulated',
+                'started_at': datetime.now().isoformat(),
+            }
+            _runtime_path = paths.RUNTIME_JSON_PATH
+            _runtime_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(_runtime_path, 'w', encoding='utf-8') as _rf:
+                _json.dump(_runtime, _rf, ensure_ascii=False, indent=2)
+            logger.info("运行时端口文件已写入: %s (port=%s, mode=%s)",
+                        _runtime_path, port, _runtime['mode'])
+        except Exception as _re:
+            logger.warning("写入运行时端口文件失败（Electron 将回退 5000）: %s", _re)
+
         # 启动Web服务
         mode_str = "真实设备模式" if not simulation_mode else "模拟模式：使用仿真数据"
         logger.info("启动Web服务...")
         logger.info("=" * 50)
         logger.info("工业数据采集与监控系统已启动")
-        logger.info("访问地址: http://localhost:5000")
+        logger.info(f"访问地址: http://{host}:{port}")
         logger.info(f"（{mode_str}）")
         logger.info("=" * 50)
 
         # 使用routes.py中已创建的SocketIO实例（init_socketio在create_app中已调用）
         from 展示层.websocket import socketio
-        from config import WebConfig, SecurityConfig
-        host = WebConfig.HOST
-        port = WebConfig.REAL_PORT if not simulation_mode else WebConfig.PORT
 
         # TLS/HTTPS 支持 (GB/T 35718 + GB/T 37980)
         ssl_context = None
@@ -450,6 +510,10 @@ def main():
         if 'broadcast_system' in locals():
             broadcast_system.disconnect()
         if 'device_manager' in locals():
+            try:
+                device_manager.stop_reconnect_loop()
+            except Exception:
+                pass
             device_manager.disconnect_all()
         if 'alarm_manager' in locals():
             # 停止升级/洪水定时器 + 配置热重载线程（stop() 幂等）

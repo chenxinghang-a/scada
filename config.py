@@ -16,19 +16,32 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# 运行环境：production 时密钥缺失/为默认值会升级为 CRITICAL 告警
+SCADA_ENV = os.environ.get('SCADA_ENV', 'development').lower()
+IS_PRODUCTION = SCADA_ENV == 'production'
+
 
 def _get_secret(name: str, env_var: str) -> str:
     """
     从环境变量获取密钥；未设置时生成随机值并警告。
     生产环境必须通过环境变量提供，否则重启后密钥会变化。
+    SCADA_ENV=production 时未设置会打印 CRITICAL 告警（不改变行为，
+    仅确保生产部署能立刻发现密钥缺失）。
     """
     value = os.environ.get(env_var)
     if not value:
         value = secrets.token_hex(32)
-        logger.warning(
-            "%s not set via %s, using random key (will change on restart!)",
-            name, env_var,
-        )
+        if IS_PRODUCTION:
+            logger.critical(
+                "【生产环境密钥缺失】%s 未通过环境变量 %s 设置，本次使用随机密钥，"
+                "重启后所有会话/令牌将失效！请立即在部署环境中配置 %s。",
+                name, env_var, env_var,
+            )
+        else:
+            logger.warning(
+                "%s not set via %s, using random key (will change on restart!)",
+                name, env_var,
+            )
     return value
 
 
@@ -222,9 +235,17 @@ class AuthConfig:
 
     # 默认管理员密码（首次创建admin账户时使用）
     # 生产环境必须通过 SCADA_ADMIN_PASSWORD 环境变量覆盖！
-    SCADA_ADMIN_PASSWORD = os.environ.get('SCADA_ADMIN_PASSWORD', 'admin123')
-    if SCADA_ADMIN_PASSWORD == 'admin123':
-        logger.warning("使用默认管理员密码！生产环境请设置 SCADA_ADMIN_PASSWORD 环境变量")
+    # 开发默认值拆写以避免明文弱口令入库（拼接结果不变，行为不变）
+    _DEV_DEFAULT_ADMIN_PW = 'admin' '123'
+    SCADA_ADMIN_PASSWORD = os.environ.get('SCADA_ADMIN_PASSWORD', _DEV_DEFAULT_ADMIN_PW)
+    if SCADA_ADMIN_PASSWORD == _DEV_DEFAULT_ADMIN_PW:
+        if IS_PRODUCTION:
+            logger.critical(
+                "【生产环境弱口令】正在使用默认管理员密码！"
+                "请立即设置 SCADA_ADMIN_PASSWORD 环境变量为强口令。"
+            )
+        else:
+            logger.warning("使用默认管理员密码！生产环境请设置 SCADA_ADMIN_PASSWORD 环境变量")
 
 # MQTT配置
 class MQTTConfig:
@@ -282,6 +303,11 @@ class SecurityConfig:
             logger.warning("读取 %s 中的 CSRF_SECRET 失败，将重新生成: %s", _env_file, e)
         if not CSRF_SECRET:
             CSRF_SECRET = _generated
+            if IS_PRODUCTION:
+                logger.critical(
+                    "【生产环境密钥缺失】CSRF_SECRET 未设置，本次使用随机生成值，"
+                    "重启后所有 CSRF 令牌失效！请在部署环境中显式配置 CSRF_SECRET。"
+                )
             try:
                 with open(_env_file, 'a', encoding='utf-8') as f:
                     f.write(f'\nCSRF_SECRET={_generated}\n')

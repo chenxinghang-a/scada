@@ -4,6 +4,7 @@
 """
 
 import logging
+import threading
 import yaml
 import time
 from typing import Any
@@ -53,6 +54,11 @@ class RealDeviceManager(IDeviceManager):
 
         # 连接失败跟踪：device_id -> {'retry_count': int, 'last_retry': timestamp}
         self._connection_failures: dict[str, dict[str, Any]] = {}
+
+        # 断线自动重连循环状态（run.py 后台线程调用 start_reconnect_loop）
+        self._reconnect_running = False
+        self._reconnect_interval = 30
+        self._reconnect_stop_event = threading.Event()
         
         # 加载设备配置
         self.load_config()
@@ -358,9 +364,71 @@ class RealDeviceManager(IDeviceManager):
         return results
 
     def disconnect_all(self):
-        """断开所有设备连接"""
+        """断开所有设备连接，并停止重连循环（关停语义）"""
+        self._reconnect_running = False
+        self._reconnect_stop_event.set()
         for device_id in list(self.clients.keys()):
             self.disconnect_device(device_id)
+
+    def start_reconnect_loop(self, interval: int = 30) -> None:
+        """启动断线自动重连后台循环。
+
+        周期扫描所有已加载设备，对「配置启用、客户端存在或已创建、但当前未连接」
+        的设备尝试重连（复用 ``connect_device`` 的指数退避逻辑）。成功记 INFO，
+        失败记 WARNING，异常被捕获后继续下一轮，绝不静默退出线程。
+
+        Args:
+            interval: 扫描间隔（秒），默认 30。
+        """
+        if self._reconnect_running:
+            logger.debug("[真实] 重连循环已在运行，跳过重复启动")
+            return
+
+        self._reconnect_interval = interval
+        self._reconnect_stop_event.clear()
+        self._reconnect_running = True
+
+        def _loop() -> None:
+            while self._reconnect_running and not self._reconnect_stop_event.is_set():
+                try:
+                    for device_id, cfg in self.devices.items():
+                        if not self._reconnect_running or self._reconnect_stop_event.is_set():
+                            break
+                        if not cfg.get('enabled', True):
+                            continue
+                        client = self.clients.get(device_id)
+                        # 尚未创建客户端，或客户端已掉线 → 尝试重连
+                        if client is None or not getattr(client, 'connected', False):
+                            if self._should_skip_connect(device_id):
+                                logger.debug(f"[真实] 设备 {device_id} 处于退避期，跳过本次重连")
+                                continue
+                            try:
+                                logger.info(f"[真实] 尝试重连设备: {device_id}")
+                                ok = self.connect_device(device_id)
+                                if ok:
+                                    logger.info(f"[真实] 设备 {device_id} 重连成功")
+                                else:
+                                    logger.warning(
+                                        f"[真实] 设备 {device_id} 重连失败（将在 ~{interval}s 后重试）")
+                            except Exception as _e:
+                                logger.warning(f"[真实] 设备 {device_id} 重连异常: {_e}")
+                except Exception as _e:
+                    logger.error(f"[真实] 重连循环内部异常: {_e}", exc_info=True)
+                # 等待间隔；若期间被 stop 则提前唤醒退出
+                self._reconnect_stop_event.wait(self._reconnect_interval)
+
+        t = threading.Thread(target=_loop, daemon=True, name="reconnect-loop")
+        t.start()
+        logger.info(f"[真实] 断线自动重连循环已启动（间隔 {interval}s）")
+
+    def stop_reconnect_loop(self) -> None:
+        """停止断线自动重连循环（关停路径调用）。
+
+        与 ``disconnect_all()`` 等价地清除运行状态并通过 Event 唤醒等待中的线程。
+        """
+        self._reconnect_running = False
+        self._reconnect_stop_event.set()
+        logger.info("[真实] 断线自动重连循环已停止")
 
     def get_device_status(self, device_id: str) -> dict[str, Any]:
         """获取设备状态"""

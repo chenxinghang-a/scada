@@ -58,6 +58,11 @@ CONFIG_DIR = _BASE / '配置'
 LOG_DIR = _BASE / 'logs'
 EXPORT_DIR = _BASE / 'exports'
 
+#: 运行时端口文件。后端启动后把实际监听的 ``port/pid/mode/started_at`` 写入此文件，
+#: 供 Electron（`scada-app/electron/main.js`）发现真实端口，避免 5000/5001 错配。
+#: Electron 侧通过 ``<backend_dir>/data/runtime.json`` 读取（与冻结/开发布局一致）。
+RUNTIME_JSON_PATH = DATA_DIR / 'runtime.json'
+
 #: 存放 `配置/`、`data/`、`logs/` 等运行时目录的基准目录。
 #: 冻结（PyInstaller）时是 `_internal/`，开发时是仓库根目录。
 #: 用于把历史代码里散落的相对路径字面量统一解析成绝对路径。

@@ -210,8 +210,18 @@ class SimulatedDeviceManager(IDeviceManager):
             self.disconnect_device(device_id)
 
     def start_reconnect_loop(self, interval: int = 30) -> None:
-        """模拟设备不需要重连（no-op）"""
-        logger.debug("模拟模式：跳过断线重连循环")
+        """模拟模式无需断线重连（显式说明性 no-op）。
+
+        模拟客户端在内存中维护连接，不会真正掉线，因此不启动任何后台重连线程。
+        保留此方法仅为满足与真实管理器一致的 ``IDeviceManager`` 契约。
+        """
+        logger.info(
+            "[模拟] 模拟模式无需断连重连：设备由内存中的模拟客户端维护，"
+            "不会真正掉线，跳过重连循环（interval=%ss 被忽略）", interval)
+
+    def stop_reconnect_loop(self) -> None:
+        """模拟模式无重连循环，no-op（显式说明，保持契约对齐）。"""
+        logger.debug("[模拟] stop_reconnect_loop 为 no-op（模拟模式本就未启动重连循环）")
 
     def get_device_status(self, device_id: str) -> dict[str, Any]:
         """获取设备状态"""

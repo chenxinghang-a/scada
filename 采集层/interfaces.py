@@ -86,6 +86,21 @@ class IDeviceManager(ABC):
         """连接所有设备"""
         pass
 
+    def start_reconnect_loop(self, interval: int = 30) -> None:
+        """启动断线自动重连后台循环。
+
+        真实管理器应周期性扫描失联设备并尝试重连（成功 INFO / 失败 WARNING）；
+        模拟管理器无需重连，应提供显式的说明性 no-op。子类必须实现本方法以保持契约完整。
+        """
+        raise NotImplementedError("子类必须实现 start_reconnect_loop(interval)")
+
+    def stop_reconnect_loop(self) -> None:
+        """停止断线自动重连后台循环（关停路径调用）。
+
+        应通过 Event / 标志位唤醒并终止重连线程，避免留下游离线程。
+        """
+        raise NotImplementedError("子类必须实现 stop_reconnect_loop()")
+
     @abstractmethod
     def disconnect_all(self):
         """断开所有设备连接"""
