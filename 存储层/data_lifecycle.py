@@ -208,8 +208,18 @@ class DataLifecycleManager:
                         'earliest': min_ts,
                         'latest': max_ts,
                     }
-                except Exception:
-                    table_stats[table] = {'count': 0}
+                except Exception as e:
+                    # 查不到 ≠ 0 行。原先报 {'count': 0} 有两个问题：
+                    #   1) 把「查询失败」显示成「这张表是空的」—— 生命周期报告
+                    #      读起来像"没数据要清理"，实际是查不动；
+                    #   2) 结构不一致：正常分支有 earliest/latest，这里没有，
+                    #      任何按正常结构读报告的地方都会 KeyError。
+                    table_stats[table] = {
+                        'count': None,
+                        'earliest': None,
+                        'latest': None,
+                        'error': str(e),
+                    }
 
             conn.close()
 

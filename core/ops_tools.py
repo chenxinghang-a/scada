@@ -652,8 +652,12 @@ class DiagnosticExporter:
                     import yaml
                     with open(f, 'r', encoding='utf-8') as fh:
                         config[f.name] = yaml.safe_load(fh)
-                except Exception:
-                    config[f.name] = '(读取失败)'
+                except Exception as e:
+                    # 带上原因。诊断包是排障用的，「读取失败」四个字等于没信息 ——
+                    # 是权限问题、编码问题，还是 YAML 语法错？只能靠猜。
+                    # 本文件其他收集段都记了 logger.warning，只有这里漏了。
+                    logger.warning("诊断导出: 读取配置 %s 失败: %s", f.name, e)
+                    config[f.name] = '(读取失败: ' + str(e) + ')'
 
         # 运行时配置
         try:
