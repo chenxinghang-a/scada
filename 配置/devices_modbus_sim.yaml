@@ -2,6 +2,12 @@
 # 所有设备指向 localhost:5020，用不同 slave_id 区分
 # 启动方式：python tools/modbus_simulator.py --port 5020
 
+# float32 字节序：ABCD / BADC / CDAB / DCBA（必须与采集层解码一致）
+byte_order: ABCD
+# 客户端写入后保持时间(秒)：rw 寄存器长期保持(真实设备行为)，只读寄存器短暂保持后由模型接管
+writable_hold_seconds: 300
+read_only_hold_seconds: 5
+
 devices:
 - collection_interval: 2
   description: 主产线控制PLC — 锅炉/换热器/反应釜群
