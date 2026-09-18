@@ -1,50 +1,237 @@
-/* 工业SCADA系统样式 — 基于 Tabler 主题补充 */
+/* 工业SCADA系统全局样式 — 基于 Tabler 主题补充
+ * 颜色/字号/间距一律引用 design-tokens.css 的令牌：
+ *   - 禁止硬编码色值、禁止渐变/发光/霓虹
+ *   - 正文与标签字号 ≥12px（导航项 ≥13px）
+ *   - 报警等级用色条表达，禁止整行 opacity 闪烁
+ */
 
 body {
-    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    font-family: var(--font-sans);
+    background: var(--bg-page);
+    color: var(--text-primary);
+    font-size: var(--font-base);
 }
 
-/* 数据值（等宽字体） */
-.data-value { font-size: 1.1em; font-weight: bold; font-family: 'Consolas', monospace; }
-.data-value.high { color: #d63939; }
-.data-value.low { color: #4299e1; }
-.data-value.normal { color: #2fb344; }
+/* ==================== 顶栏 ==================== */
+.app-navbar {
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-base);
+    box-shadow: var(--shadow-sm);
+}
+
+.app-navbar .navbar-brand {
+    font-size: var(--font-lg);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+.app-navbar .nav-link {
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    transition: background var(--duration-fast) var(--ease-out),
+                color var(--duration-fast) var(--ease-out);
+}
+
+.app-navbar .nav-link:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+.app-navbar .nav-link.active {
+    color: var(--color-brand);
+    background: var(--bg-selected);
+    font-weight: var(--weight-semibold);
+}
+
+/* 模拟模式标识（base.html 运行时切换该类名） */
+.app-navbar .nav-sim-mode {
+    color: var(--color-info);
+    font-weight: var(--weight-medium);
+}
+
+/* main.js 会在运行时重写顶栏状态图标（.text-success/.text-danger），
+ * 这里用令牌覆盖 Bootstrap 的硬编码语义色 */
+#system-status .text-success { color: var(--color-success) !important; }
+#system-status .text-danger  { color: var(--color-danger) !important; }
+#alarm-count .text-warning   { color: var(--color-warning) !important; }
+
+/* ==================== 顶部报警条 ==================== */
+.alarm-banner {
+    display: none;
+    background: var(--color-warning-soft);
+    border-bottom: 1px solid var(--color-warning);
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--font-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+    /* 报警条不参与透明度闪烁：main.js 写入的 opacity 在此被压平，保持整条可读 */
+    opacity: 1 !important;
+}
+
+.alarm-banner .text-warning { color: var(--color-warning) !important; }
+
+/* ==================== 页脚 / WebSocket 指示灯 ==================== */
+.app-footer {
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-base);
+}
+
+.app-footer__text {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+}
+
+.ws-status {
+    position: fixed;
+    bottom: var(--space-3);
+    right: var(--space-3);
+    z-index: 9999;
+    font-size: var(--font-xs);
+    color: var(--text-muted);   /* main.js 按连接状态写入具体颜色 */
+}
+
+/* ==================== 面包屑 ==================== */
+.breadcrumb {
+    font-size: var(--font-sm);
+}
+
+.breadcrumb a {
+    color: var(--color-brand);
+    text-decoration: none;
+}
+
+.breadcrumb a:hover { text-decoration: underline; }
+
+/* ==================== 数据值（等宽数字，防实时刷新抖动） ==================== */
+.data-value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--font-base);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+.data-value.high   { color: var(--color-danger); }
+.data-value.low    { color: var(--color-info); }
+.data-value.normal { color: var(--color-success); }
 
 /* 统计值 */
-.stat-value { font-size: 2rem; font-weight: 700; font-family: 'Consolas', monospace; line-height: 1; }
-.stat-label { font-size: 0.75rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--font-2xl);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
+}
 
-/* 热力图 */
-.heatmap-cell { width: 100%; height: 56px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.2s; }
-.heatmap-cell:hover { transform: scale(1.05); opacity: 0.9; }
+.stat-label {
+    font-size: var(--font-xs);
+    font-weight: var(--weight-medium);
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+}
 
-/* 健康度条 */
-.health-bar { height: 6px; border-radius: 3px; background: #e9ecef; overflow: hidden; }
-.health-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+/* 迷你指标块 */
+.metric-mini {
+    padding: var(--space-3);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    text-align: center;
+}
 
-/* 迷你指标 */
-.metric-mini { padding: 10px; background: #f8f9fa; border-radius: 8px; text-align: center; }
-.metric-mini .value { font-size: 1.3rem; font-weight: 700; font-family: 'Consolas', monospace; color: #206bc4; }
-.metric-mini .label { font-size: 0.7rem; color: #6b7280; text-transform: uppercase; }
+.metric-mini .value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--font-xl);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
 
-/* 报警条目 */
-.alarm-item { padding: 10px 12px; border-left: 4px solid; margin-bottom: 8px; border-radius: 0 8px 8px 0; }
-.alarm-critical { border-color: #d63939; }
-.alarm-warning { border-color: #f59f00; }
-.alarm-info { border-color: #4299e1; }
+.metric-mini .label {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+}
 
-/* 仪表盘卡片 */
-.gauge-card { border-radius: 12px; padding: 20px; text-align: center; }
-.gauge-container { width: 180px; height: 140px; margin: 0 auto; }
-.gauge-value { font-size: 1.6rem; font-weight: 700; font-family: 'Consolas', monospace; color: #206bc4; }
-.gauge-label { font-size: 0.8rem; color: #6b7280; }
+/* ==================== 热力图 ==================== */
+.heatmap-cell {
+    width: 100%;
+    height: 56px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-inverse);
+    font-weight: var(--weight-semibold);
+    font-size: var(--font-xs);
+    cursor: pointer;
+    transition: filter var(--duration-fast) var(--ease-out);
+}
 
-/* 状态点 */
-.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-.status-dot.online { background: #2fb344; box-shadow: 0 0 6px #2fb344; }
-.status-dot.offline { background: #d63939; box-shadow: 0 0 6px #d63939; }
-.status-dot.warning { background: #f59f00; box-shadow: 0 0 6px #f59f00; }
+.heatmap-cell:hover { filter: brightness(0.96); }
 
-/* 动画 */
-@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-.alarm-active { animation: pulse 1s infinite; }
+/* ==================== 健康度条 ==================== */
+.health-bar {
+    height: 6px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-subtle);
+    overflow: hidden;
+}
+
+.health-bar-fill {
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--color-success);
+    transition: width var(--duration-base) var(--ease-out);
+}
+
+/* ==================== 报警条目（左色条表达等级，不整行闪烁） ==================== */
+/* 仅做配色/字号令牌化：不新增背景与边框，避免影响大屏等页面自带的深色底 */
+.alarm-item {
+    padding: var(--space-2) var(--space-3);
+    border-left: 4px solid var(--border-strong);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    margin-bottom: var(--space-2);
+    font-size: var(--font-sm);
+}
+
+.alarm-critical { border-left-color: var(--level-critical); }
+.alarm-warning  { border-left-color: var(--level-warning); }
+.alarm-info     { border-left-color: var(--level-info); }
+
+/* ==================== 仪表卡片 ==================== */
+.gauge-card {
+    border-radius: var(--radius-lg);
+    padding: var(--space-5);
+    text-align: center;
+}
+
+.gauge-container {
+    width: 180px;
+    height: 140px;
+    margin: 0 auto;
+}
+
+.gauge-value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--font-xl);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+.gauge-label {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+}
+
+/* ==================== 状态点 ==================== */
+/* 基础形状与 .status-dot--success/warning/danger/offline 由 design-tokens.css 提供；
+ * 此处只补齐基线中缺失的 info 变体（仪表盘"已停止"设备使用）。
+ * 不定义发光效果：屏幕状态由颜色 + 文字标签共同表达。
+ * 数据大屏(screen.html)自带 screen.css 的 .status-dot.online 等规则，与此处互不影响。 */
+.status-dot--info { background: var(--color-info); }

@@ -1,0 +1,292 @@
+/* SmartSCADA 设计基线 —— 设计令牌 (Design Tokens)
+ * =====================================================
+ * 本文件是全局视觉的唯一真源。所有页面/组件必须引用这里的变量，
+ * 禁止再硬编码颜色、字号、间距。改动视觉只改这里。
+ *
+ * 主题：:root = 浅色（默认）；[data-theme="dark"] = 深色
+ * 命名：语义优先（--color-success 而非 --color-green）
+ *
+ * 工业监控场景的两条硬性可读性要求（此前页面违反）：
+ *   1. 正文/标签不小于 13px，次要标签不小于 12px
+ *   2. 关键数值不小于 24px，并使用等宽数字避免跳变抖动
+ */
+
+:root {
+  /* ==================== 品牌与语义色 ==================== */
+  --color-brand: #2563eb;
+  --color-brand-strong: #1d4ed8;
+  --color-brand-soft: #eff6ff;
+
+  /* 设备/系统状态：绿=正常，黄=警告，红=故障，灰=离线（工业通用约定） */
+  --color-success: #16a34a;
+  --color-success-soft: #dcfce7;
+  --color-warning: #d97706;
+  --color-warning-soft: #fef3c7;
+  --color-danger: #dc2626;
+  --color-danger-soft: #fee2e2;
+  --color-offline: #94a3b8;
+  --color-offline-soft: #f1f5f9;
+  --color-info: #0891b2;
+  --color-info-soft: #cffafe;
+
+  /* 报警等级（与后端 alarm_level 对齐：critical / warning / info） */
+  --level-critical: var(--color-danger);
+  --level-critical-soft: var(--color-danger-soft);
+  --level-warning: var(--color-warning);
+  --level-warning-soft: var(--color-warning-soft);
+  --level-info: var(--color-info);
+  --level-info-soft: var(--color-info-soft);
+
+  /* ==================== 中性色阶 ==================== */
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-disabled: #94a3b8;
+  --text-inverse: #ffffff;
+
+  --bg-page: #f1f5f9;
+  --bg-surface: #ffffff;
+  --bg-sunken: #f8fafc;
+  --bg-hover: #f1f5f9;
+  --bg-selected: var(--color-brand-soft);
+
+  --border-strong: #cbd5e1;
+  --border-base: #e2e8f0;
+  --border-subtle: #f1f5f9;
+
+  /* ==================== 字号阶 ==================== */
+  --font-xs: 12px;
+  --font-sm: 13px;
+  --font-base: 14px;
+  --font-lg: 16px;
+  --font-xl: 20px;
+  --font-2xl: 28px;
+  --font-3xl: 36px;
+
+  --leading-tight: 1.25;
+  --leading-base: 1.55;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas,
+    'Liberation Mono', monospace;
+
+  /* ==================== 间距阶（8px 基准） ==================== */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* ==================== 圆角 / 阴影 ==================== */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 2px 8px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.12);
+
+  /* ==================== 动效 ==================== */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* 报警呼吸：只做左侧色条与边框的强调，禁止整行 opacity 闪烁
+   * （整行闪烁会干扰阅读其他报警，长时间观看致眼疲劳） */
+  --pulse-critical: 1.6s;
+  --pulse-warning: 2.4s;
+
+  /* ==================== 图表配色（8 色，色盲可辨） ==================== */
+  --chart-1: #2563eb;
+  --chart-2: #f59e0b;
+  --chart-3: #0891b2;
+  --chart-4: #7c3aed;
+  --chart-5: #16a34a;
+  --chart-6: #db2777;
+  --chart-7: #65a30d;
+  --chart-8: #64748b;
+
+  --chart-grid: #e2e8f0;
+  --chart-grid-strong: #cbd5e1;
+  --chart-axis-text: #64748b;
+  --chart-label-text: #475569;
+  --chart-tooltip-bg: rgba(15, 23, 42, 0.92);
+  --chart-tooltip-text: #f8fafc;
+
+  --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.35);
+}
+
+/* ==================== 深色主题 ==================== */
+[data-theme='dark'] {
+  --color-brand: #60a5fa;
+  --color-brand-strong: #93c5fd;
+  --color-brand-soft: #1e3a5f;
+
+  --color-success: #4ade80;
+  --color-success-soft: #14351f;
+  --color-warning: #fbbf24;
+  --color-warning-soft: #3a2a0a;
+  --color-danger: #f87171;
+  --color-danger-soft: #3d1616;
+  --color-offline: #64748b;
+  --color-offline-soft: #1e293b;
+  --color-info: #22d3ee;
+  --color-info-soft: #0c3444;
+
+  --text-primary: #e8edf5;
+  --text-secondary: #a9b6c9;
+  --text-muted: #8091a8;
+  --text-disabled: #5b6b81;
+  --text-inverse: #0b1220;
+
+  --bg-page: #0b1220;
+  --bg-surface: #131c2e;
+  --bg-sunken: #0f172a;
+  --bg-hover: #1c2740;
+  --bg-selected: #1e3a5f;
+
+  --border-strong: #33405c;
+  --border-base: #263148;
+  --border-subtle: #1b2438;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  --chart-grid: #263148;
+  --chart-grid-strong: #33405c;
+  --chart-axis-text: #8091a8;
+  --chart-label-text: #a9b6c9;
+  --chart-tooltip-bg: rgba(232, 237, 245, 0.94);
+  --chart-tooltip-text: #0b1220;
+}
+
+/* ==================== 数据展示辅助类 ==================== */
+
+/* 关键数值：等宽数字 + 大字号，避免实时刷新时宽度跳动 */
+.metric-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+  font-size: var(--font-2xl);
+  line-height: var(--leading-tight);
+  color: var(--text-primary);
+}
+
+.metric-value--lg {
+  font-size: var(--font-3xl);
+}
+
+.metric-unit {
+  font-size: var(--font-sm);
+  font-weight: var(--weight-normal);
+  color: var(--text-muted);
+  margin-left: var(--space-1);
+}
+
+.metric-label {
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+/* 面板：页面内所有信息块的统一容器 */
+.panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-base);
+  font-size: var(--font-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.panel__body {
+  padding: var(--space-4);
+}
+
+/* 状态点 */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  flex: none;
+}
+
+.status-dot--success { background: var(--color-success); }
+.status-dot--warning { background: var(--color-warning); }
+.status-dot--danger { background: var(--color-danger); }
+.status-dot--offline { background: var(--color-offline); }
+
+/* 状态标签（圆角胶囊，语义底色 + 深色文字） */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.tag--success { background: var(--color-success-soft); color: var(--color-success); }
+.tag--warning { background: var(--color-warning-soft); color: var(--color-warning); }
+.tag--danger { background: var(--color-danger-soft); color: var(--color-danger); }
+.tag--offline { background: var(--color-offline-soft); color: var(--text-muted); }
+.tag--info { background: var(--color-info-soft); color: var(--color-info); }
+
+/* 报警等级色条：用左侧竖条表达等级，取代整行闪烁 */
+.level-bar {
+  width: 4px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  align-self: stretch;
+}
+
+.level-bar--critical { background: var(--level-critical); }
+.level-bar--warning { background: var(--level-warning); }
+.level-bar--info { background: var(--level-info); }
+
+/* 未确认报警：色条呼吸（不整行闪烁） */
+@media (prefers-reduced-motion: no-preference) {
+  .level-bar--pulse-critical {
+    animation: level-pulse var(--pulse-critical) ease-in-out infinite;
+  }
+  .level-bar--pulse-warning {
+    animation: level-pulse var(--pulse-warning) ease-in-out infinite;
+  }
+}
+
+@keyframes level-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* 键盘可达性：统一焦点环 */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
