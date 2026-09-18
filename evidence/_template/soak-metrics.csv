@@ -1,0 +1,4 @@
+﻿# 长时间运行（soak）指标模板 — 建议采样间隔 1~5min，时长 ≥24h（按审计要求）
+# 必备元信息：版本=<VERSION>; commit=<COMMIT_SHA>; 运行环境=<OS/Python/硬件>; 执行命令=<启动命令>; 开始时间=<UTC>; 结束时间=<UTC>; 输入配置摘要=<点位规模/采集周期/写入负载>; 结果=<pass/fail>; 失败项=<无/泄漏或超限项>; 人工见证人=<姓名/日期>
+timestamp_utc,elapsed_hours,cpu_percent,memory_rss_mb,memory_delta_mb,open_fds,threads,points_collected,points_written,write_errors,avg_cycle_ms,p99_cycle_ms,notes
+<UTC ISO8601>,0,,,,,,,,,,,,<待回填>

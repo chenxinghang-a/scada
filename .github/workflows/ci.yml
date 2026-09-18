@@ -118,3 +118,57 @@ jobs:
         # 一次性开成阻断会淹没真正有价值的信号。先当趋势看。
         continue-on-error: true
         run: ruff check . --select E,W,F --ignore E501,W503
+
+  build-backend:
+    # 在 clean checkout 上证明后端可打包，产出 dist/scada-backend/（onedir）。
+    #
+    # 为什么用 scada-backend.spec 而不是 SCADA.spec / build.py：
+    #   - SCADA.spec 的 datas 硬编码了 'C:\Users\cxx\...\industrial_scada'，
+    #     换机 / CI runner 上直接失效；
+    #   - build.py 走的是 launcher.py onefile（SCADA.exe），面向"双击即用"，
+    #     而前端 Electron 的 extraResources 期望的是 onedir 布局
+    #     （scada-backend.exe + _internal/，见 scada-app/electron/main.js）；
+    #   - scada-backend.spec 用 os.path.abspath(SPECPATH) 定位仓库根，可移植，
+    #     入口 run.py、onedir 输出 dist/scada-backend/，与前端需求完全对齐。
+    runs-on: windows-latest
+    env:
+      # 与 test job 同理：datas 目标全是中文目录名（采集层/报警层/...），
+      # runner 默认 ANSI 代码页下打包会因编码问题失败，必须开 UTF-8 模式。
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build backend (PyInstaller onedir)
+        run: python -m PyInstaller scada-backend.spec --noconfirm --clean
+
+      - name: Verify entry exe exists
+        shell: bash
+        run: test -f dist/scada-backend/scada-backend.exe
+
+      - name: Clean-checkout verification
+        # 本 job 本身就是 clean checkout 验证：runner 上只有 git 跟踪的文件，
+        # 构建成功即证明不依赖开发机上未跟踪的隐藏文件。
+        # 再显式断言构建后工作区无新增未跟踪文件（dist/ build/ 已被 .gitignore
+        # 覆盖），若有输出说明 spec/构建过程读了或写了仓库外的内容。
+        shell: bash
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-dist
+          path: dist/scada-backend/
+          retention-days: 14

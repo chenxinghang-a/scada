@@ -1,0 +1,27 @@
+{
+  "_comment": "构建清单模板。正式证据由 tools/collect_evidence.py 自动生成覆盖。本段必须包含：版本、commit、环境、命令、起止时间、配置摘要、结果、失败项、见证人。",
+  "version": "<VERSION>",
+  "commit_sha": "<COMMIT_SHA>",
+  "build_time": "<UTC ISO8601>",
+  "environment": {
+    "os": "<OS>",
+    "python_version": "<Python 版本>",
+    "node_version": "<Node 版本或 unknown>"
+  },
+  "command": "python tools/collect_evidence.py --version <VERSION>",
+  "started_at": "<UTC ISO8601>",
+  "finished_at": "<UTC ISO8601>",
+  "config_summary": "<关键构建配置摘要>",
+  "artifacts": [
+    {
+      "path": "<产物路径，如 dist/xxx.exe>",
+      "sha256": "<产物 SHA256>"
+    }
+  ],
+  "result": "<pass / fail / partial>",
+  "failures": [],
+  "witness": {
+    "name": "<人工见证人姓名>",
+    "date": "<YYYY-MM-DD>"
+  }
+}

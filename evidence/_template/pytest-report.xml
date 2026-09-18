@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- pytest JUnit 报告模板。正式证据由 tools/collect_evidence.py --run-tests 生成覆盖。
+     本段必须包含（回填于注释或 testsuite 属性）：版本=<VERSION>; commit=<COMMIT_SHA>;
+     运行环境=<OS/Python>; 执行命令=pytest tests/ -q --junitxml=<路径>;
+     开始时间=<UTC>; 结束时间=<UTC>; 输入配置摘要=<pytest 配置>; 结果=<pass/fail>;
+     失败项=<无/列表>; 人工见证人=<姓名/日期>。待脚本回填。 -->
+<testsuites>
+  <testsuite name="pytest" tests="0" failures="0" errors="0" skipped="0" time="0" timestamp="<UTC ISO8601>">
+    <!-- 测试用例节点由 pytest 自动生成 -->
+  </testsuite>
+</testsuites>

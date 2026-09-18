@@ -1,0 +1,36 @@
+{
+  "_comment": "安全扫描报告模板。可结合 tools/security_scan.py 输出回填。本段必须包含：版本、commit、环境、命令、起止时间、配置摘要、结果、失败项、见证人。待人工/待脚本回填。",
+  "version": "1.3.1028",
+  "commit_sha": "e7ffa907b97f0e917277e75f54372a924d3a7963",
+  "environment": {
+    "os": "<OS>",
+    "python": "<Python 版本>",
+    "scanner": "<工具及版本，如 bandit/pip-audit/tools/security_scan.py>"
+  },
+  "command": "<扫描命令>",
+  "started_at": "<UTC ISO8601>",
+  "finished_at": "<UTC ISO8601>",
+  "config_summary": "<扫描范围、排除规则、严重级别阈值>",
+  "result": "<pass / fail / partial / skipped>",
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "findings": [
+    {
+      "id": "<CVE/CWE/规则号>",
+      "severity": "<critical/high/medium/low>",
+      "component": "<文件或依赖>",
+      "description": "<待回填>",
+      "remediation": "<处置措施>",
+      "status": "<open/fixed/accepted-risk>"
+    }
+  ],
+  "failures": [],
+  "witness": {
+    "name": "<人工见证人姓名>",
+    "date": "<YYYY-MM-DD>"
+  }
+}

@@ -25,6 +25,6 @@ ENV SCADA_PORT=5000
 EXPOSE 5000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health/status')" || exit 1
 
 CMD ["python", "run.py"]

@@ -1,0 +1,134 @@
+{
+  "version": "1.3.1028",
+  "commit_sha": "e7ffa907b97f0e917277e75f54372a924d3a7963",
+  "build_time": "2026-09-18T14:07:43.904362+00:00",
+  "environment": {
+    "os": "Windows 11 (AMD64)",
+    "python_version": "3.13.14",
+    "node_version": "v22.22.2"
+  },
+  "command": "tools/collect_evidence.py --version 1.3.1028",
+  "started_at": "2026-09-18T14:07:43.691180+00:00",
+  "finished_at": "2026-09-18T14:07:45.433869+00:00",
+  "config_summary": {
+    "version_source": "VERSION 文件（core/version.py）",
+    "tests_executed": false,
+    "output_dir": "evidence\\1.3.1028"
+  },
+  "artifacts": [
+    {
+      "path": "dist\\scada-backend\\_internal\\base_library.zip",
+      "sha256": "6959b69a4bfd7b79f43b9b4d06b5eed1f4a96b007146efc3af356ffa6e22717d",
+      "size_bytes": 1409329
+    },
+    {
+      "path": "dist\\scada-backend\\_internal\\dateutil\\zoneinfo\\dateutil-zoneinfo.tar.gz",
+      "sha256": "d3ea52e7b6e968de0d884df1288193596fa95b803db4f92a18279a7398004475",
+      "size_bytes": 156400
+    },
+    {
+      "path": "dist\\scada-backend\\scada-backend.exe",
+      "sha256": "5dfa4495103ac6aed95178141ec9c2f08c1629a8fce6be8bddfc62ba39a547da",
+      "size_bytes": 18870687
+    },
+    {
+      "path": "dist\\scada-backend.prev-local\\_internal\\base_library.zip",
+      "sha256": "63163daba5864391a89f6d97d9f708408f2865ec05efa9001df4d7956eb3eee7",
+      "size_bytes": 1402481
+    },
+    {
+      "path": "dist\\scada-backend.prev-local\\_internal\\dateutil\\zoneinfo\\dateutil-zoneinfo.tar.gz",
+      "sha256": "d3ea52e7b6e968de0d884df1288193596fa95b803db4f92a18279a7398004475",
+      "size_bytes": 156400
+    },
+    {
+      "path": "dist\\scada-backend.prev-local\\scada-backend.exe",
+      "sha256": "fd6be2339e12a771b770a4270d7b7229a306c8021b5c3a62481f1ddee39e895a",
+      "size_bytes": 19130645
+    },
+    {
+      "path": "dist\\SCADA.exe",
+      "sha256": "8ae24697c5927a1df14ae2da55ed8816a79b575cf2c59a79191d31bf86dbb81a",
+      "size_bytes": 54160691
+    },
+    {
+      "path": "build\\SCADA\\base_library.zip",
+      "sha256": "fddb89269530273b8c92c13974ace0e498670043dade57dcc93a3b6ca0d7de0a",
+      "size_bytes": 1402481
+    },
+    {
+      "path": "build\\scada-backend\\base_library.zip",
+      "sha256": "6959b69a4bfd7b79f43b9b4d06b5eed1f4a96b007146efc3af356ffa6e22717d",
+      "size_bytes": 1409329
+    },
+    {
+      "path": "build\\scada-backend\\scada-backend.exe",
+      "sha256": "5dfa4495103ac6aed95178141ec9c2f08c1629a8fce6be8bddfc62ba39a547da",
+      "size_bytes": 18870687
+    }
+  ],
+  "result": "partial",
+  "failures": [],
+  "evidence_status": {
+    "coverage.xml": {
+      "status": "copied",
+      "reason": "从仓库根目录 coverage.xml 复制"
+    },
+    "pytest-report.xml": {
+      "status": "skipped",
+      "reason": "未指定 --run-tests，跳过 pytest 执行（避免慢）；占位模板已生成"
+    },
+    "frontend-test-report.xml": {
+      "status": "skipped",
+      "reason": "未找到前端 scada-app 测试报告（候选: scada-app\\test-results\\junit.xml, scada-app\\reports\\junit.xml, scada-app\\coverage\\junit.xml, scada-app\\frontend-test-report.xml）；占位模板已生成"
+    },
+    "sbom.spdx.json": {
+      "status": "generated",
+      "reason": "简化 SBOM，19 个依赖，来源 requirements.txt"
+    },
+    "scope-matrix.md": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    },
+    "requirements-traceability.csv": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    },
+    "risk-register.md": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    },
+    "api-contract-report.json": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    },
+    "protocol-e2e-report.md": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    },
+    "soak-metrics.csv": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    },
+    "security-scan.json": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    },
+    "install-smoke-report.md": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    },
+    "backup-restore-report.md": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    },
+    "sat-record.md": {
+      "status": "template",
+      "reason": "占位模板已生成，待人工/待脚本回填"
+    }
+  },
+  "witness": {
+    "name": "<待人工见证人签字>",
+    "date": "<YYYY-MM-DD>"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "_comment": "SBOM 模板（SPDX 2.3 简化结构）。正式证据由 tools/collect_evidence.py 基于 requirements/pip 生成；若环境可装 cyclonedx-bom 则替换为标准 SPDX。本段必须包含：版本、commit、环境、命令、起止时间、配置摘要、结果、失败项、见证人。",
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "industrial-scada-sbom-<VERSION>",
+  "documentNamespace": "https://example.invalid/spdx/industrial-scada/<VERSION>",
+  "creationInfo": {
+    "created": "<UTC ISO8601>",
+    "creators": ["Tool: collect_evidence.py"]
+  },
+  "evidence_meta": {
+    "version": "<VERSION>",
+    "commit_sha": "<COMMIT_SHA>",
+    "environment": "<OS / Python / Node>",
+    "command": "<生成命令>",
+    "started_at": "<UTC ISO8601>",
+    "finished_at": "<UTC ISO8601>",
+    "config_summary": "<依赖来源：requirements.txt / pip freeze>",
+    "result": "<pass / fail / partial>",
+    "failures": [],
+    "witness": {"name": "<人工见证人姓名>", "date": "<YYYY-MM-DD>"}
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-example",
+      "name": "<依赖名>",
+      "versionInfo": "<版本>",
+      "downloadLocation": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    }
+  ]
+}
