@@ -53,6 +53,19 @@ def _load_cors_origins():
     return ['http://localhost:5000', 'http://127.0.0.1:5000']
 
 
+def _payload(data):
+    """把 Socket.IO 事件 payload 规整成 dict。
+
+    `data` 直接来自客户端，类型完全不可控：None / 字符串 / 数字 / 列表都可能。
+    原先各 handler 写的是 `(data or {}).get(...)` —— 那只防住了 None 和空值，
+    `"abc".get` 照样抛 AttributeError。
+
+    在 Socket.IO 事件处理器里，这个异常表现为**服务端刷堆栈、客户端收不到
+    任何回应**，而且连接不会断 —— 比直接报错更难排查（客户端只会觉得"卡住了"）。
+    """
+    return data if isinstance(data, dict) else {}
+
+
 def init_socketio(app, database, data_collector):
     """
     初始化WebSocket
@@ -150,15 +163,16 @@ def init_socketio(app, database, data_collector):
         """心跳保活（客户端定期发送，服务端回复确认）"""
         emit('heartbeat_ack', {
             'timestamp': datetime.now().isoformat(),
-            'client_timestamp': data.get('timestamp') if data else None
+            'client_timestamp': _payload(data).get('timestamp')
         })
 
     @socketio.on('subscribe')
     def handle_subscribe(data):
         """订阅设备数据"""
-        # `data` 可能是 None（客户端发了空包），此时 `data.get` 会抛 AttributeError，
-        # 在事件处理器里表现为服务端刷堆栈、客户端收不到任何回应。
-        device_id = (data or {}).get('device_id')
+        # `data` 可能是 None（客户端发了空包），也可能是字符串/数字/列表。
+        # 原先写 `(data or {}).get` 只防住了 None —— `"abc".get` 会抛
+        # AttributeError，在事件处理器里表现为服务端刷堆栈、客户端收不到回应。
+        device_id = _payload(data).get('device_id')
         if not device_id:
             logger.warning("订阅请求缺少 device_id，已忽略")
             emit('error', {'message': '订阅需要 device_id'})
@@ -176,7 +190,7 @@ def init_socketio(app, database, data_collector):
     @socketio.on('unsubscribe')
     def handle_unsubscribe(data):
         """取消订阅"""
-        device_id = (data or {}).get('device_id')
+        device_id = _payload(data).get('device_id')
         if not device_id:
             logger.warning("取消订阅请求缺少 device_id，已忽略")
             emit('error', {'message': '取消订阅需要 device_id'})
