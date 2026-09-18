@@ -92,7 +92,18 @@ def write_register(device_id):
         if len(_recent_writes) > RECENT_WRITES_MAX:
             _recent_writes.clear()
 
-    success = client.write_single_register(address, value)
+    success = False
+    try:
+        success = client.write_single_register(address, value)
+    finally:
+        # 本次修复：幂等键上面是**写入前**登记的（用于挡住并发重复提交），
+        # 但写入失败时原先不回滚 —— 于是调用方重试会命中 2 秒窗口，
+        # 被判成"写入成功(幂等)"并回 HTTP 200，而寄存器**从未写入**。
+        # 失败（含抛异常）时撤销登记，让重试能真正下发。
+        if not success:
+            with _write_lock:
+                _recent_writes.pop(write_key, None)
+
     if success:
         get_auth_manager().log_operation(
             operator, 'write_register',

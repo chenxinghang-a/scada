@@ -136,10 +136,18 @@ class TestMCSendRecv:
 
         assert result is None
 
+    # 3E 帧响应头是 **9 字节**：
+    #   副帧头(2) + 网络号(1) + PC号(1) + I/O编号(2) + 站号(1) + 数据长(2)
+    # 数据长字段在偏移 7-8（小端）。
+    # 下面两个用例原先按 **11 字节**构造头（`b'\x00'*9 + 长度`）—— 那是 4E 帧
+    # 的布局，等于把「读 11 字节、从 header[9:11] 取长度」这个缺陷固化住了。
+    # 2026-09 审计修掉该缺陷（改为读 9 字节、从 header[7:9] 取长度），
+    # 测试随之对齐到正确的 3E 布局。
+
     def test_send_recv_completion_error(self, mc_client):
         mock_sock = MagicMock()
-        header = b'\x00' * 9 + struct.pack('<H', 4)
-        resp_data = struct.pack('<H', 1) + b'\x00\x00'
+        resp_data = struct.pack('<H', 1) + b'\x00\x00'      # 完成码非 0
+        header = b'\x00' * 7 + struct.pack('<H', len(resp_data))
         mock_sock.recv.side_effect = [header, resp_data]
         mc_client._sock = mock_sock
 
@@ -150,14 +158,14 @@ class TestMCSendRecv:
     def test_send_recv_success(self, mc_client):
         mock_sock = MagicMock()
         payload = b'\x01\x02\x03\x04'
-        resp_data = struct.pack('<H', 0) + payload
-        header = b'\x00' * 9 + struct.pack('<H', len(resp_data))
+        resp_data = struct.pack('<H', 0) + payload          # 完成码 0 + 数据
+        header = b'\x00' * 7 + struct.pack('<H', len(resp_data))
         mock_sock.recv.side_effect = [header, resp_data]
         mc_client._sock = mock_sock
 
         result = mc_client._send_recv(b'\x00' * 20)
 
-        assert result == payload
+        assert result == payload, '应返回去掉 2 字节完成码后的数据'
 
     def test_send_recv_timeout(self, mc_client):
         mock_sock = MagicMock()

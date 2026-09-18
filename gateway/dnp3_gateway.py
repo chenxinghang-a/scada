@@ -126,9 +126,13 @@ class DNP3Parser:
         control = 0xC0  # DIR + PRM
         length = len(app_data) + 8
 
+        # DNP3 链路层头固定 8 字节：起始(2) + 长度(1) + 控制(1) + 目的地址(2) + 源地址(2)。
+        # 原实现在这里多传了一个 `0`（格式串只有 5 个格式符却给了 6 个值），
+        # struct.pack 必抛 "pack expected 5 items for packing (got 6)"，
+        # 而 request_data() 的 except 把它吞掉 —— DNP3 从未真正发出过报文。
         header = struct.pack('<HBBHH',
                              DNP3Parser.START_BYTES, length,
-                             control, 0, destination, source)
+                             control, destination, source)
 
         # 简化CRC（实际DNP3使用CRC-16/CCITT）
         crc = sum(header) & 0xFFFF
@@ -152,9 +156,10 @@ class DNP3Parser:
         control = 0xC0
         length = len(app_data) + 8
 
+        # 同 build_read_request：链路层头 8 字节，不能多传参数
         header = struct.pack('<HBBHH',
                              DNP3Parser.START_BYTES, length,
-                             control, 0, destination, source)
+                             control, destination, source)
 
         crc = sum(header) & 0xFFFF
         return header + struct.pack('<H', crc) + app_data

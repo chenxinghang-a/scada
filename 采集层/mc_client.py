@@ -161,14 +161,22 @@ class MCClient:
             try:
                 self._sock.send(frame)
 
-                # 接收响应头（固定11字节）
-                header = self._sock.recv(11)
-                if len(header) < 11:
+                # 接收响应头
+                #
+                # 3E 帧的响应头是 **9 字节**：
+                #   副帧头(2) + 网络号(1) + PC号(1) + I/O编号(2) + 站号(1) + 数据长(2)
+                # 原实现按 11 字节读（那是 4E 帧：多 2 字节请求/响应序列号），
+                # 且把长度字段取在 header[9:11] —— 那 2 个字节其实是**响应数据的
+                # 头 2 字节（完成码）**，于是解析出的长度是个垃圾值：
+                # 要么 0（读不到数据 → 测点恒为 0），要么是个随机长度（乱跳），
+                # 而 _send_recv 仍可能返回"成功"，自诊断因此显示"读取成功"。
+                header = self._sock.recv(9)
+                if len(header) < 9:
                     logger.error("[MC] 响应头不完整")
                     return None
 
-                # 解析响应数据长度
-                resp_data_len = struct.unpack('<H', header[9:11])[0]
+                # 解析响应数据长度（9 字节头的最后 2 字节，小端）
+                resp_data_len = struct.unpack('<H', header[7:9])[0]
 
                 # 接收剩余数据
                 resp_data = b''

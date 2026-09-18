@@ -19,6 +19,31 @@ logger = logging.getLogger(__name__)
 ops_bp = Blueprint('api_ops', __name__, url_prefix='/api/ops')
 
 
+def _ops_status_response(result, action):
+    """运维类接口的统一返回：结果里 `status == 'error'` 必须变成**错误响应**。
+
+    round 162 修复了清理接口；本次把同一契约推广到 `/db/*` 与
+    `/diagnostics/export`。这些后端方法（`DatabaseMaintainer.*`、
+    `DiagnosticExporter.export_diagnostics`）与 `DataCleaner` 是同一套
+    "吞异常 + 返回结果字典"契约：失败时给 `{'status': 'error', 'error': ...}`，
+    **不抛异常**。原先接口无条件包进 `success_response()` —— 于是失败时回
+    **HTTP 200**、只在 body 里带一个 `status:'error'`，调用方只看 HTTP 状态
+    就会显示"成功"。最危险的一例是 `integrity_check`：库已损坏时它也回
+    `success: true`，运维据此认为数据库是好的。
+
+    修复后：`status == 'error'` 一律 `error_response(..., 500)`，调用方**没法**忽略。
+
+    Args:
+        result: 后端方法返回的结果（通常是 dict，`/db/tables` 是 list）
+        action: 动作名，用于拼错误信息，如 'VACUUM'
+    """
+    if isinstance(result, dict) and result.get('status') == 'error':
+        detail = result.get('error') or result.get('result') or '未知错误'
+        logger.error("运维操作失败 [%s]: %s", action, result)
+        return error_response(f"{action}失败: {detail}", 500)
+    return success_response(result)
+
+
 def _cleanup_response(result):
     """清理类接口的统一返回：`status == 'error'` 必须变成**错误响应**。
 
@@ -30,10 +55,7 @@ def _cleanup_response(result):
 
     修复后：失败一律 `error_response(..., 500)`，让调用方**没法**忽略。
     """
-    if isinstance(result, dict) and result.get('status') == 'error':
-        logger.error("运维清理失败: %s", result)
-        return error_response(f"清理失败: {result.get('error', '未知错误')}", 500)
-    return success_response(result)
+    return _ops_status_response(result, '清理')
 
 
 # ================================================================
@@ -148,7 +170,7 @@ def db_vacuum():
     try:
         result = db_maintainer.vacuum()
         ops_audit.log_operation('db_vacuum', details=result)
-        return success_response(result)
+        return _ops_status_response(result, 'VACUUM')
     except Exception as e:
         logger.error(f"VACUUM 失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -164,7 +186,7 @@ def db_reindex():
         table = data.get('table')
         result = db_maintainer.reindex(table)
         ops_audit.log_operation('db_reindex', details=result)
-        return success_response(result)
+        return _ops_status_response(result, 'REINDEX')
     except Exception as e:
         logger.error(f"REINDEX 失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -178,7 +200,7 @@ def db_analyze():
     try:
         result = db_maintainer.analyze()
         ops_audit.log_operation('db_analyze', details=result)
-        return success_response(result)
+        return _ops_status_response(result, 'ANALYZE')
     except Exception as e:
         logger.error(f"ANALYZE 失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -190,7 +212,9 @@ def db_integrity_check():
     """数据库完整性检查"""
     try:
         result = db_maintainer.integrity_check()
-        return success_response(result)
+        # 最危险的一处：库损坏时 integrity_check 返回 status:'error'，
+        # 若包成 success 则运维会认为库是好的。
+        return _ops_status_response(result, '数据库完整性检查')
     except Exception as e:
         logger.error(f"完整性检查失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -278,7 +302,7 @@ def export_diagnostics():
             include_system_state=data.get('include_system_state', True),
         )
         ops_audit.log_operation('export_diagnostics', details={'status': result.get('status')})
-        return success_response(result)
+        return _ops_status_response(result, '导出诊断信息')
     except Exception as e:
         logger.error(f"导出诊断信息失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)

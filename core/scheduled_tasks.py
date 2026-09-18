@@ -28,6 +28,8 @@ class ScheduledTask:
         self.interval = interval
         self.description = description
         self.status = 'pending'  # pending/running/paused/stopped
+        self.executing = False   # 是否正在执行（用于区分「已启动待命」与「真的卡在执行中」）
+        self.last_exec_status: Optional[str] = None  # 最近一次执行结果: success/failed
         self.last_run: Optional[float] = None
         self.next_run: Optional[float] = None
         self.run_count = 0
@@ -44,6 +46,8 @@ class ScheduledTask:
             'name': self.name,
             'description': self.description,
             'status': self.status,
+            'executing': self.executing,
+            'last_exec_status': self.last_exec_status,
             'interval': self.interval,
             'last_run': self.last_run,
             'next_run': self.next_run,
@@ -202,7 +206,17 @@ class TaskManager:
             self._execute_task(task)
 
     def _execute_task(self, task: ScheduledTask):
-        """执行单次任务"""
+        """执行单次任务
+
+        ``status`` 同时承担「调度状态」（pending/running/paused/stopped）和
+        「正在执行」两种语义，因此执行期间置为 running 后**必须还原**：
+        否则一次 run_now() 就会把 pending/stopped 的任务永久钉在 running 上
+        （get_status() 永久谎报运行中，start_all() 也会因为状态是 running
+        而永远不再启动它）。
+        """
+        with self._lock:
+            prev_status = task.status
+            task.executing = True
         start = time.time()
         task.status = 'running'
         task.last_run = start
@@ -211,13 +225,24 @@ class TaskManager:
             task.func()
             task.run_count += 1
             task.last_error = None
+            task.last_exec_status = 'success'
             logger.debug("任务执行完成: %s (%.1fs)", task.name, time.time() - start)
         except Exception as e:
             task.error_count += 1
             task.last_error = str(e)
+            task.last_exec_status = 'failed'
             logger.error("任务执行失败: %s - %s", task.name, e)
         finally:
             task.last_duration = time.time() - start
+            with self._lock:
+                task.executing = False
+                # 执行期间被 stop()/pause() 时以新状态为准；否则回到执行前的调度状态
+                if task._stop_event.is_set():
+                    task.status = 'stopped'
+                elif not task._pause_event.is_set():
+                    task.status = 'paused'
+                else:
+                    task.status = prev_status
 
 
 # 全局实例

@@ -151,6 +151,21 @@ class ConnectionPool:
                             self._stats['active'] += 1
                             self._stats['idle'] -= 1
                             return conn.client
+                elif conn.in_use:
+                    # 该 key 的连接正被占用。池是 key → 连接的**一一对应**结构，
+                    # 不能再建一条新连接去覆盖这个槽位：旧连接会立刻失去引用，
+                    # 永远不会被 disconnect/close（连接泄漏 → 长期运行耗尽句柄）。
+                    # 这里复用既有连接，保证调用方仍拿到可用客户端。
+                    conn.last_used = time.time()
+                    conn.use_count += 1
+                    self._stats['hits'] += 1
+                    logger.warning(
+                        f"连接池 {self._name}: 连接 {key} 正在使用中，复用同一连接"
+                        f"（不再新建，避免覆盖导致旧连接泄漏）")
+                    return conn.client
+                else:
+                    # 空闲但不健康：先销毁再重建，避免覆盖时泄漏旧连接
+                    self._destroy_connection(key, conn)
 
             # 创建新连接
             if len(self._pool) < self._max_size:
@@ -203,6 +218,16 @@ class ConnectionPool:
     def _create_connection(self, key: str) -> Optional[Any]:
         """创建新连接"""
         try:
+            # 防御：绝不覆盖已有槽位。直接 self._pool[key] = conn 会让旧连接
+            # 失去引用却从不 close/disconnect（连接泄漏），必须先把旧连接销毁。
+            existing = self._pool.get(key)
+            if existing is not None:
+                if existing.in_use:
+                    logger.error(
+                        f"连接池 {self._name}: 连接 {key} 正在使用中，拒绝新建以覆盖它")
+                    return None
+                self._destroy_connection(key, existing)
+
             client = self._factory(key)
             if client is None:
                 logger.error(f"连接池 {self._name}: 工厂函数返回 None (key={key})")

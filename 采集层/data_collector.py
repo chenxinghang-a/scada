@@ -13,7 +13,7 @@ import logging
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 
@@ -66,6 +66,33 @@ def _read_is_stale(client) -> bool:
     不支持该属性的客户端（如模拟客户端）视为新鲜数据。
     """
     return getattr(client, 'last_read_source', 'fresh') == 'cache'
+
+
+def _stale_value_timestamp(client, address: int, count: int,
+                           fallback: datetime) -> datetime:
+    """陈旧缓存值**原本**的采集时刻。
+
+    读取失败时 ``ModbusClient`` 会返回最后已知良好值，该值可能是几秒前、
+    也可能是几天前的。原实现给这类值打上 ``now()`` 的时间戳入库，操作员
+    会把几天前的旧值当成实时数据。这里用 ``get_cache_age()`` 反推真实时刻。
+
+    拿不到缓存年龄（客户端不支持 / 该地址从未成功读过）时退回 ``fallback``。
+    """
+    getter = getattr(client, 'get_cache_age', None)
+    if getter is None:
+        return fallback
+    try:
+        age = getter(address, count)
+    except Exception as e:
+        # 缓存年龄查询失败不该影响采集主流程，退回本次时间戳并留痕
+        logger.debug(f"查询缓存年龄失败 ({address},{count}): {e}")
+        return fallback
+    if age is None:
+        return fallback
+    try:
+        return fallback - timedelta(seconds=float(age))
+    except (TypeError, ValueError):
+        return fallback
 
 
 class DataQualityAssessor:
@@ -783,7 +810,15 @@ class DataCollector:
             timestamp = datetime.now()
 
             if protocol in ('modbus_tcp', 'modbus_rtu', 'mc', 'fins'):
-                self._collect_modbus(client, device_id, device_config, timestamp)
+                # **必须把 _collect_modbus 的返回值透传出去。**
+                # 原实现丢弃返回值、在函数末尾无条件 `return True`：
+                # 于是「读取失败 → 连续失败 → 断路器打开 → 退避」整段逻辑
+                # 是死代码 —— 熔断器永不打开、已死的设备被全速轮询。
+                # Modbus采集内部自行计数成功/失败，此处不重复计数。
+                ok = self._collect_modbus(client, device_id, device_config, timestamp)
+                with self._stats_lock:
+                    self.stats['last_collection_time'] = timestamp
+                return ok
             elif protocol in ('rest', 'opcua', 'mqtt'):
                 # REST/OPC-UA/MQTT都是缓存型协议，统一从缓存采集
                 self._collect_from_cache(client, device_id, timestamp)
@@ -792,9 +827,7 @@ class DataCollector:
                 self._inc_stat('failed_collections')
                 return False
 
-            # Modbus采集内部自行计数成功/失败，此处不重复计数
-            if protocol not in ('modbus_tcp', 'modbus_rtu', 'mc', 'fins'):
-                self._inc_stat('successful_collections')
+            self._inc_stat('successful_collections')
             with self._stats_lock:
                 self.stats['last_collection_time'] = timestamp
             return True
@@ -804,7 +837,8 @@ class DataCollector:
             self._inc_stat('failed_collections')
             return False
 
-    def _collect_modbus(self, client, device_id: str, device_config: dict[str, Any], timestamp: datetime):
+    def _collect_modbus(self, client, device_id: str, device_config: dict[str, Any],
+                        timestamp: datetime) -> bool:
         """采集Modbus设备的寄存器数据（批量读取优化）。
 
         按 GB/T 19582 Modbus 规范：FC03 单次最多读 125 个寄存器。
@@ -822,7 +856,11 @@ class DataCollector:
             timestamp: 本次采集的时间戳。
 
         Returns:
-            None
+            bool: 本次读取是否成功。
+                - ``True``：读到新鲜数据（或设备未配置寄存器，无读取动作）；
+                - ``False``：读取失败（含"只有陈旧缓存兜底"的情况 —— 数据仍然
+                  入队并降级为 UNCERTAIN，但底层读取确实失败了，必须让上层
+                  的退避/熔断逻辑看到失败）。
 
         Side Effects:
             - 通过 ``client.read_holding_registers()`` 发起网络请求。
@@ -835,7 +873,9 @@ class DataCollector:
         """
         registers = device_config.get('registers', [])
         if not registers:
-            return
+            # 没有配置寄存器 = 无读取动作，不是"读取失败"，
+            # 否则会给空配置设备误开断路器
+            return True
 
         # 计算每个寄存器需要的寄存器数
         reg_sizes = {}
@@ -855,15 +895,23 @@ class DataCollector:
             """非阻塞入队，满则丢最旧"""
             return self._enqueue_drop_oldest(item)
 
+        def _mark_stale(item, address, count):
+            """陈旧缓存兜底值：打上缓存值原本的时间戳 + 标记降级质量码"""
+            item['timestamp'] = _stale_value_timestamp(
+                client, address, count, timestamp)
+            item['stale'] = True
+
         # 单次 FC03 读取整个范围（规范限制 125，超出则分段）
         if total_count <= 125:
             all_regs = client.read_holding_registers(min_addr, total_count)
             if all_regs is None:
                 self._inc_stat('failed_collections')
                 logger.debug(f"设备 {device_id} Modbus读取返回None")
-                return
-            self._inc_stat('successful_collections')
+                return False
             stale = _read_is_stale(client)
+            # 陈旧缓存 = 底层读取失败（只是客户端用旧值兜了底），
+            # 必须计失败，否则熔断器对"有缓存的死设备"永不打开
+            self._inc_stat('failed_collections' if stale else 'successful_collections')
             for reg in registers:
                 offset = reg['address'] - min_addr
                 size = reg_sizes[reg['address']]
@@ -881,19 +929,25 @@ class DataCollector:
                     }
                     if stale:
                         # 值是陈旧缓存兜底，交给质量评估降级为 UNCERTAIN_LAST_USABLE
-                        item['stale'] = True
+                        _mark_stale(item, min_addr, total_count)
                     _enqueue(item)
+            return not stale
         else:
             # 分块读取，块边界预留重叠区防止多寄存器值被截断
             max_reg_size = max(reg_sizes.values()) if reg_sizes else 1
             chunk_size = 125
             step = chunk_size - (max_reg_size - 1)  # 重叠区 = 最大寄存器宽度-1
+            any_chunk_ok = False
+            any_chunk_fresh = False
             for start in range(min_addr, max_end, step):
                 count = min(chunk_size, max_end - start)
                 chunk = client.read_holding_registers(start, count)
                 if chunk is None:
                     continue
                 stale = _read_is_stale(client)
+                any_chunk_ok = True
+                if not stale:
+                    any_chunk_fresh = True
                 for reg in registers:
                     if reg['address'] < start or reg['address'] >= start + count:
                         continue
@@ -912,8 +966,22 @@ class DataCollector:
                             'unit': reg.get('unit', '')
                         }
                         if stale:
-                            item['stale'] = True
+                            _mark_stale(item, start, count)
                         _enqueue(item)
+
+            # 所有分块都读失败 → 本次采集失败
+            if not any_chunk_ok:
+                self._inc_stat('failed_collections')
+                logger.debug(f"设备 {device_id} Modbus分块读取全部失败")
+                return False
+            # 没有任何一块读到新鲜数据（全是陈旧缓存兜底）→ 设备实际不可达，
+            # 同样按失败上报给退避/熔断；只要有任意一块是新鲜的就仍算成功，
+            # 避免给"部分降级但还活着"的设备误开断路器。
+            if not any_chunk_fresh:
+                self._inc_stat('failed_collections')
+                return False
+            self._inc_stat('successful_collections')
+            return True
 
     def _decode_register(self, client, raw_regs: list[int], register: dict) -> float | None:
         """从原始寄存器值解码为工程值"""

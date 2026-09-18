@@ -84,7 +84,8 @@ class AlarmOutput:
             'pattern': AlarmLightPattern.STEADY,
             'level': None,
             'message': '',
-            'since': None
+            'since': None,
+            'acknowledged': False   # 操作员已确认（消音）标记，用于放行同级新报警
         }
 
         # Modbus客户端（延迟创建）
@@ -160,6 +161,8 @@ class AlarmOutput:
         - info:     绿灯常亮（仅记录，无声光）
 
         安全设计：同级别报警不重复触发灯和蜂鸣器，避免抢灯。
+        例外：操作员已确认（消音）后，同级新报警必须重新触发声光——
+        否则一次消音会吞掉后续同级报警（漏报）。确认标记见 acknowledge()。
 
         Args:
             level: 报警级别 (critical/warning/info)
@@ -169,9 +172,11 @@ class AlarmOutput:
         if not self.enabled:
             return
 
-        # 同级别报警不重复触发灯控（避免抢灯）
+        # 同级别报警不重复触发灯控（避免抢灯）；但已确认(消音)后必须放行
         with self._lock:
-            if self.current_state.get('level') == level and self.current_state.get('pattern') != AlarmLightPattern.STEADY:
+            if (self.current_state.get('level') == level
+                    and self.current_state.get('pattern') != AlarmLightPattern.STEADY
+                    and not self.current_state.get('acknowledged', False)):
                 # 只更新消息，不动灯
                 self.current_state['message'] = message
                 self.current_state['device_id'] = device_id
@@ -185,7 +190,8 @@ class AlarmOutput:
                 'level': level,
                 'message': message,
                 'device_id': device_id,
-                'since': datetime.now().isoformat()
+                'since': datetime.now().isoformat(),
+                'acknowledged': False
             })
 
         # 先停掉旧的闪烁线程和蜂鸣器
@@ -241,10 +247,15 @@ class AlarmOutput:
         """
         确认/消音 — 关蜂鸣器（停脉冲线程+写DO），灯保持闪烁
         操作员到场后按"确认"按钮
+
+        注意：确认只消音，不清除报警级别；但会打上 acknowledged 标记，
+        使后续同级新报警能重新触发声光（避免一次消音吞掉后续漏报）。
         """
         self._stop_buzzer()
-        self.current_state['buzzer'] = False
-        logger.info("报警已确认（消音），指示灯保持")
+        with self._lock:
+            self.current_state['buzzer'] = False
+            self.current_state['acknowledged'] = True
+        logger.info("报警已确认（消音），指示灯保持；同级新报警仍会触发")
         return True
 
     def reset(self):
@@ -259,7 +270,8 @@ class AlarmOutput:
             'red': False, 'yellow': False, 'green': True,
             'buzzer': False,
             'pattern': AlarmLightPattern.STEADY,
-            'level': None, 'message': '', 'since': None
+            'level': None, 'message': '', 'since': None,
+            'acknowledged': False
         })
 
         self._write_all_do(red=False, yellow=False, green=True, buzzer=False)
@@ -305,7 +317,8 @@ class AlarmOutput:
             'pattern': AlarmLightPattern.STEADY,
             'level': 'manual',
             'message': '手动控制',
-            'since': datetime.now().isoformat()
+            'since': datetime.now().isoformat(),
+            'acknowledged': False
         })
 
         if duration > 0:

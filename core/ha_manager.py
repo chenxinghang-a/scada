@@ -33,6 +33,22 @@ class HAState(Enum):
     FAILED = 'failed'        # 故障
 
 
+def _parse_role(value) -> HARole:
+    """把心跳里的 role 字符串安全地转成 HARole（非法值归为 UNKNOWN）"""
+    try:
+        return HARole(value)
+    except (ValueError, TypeError):
+        return HARole.UNKNOWN
+
+
+def _parse_state(value) -> HAState:
+    """把心跳里的 state 字符串安全地转成 HAState（非法值归为 INITIALIZING）"""
+    try:
+        return HAState(value)
+    except (ValueError, TypeError):
+        return HAState.INITIALIZING
+
+
 @dataclass
 class HANode:
     """HA节点信息"""
@@ -82,6 +98,9 @@ class HAManager:
         self._listen_thread: Optional[threading.Thread] = None
         self._last_peer_heartbeat = 0.0
         self._peer_node: Optional[HANode] = None
+        self._started_at = 0.0
+        # 运维是否用 force_role() 手动指定过角色（手动指定后不再自动仲裁）
+        self._manual_role_set = False
 
         # 回调
         self._on_role_change: Optional[Callable] = None
@@ -99,6 +118,8 @@ class HAManager:
         """启动HA管理器"""
         with self._lock:
             self._running = True
+            self._started_at = time.time()
+            self._manual_role_set = False
 
             # 初始角色：如果没有对端，自己是主
             if not self.peer_address:
@@ -144,23 +165,41 @@ class HAManager:
                 logger.error(f"角色变更回调失败: {e}")
 
     def _heartbeat_loop(self):
-        """心跳发送循环"""
+        """心跳发送 + 失效检测循环
+
+        心跳必须**双向**发送：主节点和备节点都要发。
+        历史缺陷：只有 PRIMARY 发送心跳，而切换判定又要求
+        ``_last_peer_heartbeat > 0``（"曾经收到过对端心跳"）。于是备节点
+        既收不到（对端根本不发）又永远不满足切换条件 —— 主节点宕机后备机
+        永不接管；对称配置下两台节点还会一起停在 STANDBY，谁都不采集。
+        """
         while self._running:
             try:
                 # 在锁内读取共享状态，避免竞态
                 with self._lock:
                     current_role = self.role
-                    should_failover = (
-                        current_role == HARole.STANDBY and
-                        self._last_peer_heartbeat > 0 and
-                        time.time() - self._last_peer_heartbeat > self.heartbeat_timeout
+                    now = time.time()
+                    peer_ever_seen = self._last_peer_heartbeat > 0
+                    peer_timed_out = (
+                        peer_ever_seen and
+                        now - self._last_peer_heartbeat > self.heartbeat_timeout
+                    )
+                    # 配了对端却从未收到任何心跳（对端进程没起来 / 端口不可达）：
+                    # 超过一个超时窗口后同样按「对端失效」处理，否则备机永远待命。
+                    peer_never_seen = (
+                        not peer_ever_seen and
+                        bool(self.peer_address) and
+                        self._started_at > 0 and
+                        now - self._started_at > self.heartbeat_timeout
                     )
 
-                if current_role == HARole.PRIMARY:
-                    self._send_heartbeat()
+                # 心跳双向发送：不区分角色
+                self._send_heartbeat()
 
-                if should_failover:
+                if current_role == HARole.STANDBY and (peer_timed_out or peer_never_seen):
                     self._trigger_failover()
+                else:
+                    self._try_election()
 
                 time.sleep(self.heartbeat_interval)
             except Exception as e:
@@ -251,38 +290,94 @@ class HAManager:
 
         peer_id = msg.get('node_id', 'unknown')
         peer_priority = msg.get('priority', 0)
+        peer_role = _parse_role(msg.get('role'))
 
         with self._lock:
             self._last_peer_heartbeat = time.time()
             self.stats['heartbeats_received'] += 1
+            self._peer_node = HANode(
+                node_id=peer_id,
+                role=peer_role,
+                state=_parse_state(msg.get('state')),
+                last_heartbeat=self._last_peer_heartbeat,
+                priority=peer_priority,
+                address=addr[0] if addr else '',
+            )
 
             # 如果自己是主，但收到更高优先级的主心跳，降级为备
             if (self.role == HARole.PRIMARY and
-                msg.get('role') == 'primary' and
+                peer_role == HARole.PRIMARY and
                 peer_priority > self.priority):
                 logger.warning(f"收到更高优先级主节点 {peer_id}，降级为备")
                 self._set_role(HARole.STANDBY)
                 self.state = HAState.PASSIVE
 
-    def _trigger_failover(self):
-        """触发主备切换"""
+            # 对端也是备节点时做仲裁，避免双方都停在 STANDBY（无人采集）
+            self._try_election()
+
+    def _wins_election(self, peer_priority: int, peer_id: str) -> bool:
+        """按 (priority, node_id) 全序比较决定谁当主。
+
+        两个节点各自计算同一比较，结果必然互斥，不会双方同时晋升。
+        """
+        if self.priority != peer_priority:
+            return self.priority > peer_priority
+        return self.node_id < peer_id
+
+    def _try_election(self):
+        """两个备节点之间的主节点仲裁。
+
+        对称配置（双方都填了 peer_address）下两台节点都会以 STANDBY 启动。
+        心跳改成双向后双方都能感知对端存活，但如果不做仲裁，双方会一直
+        停在 STANDBY —— 谁都不采集。这里做确定性仲裁：只有胜者晋升。
+
+        运维用 force_role() 手动指定过角色后不再自动仲裁，避免自动逻辑
+        把运维的决定立刻推翻。
+        """
         with self._lock:
+            if self._manual_role_set:
+                return
             if self.role != HARole.STANDBY:
                 return
+            peer = self._peer_node
+            if peer is None or peer.role != HARole.STANDBY:
+                return
+            if time.time() - self._last_peer_heartbeat > self.heartbeat_timeout:
+                return
+            if not self._wins_election(peer.priority, peer.node_id):
+                return
 
-            logger.warning(f"HA切换: 主节点心跳超时，备节点接管")
+            self._promote_to_primary(
+                f"对端 {peer.node_id} 同为备节点且优先级不高于本节点，仲裁胜出")
+
+    def _promote_to_primary(self, reason: str):
+        """晋升为主节点（调用方无需持锁，RLock 可重入）"""
+        with self._lock:
+            if self.role == HARole.PRIMARY:
+                return
+
+            logger.warning(f"HA节点 {self.node_id} 晋升为主节点: {reason}")
             self.state = HAState.FAILOVER
-            self.stats['failovers'] += 1
 
             self._set_role(HARole.PRIMARY)
             self.state = HAState.ACTIVE
-            self._last_peer_heartbeat = 0  # 重置
 
             if self._on_failover:
                 try:
                     self._on_failover()
                 except Exception as e:
                     logger.error(f"切换回调失败: {e}")
+
+    def _trigger_failover(self):
+        """触发主备切换（对端心跳超时）"""
+        with self._lock:
+            if self.role != HARole.STANDBY:
+                return
+
+            self.stats['failovers'] += 1
+            self._last_peer_heartbeat = 0  # 重置
+
+        self._promote_to_primary("主节点心跳超时，备节点接管")
 
     def get_status(self) -> dict:
         """获取HA状态"""
@@ -302,6 +397,7 @@ class HAManager:
         """强制切换角色（运维用）"""
         with self._lock:
             logger.warning(f"强制切换角色: {self.role.value} -> {role.value}")
+            self._manual_role_set = True
             self._set_role(role)
             self.state = HAState.ACTIVE if role == HARole.PRIMARY else HAState.PASSIVE
 

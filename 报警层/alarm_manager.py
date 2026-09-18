@@ -536,6 +536,9 @@ class AlarmManager:
             states_snapshot = list(self.alarm_states.items())
 
         for state_key, state in states_snapshot:
+            if state.get('pending', False):
+                continue  # 延迟确认中，报警尚未真正产生，不参与升级计时
+
             if state.get('acknowledged', False):
                 continue  # 已确认，跳过
 
@@ -766,11 +769,39 @@ class AlarmManager:
             logger.warning(f"未知的报警条件: {condition}")
             return False
 
+    @staticmethod
+    def _elapsed_seconds(start, end) -> float | None:
+        """计算两个时间戳之间的秒数（容忍 str/datetime 混用），无法计算返回 None"""
+        def _norm(ts):
+            if ts is None:
+                return None
+            if isinstance(ts, datetime):
+                return ts
+            if isinstance(ts, str):
+                try:
+                    return datetime.fromisoformat(ts)
+                except ValueError:
+                    return None
+            return None
+
+        start_dt, end_dt = _norm(start), _norm(end)
+        if start_dt is None or end_dt is None:
+            return None
+        try:
+            return (end_dt - start_dt).total_seconds()
+        except TypeError:
+            return None
+
     def _process_alarm_state(self, rule_id: str, rule_config: dict[str, Any],
                              device_id: str, register_name: str,
                              value: float, timestamp: datetime, triggered: bool):
         """
         处理报警状态（含去重逻辑）
+
+        延迟确认（rule_config['delay'] > 0）语义：
+        条件首次成立时只登记 pending 状态（不触发声光/弹窗），
+        后续数据点若条件持续成立且已满 delay 秒，才真正产生报警；
+        中途条件恢复则状态被清除，延迟计时重新开始。
 
         Args:
             rule_id: 规则ID
@@ -791,13 +822,31 @@ class AlarmManager:
 
         if triggered:
             # C1修复: 整个 read-modify-write 在同一锁块内，消除 TOCTOU 竞态
+            fire = False
             with self._state_lock:
                 live_state = self.alarm_states.get(state_key)
                 if live_state and live_state.get('alarm_id') == rule_id:
-                    # 已经在报警，只更新时间和数值，不重复触发声光/弹窗
-                    live_state['last_trigger_time'] = timestamp
-                    live_state['trigger_count'] = live_state.get('trigger_count', 0) + 1
-                    live_state['last_value'] = value
+                    if live_state.get('pending'):
+                        # 延迟确认中：只有条件持续成立满 delay 秒才真正产生报警
+                        elapsed = self._elapsed_seconds(live_state.get('confirm_time'), timestamp)
+                        if elapsed is not None and elapsed >= delay:
+                            live_state['pending'] = False
+                            live_state['confirmed'] = True
+                            live_state['first_trigger_time'] = timestamp
+                            live_state['last_trigger_time'] = timestamp
+                            live_state['last_value'] = value
+                            fire = True
+                            logger.info(f"延迟报警到期触发: {rule_id} - {device_id}/{register_name} "
+                                        f"(持续{elapsed:.1f}s >= delay {delay}s)")
+                        else:
+                            # 未到期：只刷新数值，不触发声光/弹窗
+                            live_state['last_trigger_time'] = timestamp
+                            live_state['last_value'] = value
+                    else:
+                        # 已经在报警，只更新时间和数值，不重复触发声光/弹窗
+                        live_state['last_trigger_time'] = timestamp
+                        live_state['trigger_count'] = live_state.get('trigger_count', 0) + 1
+                        live_state['last_value'] = value
                 else:
                     logger.debug(f"新报警触发: rule={rule_id} device={device_id} reg={register_name} "
                                f"current_alarm_id={current_state.get('alarm_id')} state_key={state_key}")
@@ -812,17 +861,18 @@ class AlarmManager:
                         'acknowledged': False
                     }
                     if delay > 0:
+                        # 延迟确认：先挂起，等条件持续满 delay 秒后由上面的分支消费
                         alarm_state['pending'] = True
                         alarm_state['confirm_time'] = timestamp
                     else:
                         alarm_state['pending'] = False
                     self.alarm_states[state_key] = alarm_state
+                    fire = delay <= 0
 
             # 锁外触发（避免回调死锁）
-            if not (live_state and live_state.get('alarm_id') == rule_id):
-                if delay <= 0:
-                    self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
-                    self._record_emit(rule_id, device_id, register_name)
+            if fire:
+                self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
+                self._record_emit(rule_id, device_id, register_name)
         else:
             # 未触发，检查是否需要清除报警（只清除自己规则的状态）
             with self._state_lock:
@@ -1018,7 +1068,8 @@ class AlarmManager:
                 'first_trigger_time': state.get('first_trigger_time'),
                 'last_trigger_time': state.get('last_trigger_time'),
                 'trigger_count': state.get('trigger_count', 0),
-                'acknowledged': state.get('acknowledged', False)
+                'acknowledged': state.get('acknowledged', False),
+                'pending': state.get('pending', False)
             })
 
         return active_alarms

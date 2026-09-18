@@ -85,6 +85,10 @@ class EnergyManager:
         # device_id -> {'power_kw': float, 'timestamp': datetime}
         self.realtime_power: dict[str, dict[str, Any]] = {}
 
+        # 电表累积读数基线：device_id -> 上一次的累积电量读数(kWh)
+        # 用于把电表的单调递增读数换算成增量（相邻两次读数做差）
+        self._last_energy_reading: dict[str, float] = {}
+
         # 能耗累积数据
         self.energy_accumulated: dict[str, dict[str, Any]] = defaultdict(lambda: {
             'energy_kwh': 0, 'water_m3': 0, 'gas_m3': 0, 'steam_ton': 0,
@@ -335,39 +339,57 @@ class EnergyManager:
         """
         喂入电力数据
 
+        两条互相独立的路径：
+        - power_kw 是瞬时功率(kW)：按梯形积分 功率×时间 得到增量；
+        - energy_kwh 是电表累积电量读数(kWh，单调递增)：与上一次读数做差得到增量。
+          首次读数只建立基线（无法得知之前的用电量，不累加）。
+
         Args:
             device_id: 设备ID
             power_kw: 实时功率 (kW)
-            energy_kwh: 累积电量 (kWh)，可选
+            energy_kwh: 累积电量读数 (kWh)，可选
             timestamp: 时间戳
         """
         now = timestamp or datetime.now()
 
         with self._lock:
-            # 更新实时功率
-            old = self.realtime_power.get(device_id, {})
-            old_power = old.get('power_kw', 0)
+            if energy_kwh is not None:
+                # 累积电量路径：增量 = 本次读数 - 上次读数
+                last_reading = self._last_energy_reading.get(device_id)
+                self._last_energy_reading[device_id] = energy_kwh
+                if last_reading is None:
+                    logger.debug(f"电量基线建立: {device_id} = {energy_kwh}kWh")
+                elif energy_kwh >= last_reading:
+                    delta_kwh = energy_kwh - last_reading
+                    tariff_type = self._get_tariff_type(now.hour)
+                    self.energy_accumulated[device_id]['energy_kwh'] += delta_kwh
+                    self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
+                else:
+                    # 表计回绕/换表/读数回退：只重置基线，不累加，避免能耗虚增
+                    logger.warning(
+                        f"电量读数回退（疑似换表/回绕）: {device_id} "
+                        f"{last_reading}kWh -> {energy_kwh}kWh，本次不累加"
+                    )
 
-            self.realtime_power[device_id] = {
-                'power_kw': power_kw,
-                'timestamp': now,
-            }
+            # 实时功率路径：energy_kwh 单独上报（power_kw=0）时不覆盖功率读数
+            if energy_kwh is None or power_kw > 0:
+                old = self.realtime_power.get(device_id, {})
+                old_power = old.get('power_kw', 0)
 
-            # 计算电量增量（梯形积分）
-            if old_power > 0 and 'timestamp' in old:
-                dt_hours = (now - old['timestamp']).total_seconds() / 3600
-                if dt_hours <= 0:
-                    return  # 时钟偏移，跳过本次计算
-                avg_power = (old_power + power_kw) / 2
-                delta_kwh = avg_power * dt_hours
+                self.realtime_power[device_id] = {
+                    'power_kw': power_kw,
+                    'timestamp': now,
+                }
 
-                # 分时累加
-                tariff_type = self._get_tariff_type(now.hour)
-                self.energy_accumulated[device_id]['energy_kwh'] += delta_kwh
-                self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
-            elif energy_kwh is not None:
-                # 直接累加电量增量
-                self.energy_accumulated[device_id]['energy_kwh'] += energy_kwh
+                # 梯形积分：增量 = (P0 + P1) / 2 × Δt
+                if old_power > 0 and 'timestamp' in old:
+                    dt_hours = (now - old['timestamp']).total_seconds() / 3600
+                    if dt_hours > 0:
+                        avg_power = (old_power + power_kw) / 2
+                        delta_kwh = avg_power * dt_hours
+                        tariff_type = self._get_tariff_type(now.hour)
+                        self.energy_accumulated[device_id]['energy_kwh'] += delta_kwh
+                        self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
 
     def feed_water_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
         """喂入水表数据"""

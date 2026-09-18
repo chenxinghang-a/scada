@@ -129,15 +129,33 @@ class TestPowerData:
         assert em.realtime_power['dev1']['power_kw'] == 5.0
 
     def test_feed_power_data_with_energy(self, em):
-        """feed_power_data accumulates energy"""
+        """首次累积读数只建立基线，不累加。
+
+        `energy_kwh` 是电表的**累积读数**（单调递增），不是本次增量。
+        首次读数无法得知此前用了多少电，因此只能建基线。
+        （原测试断言「读数 10.0 → 累积 10.0」，把累积量当增量，
+          会让能耗/电费/碳排线性虚增 —— 这是 2026-09 审计修掉的缺陷。）
+        """
         em.feed_power_data('dev1', power_kw=0, energy_kwh=10.0)
-        assert em.energy_accumulated['dev1']['energy_kwh'] == 10.0
+        assert em.energy_accumulated['dev1']['energy_kwh'] == 0.0, \
+            '首次累积读数应只建立基线，不累加'
 
     def test_feed_power_data_accumulates(self, em):
-        """Multiple calls accumulate energy"""
-        em.feed_power_data('dev1', power_kw=0, energy_kwh=5.0)
-        em.feed_power_data('dev1', power_kw=0, energy_kwh=3.0)
-        assert em.energy_accumulated['dev1']['energy_kwh'] == 8.0
+        """连续读数应换算成增量累加（相邻两次读数做差）"""
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=5.0)    # 建基线
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=8.0)    # 增量 3
+        assert em.energy_accumulated['dev1']['energy_kwh'] == 3.0, \
+            '应累加增量 3.0，而不是把两次读数相加'
+
+    def test_feed_power_data_reading_rollback_is_safe(self, em):
+        """读数回退（换表 / 计量回绕）只重置基线，不产生负增量、也不虚增"""
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=100.0)
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=5.0)    # 回退
+        assert em.energy_accumulated['dev1']['energy_kwh'] == 0.0, \
+            '读数回退不应产生负增量，也不该把 5.0 当增量加上去'
+        # 回退后基线已重置为 5.0，后续正常递增应继续累加
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=9.0)
+        assert em.energy_accumulated['dev1']['energy_kwh'] == 4.0
 
     def test_get_realtime_power(self, em):
         """get_realtime_power returns current power data"""

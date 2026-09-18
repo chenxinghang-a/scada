@@ -94,7 +94,9 @@ class DeviceControlSafety:
         self._bypass_lock = threading.Lock()
 
         # ===== 写操作安全配置 =====
-        # 设备写操作白名单：device_id -> {register_address: (min_value, max_value)}
+        # 设备写操作白名单：device_id -> {register_name: (min_value, max_value)}
+        # 键为寄存器名称（如 'temperature_setpoint'），地址由设备配置反查；
+        # 特殊键 'default' 表示该设备所有寄存器的兜底量程
         self._write_limits: dict[str, dict[str, Any]] = {}
         # 设备可写地址白名单：device_id -> set of allowed addresses
         self._write_whitelist: dict[str, Set[int]] = {}
@@ -798,11 +800,16 @@ class DeviceControlSafety:
             result['reason'] = f'设备 {device_id} 通信断开，无法执行写操作'
             return result
 
-        # 3. 值范围校验
+        # 3. 值范围校验（白名单按寄存器名索引，需先把地址反查为寄存器名）
         limits = self._write_limits.get(device_id, {})
         if limits:
-            # 查找匹配的限制（按地址或默认）
-            limit_key = str(address)
+            limit_key = self._resolve_register_name(device_id, address)
+            if limit_key is None:
+                # 查不到寄存器名 → 无法校验量程 → 拒绝（fail-closed，不放行危险写入）
+                result['allowed'] = False
+                result['reason'] = (f'无法解析设备 {device_id} 地址 {address} 对应的寄存器名，'
+                                    f'写操作被拒绝')
+                return result
             if limit_key in limits:
                 min_val, max_val = limits[limit_key]
                 if value < min_val or value > max_val:
@@ -815,6 +822,12 @@ class DeviceControlSafety:
                     result['allowed'] = False
                     result['reason'] = f'写入值 {value} 超出安全范围 [{min_val}, {max_val}]'
                     return result
+            else:
+                # 该设备配置了写白名单，但此寄存器不在名单内 → 拒绝（fail-closed）
+                result['allowed'] = False
+                result['reason'] = (f'寄存器 {limit_key} 不在设备 {device_id} 的写操作白名单中，'
+                                    f'写操作被拒绝')
+                return result
 
         # 4. 联锁阻止检查
         for rule_id, rule in self._interlock_rules.items():
@@ -1024,6 +1037,40 @@ class DeviceControlSafety:
             for reg in registers:
                 if reg.get('name') == register_name:
                     return reg.get('address')
+
+        return None
+
+    def _resolve_register_name(self, device_id: str, address: int) -> str | None:
+        """
+        将寄存器地址反查为寄存器名称（_resolve_register_address 的逆操作）
+
+        写操作量程表 _write_limits 以寄存器名称为键，而写接口只拿到地址，
+        因此校验前必须先反查名称。
+
+        Args:
+            device_id: 设备ID
+            address: 寄存器地址
+
+        Returns:
+            寄存器名称，找不到返回None
+        """
+        try:
+            addr = int(address)
+        except (ValueError, TypeError):
+            return None
+
+        if self.device_manager:
+            try:
+                device_config = self.device_manager.devices.get(device_id, {})
+                registers = device_config.get('registers', []) or []
+            except Exception:
+                return None
+            for reg in registers:
+                try:
+                    if int(reg.get('address')) == addr:
+                        return reg.get('name')
+                except (ValueError, TypeError):
+                    continue
 
         return None
 

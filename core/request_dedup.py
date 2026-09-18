@@ -94,7 +94,12 @@ def init_request_dedup(app: Flask):
                     'retry_after': round(expiry - now, 1),
                 }), 409
 
+            # 先登记「在途」指纹，用于拦截**并发**的重复提交。
+            # 注意：此时业务处理函数还没执行，指纹是临时的 —— 一旦本次请求
+            # 失败（4xx/5xx）必须在 after_request 里回滚，否则调用方的合法
+            # 重试会被误判成「重复提交」返回 409，控制指令实际上从未执行。
             fingerprints[fingerprint] = now + DEDUP_WINDOW
+            g._dedup_fingerprint = fingerprint
 
         # 定期清理
         if now - state['last_cleanup'] > 10:
@@ -102,5 +107,17 @@ def init_request_dedup(app: Flask):
             _cleanup_expired(fingerprints, fingerprints_lock)
 
         return None
+
+    @app.after_request
+    def _rollback_failed_fingerprint(response):
+        """请求失败时回滚指纹：失败即「没执行」，必须允许重试。"""
+        fingerprint = getattr(g, '_dedup_fingerprint', None)
+        if fingerprint and response.status_code >= 400:
+            with fingerprints_lock:
+                fingerprints.pop(fingerprint, None)
+            logger.debug(
+                "请求失败(%s)，回滚去重指纹以允许重试: %s %s",
+                response.status_code, request.method, request.path)
+        return response
 
     logger.info("请求去重中间件已初始化 (窗口=%ss)", DEDUP_WINDOW)

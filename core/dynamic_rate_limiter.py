@@ -303,23 +303,48 @@ class DynamicRateLimiter:
                 # 尝试动态更新Flask-Limiter
                 self._apply_to_flask_limiter()
 
-    def _apply_to_flask_limiter(self):
-        """将当前限流配置应用到Flask-Limiter"""
+    def _apply_to_flask_limiter(self) -> bool:
+        """将当前限流配置真正应用到 Flask-Limiter
+
+        Returns:
+            True 表示已下发到 Flask-Limiter；False 表示未下发（调用方/日志必须如实反映）
+        """
         if not self._flask_limiter:
-            return
+            logger.warning("动态限流未生效: 未注入 Flask-Limiter 实例")
+            return False
+
+        profile = self._current_profile
+        new_limit = f"{profile['rpm']} per minute; {profile['rps']} per second"
+
         try:
-            profile = self._current_profile
-            new_limit = f"{profile['rpm']} per minute; {profile['rps']} per second"
-            # flask-limiter 支持动态更新默认限制
+            from flask_limiter import Limit
+        except ImportError as e:
+            logger.warning("动态限流未生效: 无法导入 flask_limiter.Limit (%s)", e)
+            return False
+
+        try:
+            # flask-limiter 的 default_limits 在构造时就解析成 Limit 对象，
+            # 直接改 app.config 或 default_limits 参数都不会影响运行中的限流器。
+            # 唯一真正生效的入口是 LimitManager.set_default_limits()。
+            key_func = getattr(self._flask_limiter, '_key_func', None)
+            new_limits = [
+                Limit(
+                    limit_provider=new_limit,
+                    key_function=key_func,
+                    finalized=False,
+                ).bind(self._flask_limiter)
+            ]
+            self._flask_limiter.limit_manager.set_default_limits(new_limits)
             self._flask_limiter.enabled = True
-            # 通过重新设置 app-level 限制实现
-            # 注意: flask-limiter 不直接支持运行时修改 default_limits
-            # 但我们可以通过 enabled 标志控制
-            if self._current_level == LoadLevel.CRITICAL:
-                logger.warning("CRITICAL负载: 启用严格限流")
-            logger.info("Flask-Limiter 限流策略已更新: %s", new_limit)
         except Exception as e:
-            logger.debug("Flask-Limiter 动态更新跳过: %s", e)
+            # 下发失败必须如实上报，绝不能打印「已更新」造成限流已生效的假象
+            logger.warning("动态限流下发失败（限流值保持原样）: %s", e)
+            return False
+
+        if self._current_level == LoadLevel.CRITICAL:
+            logger.warning("CRITICAL负载: 已下发严格限流 %s", new_limit)
+        logger.info("Flask-Limiter 限流策略已下发并生效: %s", new_limit)
+        return True
 
     def get_current_profile(self) -> Dict[str, int]:
         """获取当前限流配置"""
@@ -347,9 +372,14 @@ class DynamicRateLimiter:
         """运行时覆盖某等级的限流参数"""
         with self._lock:
             self._profiles[level] = {"rpm": rpm, "rps": rps}
-            if self._current_level == level:
+            is_current = self._current_level == level
+            if is_current:
                 self._current_profile = self._profiles[level]
             logger.info("限流配置覆盖: %s → rpm=%d, rps=%d", level, rpm, rps)
+            if is_current:
+                # 覆盖的正是当前等级时，必须立刻下发，否则接口提示「已更新」
+                # 而实际限流阈值纹丝不动。
+                self._apply_to_flask_limiter()
 
 
 # 全局动态限流器实例

@@ -179,6 +179,18 @@ class MQTTClient:
                 self.client.tls_set_context(tls_context)
                 logger.info("MQTT TLS已启用")
 
+            # 把 device_config 里的 topics 登记进订阅表。
+            #
+            # **这里必须登记，否则配了 topics 也永远收不到数据。**
+            # paho 的 connect() 只发起 TCP 连接，真正的 MQTT 握手在 loop_start()
+            # 的后台线程里完成，所以此刻 self.connected 仍是 False —— 直接调用
+            # subscribe() 只会把主题记进 _subscriptions 而不发送 SUBSCRIBE。
+            # 真正的订阅动作发生在 _on_connect 回调里（它按 _subscriptions 补发）。
+            # 原实现两处都没做：DataCollector._setup_push_device 只调用
+            # add_data_callback() + connect()，从没调用过 subscribe()，
+            # 于是 MQTT 设备"连上了但零数据"，且没有任何报错。
+            self._register_configured_topics()
+
             logger.info(f"正在连接MQTT Broker: {self.broker_host}:{self.broker_port}")
             self.client.connect(self.broker_host, self.broker_port, keepalive=60)
             self.client.loop_start()
@@ -187,6 +199,38 @@ class MQTTClient:
             logger.error(f"MQTT连接失败: {e}")
             self.stats['last_error'] = str(e)
             return False
+
+    def _register_configured_topics(self) -> int:
+        """把 ``config['topics']`` 登记到本地订阅表，供 ``_on_connect`` 自动订阅。
+
+        幂等：重复调用不会重复计数，已登记的主题会被更新为最新 QoS。
+
+        Returns:
+            int: 本次新登记（此前不在订阅表中）的主题数
+        """
+        added = 0
+        for topic_config in self.topics_config or []:
+            if not isinstance(topic_config, dict):
+                logger.warning(f"无法识别的 topic 配置（已跳过）: {topic_config!r}")
+                continue
+            topic = topic_config.get('topic', '')
+            if not topic:
+                continue
+            qos = topic_config.get('qos', 1)
+            if topic not in self._subscriptions:
+                added += 1
+            self._subscriptions[topic] = qos
+
+        if added:
+            logger.info(
+                f"已登记 {added} 个待订阅主题（连接建立后自动订阅）: "
+                f"{list(self._subscriptions.keys())}"
+            )
+        elif self._subscriptions:
+            logger.debug(
+                f"主题已登记，无需重复: {list(self._subscriptions.keys())}"
+            )
+        return added
 
     def disconnect(self):
         """断开MQTT连接"""

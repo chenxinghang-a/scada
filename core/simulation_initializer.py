@@ -199,31 +199,39 @@ class SimulationInitializer:
             return {'success': True, 'message': f'设备 {device_id} 已删除'}
         return {'success': False, 'message': f'删除设备 {device_id} 失败'}
 
-    def _inject_sim_params_to_client(self, device_id: str, sim_params: dict):
+    def _inject_sim_params_to_client(self, device_id: str, sim_params: dict) -> bool:
         """
         将预设模拟参数注入到设备客户端的行为模拟器
-        
+
         这确保了：
         1. 预设的base_values驱动行为模拟器的物理模型
         2. 预设的noise_levels影响数据波动
         3. 设备参数之间有关联性（温度→压力→流量）
+
+        Returns:
+            True 表示参数已注入到运行中的客户端；False 表示未注入
+            （客户端不存在或不支持注入），调用方需据此如实反馈。
         """
         if not sim_params:
-            return
-        
+            return False
+
         try:
             client = self.device_manager.get_client(device_id)
             if client and hasattr(client, 'inject_simulation_params'):
                 client.inject_simulation_params(sim_params)
                 logger.info(f"  ✓ {device_id} 模拟参数已注入到行为模拟器")
+                return True
             elif client and hasattr(client, 'behavior_simulator'):
                 # 直接访问行为模拟器
                 client.behavior_simulator.inject_simulation_params(sim_params)
                 logger.info(f"  ✓ {device_id} 模拟参数已注入到行为模拟器（直接）")
+                return True
             else:
                 logger.debug(f"  {device_id} 客户端不支持参数注入（可能是基础模拟客户端）")
+                return False
         except Exception as e:
             logger.warning(f"  {device_id} 模拟参数注入失败: {e}")
+            return False
 
     def add_preset_batch(self, preset_ids: list[str]) -> dict:
         """批量添加预设设备"""
@@ -438,11 +446,29 @@ class SimulationInitializer:
         return self.device_sim_params.copy()
 
     def update_device_sim_params(self, device_id: str, params: dict) -> dict:
-        """更新设备的模拟参数"""
+        """更新设备的模拟参数
+
+        仅更新 device_sim_params 字典是不够的：真正决定数据形态的是运行中
+        客户端里的行为模拟器，必须把新参数注入进去，否则接口提示「已更新」
+        而实际参数没变。
+        """
         if device_id not in self.device_manager.get_all_devices():
             return {'success': False, 'message': f'设备 {device_id} 不存在'}
         self.device_sim_params[device_id] = params
-        return {'success': True, 'message': f'设备 {device_id} 模拟参数已更新'}
+
+        injected = self._inject_sim_params_to_client(device_id, params)
+        if not injected:
+            return {
+                'success': True,
+                'injected': False,
+                'message': (f'设备 {device_id} 模拟参数已保存，但未能注入运行中的实例'
+                            f'（客户端不存在或不支持参数注入），重启后生效'),
+            }
+        return {
+            'success': True,
+            'injected': True,
+            'message': f'设备 {device_id} 模拟参数已更新并注入运行中的实例',
+        }
 
 
 # ================================================================

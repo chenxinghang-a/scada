@@ -32,18 +32,25 @@ def _quarantine_smoke_test_dbs(data_dir: Path):
             pass
 
 
-@pytest.fixture(scope="session", autouse=True)
-def isolate_queue_persistence(tmp_path_factory):
-    """把 DiskBackedQueue 的持久化目录指向会话临时目录。
+@pytest.fixture(autouse=True)
+def isolate_queue_persistence(tmp_path):
+    """把 DiskBackedQueue 的持久化目录指向**本测试专属**的临时目录。
 
     默认路径是仓库内的 `data/queue/pending_data.jsonl`，所有测试共用一个文件：
-    某个测试 put 进去的数据会被下一个构造 DataCollector 的测试恢复并 unlink，
-    既造成测试间相互污染，又会因为累计删除次数过多触发环境的批量删除保护
-    （表现为大批测试以 SystemExit 失败，是假失败）。
+    某个测试 `put()` 进去的数据会被下一个构造 `DataCollector` 的测试
+    `_recover_from_disk()` 恢复并 `unlink()`。
+
+    ⚠️ 这个 fixture 原本是 **session 级**的（全会话共用一个临时目录），
+    结果只是把「共用一个文件」从仓库搬到了临时目录 —— 同样的污染、
+    同样的累计 unlink，仍然触发环境的批量删除保护
+    （表现为 `test_data_collector.py` 里 `TestDynamicInterval` /
+    `TestDispatchIntelligence` 等大批用例以 SystemExit 失败，是假失败）。
+
+    改为**函数级**：每个测试一个全新目录，任何测试都不会读到别人的残留文件，
+    `unlink()` 次数也随之降到 0~1 次。
     """
-    queue_dir = tmp_path_factory.mktemp("queue_persist")
     old = os.environ.get("SCADA_QUEUE_PERSIST_DIR")
-    os.environ["SCADA_QUEUE_PERSIST_DIR"] = str(queue_dir)
+    os.environ["SCADA_QUEUE_PERSIST_DIR"] = str(tmp_path / "queue_persist")
     yield
     if old is None:
         os.environ.pop("SCADA_QUEUE_PERSIST_DIR", None)
