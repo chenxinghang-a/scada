@@ -1,0 +1,160 @@
+"""生成发布清单 release-manifest.json
+
+把"一个版本源、一个 commit、一个安装包"的口径固化成机器可读的清单：
+    version                 - 应用版本号（来自唯一真源 VERSION 文件）
+    commit_sha              - git HEAD SHA（非 git 仓库时为 unknown）
+    build_time              - 构建时间（UTC，ISO8601）
+    python_version          - 运行环境 Python 版本
+    node_version            - 运行环境 Node 版本（不可用时 unknown）
+    backend_deps_lock_digest  - requirements.txt 的 sha256（文件缺失则 null）
+    frontend_deps_lock_digest - scada-app/package-lock.json 的 sha256（缺失则 null）
+    artifacts               - 交付产物清单（路径 + sha256）；产物缺失记 null 并注明
+
+设计要点：
+    * 产物（安装包/归档）尚未构建时是常态，脚本**必须仍能成功运行**，
+      缺失产物记为 null 而非抛异常退出。
+    * 依赖锁文件缺失同样记为 null，不影响其余字段生成。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+# 仓库根（本脚本位于 tools/，上两级为后端根）。
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_frontend_root() -> Path:
+    """定位前端仓库根（不同环境可能不在后端根的同级目录）。
+
+    只要某候选目录下存在 package-lock.json 即视为前端根；
+    都找不到则返回 BACKEND_ROOT.parent / 'scada-app'（让产物/锁文件字段记 null）。
+    """
+    candidates = [
+        BACKEND_ROOT.parent / "scada-app",
+        Path("C:/Users/cxx/scada-app"),
+        BACKEND_ROOT.parent.parent / "scada-app",
+    ]
+    for cand in candidates:
+        if (cand / "package-lock.json").is_file():
+            return cand
+    return BACKEND_ROOT.parent / "scada-app"
+
+
+FRONTEND_ROOT = _resolve_frontend_root()
+
+# 确保能 import core.version（版本唯一真源）。
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from core.version import get_version, _git_commit_sha, _node_version  # noqa: E402
+
+
+def _sha256_of_file(path: Path) -> str | None:
+    """返回文件 sha256（小写 hex）；文件不存在/读取失败返回 None。"""
+    if not path.is_file():
+        return None
+    try:
+        h = hashlib.sha256()
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _lock_digest(rel_path: Path) -> str | None:
+    """依赖锁文件 digest：存在则 sha256，缺失则 None（调用方据实记录）。"""
+    return _sha256_of_file(rel_path)
+
+
+def _collect_artifacts(version: str) -> list[dict]:
+    """收集交付产物。
+
+    列出"期望存在"的产物路径；存在则给 sha256，缺失则 sha256=null 并注明原因。
+    产物缺失是构建前/构建中的正常状态，不应导致脚本失败。
+    """
+    # (展示名, 相对后端根或前端根的路径, 归属根)
+    candidates = [
+        ("backend_windows_exe", BACKEND_ROOT / "dist" / "SCADA.exe", "backend"),
+        (
+            "frontend_installer",
+            FRONTEND_ROOT / "release" / f"SmartSCADA Setup {version}.exe",
+            "frontend",
+        ),
+        (
+            "frontend_archive",
+            FRONTEND_ROOT / "release" / f"smartscada-{version}-x64.nsis.7z",
+            "frontend",
+        ),
+    ]
+
+    artifacts: list[dict] = []
+    for name, path, owner in candidates:
+        digest = _sha256_of_file(path)
+        if digest is None:
+            artifacts.append(
+                {
+                    "name": name,
+                    "owner": owner,
+                    "path": str(path),
+                    "sha256": None,
+                    "note": "artifact not built yet / not found",
+                }
+            )
+        else:
+            artifacts.append(
+                {
+                    "name": name,
+                    "owner": owner,
+                    "path": str(path),
+                    "sha256": digest,
+                }
+            )
+    return artifacts
+
+
+def generate_manifest() -> dict:
+    version = get_version()
+    build_info = {
+        "version": version,
+        "commit_sha": _git_commit_sha(),
+        "build_time": datetime.now(timezone.utc).isoformat(),
+        "python_version": sys.version.split()[0],
+        "node_version": _node_version(),
+    }
+
+    backend_lock = _lock_digest(BACKEND_ROOT / "requirements.txt")
+    frontend_lock = _lock_digest(FRONTEND_ROOT / "package-lock.json")
+
+    manifest = {
+        **build_info,
+        "backend_deps_lock_digest": backend_lock,
+        "frontend_deps_lock_digest": frontend_lock,
+        "artifacts": _collect_artifacts(version),
+        # 生成清单的工具自身版本，便于追溯清单格式
+        "manifest_generator": "tools/gen_release_manifest.py",
+    }
+    return manifest
+
+
+def main() -> int:
+    manifest = generate_manifest()
+    out_path = BACKEND_ROOT / "release-manifest.json"
+    out_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    print(f"release-manifest.json 已生成: {out_path}")
+    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

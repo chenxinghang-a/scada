@@ -2,13 +2,15 @@
 from flask_restx import Api, Namespace, fields, Resource
 from flask import Blueprint
 
+from core.version import get_version
+
 # 创建API文档蓝图
 swagger_bp = Blueprint('swagger', __name__)
 
-# 创建API实例
+# 创建API实例。版本号来自唯一真源 VERSION 文件（core.version），不在此硬编码。
 api = Api(
     swagger_bp,
-    version='3.0.0',
+    version=get_version(),
     title='SCADA系统API',
     description='工业级SCADA监控与数据采集系统API文档 - 符合GB/T 36416-2018',
     doc='/docs',  # Swagger UI路径

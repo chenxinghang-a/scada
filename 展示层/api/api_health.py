@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, current_app
 from core.health_checker import HealthChecker, HealthStatus
 from core.module_registry import ModuleRegistry
 from core.service_response import success_response, error_response
+from core.version import get_version
 from 用户层.auth import jwt_required
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ def get_health_status():
             global_status = 'healthy'
 
         return success_response({
+            'version': get_version(),
             'global_status': global_status,
             'modules': modules_status,
             'checks': health_status,
@@ -99,7 +101,7 @@ def get_health_detail():
                 "database": {"status": "ok", "latency_ms": 1.2},
                 "websocket": {"status": "ok", "connected_clients": 5},
                 "collector": {"status": "ok", "active_tasks": 10},
-                "version": "1.3.1022",
+                "version": "1.3.1028",
                 "api_cache": {...},
                 "queues": {"report": {...}, "export": {...}},
                 "circuit_breakers": {...}
@@ -154,10 +156,10 @@ def get_health_detail():
             logger.warning("健康详情：采集器状态探测失败: %s", e, exc_info=True)
             result['collector'] = {'status': 'unknown', 'reason': str(e)}
 
-        # 版本和运行时间（版本号来自 VERSION 文件，见 config.APP_VERSION）
+        # 版本和运行时间（版本号统一从唯一真源 VERSION 文件读取，见 core.version）
         try:
-            from config import APP_VERSION
-            result['version'] = APP_VERSION
+            from core.version import get_version
+            result['version'] = get_version()
         except Exception as e:
             logger.warning("健康详情：读取版本号失败: %s", e, exc_info=True)
             result['version'] = 'unknown'

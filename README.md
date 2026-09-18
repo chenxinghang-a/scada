@@ -1,4 +1,4 @@
-# Industrial SCADA System v3.0
+# Industrial SCADA System v1.3.1028
 
 工业级数据采集与监控系统 -- 符合中国国标等保2.0 (GB/T 22239)
 
@@ -155,7 +155,7 @@ industrial_scada/
 │   ├── energy.yaml              # 能源管理配置
 │   └── simulation_presets.yaml  # 模拟预设方案
 │
-├── tests/                       # 测试套件 (1653 tests, 71% coverage)
+├── tests/                       # 测试套件 (~90 个测试文件; 覆盖率门槛 45% 见 .github/workflows/ci.yml 的 --cov-fail-under=45, 当前约 47% 见 coverage.xml)
 │   ├── test_api.py              # API测试
 │   ├── test_core.py             # 核心模块测试
 │   ├── test_alarm.py            # 报警测试
@@ -492,6 +492,18 @@ python run.py
 # 4. 浏览器访问
 # http://localhost:5000
 # 账号: admin / admin123
+```
+
+### 打包构建
+
+```bash
+# 单文件版（自动开浏览器）→ dist/SCADA.exe
+python build.py
+
+# 后端 onedir 版（供 scada-app Electron 安装包集成）
+# → dist/scada-backend/scada-backend.exe
+pip install pyinstaller
+python -m PyInstaller scada-backend.spec --noconfirm
 ```
 
 ### 从打包版启动

@@ -222,10 +222,11 @@ class TestPrometheusOutput:
 class TestGlobalMetrics:
 
     def test_scada_info_has_version(self):
-        """SCADA_INFO contains version"""
+        """SCADA_INFO contains version (from VERSION, never hardcoded)"""
         # SCADA_INFO is already set at module level
+        from core.version import get_version
         output = collector_get_output()
-        assert '3.0.0' in output
+        assert get_version() in output
 
     def test_metrics_collector_singleton(self):
         """metrics_collector is a MetricsCollector instance"""

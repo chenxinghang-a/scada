@@ -13,6 +13,7 @@ from datetime import datetime
 from 用户层.auth import role_required, jwt_required
 from ._common import load_yaml_config, save_yaml_config, api_error
 import paths
+from core.version import get_version
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ def get_system_status():
     brief = request.args.get('brief', '0') == '1'
 
     return jsonify({
+        'version': get_version(),
         'database': current_app.database.get_database_stats(),
         'devices': current_app.device_manager.get_all_status(brief=brief),
         'collector': current_app.data_collector.get_stats(),

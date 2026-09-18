@@ -64,7 +64,9 @@ def register_api_blueprints(app):
 
     通过 X-API-Version 响应头标识当前API版本。
     """
-    API_VERSION = '1.0.0'
+    # 版本号来自唯一真源 VERSION 文件（core.version），不在此硬编码。
+    from core.version import get_version
+    API_VERSION = get_version()
 
     # 安装版本中间件
     app.wsgi_app = APIVersionMiddleware(app.wsgi_app)

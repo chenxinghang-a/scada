@@ -2,6 +2,18 @@
 
 All notable changes to the Industrial SCADA System are documented in this file.
 
+## [1.3.1028] - 2026-09-18
+
+版本口径统一（消除 1.3.1028 / 1.3.1010 / 3.1.0 / v3.0 / 1.0.0 五套漂移）：
+
+- **唯一版本源**：项目根目录 `VERSION` 文件（`1.3.1028`）。前后端 lockstep。
+- 后端 `pyproject.toml` 改为 setuptools 动态版本（`dynamic = ["version"]` + `[tool.setuptools.dynamic]`），构建期从 `VERSION` 读取。
+- 新增 `core/version.py` 单点读取 `VERSION`，暴露 `get_version()` 与 `get_build_info()`；
+  运行时（Prometheus 指标、Swagger 文档、API 版本头、`/api/health/status`、`/api/system/status`、发布清单）统一调用，不再硬编码。
+- 前端 `package.json` 版本对齐为 `1.3.1028`（经 `vite.config.ts` 的 `__APP_VERSION__` 注入到关于页/登录页）。
+- 自动更新明确关闭：`electron-updater` 未声明依赖、实为 no-op；`electron/updater.js` 改为显式“未启用”状态，构建不配置 `publish`。
+- 新增 `tools/gen_release_manifest.py` 生成 `release-manifest.json`（版本/commit/构建时间/依赖锁 digest/产物清单）。
+
 ## [3.0.0] - 2026-05-30
 
 Major release: security hardening, protocol expansion, industrial-grade simulation, and 623 automated tests.

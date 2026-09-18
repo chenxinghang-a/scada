@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "industrial-scada"
-version = "3.1.0"
+# 版本号唯一真源：项目根目录的 VERSION 文件。不要在此硬编码版本。
+# 构建时由 setuptools 动态读取，运行时由 core.version 读取，前后端 lockstep。
+dynamic = ["version"]
 description = "Industrial SCADA System - Modbus/OPC-UA/MQTT protocol gateway with real-time monitoring"
 requires-python = ">=3.12"
 dependencies = [
@@ -36,6 +38,10 @@ tdengine = [
 
 [tool.setuptools.packages.find]
 include = ["配置*", "模板*", "静态资源*"]
+
+[tool.setuptools.dynamic]
+# 版本号从根目录 VERSION 文件读取（唯一真源）。
+version = {file = "VERSION"}
 
 [tool.pytest.ini_options]
 # 真正的测试套件在 tests/（约 1880 个用例）。

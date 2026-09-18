@@ -6,12 +6,14 @@ from prometheus_client import Counter, Gauge, Histogram, Info, generate_latest, 
 import threading
 import logging
 
+from .version import get_version
+
 logger = logging.getLogger(__name__)
 
-# 系统信息
+# 系统信息。版本号来自唯一真源 VERSION 文件（core.version），不在此硬编码。
 SCADA_INFO = Info('scada', 'SCADA系统信息')
 SCADA_INFO.info({
-    'version': '3.0.0',
+    'version': get_version(),
     'python': '3.13',
     'protocol': 'Modbus/OPC-UA/MQTT/IEC104'
 })

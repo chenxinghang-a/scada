@@ -1,0 +1,32 @@
+{
+  "version": "1.3.1028",
+  "commit_sha": "e7ffa907b97f0e917277e75f54372a924d3a7963",
+  "build_time": "2026-09-18T12:13:58.068940+00:00",
+  "python_version": "3.13.14",
+  "node_version": "v22.22.2",
+  "backend_deps_lock_digest": "280cf4fed49209ef95226dd05a4d46309647610a56def147e62eff592943ee3d",
+  "frontend_deps_lock_digest": "04dfd4e959fc2d708951e9a0110477b87b7441247eb647d131d4952cc9b7dcd1",
+  "artifacts": [
+    {
+      "name": "backend_windows_exe",
+      "owner": "backend",
+      "path": "C:\\Users\\cxx\\WorkBuddy\\Claw\\industrial_scada\\dist\\SCADA.exe",
+      "sha256": "8ae24697c5927a1df14ae2da55ed8816a79b575cf2c59a79191d31bf86dbb81a"
+    },
+    {
+      "name": "frontend_installer",
+      "owner": "frontend",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\SmartSCADA Setup 1.3.1028.exe",
+      "sha256": null,
+      "note": "artifact not built yet / not found"
+    },
+    {
+      "name": "frontend_archive",
+      "owner": "frontend",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1028-x64.nsis.7z",
+      "sha256": null,
+      "note": "artifact not built yet / not found"
+    }
+  ],
+  "manifest_generator": "tools/gen_release_manifest.py"
+}
