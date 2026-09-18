@@ -96,14 +96,19 @@ def get_health_detail():
         {
             "success": true,
             "data": {
-                "database": {"status": "ok", "latency_ms": 1.2, "connections": 3},
+                "database": {"status": "ok", "latency_ms": 1.2},
                 "websocket": {"status": "ok", "connected_clients": 5},
-                "collector": {"status": "ok", "active_tasks": 10, "queue_size": 0},
-                "alarm": {"status": "ok", "active_alarms": 2},
-                "uptime_seconds": 3600,
-                "version": "<APP_VERSION>"
+                "collector": {"status": "ok", "active_tasks": 10},
+                "version": "1.3.1022",
+                "api_cache": {...},
+                "queues": {"report": {...}, "export": {...}},
+                "circuit_breakers": {...}
             }
         }
+
+    注意：探测失败的组件降级为 `{"status": "unknown"|"unavailable", "reason": "..."}`
+    而不是抛异常 —— 单个组件探不到不该让整个诊断接口 500。但 `reason` 一定带上，
+    否则运维看到 unknown 却无从判断是组件坏了还是探测代码本身出错。
     """
     try:
         result = {}
@@ -120,12 +125,23 @@ def get_health_detail():
         except Exception as e:
             result['database'] = {'status': 'error', 'error': str(e)}
 
+        # 下面 6 个组件探测都是「探测失败就降级为 unknown/unavailable，不抛异常」。
+        # 这个降级本身是对的（一个组件探不到不该让整个诊断接口 500），
+        # 但**必须留下原因**：本接口存在的意义就是告诉运维「哪个组件坏了、为什么」，
+        # 静默吞异常会让「组件真的坏了」和「组件正常但探测代码本身出错」
+        # 长得一模一样，运维只能看到 unknown 却无从下手。
+        #
+        # 真实踩过：`get_connected_count` 曾因函数改名而不存在，
+        # ImportError 被吞 → websocket 状态永远是 unknown，没人发现是代码坏了。
+        # 所以这里统一：**日志记完整原因（含栈），响应带简短 reason**。
+
         # WebSocket状态
         try:
             from 展示层.websocket import get_connected_count
             result['websocket'] = {'status': 'ok', 'connected_clients': get_connected_count()}
-        except Exception:
-            result['websocket'] = {'status': 'unknown'}
+        except Exception as e:
+            logger.warning("健康详情：WebSocket 状态探测失败: %s", e, exc_info=True)
+            result['websocket'] = {'status': 'unknown', 'reason': str(e)}
 
         # 采集器状态
         try:
@@ -134,22 +150,25 @@ def get_health_detail():
                 'status': 'ok' if dc.running else 'stopped',
                 'active_tasks': len(getattr(dc, 'tasks', {})),
             }
-        except Exception:
-            result['collector'] = {'status': 'unknown'}
+        except Exception as e:
+            logger.warning("健康详情：采集器状态探测失败: %s", e, exc_info=True)
+            result['collector'] = {'status': 'unknown', 'reason': str(e)}
 
         # 版本和运行时间（版本号来自 VERSION 文件，见 config.APP_VERSION）
         try:
             from config import APP_VERSION
             result['version'] = APP_VERSION
-        except Exception:
+        except Exception as e:
+            logger.warning("健康详情：读取版本号失败: %s", e, exc_info=True)
             result['version'] = 'unknown'
 
         # API缓存状态
         try:
             from core.api_cache import get_cache_stats
             result['api_cache'] = get_cache_stats()
-        except Exception:
-            result['api_cache'] = {'status': 'unavailable'}
+        except Exception as e:
+            logger.warning("健康详情：API 缓存状态探测失败: %s", e, exc_info=True)
+            result['api_cache'] = {'status': 'unavailable', 'reason': str(e)}
 
         # 请求队列状态
         try:
@@ -158,15 +177,17 @@ def get_health_detail():
                 'report': report_queue.get_stats(),
                 'export': export_queue.get_stats(),
             }
-        except Exception:
-            result['queues'] = {'status': 'unavailable'}
+        except Exception as e:
+            logger.warning("健康详情：请求队列状态探测失败: %s", e, exc_info=True)
+            result['queues'] = {'status': 'unavailable', 'reason': str(e)}
 
         # 熔断器状态
         try:
             from core.circuit_breaker import circuit_breaker_manager
             result['circuit_breakers'] = circuit_breaker_manager.get_all_stats()
-        except Exception:
-            result['circuit_breakers'] = {'status': 'unavailable'}
+        except Exception as e:
+            logger.warning("健康详情：熔断器状态探测失败: %s", e, exc_info=True)
+            result['circuit_breakers'] = {'status': 'unavailable', 'reason': str(e)}
 
         return success_response(result)
     except Exception as e:
