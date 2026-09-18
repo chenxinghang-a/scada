@@ -394,7 +394,6 @@ class Database:
             ``batch`` 为空时直接返回，不执行任何操作。
             单条记录字段缺失不影响其他记录的插入。
         """
-        return  # MUTATION
         if not batch:
             return
 
