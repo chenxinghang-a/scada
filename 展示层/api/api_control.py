@@ -25,6 +25,14 @@ _write_lock = __import__('threading').Lock()
 IDEMPOTENCY_WINDOW_S = 2  # 2秒内的重复写入视为同一操作
 RECENT_WRITES_MAX = 1000  # 幂等性记录最大条数
 
+# 「写入进行中」占位标记。
+# 幂等键必须在**下发之前**登记，否则挡不住并发的重复提交；但登记 ≠ 写入成功，
+# 所以登记时先放这个哨兵，写入结束后再按结果替换成时间戳 / 撤销。
+# 没有它的话：请求 A 登记键后开始下发（网络往返可能几百 ms），此时并发的
+# 请求 B 命中幂等分支直接回 `写入成功(幂等)` —— 而 A 可能还没写、甚至写失败，
+# B 却已经拿到"成功"。更糟的是 A 失败会撤销登记，B 的成功也就成了假账。
+_IN_FLIGHT = object()
+
 # 寄存器地址/值范围常量
 REGISTER_ADDRESS_MIN = 0
 REGISTER_ADDRESS_MAX = 65535
@@ -83,25 +91,40 @@ def write_register(device_id):
     import time
     write_key = f"{device_id}:{address}:{value}"
     with _write_lock:
-        last_write = _recent_writes.get(write_key, 0)
+        last_write = _recent_writes.get(write_key)
         now = time.time()
-        if now - last_write < IDEMPOTENCY_WINDOW_S:
+        if last_write is _IN_FLIGHT:
+            # 同一写入正在下发中。**不能**回"成功(幂等)" —— 上一次的结果还没出来。
+            # 明确告诉调用方"进行中"，由它决定等待或重试。
+            return jsonify({
+                'success': False,
+                'message': f'相同的写入正在执行中，请勿重复提交: 地址={address}, 值={value}',
+            }), 409
+        if isinstance(last_write, float) and now - last_write < IDEMPOTENCY_WINDOW_S:
             return jsonify({'success': True, 'message': f'写入成功(幂等): 地址={address}, 值={value}'})
-        _recent_writes[write_key] = now
-        # 清理过期记录
+        # 先占位（挡住并发重复提交），写入结束后再落实为时间戳
+        _recent_writes[write_key] = _IN_FLIGHT
+        # 清理过期记录（只清**已完成**的条目，不能误删进行中的占位）
         if len(_recent_writes) > RECENT_WRITES_MAX:
-            _recent_writes.clear()
+            for k in [k for k, v in _recent_writes.items()
+                      if isinstance(v, float) and now - v >= IDEMPOTENCY_WINDOW_S]:
+                _recent_writes.pop(k, None)
+            if len(_recent_writes) > RECENT_WRITES_MAX:
+                _recent_writes.clear()
 
     success = False
     try:
         success = client.write_single_register(address, value)
     finally:
-        # 本次修复：幂等键上面是**写入前**登记的（用于挡住并发重复提交），
-        # 但写入失败时原先不回滚 —— 于是调用方重试会命中 2 秒窗口，
-        # 被判成"写入成功(幂等)"并回 HTTP 200，而寄存器**从未写入**。
-        # 失败（含抛异常）时撤销登记，让重试能真正下发。
-        if not success:
-            with _write_lock:
+        # 幂等键在上面是**写入前**登记的（用于挡住并发重复提交），
+        # 写入结束后按真实结果落实：
+        #   - 成功 → 换成时间戳，2 秒内的重试确实可以判定为"已写入"
+        #   - 失败（含抛异常）→ 撤销登记，让重试能真正下发；否则调用方重试会命中
+        #     2 秒窗口，被判成"写入成功(幂等)"并回 HTTP 200，而寄存器**从未写入**。
+        with _write_lock:
+            if success:
+                _recent_writes[write_key] = time.time()
+            elif _recent_writes.get(write_key) is _IN_FLIGHT:
                 _recent_writes.pop(write_key, None)
 
     if success:

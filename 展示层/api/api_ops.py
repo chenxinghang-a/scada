@@ -19,6 +19,26 @@ logger = logging.getLogger(__name__)
 ops_bp = Blueprint('api_ops', __name__, url_prefix='/api/ops')
 
 
+def _result_error_detail(result):
+    """从后端"吞异常 + 返回结果"的契约里抽出错误信息；无错返回 None。
+
+    覆盖两种形态（同一个 `core/ops_tools.py` 里并存）：
+      * dict：失败 → ``{'status': 'error', 'error': ...}``（DatabaseMaintainer/
+        DataCleaner/DiagnosticExporter 都用这个）
+      * list：失败 → ``[{'error': ...}]``（``DatabaseMaintainer.get_table_stats()``
+        整体失败时走这条，见 core/ops_tools.py:373）
+    """
+    if isinstance(result, dict):
+        if result.get('status') == 'error':
+            return result.get('error') or result.get('result') or '未知错误'
+        return None
+    if isinstance(result, list):
+        for item in result:
+            if isinstance(item, dict) and item.get('error'):
+                return item['error']
+    return None
+
+
 def _ops_status_response(result, action):
     """运维类接口的统一返回：结果里 `status == 'error'` 必须变成**错误响应**。
 
@@ -37,8 +57,8 @@ def _ops_status_response(result, action):
         result: 后端方法返回的结果（通常是 dict，`/db/tables` 是 list）
         action: 动作名，用于拼错误信息，如 'VACUUM'
     """
-    if isinstance(result, dict) and result.get('status') == 'error':
-        detail = result.get('error') or result.get('result') or '未知错误'
+    detail = _result_error_detail(result)
+    if detail is not None:
         logger.error("运维操作失败 [%s]: %s", action, result)
         return error_response(f"{action}失败: {detail}", 500)
     return success_response(result)
@@ -56,6 +76,42 @@ def _cleanup_response(result):
     修复后：失败一律 `error_response(..., 500)`，让调用方**没法**忽略。
     """
     return _ops_status_response(result, '清理')
+
+
+def _ops_operator(default: str = 'unknown') -> str:
+    """从 JWT 上下文取操作者（不信任客户端传入的 operator）。"""
+    user = getattr(request, 'current_user', None) or {}
+    return user.get('username') or default
+
+
+def _log_ops(operation, result, target: str = '', details=None):
+    """按后端返回的**真实 status** 写审计日志。
+
+    一起修两个问题（都在 `core/ops_tools.py` 的 `OpsAuditLogger.log_operation` 契约上）：
+
+    1. `log_operation` 的 `result` 参数默认值是 `'success'`，而本文件所有调用点
+       都没传它。于是 `db_maintainer.vacuum()` 返回 `{'status': 'error'}`、
+       `data_cleaner.clean_history_data()` 清理失败时，审计日志照样落一条
+       `result: 'success'` —— 事后追责读到的是"操作成功"，与事实完全相反。
+    2. 这些**变更类**操作也都没传 `operator`，日志里一律是默认值 `'system'`。
+       出事后（谁把库 VACUUM 坏了 / 谁删了历史数据）根本定位不到人。
+
+    Args:
+        operation: 审计动作名，如 'db_vacuum'
+        result: 后端方法返回的结果（dict / list 均可）
+        target: 操作对象
+        details: 落日志的明细，缺省用 result 本身
+    """
+    detail = _result_error_detail(result)
+    ops_audit.log_operation(
+        operation,
+        operator=_ops_operator(),
+        target=target,
+        details=details if details is not None else (
+            result if isinstance(result, dict) else {'result': result}),
+        result='error' if detail is not None else 'success',
+        error=detail or '',
+    )
 
 
 # ================================================================
@@ -226,7 +282,10 @@ def db_table_stats():
     """获取数据库表统计"""
     try:
         result = db_maintainer.get_table_stats()
-        return success_response(result)
+        # get_table_stats() 的失败形态是 **list**：`[{'error': ...}]`（core/ops_tools.py:373），
+        # 原先无条件 `success_response()` → 前端拿到 HTTP 200「成功」，
+        # 而 body 里只有一条错误项，表统计实际上是空的。
+        return _ops_status_response(result, '获取表统计')
     except Exception as e:
         logger.error(f"获取表统计失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -245,7 +304,7 @@ def cleanup_history():
         data = request.get_json() or {}
         days = data.get('retention_days', 90)
         result = data_cleaner.clean_history_data(days)
-        ops_audit.log_operation('cleanup_history', details=result)
+        _log_ops('cleanup_history', result, details={'retention_days': days, **(result if isinstance(result, dict) else {})})
         return _cleanup_response(result)
     except Exception as e:
         logger.error(f"清理历史数据失败: {e}", exc_info=True)
@@ -261,7 +320,7 @@ def cleanup_backups():
         data = request.get_json() or {}
         keep = data.get('keep_count', 5)
         result = data_cleaner.clean_old_backups(keep_count=keep)
-        ops_audit.log_operation('cleanup_backups', details=result)
+        _log_ops('cleanup_backups', result, details={'keep_count': keep, **(result if isinstance(result, dict) else {})})
         return _cleanup_response(result)
     except Exception as e:
         logger.error(f"清理备份失败: {e}", exc_info=True)
@@ -357,8 +416,15 @@ def run_maintenance_task(name):
 
         operator = request.current_user.get('username', 'unknown')
         accepted = run_task_now(name)
+        # accepted=False 表示任务**没有**被接受执行（未注册/已在运行/调度器不可用）。
+        # 原先固定按默认值记 success —— 管理员点了「立即执行」，审计里显示成功，
+        # 而任务根本没跑。这里如实记 error。
         ops_audit.log_operation(
-            'maintenance_task_run', operator=operator, details={'task': name})
+            'maintenance_task_run', operator=operator, target=name,
+            details={'task': name, 'accepted': accepted},
+            result='success' if accepted else 'error',
+            error='' if accepted else '维护任务未被接受执行',
+        )
 
         return success_response({'task': name, 'accepted': accepted})
     except Exception as e:
