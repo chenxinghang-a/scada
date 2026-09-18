@@ -3,61 +3,280 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
     <title>用户管理 - 工业数据采集与监控系统</title>
+
+    <!-- 深浅色：跟随系统偏好，驱动设计令牌(data-theme)与 Bootstrap(data-bs-theme) -->
+    <script>
+        (function () {
+            var mq = window.matchMedia('(prefers-color-scheme: dark)');
+            function apply(dark) {
+                var root = document.documentElement;
+                root.setAttribute('data-theme', dark ? 'dark' : 'light');
+                root.setAttribute('data-bs-theme', dark ? 'dark' : 'light');
+            }
+            apply(mq.matches);
+            var onChange = function (e) { apply(e.matches); };
+            if (mq.addEventListener) { mq.addEventListener('change', onChange); }
+            else if (mq.addListener) { mq.addListener(onChange); }
+        })();
+    </script>
+
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/design-tokens.css') }}" rel="stylesheet">
+
     <style>
-        body { background-color: #f5f5f5; }
+        /* 用户管理页：颜色/字号/间距/圆角全部来自 design-tokens.css，无渐变、无硬编码色 */
+        body {
+            background: var(--bg-page);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: var(--font-base);
+            line-height: var(--leading-base);
+        }
+
+        /* ---------- 侧边导航（扁平纯色，不使用渐变） ---------- */
         .sidebar {
-            background: linear-gradient(135deg, #1a237e, #0d47a1);
+            background: var(--bg-surface);
+            border-right: 1px solid var(--border-base);
             min-height: 100vh;
-            color: white;
-            padding-top: 20px;
+            padding-top: var(--space-5);
         }
+
+        .sidebar__brand {
+            text-align: center;
+            color: var(--text-primary);
+        }
+
+        .sidebar__brand i {
+            font-size: var(--font-2xl);
+            color: var(--color-brand);
+        }
+
+        .sidebar__brand h5 {
+            margin: var(--space-2) 0 0;
+            font-size: var(--font-base);
+            font-weight: var(--weight-semibold);
+        }
+
         .sidebar .nav-link {
-            color: rgba(255,255,255,0.8);
-            padding: 12px 20px;
-            border-radius: 8px;
-            margin: 2px 10px;
-            transition: all 0.3s;
+            color: var(--text-secondary);
+            font-size: var(--font-sm);
+            padding: var(--space-3) var(--space-4);
+            border-radius: var(--radius-md);
+            margin: 2px var(--space-2);
+            display: flex;
+            align-items: center;
+            gap: var(--space-2);
+            transition: background var(--duration-fast) var(--ease-out),
+                        color var(--duration-fast) var(--ease-out);
         }
-        .sidebar .nav-link:hover, .sidebar .nav-link.active {
-            background: rgba(255,255,255,0.15);
-            color: white;
+
+        .sidebar .nav-link:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
         }
-        .sidebar .nav-link i { width: 24px; }
-        .main-content { padding: 20px; }
-        .card {
-            border: none;
-            border-radius: 12px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+
+        .sidebar .nav-link.active {
+            background: var(--bg-selected);
+            color: var(--color-brand);
+            font-weight: var(--weight-semibold);
         }
-        .card-header {
-            background: white;
-            border-bottom: 1px solid #eee;
-            font-weight: 600;
+
+        .sidebar .nav-link i { width: 20px; }
+
+        .sidebar .sidebar__divider {
+            border-color: var(--border-base);
+            margin: var(--space-2) var(--space-4);
+            opacity: 1;
         }
-        .badge-role {
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 0.8rem;
+
+        .sidebar__user {
+            padding: var(--space-4);
+            font-size: var(--font-xs);
+            color: var(--text-muted);
         }
+
+        /* ---------- 主区 ---------- */
+        .main-content { padding: var(--space-5) var(--space-6); }
+
+        .page-title {
+            font-size: var(--font-xl);
+            font-weight: var(--weight-semibold);
+            margin: 0;
+        }
+
+        .panel + .panel { margin-top: var(--space-5); }
+
+        /* 指标卡 */
+        .metric-card {
+            padding: var(--space-4);
+            text-align: center;
+        }
+
+        .metric-card .metric-label { display: block; margin-top: var(--space-1); }
+
+        /* 表格：表头次要色，数值/时间列等宽 */
+        .table {
+            margin-bottom: 0;
+            color: var(--text-primary);
+            border-color: var(--border-base);
+        }
+
+        .table > :not(caption) > * > * {
+            border-color: var(--border-base);
+            background: transparent;
+            color: var(--text-primary);
+            padding: var(--space-3);
+            vertical-align: middle;
+        }
+
+        .table thead th {
+            font-size: var(--font-xs);
+            font-weight: var(--weight-semibold);
+            color: var(--text-muted);
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+        }
+
+        .table tbody td { font-size: var(--font-sm); }
+
+        .table-hover > tbody > tr:hover > * {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        /* 时间 / IP / 数值：等宽 + 表格数字，避免刷新跳动 */
+        .cell-mono {
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
+            font-size: var(--font-xs);
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
         .user-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #1565c0, #0d47a1);
-            color: white;
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-pill);
+            background: var(--color-brand-soft);
+            color: var(--color-brand);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: bold;
+            font-weight: var(--weight-semibold);
+            font-size: var(--font-sm);
+            flex: none;
         }
+
+        .user-name { font-size: var(--font-sm); font-weight: var(--weight-semibold); }
+        .user-account { font-size: var(--font-xs); color: var(--text-muted); }
+
+        .empty-state {
+            padding: var(--space-8) var(--space-4);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: var(--font-sm);
+        }
+
+        .empty-state i { font-size: var(--font-2xl); display: block; margin-bottom: var(--space-2); }
+
+        /* ---------- 模态框（扁平，无渐变） ---------- */
         .modal-header {
-            background: linear-gradient(135deg, #1565c0, #0d47a1);
-            color: white;
+            background: var(--bg-surface);
+            color: var(--text-primary);
+            border-bottom: 1px solid var(--border-base);
         }
-        .modal-header .btn-close { filter: brightness(0) invert(1); }
+
+        .modal-title { font-size: var(--font-lg); font-weight: var(--weight-semibold); }
+
+        .modal-footer { border-top: 1px solid var(--border-base); }
+
+        .modal .form-label {
+            font-size: var(--font-sm);
+            font-weight: var(--weight-medium);
+            color: var(--text-secondary);
+            margin-bottom: var(--space-2);
+        }
+
+        .required-mark { color: var(--color-danger); }
+
+        .danger-hint {
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+        }
+
+        /* ---------- Bootstrap 控件对齐设计令牌（本页不加载 Tabler，需自行覆盖） ---------- */
+        .btn-primary {
+            background: var(--color-brand);
+            border-color: var(--color-brand);
+            color: var(--text-inverse);
+        }
+
+        .btn-primary:hover,
+        .btn-primary:focus {
+            background: var(--color-brand-strong);
+            border-color: var(--color-brand-strong);
+            color: var(--text-inverse);
+        }
+
+        .btn-outline-secondary {
+            color: var(--text-secondary);
+            border-color: var(--border-strong);
+        }
+
+        .btn-outline-secondary:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+            border-color: var(--border-strong);
+        }
+
+        /* 危险操作：删除 / 禁用 */
+        .btn-outline-danger {
+            color: var(--color-danger);
+            border-color: var(--color-danger);
+        }
+
+        .btn-outline-danger:hover,
+        .btn-outline-danger:focus {
+            background: var(--color-danger);
+            border-color: var(--color-danger);
+            color: var(--text-inverse);
+        }
+
+        .btn-outline-success {
+            color: var(--color-success);
+            border-color: var(--color-success);
+        }
+
+        .btn-outline-success:hover,
+        .btn-outline-success:focus {
+            background: var(--color-success);
+            border-color: var(--color-success);
+            color: var(--text-inverse);
+        }
+
+        .form-control,
+        .form-select {
+            font-size: var(--font-sm);
+            color: var(--text-primary);
+            background: var(--bg-surface);
+            border-color: var(--border-strong);
+        }
+
+        .form-control:focus,
+        .form-select:focus {
+            background: var(--bg-surface);
+            color: var(--text-primary);
+            border-color: var(--color-brand);
+            box-shadow: var(--focus-ring);
+        }
+
+        .form-check-input:checked {
+            background-color: var(--color-brand);
+            border-color: var(--color-brand);
+        }
     </style>
 </head>
 <body>
@@ -65,9 +284,9 @@
         <div class="row">
             <!-- 侧边栏 -->
             <div class="col-md-2 sidebar">
-                <div class="text-center mb-4">
-                    <i class="bi bi-gear-wide-connected" style="font-size: 2rem;"></i>
-                    <h5 class="mt-2">SCADA系统</h5>
+                <div class="sidebar__brand mb-4">
+                    <i class="bi bi-gear-wide-connected"></i>
+                    <h5>SCADA系统</h5>
                 </div>
                 <nav class="nav flex-column">
                     <a class="nav-link" href="/dashboard">
@@ -88,73 +307,63 @@
                     <a class="nav-link active" href="/users">
                         <i class="bi bi-people"></i> 用户管理
                     </a>
-                    <hr class="text-white-50 mx-3">
+                    <hr class="sidebar__divider">
                     <a class="nav-link" href="#" onclick="logout()">
                         <i class="bi bi-box-arrow-right"></i> 退出登录
                     </a>
                 </nav>
-                <div class="mt-auto p-3">
-                    <small class="text-white-50">
-                        <span id="currentUser">-</span><br>
-                        <span id="currentRole" class="badge bg-light text-dark">-</span>
-                    </small>
+                <div class="sidebar__user">
+                    <span id="currentUser">-</span><br>
+                    <span id="currentRole" class="tag tag--info mt-1">-</span>
                 </div>
             </div>
-            
+
             <!-- 主内容区 -->
             <div class="col-md-10 main-content">
                 <div class="d-flex justify-content-between align-items-center mb-4">
-                    <h4><i class="bi bi-people me-2"></i>用户管理</h4>
+                    <h1 class="page-title"><i class="bi bi-people me-2"></i>用户管理</h1>
                     <button class="btn btn-primary" onclick="showAddUserModal()">
                         <i class="bi bi-person-plus me-1"></i>添加用户
                     </button>
                 </div>
-                
-                <!-- 统计卡片 -->
-                <div class="row mb-4">
-                    <div class="col-md-3">
-                        <div class="card">
-                            <div class="card-body text-center">
-                                <h3 id="totalUsers" class="text-primary">0</h3>
-                                <small class="text-muted">总用户数</small>
-                            </div>
+
+                <!-- 统计指标卡 -->
+                <div class="row g-3 mb-4">
+                    <div class="col-6 col-md-3">
+                        <div class="panel metric-card">
+                            <span id="totalUsers" class="metric-value">0</span>
+                            <span class="metric-label">总用户数</span>
                         </div>
                     </div>
-                    <div class="col-md-3">
-                        <div class="card">
-                            <div class="card-body text-center">
-                                <h3 id="activeUsers" class="text-success">0</h3>
-                                <small class="text-muted">活跃用户</small>
-                            </div>
+                    <div class="col-6 col-md-3">
+                        <div class="panel metric-card">
+                            <span id="activeUsers" class="metric-value" style="color: var(--color-success);">0</span>
+                            <span class="metric-label">活跃用户</span>
                         </div>
                     </div>
-                    <div class="col-md-3">
-                        <div class="card">
-                            <div class="card-body text-center">
-                                <h3 id="adminCount" class="text-warning">0</h3>
-                                <small class="text-muted">管理员</small>
-                            </div>
+                    <div class="col-6 col-md-3">
+                        <div class="panel metric-card">
+                            <span id="adminCount" class="metric-value" style="color: var(--color-warning);">0</span>
+                            <span class="metric-label">管理员</span>
                         </div>
                     </div>
-                    <div class="col-md-3">
-                        <div class="card">
-                            <div class="card-body text-center">
-                                <h3 id="todayLogins" class="text-info">0</h3>
-                                <small class="text-muted">今日登录</small>
-                            </div>
+                    <div class="col-6 col-md-3">
+                        <div class="panel metric-card">
+                            <span id="todayLogins" class="metric-value" style="color: var(--color-info);">0</span>
+                            <span class="metric-label">今日登录</span>
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- 用户列表 -->
-                <div class="card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="panel">
+                    <div class="panel__header">
                         <span><i class="bi bi-list-ul me-2"></i>用户列表</span>
-                        <button class="btn btn-sm btn-outline-primary" onclick="loadUsers()">
+                        <button class="btn btn-sm btn-outline-secondary" onclick="loadUsers()">
                             <i class="bi bi-arrow-clockwise"></i> 刷新
                         </button>
                     </div>
-                    <div class="card-body">
+                    <div class="panel__body p-0">
                         <div class="table-responsive">
                             <table class="table table-hover">
                                 <thead>
@@ -170,8 +379,10 @@
                                 </thead>
                                 <tbody id="userTableBody">
                                     <tr>
-                                        <td colspan="7" class="text-center text-muted py-4">
-                                            <div class="spinner-border spinner-border-sm me-2"></div>加载中...
+                                        <td colspan="7">
+                                            <div class="empty-state">
+                                                <div class="spinner-border spinner-border-sm me-2"></div>加载中...
+                                            </div>
                                         </td>
                                     </tr>
                                 </tbody>
@@ -179,15 +390,16 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- 操作日志 -->
-                <div class="card mt-4">
-                    <div class="card-header">
-                        <i class="bi bi-journal-text me-2"></i>操作日志
+                <div class="panel">
+                    <div class="panel__header">
+                        <span><i class="bi bi-journal-text me-2"></i>操作日志</span>
+                        <span class="metric-label">最近 50 条</span>
                     </div>
-                    <div class="card-body">
-                        <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
-                            <table class="table table-sm">
+                    <div class="panel__body p-0">
+                        <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+                            <table class="table table-sm table-hover">
                                 <thead>
                                     <tr>
                                         <th>时间</th>
@@ -200,7 +412,9 @@
                                 </thead>
                                 <tbody id="logTableBody">
                                     <tr>
-                                        <td colspan="6" class="text-center text-muted">暂无日志</td>
+                                        <td colspan="6">
+                                            <div class="empty-state">暂无日志</div>
+                                        </td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -223,17 +437,17 @@
                     <form id="userForm">
                         <input type="hidden" id="editUsername" value="">
                         <div class="mb-3">
-                            <label class="form-label">用户名 <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="formUsername" required 
+                            <label class="form-label" for="formUsername">用户名 <span class="required-mark">*</span></label>
+                            <input type="text" class="form-control" id="formUsername" required
                                    minlength="3" maxlength="20" placeholder="3-20个字符">
                         </div>
                         <div class="mb-3" id="passwordGroup">
-                            <label class="form-label">密码 <span class="text-danger">*</span></label>
-                            <input type="password" class="form-control" id="formPassword" 
+                            <label class="form-label" for="formPassword">密码 <span class="required-mark">*</span></label>
+                            <input type="password" class="form-control" id="formPassword"
                                    minlength="6" placeholder="至少6位">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">角色 <span class="text-danger">*</span></label>
+                            <label class="form-label" for="formRole">角色 <span class="required-mark">*</span></label>
                             <select class="form-select" id="formRole" required>
                                 <option value="admin">管理员 - 全部权限</option>
                                 <option value="engineer">工程师 - 设备管理+数据导出</option>
@@ -242,15 +456,15 @@
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">显示名称</label>
+                            <label class="form-label" for="formDisplayName">显示名称</label>
                             <input type="text" class="form-control" id="formDisplayName" placeholder="真实姓名">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">邮箱</label>
+                            <label class="form-label" for="formEmail">邮箱</label>
                             <input type="email" class="form-control" id="formEmail" placeholder="user@example.com">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">手机</label>
+                            <label class="form-label" for="formPhone">手机</label>
                             <input type="tel" class="form-control" id="formPhone" placeholder="13800138000">
                         </div>
                     </form>
@@ -289,14 +503,14 @@
                 window.location.href = '/login';
                 return;
             }
-            
+
             const userStr = localStorage.getItem('scada_user');
             if (userStr) {
                 currentUser = JSON.parse(userStr);
                 document.getElementById('currentUser').textContent = currentUser.display_name || currentUser.username;
                 document.getElementById('currentRole').textContent = currentUser.role_name || currentUser.role;
             }
-            
+
             // 验证token
             fetch(`${API_BASE}/auth/verify`, {
                 headers: { 'Authorization': `Bearer ${token}` }
@@ -315,13 +529,13 @@
                 const response = await fetch(`${API_BASE}/auth/users`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
-                
+
                 if (response.status === 403) {
                     alert('需要管理员权限');
                     window.location.href = '/dashboard';
                     return;
                 }
-                
+
                 const data = await response.json();
                 renderUsers(data.users || []);
                 updateStats(data.users || []);
@@ -330,70 +544,95 @@
             }
         }
 
+        // 角色 → 统一标签样式（design-tokens 的 .tag--*）
+        const ROLE_CLASS = {
+            'admin': 'tag--danger',
+            'engineer': 'tag--warning',
+            'operator': 'tag--info',
+            'viewer': 'tag--offline'
+        };
+
+        const ROLE_NAMES = {
+            'admin': '管理员',
+            'engineer': '工程师',
+            'operator': '操作员',
+            'viewer': '观察者'
+        };
+
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
         function renderUsers(users) {
             const tbody = document.getElementById('userTableBody');
-            
+
             if (users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">暂无用户</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state">暂无用户</div></td></tr>';
                 return;
             }
-            
-            const roleColors = {
-                'admin': 'danger',
-                'engineer': 'warning',
-                'operator': 'info',
-                'viewer': 'secondary'
-            };
-            
-            const roleNames = {
-                'admin': '管理员',
-                'engineer': '工程师',
-                'operator': '操作员',
-                'viewer': '观察者'
-            };
-            
-            tbody.innerHTML = users.map(user => `
+
+            const me = currentUser ? currentUser.username : null;
+
+            tbody.innerHTML = users.map(user => {
+                const displayName = escapeHtml(user.display_name || user.username);
+                const username = escapeHtml(user.username);
+                const isSelf = user.username === me;
+                const isBuiltinAdmin = user.username === 'admin';
+
+                const roleCls = ROLE_CLASS[user.role] || 'tag--offline';
+                const roleName = ROLE_NAMES[user.role] || escapeHtml(user.role);
+
+                // 危险操作：禁用 / 删除（删除用 --color-danger + 明确确认）
+                const toggleBtn = isBuiltinAdmin ? '' : `
+                    <button class="btn btn-sm ${user.is_active ? 'btn-outline-danger' : 'btn-outline-success'}"
+                            onclick="toggleUser('${username}', ${!user.is_active})"
+                            title="${user.is_active ? '禁用该用户' : '启用该用户'}">
+                        <i class="bi bi-${user.is_active ? 'pause' : 'play'}"></i>
+                        ${user.is_active ? '禁用' : '启用'}
+                    </button>`;
+
+                const deleteBtn = (isBuiltinAdmin || isSelf) ? '' : `
+                    <button class="btn btn-sm btn-outline-danger"
+                            onclick="deleteUser('${username}')"
+                            title="删除该用户">
+                        <i class="bi bi-trash"></i> 删除
+                    </button>`;
+
+                return `
                 <tr>
                     <td>
-                        <div class="d-flex align-items-center">
-                            <div class="user-avatar me-2">
-                                ${(user.display_name || user.username).charAt(0).toUpperCase()}
+                        <div class="d-flex align-items-center gap-2">
+                            <div class="user-avatar">
+                                ${escapeHtml((user.display_name || user.username).charAt(0).toUpperCase())}
                             </div>
                             <div>
-                                <div class="fw-bold">${user.display_name || user.username}</div>
-                                <small class="text-muted">@${user.username}</small>
+                                <div class="user-name">${displayName}${isSelf ? ' <span class="tag tag--info">本人</span>' : ''}</div>
+                                <div class="user-account">@${username}</div>
                             </div>
                         </div>
                     </td>
+                    <td><span class="tag ${roleCls}">${roleName}</span></td>
+                    <td>${escapeHtml(user.email) || '-'}</td>
+                    <td class="cell-mono">${escapeHtml(user.phone) || '-'}</td>
+                    <td class="cell-mono">${user.last_login ? escapeHtml(new Date(user.last_login).toLocaleString('zh-CN')) : '从未登录'}</td>
                     <td>
-                        <span class="badge bg-${roleColors[user.role] || 'secondary'} badge-role">
-                            ${roleNames[user.role] || user.role}
-                        </span>
-                    </td>
-                    <td>${user.email || '-'}</td>
-                    <td>${user.phone || '-'}</td>
-                    <td>${user.last_login ? new Date(user.last_login).toLocaleString('zh-CN') : '从未登录'}</td>
-                    <td>
-                        <span class="badge bg-${user.is_active ? 'success' : 'danger'}">
+                        <span class="tag ${user.is_active ? 'tag--success' : 'tag--offline'}">
                             ${user.is_active ? '活跃' : '已禁用'}
                         </span>
                     </td>
                     <td>
-                        <div class="btn-group btn-group-sm">
-                            <button class="btn btn-outline-primary" onclick="editUser('${user.username}')" title="编辑">
-                                <i class="bi bi-pencil"></i>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="editUser('${username}')" title="编辑">
+                                <i class="bi bi-pencil"></i> 编辑
                             </button>
-                            ${user.username !== 'admin' ? `
-                                <button class="btn btn-outline-${user.is_active ? 'warning' : 'success'}" 
-                                        onclick="toggleUser('${user.username}', ${!user.is_active})" 
-                                        title="${user.is_active ? '禁用' : '启用'}">
-                                    <i class="bi bi-${user.is_active ? 'pause' : 'play'}"></i>
-                                </button>
-                            ` : ''}
+                            ${toggleBtn}
+                            ${deleteBtn}
                         </div>
                     </td>
                 </tr>
-            `).join('');
+            `;
+            }).join('');
         }
 
         function updateStats(users) {
@@ -449,28 +688,28 @@
         async function saveUser() {
             const editUsername = document.getElementById('editUsername').value;
             const isEdit = !!editUsername;
-            
+
             const data = {
                 role: document.getElementById('formRole').value,
                 display_name: document.getElementById('formDisplayName').value,
                 email: document.getElementById('formEmail').value,
                 phone: document.getElementById('formPhone').value
             };
-            
+
             if (!isEdit) {
                 data.username = document.getElementById('formUsername').value;
                 data.password = document.getElementById('formPassword').value;
-                
+
                 if (!data.username || !data.password) {
                     alert('请填写用户名和密码');
                     return;
                 }
             }
-            
+
             const token = getToken();
             const url = isEdit ? `${API_BASE}/auth/users/${editUsername}` : `${API_BASE}/auth/register`;
             const method = isEdit ? 'PUT' : 'POST';
-            
+
             try {
                 const response = await fetch(url, {
                     method: method,
@@ -480,9 +719,9 @@
                     },
                     body: JSON.stringify(data)
                 });
-                
+
                 const result = await response.json();
-                
+
                 if (result.success) {
                     userModal.hide();
                     loadUsers();
@@ -495,11 +734,16 @@
             }
         }
 
+        // 启用/禁用：明确确认（禁用属于影响登录的危险操作）
         async function toggleUser(username, enable) {
-            if (!confirm(`确定要${enable ? '启用' : '禁用'}用户 ${username} 吗？`)) {
+            const action = enable ? '启用' : '禁用';
+            const detail = enable
+                ? `启用后 ${username} 可正常登录系统。`
+                : `禁用后 ${username} 将立即无法登录系统。`;
+            if (!confirm(`确定要${action}用户「${username}」吗？\n\n${detail}`)) {
                 return;
             }
-            
+
             const token = getToken();
             try {
                 const response = await fetch(`${API_BASE}/auth/users/${username}`, {
@@ -510,7 +754,7 @@
                     },
                     body: JSON.stringify({ is_active: enable })
                 });
-                
+
                 const result = await response.json();
                 if (result.success) {
                     loadUsers();
@@ -523,13 +767,42 @@
             }
         }
 
+        // 删除用户：危险操作，二次确认（需再次输入用户名）
+        async function deleteUser(username) {
+            if (!confirm(`【危险操作】确定要删除用户「${username}」吗？\n\n删除后该账号及其登录凭据将被移除，且无法恢复。`)) {
+                return;
+            }
+            const typed = prompt(`请输入用户名「${username}」以确认删除：`);
+            if (typed === null) return;
+            if (typed.trim() !== username) {
+                alert('输入的用户名不匹配，已取消删除');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/auth/users/${username}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${getToken()}` }
+                });
+                const result = await response.json();
+                if (result.success) {
+                    loadUsers();
+                    loadLogs();
+                } else {
+                    alert(result.message || '删除失败');
+                }
+            } catch (error) {
+                alert('网络错误');
+            }
+        }
+
         async function loadLogs() {
             const token = getToken();
             try {
                 const response = await fetch(`${API_BASE}/auth/logs?limit=50`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
-                
+
                 const data = await response.json();
                 renderLogs(data.logs || []);
             } catch (error) {
@@ -539,12 +812,17 @@
 
         function renderLogs(logs) {
             const tbody = document.getElementById('logTableBody');
-            
+
+            // 今日登录数（由已加载日志聚合，不新增接口）
+            const today = new Date().toDateString();
+            const todayCount = logs.filter(l => l.action === 'login' && new Date(l.timestamp).toDateString() === today).length;
+            document.getElementById('todayLogins').textContent = todayCount;
+
             if (logs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">暂无日志</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state">暂无日志</div></td></tr>';
                 return;
             }
-            
+
             const actionNames = {
                 'login': '登录',
                 'login_failed': '登录失败',
@@ -553,17 +831,20 @@
                 'update_user': '更新用户',
                 'delete_user': '删除用户'
             };
-            
-            tbody.innerHTML = logs.map(log => `
+
+            tbody.innerHTML = logs.map(log => {
+                const isFailed = String(log.action || '').includes('failed');
+                return `
                 <tr>
-                    <td><small>${new Date(log.timestamp).toLocaleString('zh-CN')}</small></td>
-                    <td>${log.username}</td>
-                    <td><span class="badge bg-${log.action.includes('failed') ? 'danger' : 'primary'}">${actionNames[log.action] || log.action}</span></td>
-                    <td>${log.target || '-'}</td>
-                    <td><small>${log.detail || '-'}</small></td>
-                    <td><small>${log.ip_address || '-'}</small></td>
+                    <td class="cell-mono">${escapeHtml(new Date(log.timestamp).toLocaleString('zh-CN'))}</td>
+                    <td>${escapeHtml(log.username)}</td>
+                    <td><span class="tag ${isFailed ? 'tag--danger' : 'tag--info'}">${escapeHtml(actionNames[log.action] || log.action)}</span></td>
+                    <td>${escapeHtml(log.target) || '-'}</td>
+                    <td>${escapeHtml(log.detail) || '-'}</td>
+                    <td class="cell-mono">${escapeHtml(log.ip_address) || '-'}</td>
                 </tr>
-            `).join('');
+            `;
+            }).join('');
         }
 
         function logout() {

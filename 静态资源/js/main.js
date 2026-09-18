@@ -16,6 +16,40 @@ const MAX_RECONNECT_ATTEMPTS = 50;
 const BASE_RECONNECT_DELAY = 1000;  // 1秒
 
 /**
+ * 令牌化状态样式：建立「状态类名 → 设计令牌变量」的映射
+ *
+ * why：本文件是全站共享脚本，此前直接向元素写入内联色值（写死的十六进制），
+ * 深色模式下这些亮色底/亮色点与暗背景冲突（报警条底色偏亮刺眼）。
+ * 现在 JS 只切换类名，颜色一律来自 design-tokens.css 的变量，
+ * 因此深浅色主题切换时颜色会自动跟随，无需 JS 重新计算。
+ */
+function ensureTokenStyles() {
+    if (document.getElementById('scada-token-styles')) return;
+
+    const style = document.createElement('style');
+    style.id = 'scada-token-styles';
+    style.textContent = [
+        // WebSocket 连接指示灯（右下角小圆点）
+        '.ws-status.ws-status--connected { color: var(--color-success); }',
+        '.ws-status.ws-status--disconnected { color: var(--color-danger); }',
+        '.ws-status.ws-status--failed { color: var(--color-danger); }',
+        '.ws-status.ws-status--error { color: var(--color-warning); }',
+        '.ws-status.ws-status--reconnecting { color: var(--color-info); }',
+        // 顶部报警条：等级由底色 + 下边框色条表达，不做整行 opacity 闪烁
+        '.alarm-banner.alarm-banner--critical { background: var(--level-critical-soft); border-bottom-color: var(--level-critical); }',
+        '.alarm-banner.alarm-banner--warning { background: var(--level-warning-soft); border-bottom-color: var(--level-warning); }',
+        '.alarm-banner .text-danger { color: var(--level-critical) !important; }',
+    ].join('\n');
+
+    if (document.head) {
+        document.head.appendChild(style);
+    } else {
+        document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style), { once: true });
+    }
+}
+ensureTokenStyles();
+
+/**
  * 初始化WebSocket连接（带断连重连 + 指数退避）
  */
 function initWebSocket() {
@@ -112,21 +146,22 @@ function updateSystemStatus(status) {
 
 /**
  * 更新WebSocket连接状态指示器（右下角小圆点）
+ * 颜色由 .ws-status--* 类名 + 设计令牌提供，不写入硬编码色值
  */
 function updateConnectionStatus(status) {
     const indicator = document.getElementById('ws-status');
     if (!indicator) return;
 
     const states = {
-        'connected': {color: '#52c41a', text: '已连接'},
-        'disconnected': {color: '#ff4d4f', text: '已断开'},
-        'error': {color: '#faad14', text: '连接错误'},
-        'reconnecting': {color: '#1890ff', text: '重连中...'},
-        'failed': {color: '#ff4d4f', text: '连接失败'},
+        'connected': {cls: 'ws-status--connected', text: '已连接'},
+        'disconnected': {cls: 'ws-status--disconnected', text: '已断开'},
+        'error': {cls: 'ws-status--error', text: '连接错误'},
+        'reconnecting': {cls: 'ws-status--reconnecting', text: '重连中...'},
+        'failed': {cls: 'ws-status--failed', text: '连接失败'},
     };
 
     const state = states[status] || states['disconnected'];
-    indicator.style.color = state.color;
+    indicator.className = 'ws-status ' + state.cls;
     indicator.textContent = '● ' + state.text;
     indicator.title = `WebSocket: ${state.text}`;
 }
@@ -319,6 +354,22 @@ const AlarmDedupManager = {
 setInterval(() => AlarmDedupManager.cleanup(), 60000);
 
 /**
+ * 按报警等级切换报警条的令牌类
+ * 等级只由「底色 + 下边框色条 + 图标色」表达，不做整行 opacity 闪烁
+ * （整行闪烁会干扰同时阅读其他内容，长时间观看易眼疲劳）
+ */
+function applyAlarmBannerLevel(banner, isCritical) {
+    banner.classList.toggle('alarm-banner--critical', !!isCritical);
+    banner.classList.toggle('alarm-banner--warning', !isCritical);
+
+    const icon = banner.querySelector('i.bi-exclamation-triangle-fill');
+    if (icon) {
+        icon.classList.toggle('text-danger', !!isCritical);
+        icon.classList.toggle('text-warning', !isCritical);
+    }
+}
+
+/**
  * 更新顶部报警条（不弹窗，不打断操作）
  */
 function updateAlarmBanner(alarm) {
@@ -337,18 +388,11 @@ function updateAlarmBanner(alarm) {
             : `警告：${msg} (${device})`;
     }
 
-    // 更新背景色
-    banner.style.background = isCritical ? '#fee2e2' : '#fff3cd';
-    banner.style.borderBottomColor = isCritical ? '#dc2626' : '#f59e0b';
+    // 等级样式：切类名（颜色来自设计令牌）
+    applyAlarmBannerLevel(banner, isCritical);
 
     // 显示
     banner.style.display = 'block';
-
-    // 闪一下提醒（不遮挡操作）
-    banner.style.opacity = '0.6';
-    setTimeout(() => { banner.style.opacity = '1'; }, 200);
-    setTimeout(() => { banner.style.opacity = '0.7'; }, 400);
-    setTimeout(() => { banner.style.opacity = '1'; }, 600);
 
     // 更新计数
     updateAlarmCount();
@@ -415,16 +459,16 @@ function updateAlarmCount() {
             // 显示最新一条报警信息
             const latest = alarms[0];
             const textEl = document.getElementById('alarm-banner-text');
+            const isCrit = !!latest && latest.alarm_level === 'critical';
             if (textEl && latest) {
                 const msg = latest.alarm_message || latest.alarm_id || '报警';
                 const device = latest.device_id || '';
-                const isCrit = latest.alarm_level === 'critical';
                 textEl.textContent = isCrit
                     ? `紧急：${msg} (${device})`
                     : `警告：${msg} (${device})`;
-                banner.style.background = isCrit ? '#fee2e2' : '#fff3cd';
-                banner.style.borderBottomColor = isCrit ? '#dc2626' : '#f59e0b';
             }
+            // 等级样式：切类名（颜色来自设计令牌，深色模式自动适配）
+            applyAlarmBannerLevel(banner, isCrit);
 
             // 更新徽章
             const critBadge = document.getElementById('alarm-banner-crit');
@@ -664,22 +708,40 @@ function updateDeviceStatusList(devices) {
 
 /**
  * 更新最新报警列表
+ * 单条为「左侧等级色条 + 两行(消息 / 设备·数值)」布局，
+ * 等级由 .level-bar--* 与 .tag--* 表达，不使用整行闪烁
  */
 function updateLatestAlarms(alarms) {
     const container = document.getElementById('latest-alarms');
     if (!container) return;
-    
+
     if (!alarms || alarms.length === 0) {
-        container.innerHTML = '<p class="text-muted text-center">暂无报警</p>';
+        container.innerHTML = '<p class="text-muted text-center mb-0" style="font-size: var(--font-sm)">暂无报警</p>';
         return;
     }
-    
-    container.innerHTML = alarms.slice(0, 5).map(alarm => `
-        <div class="alert alert-${alarm.alarm_level === 'critical' ? 'danger' : 'warning'} py-2 mb-2">
-            <small>
-                <strong>${escapeHtml(alarm.alarm_message)}</strong><br>
-                ${escapeHtml(alarm.device_id)} | 值: ${escapeHtml(alarm.actual_value?.toFixed(2) || '-')}
-            </small>
-        </div>
-    `).join('');
+
+    container.innerHTML = alarms.slice(0, 5).map(alarm => {
+        const isCritical = alarm.alarm_level === 'critical';
+        const levelCls = isCritical ? 'level-bar--critical' : 'level-bar--warning';
+        const tagCls = isCritical ? 'tag--danger' : 'tag--warning';
+        const levelText = isCritical ? '紧急' : '警告';
+        const value = alarm.actual_value != null ? Number(alarm.actual_value).toFixed(2) : '-';
+
+        return `
+            <div class="d-flex align-items-stretch gap-2 py-2" style="border-bottom: 1px solid var(--border-subtle);">
+                <span class="level-bar ${levelCls}"></span>
+                <div class="flex-grow-1">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="tag ${tagCls}">${levelText}</span>
+                        <span style="font-size: var(--font-sm); font-weight: var(--weight-medium); color: var(--text-primary);">
+                            ${escapeHtml(alarm.alarm_message)}
+                        </span>
+                    </div>
+                    <div class="metric-label" style="margin-top: var(--space-1);">
+                        ${escapeHtml(alarm.device_id)} · 值 ${value}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
 }

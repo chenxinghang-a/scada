@@ -2,96 +2,190 @@
 
 {% block title %}报警管理 - 工业SCADA系统{% endblock %}
 
+{% block extra_css %}
+<style>
+    /* 报警管理页：等级一律由 .level-bar--* 色条 + 两行布局表达，不做整行闪烁 */
+    .alarm-metrics .panel {
+        padding: var(--space-4);
+        text-align: center;
+    }
+
+    .alarm-metrics .metric-label {
+        display: block;
+        margin-top: var(--space-1);
+    }
+
+    /* ---------- 报警列表 ---------- */
+    .alarm-list {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .alarm-row {
+        display: flex;
+        align-items: stretch;
+        gap: var(--space-3);
+        padding: var(--space-3) var(--space-4);
+        border-bottom: 1px solid var(--border-base);
+    }
+
+    .alarm-row:last-child { border-bottom: none; }
+
+    .alarm-row:hover { background: var(--bg-hover); }
+
+    .alarm-row__main {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .alarm-row__line1 {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        flex-wrap: wrap;
+    }
+
+    .alarm-row__msg {
+        font-size: var(--font-base);
+        font-weight: var(--weight-medium);
+        color: var(--text-primary);
+        word-break: break-word;
+    }
+
+    .alarm-row__line2 {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: var(--space-1) var(--space-3);
+        margin-top: var(--space-1);
+        font-size: var(--font-xs);
+        color: var(--text-muted);
+    }
+
+    .alarm-row__line2 .kv {
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        color: var(--text-secondary);
+    }
+
+    .alarm-row__side {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        flex: none;
+    }
+
+    /* ---------- 空态 ---------- */
+    .alarm-empty {
+        padding: var(--space-10) var(--space-4);
+        text-align: center;
+        color: var(--text-muted);
+        font-size: var(--font-sm);
+    }
+
+    .alarm-empty i {
+        display: block;
+        font-size: var(--font-3xl);
+        color: var(--text-disabled);
+        margin-bottom: var(--space-3);
+    }
+
+    .alarm-empty__hint {
+        margin-top: var(--space-1);
+        font-size: var(--font-xs);
+        color: var(--text-disabled);
+    }
+
+    /* 筛选条 */
+    .alarm-filters .form-label {
+        font-size: var(--font-xs);
+        font-weight: var(--weight-medium);
+        color: var(--text-muted);
+        margin-bottom: var(--space-2);
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="row">
-    <div class="col-md-4">
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-bell"></i> 报警统计</h5>
-            </div>
-            <div class="card-body">
-                <div class="row text-center">
-                    <div class="col-4">
-                        <h3 id="total-alarms" class="text-primary">0</h3>
-                        <small class="text-muted">总报警</small>
-                    </div>
-                    <div class="col-4">
-                        <h3 id="unacknowledged-alarms" class="text-warning">0</h3>
-                        <small class="text-muted">未确认</small>
-                    </div>
-                    <div class="col-4">
-                        <h3 id="high-alarms" class="text-danger">0</h3>
-                        <small class="text-muted">严重</small>
-                    </div>
-                </div>
-            </div>
+<div class="row g-3 mb-3 alarm-metrics">
+    <div class="col-6 col-md-3">
+        <div class="panel">
+            <span id="total-alarms" class="metric-value">0</span>
+            <span class="metric-label">总报警</span>
         </div>
     </div>
-    
-    <div class="col-md-8">
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-funnel"></i> 筛选条件</h5>
-            </div>
-            <div class="card-body">
-                <form class="row g-3">
-                    <div class="col-md-3">
-                        <select id="alarm-device-filter" class="form-select">
-                            <option value="">全部设备</option>
-                        </select>
-                    </div>
-                    <div class="col-md-3">
-                        <select id="alarm-level-filter" class="form-select">
-                            <option value="">全部级别</option>
-                            <option value="critical">严重</option>
-                            <option value="warning">警告</option>
-                        </select>
-                    </div>
-                    <div class="col-md-3">
-                        <select id="alarm-status-filter" class="form-select">
-                            <option value="">全部状态</option>
-                            <option value="unacknowledged">未确认</option>
-                            <option value="acknowledged">已确认</option>
-                        </select>
-                    </div>
-                    <div class="col-md-3">
-                        <button type="button" id="filter-btn" class="btn btn-primary">筛选</button>
-                        <button type="button" id="refresh-btn" class="btn btn-secondary">刷新</button>
-                    </div>
-                </form>
-            </div>
+    <div class="col-6 col-md-3">
+        <div class="panel">
+            <span id="unacknowledged-alarms" class="metric-value" style="color: var(--color-warning);">0</span>
+            <span class="metric-label">未确认</span>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="panel">
+            <span id="high-alarms" class="metric-value" style="color: var(--color-danger);">0</span>
+            <span class="metric-label">严重</span>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="panel">
+            <span id="acknowledged-alarms" class="metric-value" style="color: var(--color-success);">0</span>
+            <span class="metric-label">已确认</span>
         </div>
     </div>
 </div>
 
-<div class="row">
-    <div class="col-12">
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-list-ul"></i> 报警记录</h5>
+<!-- 筛选条件 -->
+<div class="panel mb-3 alarm-filters">
+    <div class="panel__header">
+        <span><i class="bi bi-funnel me-2"></i>筛选条件</span>
+    </div>
+    <div class="panel__body">
+        <form class="row g-3 align-items-end" onsubmit="return false;">
+            <div class="col-md-3">
+                <label class="form-label" for="alarm-device-filter">设备</label>
+                <select id="alarm-device-filter" class="form-select">
+                    <option value="">全部设备</option>
+                </select>
             </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-striped table-hover" id="alarm-table">
-                        <thead>
-                            <tr>
-                                <th>首次触发</th>
-                                <th>最后触发</th>
-                                <th>设备</th>
-                                <th>参数</th>
-                                <th>级别</th>
-                                <th>报警信息</th>
-                                <th>阈值</th>
-                                <th>最新值</th>
-                                <th>触发次数</th>
-                                <th>状态</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="alarm-tbody">
-                        </tbody>
-                    </table>
-                </div>
+            <div class="col-md-3">
+                <label class="form-label" for="alarm-level-filter">级别</label>
+                <select id="alarm-level-filter" class="form-select">
+                    <option value="">全部级别</option>
+                    <option value="critical">严重</option>
+                    <option value="warning">警告</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="alarm-status-filter">状态</label>
+                <select id="alarm-status-filter" class="form-select">
+                    <option value="">全部状态</option>
+                    <option value="unacknowledged">未确认</option>
+                    <option value="acknowledged">已确认</option>
+                </select>
+            </div>
+            <div class="col-md-3 d-flex gap-2">
+                <button type="button" id="filter-btn" class="btn btn-primary">
+                    <i class="bi bi-search me-1"></i>筛选
+                </button>
+                <button type="button" id="refresh-btn" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-clockwise me-1"></i>刷新
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 报警记录 -->
+<div class="panel">
+    <div class="panel__header">
+        <span><i class="bi bi-list-ul me-2"></i>报警记录</span>
+        <span class="metric-label">未确认报警的左侧色条会呼吸提示</span>
+    </div>
+    <div class="panel__body p-0">
+        <div id="alarm-tbody" class="alarm-list">
+            <div class="alarm-empty">
+                <i class="bi bi-hourglass-split"></i>
+                加载中...
             </div>
         </div>
     </div>
@@ -135,6 +229,17 @@ async function loadAlarmDeviceList() {
     }
 }
 
+// 等级 → 色条 / 标签 映射（critical=严重, warning=警告, 其他=信息）
+function alarmLevelMeta(level) {
+    if (level === 'critical') {
+        return { bar: 'critical', tag: 'tag--danger', text: '严重' };
+    }
+    if (level === 'info' || level === 'low') {
+        return { bar: 'info', tag: 'tag--info', text: '信息' };
+    }
+    return { bar: 'warning', tag: 'tag--warning', text: '警告' };
+}
+
 async function loadAlarms() {
     const deviceFilter = document.getElementById('alarm-device-filter').value;
     const levelFilter = document.getElementById('alarm-level-filter').value;
@@ -156,61 +261,102 @@ async function loadAlarms() {
             alarms = alarms.filter(a => a.acknowledged);
         }
 
-        // 更新统计
+        // 更新统计（指标卡）
         const allAlarms = data.alarms || [];
         document.getElementById('total-alarms').textContent = allAlarms.length;
         document.getElementById('unacknowledged-alarms').textContent = allAlarms.filter(a => !a.acknowledged).length;
         document.getElementById('high-alarms').textContent = allAlarms.filter(a => a.alarm_level === 'critical').length;
+        document.getElementById('acknowledged-alarms').textContent = allAlarms.filter(a => a.acknowledged).length;
 
-        const tbody = document.getElementById('alarm-tbody');
-        if (alarms.length > 0) {
-            tbody.innerHTML = alarms.map(a => {
-                const firstTime = new Date(a.timestamp).toLocaleString('zh-CN');
-                const lastTime = a.last_trigger_time
-                    ? new Date(a.last_trigger_time).toLocaleString('zh-CN')
-                    : '-';
-                const deviceName = _alarmDeviceNames[a.device_id] || a.device_id;
-                const levelBadge = a.alarm_level === 'critical'
-                    ? '<span class="badge bg-danger">严重</span>'
-                    : '<span class="badge bg-warning text-dark">警告</span>';
-                const statusBadge = a.acknowledged
-                    ? '<span class="badge bg-success">已确认</span>'
-                    : '<span class="badge bg-secondary">未确认</span>';
-                const ackBtn = a.acknowledged
-                    ? ''
-                    : `<button class="btn btn-sm btn-outline-primary" onclick="acknowledgeAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}')">确认</button>`;
-
-                const triggerCount = a.trigger_count || 1;
-                const countBadge = triggerCount > 1
-                    ? `<span class="badge bg-danger">${triggerCount}次</span>`
-                    : `<span class="badge bg-secondary">1次</span>`;
-
-                const latestValue = a.last_value != null ? parseFloat(a.last_value).toFixed(2)
-                    : (a.actual_value != null ? parseFloat(a.actual_value).toFixed(2) : '-');
-
-                return `<tr>
-                    <td><small>${firstTime}</small></td>
-                    <td><small>${lastTime}</small></td>
-                    <td>${deviceName}</td>
-                    <td>${a.register_name || '-'}</td>
-                    <td>${levelBadge}</td>
-                    <td>${a.alarm_message || '-'}</td>
-                    <td>${a.threshold != null ? parseFloat(a.threshold).toFixed(2) : '-'}</td>
-                    <td><strong>${latestValue}</strong></td>
-                    <td>${countBadge}</td>
-                    <td>${statusBadge}</td>
-                    <td>${ackBtn}</td>
-                </tr>`;
-            }).join('');
-        } else {
-            tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">暂无报警记录</td></tr>';
-        }
+        renderAlarmList(alarms);
     } catch (error) {
         console.error('加载报警失败:', error);
+        const container = document.getElementById('alarm-tbody');
+        if (container) {
+            container.innerHTML = `
+                <div class="alarm-empty">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    报警数据加载失败
+                    <div class="alarm-empty__hint">请检查网络或稍后点击「刷新」重试</div>
+                </div>`;
+        }
     }
 }
 
-async function acknowledgeAlarm(alarmId, deviceId, registerName) {
+// 报警列表：左侧等级色条 + 两行（等级/消息；设备/参数/数值/时间）+ 状态与确认
+function renderAlarmList(alarms) {
+    const container = document.getElementById('alarm-tbody');
+
+    if (!alarms || alarms.length === 0) {
+        container.innerHTML = `
+            <div class="alarm-empty">
+                <i class="bi bi-bell-slash"></i>
+                暂无报警记录
+                <div class="alarm-empty__hint">当前没有符合筛选条件的报警</div>
+            </div>`;
+        return;
+    }
+
+    container.innerHTML = alarms.map(a => {
+        const meta = alarmLevelMeta(a.alarm_level);
+        const deviceName = _alarmDeviceNames[a.device_id] || a.device_id || '-';
+        const firstTime = new Date(a.timestamp).toLocaleString('zh-CN');
+        const lastTime = a.last_trigger_time
+            ? new Date(a.last_trigger_time).toLocaleString('zh-CN')
+            : '-';
+        const latestValue = a.last_value != null ? parseFloat(a.last_value).toFixed(2)
+            : (a.actual_value != null ? parseFloat(a.actual_value).toFixed(2) : '-');
+        const threshold = a.threshold != null ? parseFloat(a.threshold).toFixed(2) : '-';
+        const triggerCount = a.trigger_count || 1;
+
+        // 未确认只让左侧色条呼吸（design-tokens 的 .level-bar--pulse-*），不做整行闪烁
+        const canPulse = (meta.bar === 'critical' || meta.bar === 'warning');
+        const pulse = (!a.acknowledged && canPulse) ? ` level-bar--pulse-${meta.bar}` : '';
+
+        const ackBtn = a.acknowledged
+            ? '<span class="tag tag--success"><i class="bi bi-check-lg"></i> 已确认</span>'
+            : `<button class="btn btn-sm btn-outline-primary"
+                       onclick="acknowledgeAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}', this)">
+                    <i class="bi bi-check2-circle me-1"></i>确认
+               </button>`;
+
+        const statusTag = a.acknowledged
+            ? ''
+            : '<span class="tag tag--offline">未确认</span>';
+
+        return `
+        <div class="alarm-row">
+            <span class="level-bar level-bar--${meta.bar}${pulse}"></span>
+            <div class="alarm-row__main">
+                <div class="alarm-row__line1">
+                    <span class="tag ${meta.tag}">${meta.text}</span>
+                    <span class="alarm-row__msg">${escapeHtml(a.alarm_message || '-')}</span>
+                </div>
+                <div class="alarm-row__line2">
+                    <span><i class="bi bi-hdd-rack"></i> ${escapeHtml(deviceName)}</span>
+                    <span><i class="bi bi-sliders"></i> ${escapeHtml(a.register_name || '-')}</span>
+                    <span>阈值 <span class="kv">${threshold}</span></span>
+                    <span>最新值 <span class="kv">${latestValue}</span></span>
+                    <span>触发 <span class="kv">${triggerCount}</span> 次</span>
+                    <span><i class="bi bi-clock"></i> 首次 ${escapeHtml(firstTime)}</span>
+                    <span>最后 ${escapeHtml(lastTime)}</span>
+                </div>
+            </div>
+            <div class="alarm-row__side">
+                ${statusTag}
+                ${ackBtn}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function acknowledgeAlarm(alarmId, deviceId, registerName, btn) {
+    // 操作反馈：按钮进入处理中状态，完成后给出明确提示
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>确认中';
+    }
+
     try {
         const response = await fetch(`/api/alarms/${alarmId}/acknowledge`, {
             method: 'POST',
@@ -222,9 +368,23 @@ async function acknowledgeAlarm(alarmId, deviceId, registerName) {
             })
         });
         const data = await response.json();
-        if (data.success) loadAlarms();
+        if (data.success) {
+            showToast('报警已确认', 'success');
+            loadAlarms();
+        } else {
+            showToast(data.message || '确认失败', 'danger');
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>确认';
+            }
+        }
     } catch (error) {
         console.error('确认报警失败:', error);
+        showToast('确认报警失败：网络错误', 'danger');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>确认';
+        }
     }
 }
 </script>

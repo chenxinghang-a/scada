@@ -4,73 +4,293 @@
 
 {% block extra_css %}
 <style>
-/* 紧急停机按钮 */
+/* ==================== 设备控制页（安全相关，视觉以风险层级为纲） ==================== */
+
+/* ---------- 页头 ---------- */
+.page-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-3);
+}
+.page-head__title {
+    font-size: var(--font-xl);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+    margin-bottom: var(--space-1);
+}
+.page-head__desc { font-size: var(--font-sm); color: var(--text-muted); margin: 0; }
+
+/* ---------- 急停：全页视觉权重最高 ---------- */
+.safety-panel--estop { border: 1px solid var(--color-danger); }
+.safety-panel--estop .panel__header {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+    border-bottom: 1px solid var(--color-danger);
+}
+.estop-wrap { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; }
 .estop-btn {
-    width: 120px;
-    height: 120px;
-    border-radius: 50%;
-    font-size: 16px;
-    font-weight: bold;
-    border: 6px solid #8b0000;
-    box-shadow: 0 4px 15px rgba(220,53,69,0.4);
-    transition: all 0.2s;
+    width: 168px;
+    height: 168px;
+    padding: 0;
+    border-radius: var(--radius-pill);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-1);
+    background: var(--color-danger);
+    color: var(--text-inverse);
+    border: 4px solid var(--color-danger);
+    box-shadow: 0 0 0 6px var(--color-danger-soft), var(--shadow-md);
+    cursor: pointer;
+    transition: transform var(--duration-fast) var(--ease-out);
 }
-.estop-btn:hover {
-    transform: scale(1.05);
-    box-shadow: 0 6px 20px rgba(220,53,69,0.6);
+.estop-btn:hover { transform: scale(1.03); }
+.estop-btn:active { transform: scale(0.98); }
+.estop-btn__main {
+    font-family: var(--font-mono);
+    font-size: 26px;
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.04em;
+    line-height: 1;
 }
+.estop-btn__sub { font-size: var(--font-xs); opacity: 0.92; }
+/* 已停机（锁定）状态：双环锁定，不使用发光/闪烁 */
 .estop-btn.active {
-    background: #ff0000 !important;
-    color: #fff !important;
-    animation: estop-pulse 1s ease-in-out infinite;
+    background: var(--color-danger);
+    color: var(--text-inverse);
+    box-shadow: 0 0 0 6px var(--color-danger-soft), 0 0 0 12px var(--color-danger-soft), var(--shadow-md);
 }
-@keyframes estop-pulse {
-    0%, 100% { box-shadow: 0 0 20px rgba(255,0,0,0.5); }
-    50% { box-shadow: 0 0 40px rgba(255,0,0,0.8), 0 0 60px rgba(255,0,0,0.3); }
+.estop-hint {
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
 }
-/* 联锁状态 */
+.estop-hint--danger { color: var(--color-danger); font-weight: var(--weight-semibold); font-size: var(--font-base); }
+.estop-hint--success { color: var(--color-success); font-weight: var(--weight-medium); }
+.estop-steps { font-size: var(--font-xs); color: var(--text-muted); text-align: left; margin: 0; padding-left: var(--space-4); }
+
+@media (max-width: 575.98px) {
+    .estop-btn { width: 132px; height: 132px; }
+    .estop-btn__main { font-size: var(--font-xl); }
+}
+
+/* ---------- 联锁列表 ---------- */
 .interlock-item {
-    padding: 6px 10px;
-    border-left: 3px solid #6c757d;
-    margin-bottom: 4px;
-    background: #f8f9fa;
-    border-radius: 0 4px 4px 0;
-    font-size: 13px;
+    padding: var(--space-2) var(--space-3);
+    border-left: 3px solid var(--border-strong);
+    background: var(--bg-sunken);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    margin-bottom: var(--space-2);
+    font-size: var(--font-sm);
 }
-.interlock-item.triggered { border-left-color: #dc3545; background: #fff5f5; }
-.interlock-item.bypassed { border-left-color: #ffc107; background: #fffdf0; opacity: 0.7; }
-.interlock-item.normal { border-left-color: #28a745; }
-/* 设备健康 */
-.health-dot {
-    display: inline-block;
+.interlock-item.normal { border-left-color: var(--color-success); }
+.interlock-item.triggered {
+    border-left-color: var(--color-danger);
+    background: var(--color-danger-soft);
+}
+/* 旁路＝危险状态：警告色实心边框，明确区别于常规操作 */
+.interlock-item.bypassed {
+    border: 2px solid var(--color-warning);
+    border-left-width: 6px;
+    background: var(--color-warning-soft);
+}
+.interlock-item__desc { font-size: var(--font-xs); color: var(--text-muted); }
+
+/* ---------- 设备健康 ---------- */
+.health-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--font-sm);
+}
+.health-row:last-child { border-bottom: 0; }
+.health-row__ms { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-secondary); font-size: var(--font-xs); }
+
+/* ---------- 写入区：当前值 / 目标值 / 单位 三列对齐 ---------- */
+.write-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-3);
+}
+.write-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.write-cell + .write-cell { border-left: 1px solid var(--border-base); padding-left: var(--space-3); }
+.write-cell__value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--font-xl);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+.write-cell__value--muted { color: var(--text-muted); font-size: var(--font-base); }
+.write-cell__sub { font-size: var(--font-xs); color: var(--text-muted); font-family: var(--font-mono); }
+
+/* 量程位置关系 */
+.range-track {
+    position: relative;
+    height: 8px;
+    margin: var(--space-4) var(--space-2) var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-base);
+}
+.range-marker {
+    position: absolute;
+    top: 50%;
     width: 10px;
     height: 10px;
-    border-radius: 50%;
-    margin-right: 6px;
+    border-radius: var(--radius-pill);
+    transform: translate(-50%, -50%);
 }
-.health-dot.connected { background: #28a745; }
-.health-dot.disconnected { background: #dc3545; }
-.health-dot.unknown { background: #6c757d; }
+.range-marker--current { background: var(--color-info); }
+.range-marker--target { background: var(--color-brand); }
+.range-legend {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    margin-top: var(--space-3);
+}
+
+/* 只读回读值（原 bg-dark text-info 改为令牌） */
+.readout {
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    font-size: var(--font-sm);
+    padding: var(--space-1) var(--space-2);
+}
+
+/* ---------- 表格 ---------- */
+.control-table { margin-bottom: 0; }
+.control-table thead th {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-xs);
+    font-weight: var(--weight-semibold);
+    color: var(--text-muted);
+    background: var(--bg-sunken);
+    border-bottom: 1px solid var(--border-strong);
+    white-space: nowrap;
+}
+.control-table tbody td {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-sm);
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-base);
+    vertical-align: middle;
+}
+.control-table tbody tr:hover td { background: var(--bg-hover); }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ---------- 批量控制 ---------- */
+.batch-block {
+    height: 100%;
+    padding: var(--space-3);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-md);
+    background: var(--bg-sunken);
+}
+.batch-block__title { font-size: var(--font-sm); font-weight: var(--weight-semibold); color: var(--text-primary); margin-bottom: var(--space-3); }
+.batch-block--danger { border-color: var(--color-danger); background: var(--color-danger-soft); }
+.notes { font-size: var(--font-xs); color: var(--text-muted); margin: 0; padding-left: var(--space-4); }
+
+/* ---------- 空态 / 加载态 ---------- */
+.state-box { padding: var(--space-6) var(--space-4); text-align: center; }
+.state-box--inline { padding: var(--space-3); }
+.state-box__icon { display: block; font-size: 24px; color: var(--text-disabled); margin-bottom: var(--space-1); }
+.state-box__title { font-size: var(--font-sm); color: var(--text-secondary); }
+.state-box .spinner-border { color: var(--color-brand); }
+
+/* ---------- 危险操作按钮 ---------- */
+.btn-danger-token {
+    background: var(--color-danger);
+    border: 1px solid var(--color-danger);
+    color: var(--text-inverse);
+}
+.btn-danger-token:hover, .btn-danger-token:focus, .btn-danger-token:active {
+    background: var(--color-danger);
+    border-color: var(--color-danger);
+    color: var(--text-inverse);
+    filter: brightness(0.92);
+}
+.btn-danger-token:disabled { opacity: 0.6; }
+/* 危险但可逆的操作（如旁路联锁）：危险色描边，与常规操作明显区分 */
+.btn-danger-outline-token {
+    background: transparent;
+    border: 1px solid var(--color-danger);
+    color: var(--color-danger);
+    font-weight: var(--weight-medium);
+}
+.btn-danger-outline-token:hover, .btn-danger-outline-token:focus, .btn-danger-outline-token:active {
+    background: var(--color-danger-soft);
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+}
+
+/* ---------- 确认弹窗 ---------- */
+.modal-content { border: 1px solid var(--border-base); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.modal-header { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-base); }
+.modal-header--warning { background: var(--color-warning-soft); }
+.modal-header--warning .modal-title { color: var(--color-warning); }
+.modal-header--danger { background: var(--color-danger-soft); border-bottom-color: var(--color-danger); }
+.modal-header--danger .modal-title { color: var(--color-danger); }
+.modal-title { font-size: var(--font-lg); font-weight: var(--weight-semibold); }
+.modal-body { padding: var(--space-4); font-size: var(--font-sm); color: var(--text-primary); }
+.modal-footer { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border-base); gap: var(--space-2); }
+.modal .form-label {
+    font-size: var(--font-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-secondary);
+    margin-bottom: var(--space-1);
+}
+.confirm-danger { display: flex; flex-direction: column; gap: var(--space-2); }
+.confirm-danger__lead { font-size: var(--font-lg); font-weight: var(--weight-semibold); color: var(--color-danger); margin: 0; }
+.confirm-danger__list { margin: 0; padding-left: var(--space-4); color: var(--text-secondary); font-size: var(--font-sm); }
+.confirm-danger__list li { margin-bottom: var(--space-1); }
+
+/* ---------- 浮动提示 ---------- */
+.alert-floating { box-shadow: var(--shadow-lg); font-size: var(--font-sm); }
 </style>
 {% endblock %}
 
 {% block content %}
 <!-- 紧急停机状态横幅 -->
-<div class="alert alert-danger d-none align-items-center mb-3" id="estop-banner" role="alert" style="font-size:18px;">
+<div class="alert alert-danger d-none align-items-center mb-3" id="estop-banner" role="alert">
     <i class="bi bi-exclamation-octagon-fill me-3" style="font-size:28px;"></i>
     <div class="flex-grow-1">
         <strong>紧急停机已激活</strong> — <span id="estop-reason">-</span>
-        <br><small>时间: <span id="estop-time">-</span></small>
+        <br><small>时间: <span id="estop-time" class="mono">-</span></small>
     </div>
     <button class="btn btn-light btn-lg" id="btn-estop-reset" onclick="resetEStop()">
         <i class="bi bi-arrow-counterclockwise"></i> 解除停机
     </button>
 </div>
 
-<div class="row mb-3">
-    <div class="col">
-        <h2><i class="bi bi-joystick me-2"></i>设备控制</h2>
-        <p class="text-muted">远程控制工业设备，写入寄存器和线圈 | 工厂级安全控制</p>
+<div class="page-head">
+    <div>
+        <h2 class="page-head__title"><i class="bi bi-joystick me-2"></i>设备控制</h2>
+        <p class="page-head__desc">远程控制工业设备，写入寄存器和线圈 | 工厂级安全控制</p>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <span class="tag tag--danger"><i class="bi bi-shield-exclamation"></i>危险操作需二次确认</span>
+        <span class="tag tag--info"><i class="bi bi-journal-text"></i>操作全程记入日志</span>
     </div>
 </div>
 
@@ -80,46 +300,54 @@
     <strong>权限不足：</strong>设备控制功能仅限管理员和工程师使用。
 </div>
 
-<!-- 紧急停机 + 联锁状态 + 设备健康 -->
-<div class="row mb-4">
-    <!-- 紧急停机 -->
-    <div class="col-md-3 text-center">
-        <div class="card border-danger">
-            <div class="card-body py-4">
-                <h6 class="text-danger mb-3"><i class="bi bi-shield-exclamation"></i> 紧急停机</h6>
-                <button class="btn btn-danger estop-btn" id="btn-estop" onclick="triggerEStop()">
-                    E-STOP
-                </button>
-                <div class="mt-2">
-                    <small class="text-muted" id="estop-status-text">系统正常</small>
+<!-- 安全区：紧急停机 + 联锁状态 + 设备健康 -->
+<div class="row g-3 mb-4">
+    <!-- 紧急停机（视觉权重最高） -->
+    <div class="col-xl-3 col-lg-4">
+        <div class="panel safety-panel--estop h-100">
+            <div class="panel__header">
+                <span><i class="bi bi-shield-exclamation me-2"></i>紧急停机</span>
+                <span class="tag tag--danger">E-STOP</span>
+            </div>
+            <div class="panel__body">
+                <div class="estop-wrap">
+                    <button class="estop-btn" id="btn-estop" onclick="triggerEStop()" aria-label="触发紧急停机">
+                        <span class="estop-btn__main">E-STOP</span>
+                        <span class="estop-btn__sub">停止全部设备</span>
+                    </button>
+                    <div class="estop-hint" id="estop-status-text">系统正常</div>
+                    <ul class="estop-steps">
+                        <li>触发后所有可控设备立即停止</li>
+                        <li>需人工「解除停机」方可恢复</li>
+                    </ul>
                 </div>
             </div>
         </div>
     </div>
     <!-- 安全联锁 -->
-    <div class="col-md-5">
-        <div class="card h-100">
-            <div class="card-header d-flex justify-content-between align-items-center py-2">
-                <h6 class="mb-0"><i class="bi bi-shield-check"></i> 安全联锁</h6>
-                <span class="badge bg-secondary" id="interlock-count">-</span>
+    <div class="col-xl-5 col-lg-8">
+        <div class="panel h-100">
+            <div class="panel__header">
+                <span><i class="bi bi-shield-check me-2"></i>安全联锁</span>
+                <span class="tag tag--offline" id="interlock-count">-</span>
             </div>
-            <div class="card-body p-2" style="max-height:200px;overflow-y:auto;">
+            <div class="panel__body" style="max-height:260px;overflow-y:auto;">
                 <div id="interlock-list">
-                    <div class="text-muted text-center py-2">加载中...</div>
+                    <div class="state-box state-box--inline"><span class="spinner-border spinner-border-sm me-2"></span>加载中…</div>
                 </div>
             </div>
         </div>
     </div>
     <!-- 设备健康 -->
-    <div class="col-md-4">
-        <div class="card h-100">
-            <div class="card-header d-flex justify-content-between align-items-center py-2">
-                <h6 class="mb-0"><i class="bi bi-heart-pulse"></i> 设备健康</h6>
-                <span class="badge bg-secondary" id="health-count">-</span>
+    <div class="col-xl-4">
+        <div class="panel h-100">
+            <div class="panel__header">
+                <span><i class="bi bi-heart-pulse me-2"></i>设备健康</span>
+                <span class="tag tag--offline" id="health-count">-</span>
             </div>
-            <div class="card-body p-2" style="max-height:200px;overflow-y:auto;">
+            <div class="panel__body" style="max-height:260px;overflow-y:auto;">
                 <div id="health-list">
-                    <div class="text-muted text-center py-2">加载中...</div>
+                    <div class="state-box state-box--inline"><span class="spinner-border spinner-border-sm me-2"></span>加载中…</div>
                 </div>
             </div>
         </div>
@@ -127,27 +355,27 @@
 </div>
 
 <!-- 控制面板 -->
-<div class="row" id="control-panel">
+<div class="row g-3" id="control-panel">
     <!-- 设备选择 -->
-    <div class="col-md-4 mb-4">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-hdd-rack me-2"></i>设备选择</h5>
+    <div class="col-lg-4 mb-2">
+        <div class="panel h-100">
+            <div class="panel__header">
+                <span><i class="bi bi-hdd-rack me-2"></i>设备选择</span>
             </div>
-            <div class="card-body">
+            <div class="panel__body">
                 <div class="mb-3">
                     <label class="form-label">选择设备</label>
                     <select id="device-select" class="form-select">
                         <option value="">请选择设备</option>
                     </select>
                 </div>
-                <div id="device-info" class="mt-3" style="display: none;">
-                    <h6>设备信息</h6>
-                    <table class="table table-sm">
-                        <tr><td>设备ID</td><td id="info-device-id">-</td></tr>
+                <div id="device-info" style="display: none;">
+                    <div class="panel__header px-0 pt-3">设备信息</div>
+                    <table class="table table-sm control-table mt-2">
+                        <tr><td>设备ID</td><td id="info-device-id" class="mono">-</td></tr>
                         <tr><td>设备名称</td><td id="info-device-name">-</td></tr>
                         <tr><td>连接状态</td><td id="info-connection">-</td></tr>
-                        <tr><td>IP地址</td><td id="info-host">-</td></tr>
+                        <tr><td>IP地址</td><td id="info-host" class="mono">-</td></tr>
                     </table>
                 </div>
             </div>
@@ -155,36 +383,63 @@
     </div>
     
     <!-- 寄存器写入 -->
-    <div class="col-md-4 mb-4">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-pencil-square me-2"></i>寄存器写入</h5>
+    <div class="col-lg-4 mb-2">
+        <div class="panel h-100">
+            <div class="panel__header">
+                <span><i class="bi bi-pencil-square me-2"></i>寄存器写入</span>
+                <span class="tag tag--offline mono">量程 0 – 65535</span>
             </div>
-            <div class="card-body">
+            <div class="panel__body">
                 <form id="register-form">
                     <div class="mb-3">
                         <label class="form-label">寄存器地址</label>
                         <div class="input-group">
-                            <input type="number" class="form-control" id="register-address"
+                            <input type="number" class="form-control mono" id="register-address"
                                    min="0" max="65535" placeholder="0-65535" required>
                             <button type="button" class="btn btn-outline-info" id="btn-read-register" title="读取当前值">
                                 <i class="bi bi-eye"></i>
                             </button>
                         </div>
                     </div>
-                    <div class="mb-3" id="register-current-box" style="display:none;">
-                        <label class="form-label">当前值</label>
-                        <div class="input-group">
-                            <span class="form-control bg-dark text-info" id="register-current-value">--</span>
-                            <span class="input-group-text bg-dark text-muted" id="register-current-raw">原始: --</span>
+
+                    <!-- 当前值 / 目标值 / 单位：三列对齐 -->
+                    <div class="write-grid" id="register-current-box" style="display:none;">
+                        <div class="write-cell">
+                            <span class="metric-label">当前值</span>
+                            <span class="write-cell__value" id="register-current-value">--</span>
+                            <span class="write-cell__sub" id="register-current-raw">原始: --</span>
+                        </div>
+                        <div class="write-cell">
+                            <span class="metric-label">目标值</span>
+                            <span class="write-cell__value" id="register-target-value">--</span>
+                            <span class="write-cell__sub" id="register-range-text">量程 0 – 65535</span>
+                        </div>
+                        <div class="write-cell">
+                            <span class="metric-label">单位</span>
+                            <span class="write-cell__value" id="register-unit">—</span>
+                            <span class="write-cell__sub" id="register-type">数据类型 —</span>
                         </div>
                     </div>
+
                     <div class="mb-3">
                         <label class="form-label">写入值</label>
-                        <input type="number" class="form-control" id="register-value"
+                        <input type="number" class="form-control mono" id="register-value"
                                min="0" max="65535" placeholder="0-65535" required>
                     </div>
-                    <div class="mb-3">
+
+                    <!-- 量程位置关系：当前值与目标值在量程中的位置 -->
+                    <div class="range-track" id="register-range-track">
+                        <span class="range-marker range-marker--current" id="register-range-current" title="当前值"></span>
+                        <span class="range-marker range-marker--target" id="register-range-target" title="目标值"></span>
+                    </div>
+                    <div class="range-legend">
+                        <span id="register-range-min">0</span>
+                        <span><i class="bi bi-circle-fill" style="color:var(--color-info)"></i> 当前值
+                              <i class="bi bi-circle-fill ms-2" style="color:var(--color-brand)"></i> 目标值</span>
+                        <span id="register-range-max">65535</span>
+                    </div>
+
+                    <div class="mb-3 mt-3">
                         <label class="form-label">常用寄存器</label>
                         <select id="register-preset" class="form-select">
                             <option value="">自定义</option>
@@ -199,18 +454,39 @@
     </div>
     
     <!-- 线圈控制 -->
-    <div class="col-md-4 mb-4">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-toggle-on me-2"></i>线圈控制</h5>
+    <div class="col-lg-4 mb-2">
+        <div class="panel h-100">
+            <div class="panel__header">
+                <span><i class="bi bi-toggle-on me-2"></i>线圈控制</span>
+                <span class="tag tag--offline mono">量程 0 – 65535</span>
             </div>
-            <div class="card-body">
+            <div class="panel__body">
                 <form id="coil-form">
                     <div class="mb-3">
                         <label class="form-label">线圈地址</label>
-                        <input type="number" class="form-control" id="coil-address" 
+                        <input type="number" class="form-control mono" id="coil-address" 
                                min="0" max="65535" placeholder="0-65535" required>
                     </div>
+
+                    <!-- 当前值 / 目标值 / 单位：与寄存器区同构 -->
+                    <div class="write-grid">
+                        <div class="write-cell">
+                            <span class="metric-label">当前值</span>
+                            <span class="write-cell__value write-cell__value--muted" id="coil-current-value">未回读</span>
+                            <span class="write-cell__sub">线圈无回读接口</span>
+                        </div>
+                        <div class="write-cell">
+                            <span class="metric-label">目标值</span>
+                            <span class="write-cell__value" id="coil-target-value">ON</span>
+                            <span class="write-cell__sub">写入后即时生效</span>
+                        </div>
+                        <div class="write-cell">
+                            <span class="metric-label">单位</span>
+                            <span class="write-cell__value">布尔</span>
+                            <span class="write-cell__sub">0 / 1</span>
+                        </div>
+                    </div>
+
                     <div class="mb-3">
                         <label class="form-label">控制状态</label>
                         <div class="btn-group w-100" role="group">
@@ -240,92 +516,91 @@
 </div>
 
 <!-- 批量控制 -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-list-check me-2"></i>批量控制</h5>
+<div class="panel mb-4">
+    <div class="panel__header">
+        <span><i class="bi bi-list-check me-2"></i>批量控制</span>
+        <span class="tag tag--danger"><i class="bi bi-exclamation-triangle"></i>影响多台设备</span>
+    </div>
+    <div class="panel__body">
+        <div class="row g-3 mb-3">
+            <div class="col-lg-6">
+                <div class="batch-block">
+                    <div class="batch-block__title">按分组操作</div>
+                    <div class="mb-3">
+                        <select id="batch-group-select" class="form-select">
+                            <option value="all">所有设备</option>
+                        </select>
+                    </div>
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button class="btn btn-success" onclick="batchControlByGroup('start')">
+                            <i class="bi bi-play-circle me-1"></i>启动分组设备
+                        </button>
+                        <button class="btn btn-danger-token" onclick="batchControlByGroup('stop')">
+                            <i class="bi bi-stop-circle me-1"></i>停止分组设备
+                        </button>
+                        <button class="btn btn-outline-info" onclick="batchControlByGroup('reset')">
+                            <i class="bi bi-arrow-counterclockwise me-1"></i>复位分组设备
+                        </button>
+                    </div>
+                </div>
             </div>
-            <div class="card-body">
-                <div class="row mb-3">
-                    <div class="col-md-6">
-                        <h6>按分组操作</h6>
-                        <div class="mb-3">
-                            <select id="batch-group-select" class="form-select">
-                                <option value="all">所有设备</option>
-                            </select>
-                        </div>
-                        <div class="d-flex gap-2 flex-wrap">
-                            <button class="btn btn-success" onclick="batchControlByGroup('start')">
-                                <i class="bi bi-play-circle me-1"></i>启动分组设备
-                            </button>
-                            <button class="btn btn-danger" onclick="batchControlByGroup('stop')">
-                                <i class="bi bi-stop-circle me-1"></i>停止分组设备
-                            </button>
-                            <button class="btn btn-info" onclick="batchControlByGroup('reset')">
-                                <i class="bi bi-arrow-counterclockwise me-1"></i>复位分组设备
-                            </button>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <h6>快速操作</h6>
-                        <div class="d-flex gap-2 flex-wrap">
-                            <button class="btn btn-success" onclick="batchControl('start')">
-                                <i class="bi bi-play-circle me-1"></i>启动所有设备
-                            </button>
-                            <button class="btn btn-danger" onclick="batchControl('stop')">
-                                <i class="bi bi-stop-circle me-1"></i>停止所有设备
-                            </button>
-                            <button class="btn btn-info" onclick="batchControl('reset')">
-                                <i class="bi bi-arrow-counterclockwise me-1"></i>复位所有设备
-                            </button>
-                        </div>
+            <div class="col-lg-6">
+                <div class="batch-block batch-block--danger">
+                    <div class="batch-block__title"><i class="bi bi-exclamation-triangle me-1"></i>快速操作（全厂设备）</div>
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button class="btn btn-success" onclick="batchControl('start')">
+                            <i class="bi bi-play-circle me-1"></i>启动所有设备
+                        </button>
+                        <button class="btn btn-danger-token" onclick="batchControl('stop')">
+                            <i class="bi bi-stop-circle me-1"></i>停止所有设备
+                        </button>
+                        <button class="btn btn-outline-info" onclick="batchControl('reset')">
+                            <i class="bi bi-arrow-counterclockwise me-1"></i>复位所有设备
+                        </button>
                     </div>
                 </div>
-                <div class="row">
-                    <div class="col-12">
-                        <h6>操作说明</h6>
-                        <ul class="list-unstyled text-muted">
-                            <li><i class="bi bi-info-circle me-1"></i> 所有控制操作需要二次确认</li>
-                            <li><i class="bi bi-info-circle me-1"></i> 操作记录会自动保存到日志</li>
-                            <li><i class="bi bi-info-circle me-1"></i> 仅管理员和工程师有控制权限</li>
-                        </ul>
-                    </div>
-                </div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-12">
+                <h6 class="batch-block__title mb-2">操作说明</h6>
+                <ul class="notes">
+                    <li>所有控制操作需要二次确认</li>
+                    <li>操作记录会自动保存到日志</li>
+                    <li>仅管理员和工程师有控制权限</li>
+                </ul>
             </div>
         </div>
     </div>
 </div>
 
 <!-- 操作日志 -->
-<div class="row">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="card-title mb-0"><i class="bi bi-journal-text me-2"></i>操作日志</h5>
-                <button class="btn btn-sm btn-outline-secondary" onclick="loadControlLogs()">
-                    <i class="bi bi-arrow-clockwise me-1"></i>刷新
-                </button>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-sm table-hover">
-                        <thead>
-                            <tr>
-                                <th>时间</th>
-                                <th>操作人</th>
-                                <th>操作类型</th>
-                                <th>操作详情</th>
-                            </tr>
-                        </thead>
-                        <tbody id="control-logs-body">
-                            <tr>
-                                <td colspan="4" class="text-center text-muted">暂无操作记录</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+<div class="panel">
+    <div class="panel__header">
+        <span><i class="bi bi-journal-text me-2"></i>操作日志</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadControlLogs()">
+            <i class="bi bi-arrow-clockwise me-1"></i>刷新
+        </button>
+    </div>
+    <div class="panel__body p-0">
+        <div class="table-responsive">
+            <table class="table control-table">
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>操作人</th>
+                        <th>操作类型</th>
+                        <th>操作详情</th>
+                    </tr>
+                </thead>
+                <tbody id="control-logs-body">
+                    <tr>
+                        <td colspan="4">
+                            <div class="state-box state-box--inline"><span class="spinner-border spinner-border-sm me-2"></span>加载中…</div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
     </div>
 </div>
@@ -334,8 +609,8 @@
 <div class="modal fade" id="confirmModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-warning">
-                <h5 class="modal-title"><i class="bi bi-exclamation-triangle me-2"></i>操作确认</h5>
+            <div class="modal-header modal-header--warning">
+                <h5 class="modal-title" id="confirm-title"><i class="bi bi-exclamation-triangle me-2"></i>操作确认</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body" id="confirm-message">
@@ -360,6 +635,9 @@ function escapeHtml(str) {
 
 // 待执行的操作
 let pendingAction = null;
+
+// 最近一次回读的寄存器原始数值（仅用于量程位置呈现）
+let lastRegisterRaw = null;
 
 // 页面加载
 document.addEventListener('DOMContentLoaded', function() {
@@ -386,6 +664,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const [addr, val] = this.value.split('|');
             document.getElementById('coil-address').value = addr;
             document.getElementById(val === 'true' ? 'coil-on' : 'coil-off').checked = true;
+            updateCoilTarget();
         }
     });
     
@@ -402,7 +681,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         showConfirm(
-            `确定要向设备 <strong>${escapeHtml(deviceId)}</strong> 的寄存器地址 <strong>${escapeHtml(address)}</strong> 写入值 <strong>${escapeHtml(value)}</strong> 吗？`,
+            `确定要向设备 <strong>${escapeHtml(deviceId)}</strong> 的寄存器地址 <strong class="mono">${escapeHtml(address)}</strong> 写入值 <strong class="mono">${escapeHtml(value)}</strong> 吗？`,
             () => writeRegister(deviceId, address, value)
         );
     });
@@ -432,12 +711,19 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // 目标值变化时同步三列区与量程位置
+    document.getElementById('register-value').addEventListener('input', function() {
+        updateRegisterTarget();
+    });
+
     // 预设选择时自动读取当前值
     document.getElementById('register-preset').addEventListener('change', function() {
         if (this.value) {
             const [addr, val] = this.value.split('|');
             document.getElementById('register-address').value = addr;
             document.getElementById('register-value').value = val;
+            updateRegisterMeta();
+            updateRegisterTarget();
             const deviceId = document.getElementById('device-select').value;
             if (deviceId) {
                 readRegisterValue(deviceId, addr);
@@ -458,9 +744,14 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         showConfirm(
-            `确定要向设备 <strong>${escapeHtml(deviceId)}</strong> 的线圈地址 <strong>${escapeHtml(address)}</strong> 写入 <strong>${value ? 'ON' : 'OFF'}</strong> 吗？`,
+            `确定要向设备 <strong>${escapeHtml(deviceId)}</strong> 的线圈地址 <strong class="mono">${escapeHtml(address)}</strong> 写入 <strong>${value ? 'ON' : 'OFF'}</strong> 吗？`,
             () => writeCoil(deviceId, address, value)
         );
+    });
+
+    // 线圈目标值呈现
+    document.querySelectorAll('input[name="coil-value"]').forEach(el => {
+        el.addEventListener('change', updateCoilTarget);
     });
     
     // 确认按钮
@@ -524,8 +815,8 @@ async function loadDeviceInfo(deviceId) {
         document.getElementById('info-device-id').textContent = data.device_id;
         document.getElementById('info-device-name').textContent = data.name;
         document.getElementById('info-connection').innerHTML = data.connected ?
-            '<span class="badge bg-success">已连接</span>' :
-            '<span class="badge bg-danger">未连接</span>';
+            '<span class="tag tag--success"><span class="status-dot status-dot--success"></span>已连接</span>' :
+            '<span class="tag tag--danger"><span class="status-dot status-dot--danger"></span>未连接</span>';
         document.getElementById('info-host').textContent = `${data.host}:${data.port}`;
         document.getElementById('device-info').style.display = 'block';
 
@@ -564,6 +855,8 @@ function updateRegisterPresets(registers) {
         opt.dataset.unit = unit;
         select.appendChild(opt);
     });
+
+    updateRegisterMeta();
 }
 
 // 更新线圈预设下拉框
@@ -581,6 +874,71 @@ function updateCoilPresets(coils) {
     });
 }
 
+// 寄存器“单位 / 数据类型”呈现（来自预设选项 dataset，无新增接口）
+function updateRegisterMeta() {
+    const select = document.getElementById('register-preset');
+    const opt = select.options[select.selectedIndex];
+    const unit = (opt && opt.dataset && opt.dataset.unit) ? opt.dataset.unit : '';
+    const dataType = (opt && opt.dataset && opt.dataset.dataType) ? opt.dataset.dataType : '';
+    const unitEl = document.getElementById('register-unit');
+    const typeEl = document.getElementById('register-type');
+    if (unitEl) unitEl.textContent = unit || '—';
+    if (typeEl) typeEl.textContent = '数据类型 ' + (dataType || '—');
+}
+
+// 量程范围（读取输入框 min/max 属性，保持后端接口不变）
+function getRegisterRange() {
+    const valueInput = document.getElementById('register-value');
+    const min = parseFloat(valueInput.min);
+    const max = parseFloat(valueInput.max);
+    return {
+        min: isNaN(min) ? 0 : min,
+        max: isNaN(max) ? 65535 : max
+    };
+}
+
+// 目标值三列呈现 + 量程位置
+function updateRegisterTarget() {
+    const valueInput = document.getElementById('register-value');
+    const targetEl = document.getElementById('register-target-value');
+    const range = getRegisterRange();
+    const raw = valueInput.value === '' ? null : parseFloat(valueInput.value);
+
+    if (targetEl) targetEl.textContent = raw === null || isNaN(raw) ? '--' : raw;
+    placeRangeMarker('register-range-target', raw, range.min, range.max);
+}
+
+// 当前值量程位置
+function updateRegisterCurrentMarker() {
+    const range = getRegisterRange();
+    placeRangeMarker('register-range-current', lastRegisterRaw, range.min, range.max);
+}
+
+// 把数值换算成量程内的百分比位置
+function placeRangeMarker(id, value, min, max) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (value === null || value === undefined || isNaN(value) || max <= min) {
+        el.style.display = 'none';
+        return;
+    }
+    let pct = ((value - min) / (max - min)) * 100;
+    pct = Math.max(0, Math.min(100, pct));
+    el.style.display = 'block';
+    el.style.left = pct + '%';
+}
+
+// 同步量程刻度文案
+function updateRegisterRangeText() {
+    const range = getRegisterRange();
+    const minEl = document.getElementById('register-range-min');
+    const maxEl = document.getElementById('register-range-max');
+    const textEl = document.getElementById('register-range-text');
+    if (minEl) minEl.textContent = range.min;
+    if (maxEl) maxEl.textContent = range.max;
+    if (textEl) textEl.textContent = `量程 ${range.min} – ${range.max}`;
+}
+
 // 读取寄存器当前值
 async function readRegisterValue(deviceId, address) {
     const box = document.getElementById('register-current-box');
@@ -590,7 +948,11 @@ async function readRegisterValue(deviceId, address) {
     try {
         valueSpan.textContent = '读取中...';
         rawSpan.textContent = '原始: --';
-        box.style.display = 'block';
+        box.style.display = 'grid';
+        lastRegisterRaw = null;
+        updateRegisterRangeText();
+        updateRegisterTarget();
+        updateRegisterCurrentMarker();
 
         const response = await fetch(`/api/data/latest/${deviceId}`, {
             headers: getAuthHeaders()
@@ -604,6 +966,7 @@ async function readRegisterValue(deviceId, address) {
             if (reg) {
                 valueSpan.textContent = reg.value != null ? reg.value : '--';
                 rawSpan.textContent = `原始: ${reg.raw_value != null ? reg.raw_value : '--'}`;
+                lastRegisterRaw = reg.raw_value != null ? parseFloat(reg.raw_value) : parseFloat(reg.value);
             } else {
                 // 尝试通过名称匹配（预设选择时）
                 const presetSelect = document.getElementById('register-preset');
@@ -614,20 +977,31 @@ async function readRegisterValue(deviceId, address) {
                     if (presetReg) {
                         valueSpan.textContent = presetReg.value != null ? presetReg.value : '--';
                         rawSpan.textContent = `原始: ${presetReg.raw_value != null ? presetReg.raw_value : '--'}`;
+                        lastRegisterRaw = presetReg.raw_value != null ? parseFloat(presetReg.raw_value) : parseFloat(presetReg.value);
+                        updateRegisterRangeText();
+                        updateRegisterTarget();
+                        updateRegisterCurrentMarker();
                         return;
                     }
                 }
                 valueSpan.textContent = '未找到';
                 rawSpan.textContent = '原始: --';
+                lastRegisterRaw = null;
             }
         } else {
             valueSpan.textContent = '无数据';
             rawSpan.textContent = '原始: --';
+            lastRegisterRaw = null;
         }
+        updateRegisterRangeText();
+        updateRegisterTarget();
+        updateRegisterCurrentMarker();
     } catch (error) {
         console.error('读取寄存器失败:', error);
         valueSpan.textContent = '读取失败';
         rawSpan.textContent = '原始: --';
+        lastRegisterRaw = null;
+        updateRegisterCurrentMarker();
     }
 }
 
@@ -689,6 +1063,16 @@ async function writeCoil(deviceId, address, value) {
     }
 }
 
+// 线圈目标值呈现
+function updateCoilTarget() {
+    const checked = document.querySelector('input[name="coil-value"]:checked');
+    const el = document.getElementById('coil-target-value');
+    if (!el) return;
+    const isOn = checked ? checked.value === 'true' : true;
+    el.textContent = isOn ? 'ON' : 'OFF';
+    el.style.color = isOn ? 'var(--color-success)' : 'var(--color-danger)';
+}
+
 // 批量控制
 async function batchControl(action) {
     let actionText = '';
@@ -699,7 +1083,7 @@ async function batchControl(action) {
     }
 
     showConfirm(
-        `确定要<strong>${actionText}</strong>吗？<br><small class="text-muted">此操作将对所有已连接设备执行。</small>`,
+        `确定要<strong>${actionText}</strong>吗？<br><small class="text-muted">此操作将对所有已连接设备执行，涉及多台设备请谨慎确认。</small>`,
         async () => {
             try {
                 const response = await fetch('/api/control/batch', {
@@ -732,7 +1116,8 @@ async function batchControl(action) {
             } catch (error) {
                 showAlert(`${actionText}失败: ${error.message}`, 'danger');
             }
-        }
+        },
+        action === 'stop' ? 'danger' : 'warning'
     );
 }
 
@@ -781,7 +1166,8 @@ async function batchControlByGroup(action) {
             } catch (error) {
                 showAlert(`${actionText}${groupName}失败: ${error.message}`, 'danger');
             }
-        }
+        },
+        action === 'stop' ? 'danger' : 'warning'
     );
 }
 
@@ -843,30 +1229,71 @@ async function loadControlLogs() {
         const tbody = document.getElementById('control-logs-body');
         
         if (!data.logs || data.logs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">暂无操作记录</td></tr>';
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="4">
+                        <div class="state-box state-box--inline">
+                            <i class="bi bi-journal state-box__icon"></i>
+                            <div class="state-box__title">暂无操作记录</div>
+                        </div>
+                    </td>
+                </tr>`;
             return;
         }
         
         tbody.innerHTML = data.logs.map(log => `
             <tr>
-                <td>${escapeHtml(log.timestamp || '-')}</td>
+                <td class="mono">${escapeHtml(log.timestamp || '-')}</td>
                 <td>${escapeHtml(log.username || '-')}</td>
-                <td><span class="badge bg-info">${escapeHtml(log.action || '-')}</span></td>
+                <td><span class="tag tag--info">${escapeHtml(log.action || '-')}</span></td>
                 <td>${escapeHtml(log.details || '-')}</td>
             </tr>
         `).join('');
     } catch (error) {
         console.error('加载操作日志失败:', error);
+        const tbody = document.getElementById('control-logs-body');
+        if (tbody) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="4">
+                        <div class="state-box state-box--inline">
+                            <i class="bi bi-exclamation-triangle state-box__icon"></i>
+                            <div class="state-box__title">操作日志加载失败</div>
+                        </div>
+                    </td>
+                </tr>`;
+        }
     }
 }
 
-// 显示确认对话框
-function showConfirm(message, callback) {
+// 显示确认对话框（variant: estop / danger / warning，仅影响呈现）
+function showConfirm(message, callback, variant) {
     // 安全地设置确认消息（支持HTML）
     const confirmMessageEl = document.getElementById('confirm-message');
     confirmMessageEl.innerHTML = message;
+
+    const modalEl = document.getElementById('confirmModal');
+    const isDanger = variant === 'estop' || variant === 'danger';
+    const header = modalEl.querySelector('.modal-header');
+    const title = document.getElementById('confirm-title');
+    const okBtn = document.getElementById('btn-confirm');
+
+    if (header) {
+        header.className = 'modal-header ' + (isDanger ? 'modal-header--danger' : 'modal-header--warning');
+    }
+    if (title) {
+        title.innerHTML = variant === 'estop'
+            ? '<i class="bi bi-exclamation-octagon-fill me-2"></i>紧急停机确认'
+            : (isDanger ? '<i class="bi bi-exclamation-triangle me-2"></i>危险操作确认'
+                        : '<i class="bi bi-exclamation-triangle me-2"></i>操作确认');
+    }
+    if (okBtn) {
+        okBtn.className = isDanger ? 'btn btn-danger-token' : 'btn btn-warning';
+        okBtn.textContent = variant === 'estop' ? '确认紧急停机' : '确定执行';
+    }
+
     pendingAction = callback;
-    const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
+    const modal = new bootstrap.Modal(modalEl);
     modal.show();
 }
 
@@ -896,35 +1323,55 @@ function showAlert(message, type = 'info') {
 
 // ==================== 紧急停机 ====================
 async function triggerEStop() {
-    if (!confirm('确认触发紧急停机？\n\n这将停止所有可控设备！')) return;
-    const reason = prompt('请输入停机原因（可选）:', '操作员手动触发') || '操作员手动触发';
-    try {
-        const r = await fetch('/api/control/estop', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-            body: JSON.stringify({ reason })
-        });
-        const data = await r.json();
-        showAlert(data.message || '紧急停机已触发', 'danger');
-        loadControlSafetyStatus();
-    } catch(e) { showAlert('紧急停机触发失败', 'danger'); }
+    showConfirm(
+        `<div class="confirm-danger">
+            <p class="confirm-danger__lead"><i class="bi bi-exclamation-octagon-fill me-2"></i>确认触发紧急停机？</p>
+            <ul class="confirm-danger__list">
+                <li>将<strong>立即停止所有可控设备</strong>（机械类设备数据归零）；</li>
+                <li>停机后需人工「解除停机」，设备才可重新启动；</li>
+                <li>本次操作与原因将记入操作日志。</li>
+            </ul>
+        </div>`,
+        async () => {
+            const reason = prompt('请输入停机原因（可选）:', '操作员手动触发') || '操作员手动触发';
+            try {
+                const r = await fetch('/api/control/estop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                    body: JSON.stringify({ reason })
+                });
+                const data = await r.json();
+                showAlert(data.message || '紧急停机已触发', 'danger');
+                loadControlSafetyStatus();
+            } catch(e) { showAlert('紧急停机触发失败', 'danger'); }
+        },
+        'estop'
+    );
 }
 
 async function resetEStop() {
-    if (!confirm('确认解除紧急停机？\n\n请确认所有安全条件已满足！')) return;
-    try {
-        const r = await fetch('/api/control/estop/reset', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
-        });
-        const data = await r.json();
-        if (data.success) {
-            showAlert('紧急停机已解除', 'success');
-        } else {
-            showAlert(data.message || '解除失败', 'warning');
-        }
-        loadControlSafetyStatus();
-    } catch(e) { showAlert('解除紧急停机失败', 'danger'); }
+    showConfirm(
+        `<div>
+            <p class="mb-2"><strong>确认解除紧急停机？</strong></p>
+            <p class="text-muted mb-0">请先确认现场风险已排除、所有安全条件已满足，再解除停机。</p>
+        </div>`,
+        async () => {
+            try {
+                const r = await fetch('/api/control/estop/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+                });
+                const data = await r.json();
+                if (data.success) {
+                    showAlert('紧急停机已解除', 'success');
+                } else {
+                    showAlert(data.message || '解除失败', 'warning');
+                }
+                loadControlSafetyStatus();
+            } catch(e) { showAlert('解除紧急停机失败', 'danger'); }
+        },
+        'warning'
+    );
 }
 
 // ==================== 安全联锁 ====================
@@ -940,7 +1387,11 @@ function renderInterlocks(rules) {
     const container = document.getElementById('interlock-list');
     const entries = Object.entries(rules);
     if (entries.length === 0) {
-        container.innerHTML = '<div class="text-muted text-center py-2">无联锁规则</div>';
+        container.innerHTML = `
+            <div class="state-box state-box--inline">
+                <i class="bi bi-shield-check state-box__icon"></i>
+                <div class="state-box__title">无联锁规则</div>
+            </div>`;
         return;
     }
     let triggered = 0, bypassed = 0;
@@ -949,22 +1400,28 @@ function renderInterlocks(rules) {
         if (r.bypassed) bypassed++;
         const status = r.bypassed ? 'bypassed' : r.triggered ? 'triggered' : 'normal';
         const icon = r.bypassed ? 'bi-pause-circle' : r.triggered ? 'bi-exclamation-triangle' : 'bi-check-circle';
-        const color = r.bypassed ? 'warning' : r.triggered ? 'danger' : 'success';
+        // 状态标签：正常=成功 / 触发=危险 / 旁路=警告
+        const tagClass = r.bypassed ? 'tag--warning' : r.triggered ? 'tag--danger' : 'tag--success';
+        const tagText = r.bypassed ? '已旁路' : r.triggered ? '已触发' : '已启用';
+        // 旁路＝危险操作：使用危险描边按钮，明确区别于常规操作
+        const actionBtn = r.bypassed
+            ? `<button class="btn btn-sm btn-outline-success" onclick="restoreInterlock('${escapeHtml(id)}')">
+                   <i class="bi bi-shield-check me-1"></i>恢复联锁
+               </button>`
+            : `<button class="btn btn-sm btn-danger-outline-token" onclick="bypassInterlock('${escapeHtml(id)}')">
+                   <i class="bi bi-exclamation-triangle me-1"></i>旁路（危险）
+               </button>`;
         return `
             <div class="interlock-item ${status}">
-                <div class="d-flex justify-content-between align-items-center">
-                    <span>
-                        <i class="bi ${icon} text-${color} me-1"></i>
+                <div class="d-flex justify-content-between align-items-center gap-2">
+                    <span class="d-flex align-items-center gap-2">
+                        <i class="bi ${icon}"></i>
                         <strong>${escapeHtml(r.name || id)}</strong>
+                        <span class="tag ${tagClass}">${tagText}</span>
                     </span>
-                    <span>
-                        ${r.bypassed
-                            ? `<button class="btn btn-sm btn-outline-success py-0" onclick="restoreInterlock('${escapeHtml(id)}')">恢复</button>`
-                            : `<button class="btn btn-sm btn-outline-warning py-0" onclick="bypassInterlock('${escapeHtml(id)}')">旁路</button>`
-                        }
-                    </span>
+                    <span>${actionBtn}</span>
                 </div>
-                <small class="text-muted">${escapeHtml(r.description || '')}</small>
+                <div class="interlock-item__desc">${escapeHtml(r.description || '')}</div>
             </div>
         `;
     }).join('');
@@ -972,7 +1429,7 @@ function renderInterlocks(rules) {
 }
 
 async function bypassInterlock(ruleId) {
-    const reason = prompt('请输入旁路原因（维护等）:');
+    const reason = prompt('旁路将暂时失效该安全联锁，请输入旁路原因（维护等）:');
     if (!reason) return;
     try {
         await fetch(`/api/control/interlocks/${ruleId}/bypass`, {
@@ -985,7 +1442,7 @@ async function bypassInterlock(ruleId) {
 }
 
 async function restoreInterlock(ruleId) {
-    if (!confirm('确认恢复联锁？')) return;
+    if (!confirm('确认恢复联锁？\n\n恢复后该安全联锁将重新生效。')) return;
     try {
         await fetch(`/api/control/interlocks/${ruleId}/restore`, {
             method: 'POST',
@@ -1009,7 +1466,11 @@ function renderDeviceHealth(data) {
     const devices = data.devices || {};
     const entries = Object.entries(devices);
     if (entries.length === 0) {
-        container.innerHTML = '<div class="text-muted text-center py-2">暂无设备健康数据</div>';
+        container.innerHTML = `
+            <div class="state-box state-box--inline">
+                <i class="bi bi-heart-pulse state-box__icon"></i>
+                <div class="state-box__title">暂无设备健康数据</div>
+            </div>`;
         return;
     }
     let connected = 0, disconnected = 0;
@@ -1017,13 +1478,20 @@ function renderDeviceHealth(data) {
         const status = h.status || 'unknown';
         if (status === 'connected') connected++;
         if (status === 'disconnected') disconnected++;
+        // 状态点语义：在线=成功 / 断开=危险 / 未知=离线
+        const dotClass = status === 'connected' ? 'status-dot--success'
+                       : status === 'disconnected' ? 'status-dot--danger'
+                       : 'status-dot--offline';
+        const tail = status === 'connected'
+            ? `<span class="health-row__ms">${Math.round(h.avg_response_ms || 0)} ms</span>`
+            : `<span class="tag tag--offline">${escapeHtml(status)}</span>`;
         return `
-            <div class="d-flex justify-content-between align-items-center py-1 border-bottom">
-                <span>
-                    <span class="health-dot ${status}"></span>
+            <div class="health-row">
+                <span class="d-flex align-items-center gap-2">
+                    <span class="status-dot ${dotClass}"></span>
                     ${escapeHtml(id)}
                 </span>
-                <small class="text-muted">${status === 'connected' ? `${Math.round(h.avg_response_ms || 0)}ms` : escapeHtml(status)}</small>
+                ${tail}
             </div>
         `;
     }).join('');
@@ -1048,14 +1516,14 @@ async function loadControlSafetyStatus() {
             document.getElementById('estop-reason').textContent = estop.reason || '-';
             document.getElementById('estop-time').textContent = estop.time ? new Date(estop.time).toLocaleString() : '-';
             btn.classList.add('active');
-            statusText.textContent = '停机中';
-            statusText.className = 'text-danger fw-bold';
+            statusText.textContent = '停机中 — 全部设备已停止';
+            statusText.className = 'estop-hint estop-hint--danger';
         } else {
             banner.classList.add('d-none');
             banner.classList.remove('d-flex');
             btn.classList.remove('active');
             statusText.textContent = '系统正常';
-            statusText.className = 'text-success';
+            statusText.className = 'estop-hint';
         }
 
         // 联锁和健康

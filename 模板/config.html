@@ -2,28 +2,323 @@
 
 {% block title %}系统配置 - 工业数据采集与监控系统{% endblock %}
 
+{% block extra_css %}
+<style>
+    /* 系统配置页：分区卡片化(.panel) + 令牌化表单 + 保存状态可见。
+       所有颜色取 design-tokens.css，禁止硬编码色与渐变。 */
+    .cfg-page__title {
+        font-size: var(--font-xl);
+        font-weight: var(--weight-semibold);
+        margin: 0;
+        color: var(--text-primary);
+    }
+
+    .cfg-page__desc {
+        margin: var(--space-1) 0 0;
+        font-size: var(--font-sm);
+        color: var(--text-muted);
+    }
+
+    /* ---------- 分区标签页 ---------- */
+    .cfg-tabs {
+        border-bottom: 1px solid var(--border-base);
+        flex-wrap: wrap;
+        gap: var(--space-1);
+    }
+
+    .cfg-tabs .nav-link {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        font-size: var(--font-sm);
+        color: var(--text-secondary);
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        padding: var(--space-3) var(--space-4);
+        transition: color var(--duration-fast) var(--ease-out),
+                    background var(--duration-fast) var(--ease-out);
+    }
+
+    .cfg-tabs .nav-link:hover {
+        color: var(--text-primary);
+        background: var(--bg-hover);
+    }
+
+    .cfg-tabs .nav-link.active {
+        color: var(--color-brand);
+        border-bottom-color: var(--color-brand);
+        background: transparent;
+        font-weight: var(--weight-semibold);
+    }
+
+    /* ---------- 面板标题 / 说明 / 操作条 ---------- */
+    .panel__title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        font-size: var(--font-base);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+
+    .panel__desc {
+        margin-top: 2px;
+        font-size: var(--font-xs);
+        font-weight: var(--weight-normal);
+        color: var(--text-muted);
+    }
+
+    .panel__footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: var(--space-3);
+        padding: var(--space-3) var(--space-4);
+        border-top: 1px solid var(--border-base);
+        background: var(--bg-sunken);
+        border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    }
+
+    .panel__footer .cfg-footer-hint {
+        font-size: var(--font-xs);
+        color: var(--text-muted);
+    }
+
+    .panel + .panel { margin-top: var(--space-4); }
+
+    /* ---------- 表单 ---------- */
+    .form-label {
+        font-size: var(--font-xs);
+        font-weight: var(--weight-medium);
+        color: var(--text-muted);
+        margin-bottom: var(--space-2);
+    }
+
+    .form-control,
+    .form-select {
+        font-size: var(--font-sm);
+        color: var(--text-primary);
+        background: var(--bg-surface);
+        border-color: var(--border-strong);
+    }
+
+    .form-control:focus,
+    .form-select:focus {
+        background: var(--bg-surface);
+        color: var(--text-primary);
+        border-color: var(--color-brand);
+        box-shadow: var(--focus-ring);
+    }
+
+    .form-control:disabled,
+    .form-control[readonly] {
+        background: var(--bg-sunken);
+        color: var(--text-muted);
+    }
+
+    .cfg-hint {
+        display: block;
+        margin-top: var(--space-1);
+        font-size: var(--font-xs);
+        color: var(--text-muted);
+    }
+
+    .cfg-subtitle {
+        font-size: var(--font-xs);
+        font-weight: var(--weight-semibold);
+        color: var(--text-muted);
+        letter-spacing: 0.02em;
+        margin: var(--space-2) 0 var(--space-3);
+        text-transform: none;
+    }
+
+    /* ---------- 开关：状态文字可见 ---------- */
+    .cfg-switch {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        padding: var(--space-1) 0;
+    }
+
+    .cfg-switch .form-check-input {
+        margin: 0;
+        border-color: var(--border-strong);
+        cursor: pointer;
+    }
+
+    .cfg-switch .form-check-label {
+        font-size: var(--font-sm);
+        color: var(--text-primary);
+        cursor: pointer;
+    }
+
+    .cfg-switch__state {
+        font-size: var(--font-xs);
+        font-weight: var(--weight-medium);
+        color: var(--text-disabled);
+    }
+
+    .cfg-switch__state.is-on { color: var(--color-success); }
+
+    /* ---------- 单选/复选 ---------- */
+    .form-check-input {
+        border-color: var(--border-strong);
+    }
+
+    .form-check-input:checked {
+        background-color: var(--color-brand);
+        border-color: var(--color-brand);
+    }
+
+    /* ---------- 表格 ---------- */
+    .table {
+        margin-bottom: 0;
+        color: var(--text-primary);
+    }
+
+    .table > :not(caption) > * > * {
+        border-color: var(--border-base);
+        background: transparent;
+        color: var(--text-primary);
+        font-size: var(--font-sm);
+        vertical-align: middle;
+        padding: var(--space-3);
+    }
+
+    .table thead th {
+        font-size: var(--font-xs);
+        font-weight: var(--weight-semibold);
+        color: var(--text-muted);
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+    }
+
+    .table-hover > tbody > tr:hover > * {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+    }
+
+    .cfg-code {
+        font-family: var(--font-mono);
+        font-size: var(--font-xs);
+        color: var(--text-secondary);
+        background: var(--bg-sunken);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-sm);
+        padding: 1px var(--space-1);
+    }
+
+    .cfg-num {
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        white-space: nowrap;
+    }
+
+    /* ---------- 提示条（无渐变） ---------- */
+    .cfg-note {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--space-2);
+        padding: var(--space-3) var(--space-4);
+        background: var(--color-info-soft);
+        border: 1px solid var(--border-base);
+        border-left: 4px solid var(--color-info);
+        border-radius: var(--radius-md);
+        font-size: var(--font-xs);
+        color: var(--text-secondary);
+    }
+
+    /* ---------- 系统状态读数 ---------- */
+    .info-item {
+        padding: var(--space-3) var(--space-4);
+        border-right: 1px solid var(--border-subtle);
+    }
+
+    .info-item:last-child { border-right: none; }
+
+    .info-item__value {
+        margin-top: var(--space-1);
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: var(--font-lg);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+        word-break: break-all;
+    }
+
+    /* 时间段行 */
+    .cfg-period-row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        margin-bottom: var(--space-2);
+    }
+
+    .cfg-period-row .form-control {
+        flex: 1 1 0;
+        min-width: 0;
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .cfg-period-row .btn { flex: none; }
+
+    .cfg-period-row .cfg-period-sep {
+        color: var(--text-muted);
+        font-size: var(--font-sm);
+    }
+
+    /* 单位后缀 */
+    .input-group-text {
+        font-size: var(--font-xs);
+        color: var(--text-muted);
+        background: var(--bg-sunken);
+        border-color: var(--border-strong);
+    }
+
+    .modal-title { font-size: var(--font-lg); font-weight: var(--weight-semibold); }
+
+    .cfg-required { color: var(--color-danger); }
+
+    .empty-state {
+        padding: var(--space-8) var(--space-4);
+        text-align: center;
+        color: var(--text-muted);
+        font-size: var(--font-sm);
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="row mb-4">
-    <div class="col">
-        <h2><i class="bi bi-sliders me-2"></i>系统配置</h2>
-        <p class="text-muted">管理系统参数、报警规则、采集设置</p>
-    </div>
+<div class="mb-4">
+    <h1 class="cfg-page__title"><i class="bi bi-sliders me-2"></i>系统配置</h1>
+    <p class="cfg-page__desc">管理系统参数、报警规则、采集设置。修改后请点击各分区底部的保存按钮，未保存的改动会在标题旁标注。</p>
 </div>
 
 <!-- Tab导航 -->
-<ul class="nav nav-tabs mb-3" id="configTabs">
+<ul class="nav nav-tabs mb-3 cfg-tabs" id="configTabs">
     <li class="nav-item">
-        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-system">系统设置</button>
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-system">
+            <i class="bi bi-gear"></i>系统设置
+        </button>
     </li>
     <li class="nav-item">
-        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-collection">采集设置</button>
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-collection">
+            <i class="bi bi-arrow-repeat"></i>采集设置
+        </button>
     </li>
     <li class="nav-item">
-        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-database">数据库设置</button>
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-database">
+            <i class="bi bi-database"></i>数据库设置
+        </button>
     </li>
     <li class="nav-item">
         <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-alarms">
-            报警规则 <span class="badge bg-danger" id="alarm-count-badge">0</span>
+            <i class="bi bi-bell"></i>报警规则 <span class="tag tag--danger" id="alarm-count-badge">0</span>
         </button>
     </li>
     <li class="nav-item">
@@ -37,53 +332,65 @@
         </button>
     </li>
     <li class="nav-item">
-        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logging">日志设置</button>
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logging">
+            <i class="bi bi-journal-text"></i>日志设置
+        </button>
     </li>
 </ul>
 
 <div class="tab-content">
     <!-- ==================== 系统设置 ==================== -->
     <div class="tab-pane fade show active" id="tab-system">
-        <div class="card">
-            <div class="card-body">
-                <div class="row mb-3">
+        <div class="panel" data-cfg-section="system">
+            <div class="panel__header">
+                <div>
+                    <div class="panel__title"><i class="bi bi-gear"></i> 系统设置</div>
+                    <div class="panel__desc">系统标识、Web 服务端口、调试模式与跨域访问</div>
+                </div>
+                <span class="tag tag--offline" data-cfg-status="system">未修改</span>
+            </div>
+            <div class="panel__body">
+                <div class="row g-3 mb-3">
                     <div class="col-md-6">
-                        <label class="form-label">系统名称</label>
-                        <input type="text" class="form-control" id="cfg-system-name">
+                        <label class="form-label" for="cfg-system-name">系统名称</label>
+                        <input type="text" class="form-control" id="cfg-system-name" placeholder="工业数据采集与监控系统">
                     </div>
                     <div class="col-md-3">
-                        <label class="form-label">版本</label>
+                        <label class="form-label" for="cfg-system-version">版本</label>
                         <input type="text" class="form-control" id="cfg-system-version" readonly>
                     </div>
                     <div class="col-md-3">
-                        <label class="form-label">作者</label>
+                        <label class="form-label" for="cfg-system-author">作者</label>
                         <input type="text" class="form-control" id="cfg-system-author" readonly>
                     </div>
                 </div>
-                <div class="row mb-3">
+                <div class="row g-3">
                     <div class="col-md-3">
-                        <label class="form-label">Web端口</label>
+                        <label class="form-label" for="cfg-web-port">Web端口</label>
                         <input type="number" class="form-control" id="cfg-web-port" min="1" max="65535">
                     </div>
                     <div class="col-md-3">
-                        <label class="form-label">Web主机</label>
+                        <label class="form-label" for="cfg-web-host">Web主机</label>
                         <input type="text" class="form-control" id="cfg-web-host">
                     </div>
                     <div class="col-md-3">
-                        <label class="form-label">调试模式</label>
+                        <label class="form-label" for="cfg-web-debug">调试模式</label>
                         <select class="form-select" id="cfg-web-debug">
                             <option value="true">开启</option>
                             <option value="false">关闭</option>
                         </select>
                     </div>
                     <div class="col-md-3">
-                        <label class="form-label">CORS</label>
+                        <label class="form-label" for="cfg-cors-enabled">CORS</label>
                         <select class="form-select" id="cfg-cors-enabled">
                             <option value="true">允许跨域</option>
                             <option value="false">禁止</option>
                         </select>
                     </div>
                 </div>
+            </div>
+            <div class="panel__footer">
+                <span class="cfg-footer-hint">修改后需保存才会生效；端口变更需要重启服务。</span>
                 <button class="btn btn-primary" onclick="saveSection('system')">
                     <i class="bi bi-check-lg me-1"></i>保存系统设置
                 </button>
@@ -93,32 +400,42 @@
 
     <!-- ==================== 采集设置 ==================== -->
     <div class="tab-pane fade" id="tab-collection">
-        <div class="card">
-            <div class="card-body">
-                <div class="row mb-3">
+        <div class="panel" data-cfg-section="collection">
+            <div class="panel__header">
+                <div>
+                    <div class="panel__title"><i class="bi bi-arrow-repeat"></i> 采集设置</div>
+                    <div class="panel__desc">采集间隔、并发数、通信超时与失败重试策略</div>
+                </div>
+                <span class="tag tag--offline" data-cfg-status="collection">未修改</span>
+            </div>
+            <div class="panel__body">
+                <div class="row g-3 mb-3">
                     <div class="col-md-3">
-                        <label class="form-label">默认采集间隔(秒)</label>
+                        <label class="form-label" for="cfg-col-interval">默认采集间隔(秒)</label>
                         <input type="number" class="form-control" id="cfg-col-interval" min="1">
                     </div>
                     <div class="col-md-3">
-                        <label class="form-label">最大并发数</label>
+                        <label class="form-label" for="cfg-col-concurrent">最大并发数</label>
                         <input type="number" class="form-control" id="cfg-col-concurrent" min="1">
                     </div>
                     <div class="col-md-3">
-                        <label class="form-label">通信超时(秒)</label>
+                        <label class="form-label" for="cfg-col-timeout">通信超时(秒)</label>
                         <input type="number" class="form-control" id="cfg-col-timeout" min="1">
                     </div>
                     <div class="col-md-3">
-                        <label class="form-label">重试次数</label>
+                        <label class="form-label" for="cfg-col-retry">重试次数</label>
                         <input type="number" class="form-control" id="cfg-col-retry" min="0">
                     </div>
                 </div>
-                <div class="row mb-3">
+                <div class="row g-3">
                     <div class="col-md-3">
-                        <label class="form-label">重试间隔(秒)</label>
+                        <label class="form-label" for="cfg-col-retry-interval">重试间隔(秒)</label>
                         <input type="number" class="form-control" id="cfg-col-retry-interval" min="1">
                     </div>
                 </div>
+            </div>
+            <div class="panel__footer">
+                <span class="cfg-footer-hint">采集间隔过小会增加设备通信压力，建议不低于设备响应时间。</span>
                 <button class="btn btn-primary" onclick="saveSection('collection')">
                     <i class="bi bi-check-lg me-1"></i>保存采集设置
                 </button>
@@ -128,36 +445,43 @@
 
     <!-- ==================== 数据库设置 ==================== -->
     <div class="tab-pane fade" id="tab-database">
-        <div class="card">
-            <div class="card-body">
-                <div class="row mb-3">
+        <div class="panel" data-cfg-section="database">
+            <div class="panel__header">
+                <div>
+                    <div class="panel__title"><i class="bi bi-database"></i> 数据库设置</div>
+                    <div class="panel__desc">数据保留周期与历史数据压缩策略</div>
+                </div>
+                <span class="tag tag--offline" data-cfg-status="database">未修改</span>
+            </div>
+            <div class="panel__body">
+                <div class="row g-3 mb-3">
                     <div class="col-md-4">
-                        <label class="form-label">原始数据保留天数</label>
+                        <label class="form-label" for="cfg-db-raw-days">原始数据保留天数</label>
                         <input type="number" class="form-control" id="cfg-db-raw-days" min="1">
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">压缩数据保留天数</label>
+                        <label class="form-label" for="cfg-db-compressed-days">压缩数据保留天数</label>
                         <input type="number" class="form-control" id="cfg-db-compressed-days" min="1">
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">报警记录保留天数</label>
+                        <label class="form-label" for="cfg-db-alarm-days">报警记录保留天数</label>
                         <input type="number" class="form-control" id="cfg-db-alarm-days" min="1">
                     </div>
                 </div>
-                <div class="row mb-3">
+                <div class="row g-3">
                     <div class="col-md-4">
-                        <label class="form-label">数据压缩</label>
+                        <label class="form-label" for="cfg-db-compress-enabled">数据压缩</label>
                         <select class="form-select" id="cfg-db-compress-enabled">
                             <option value="true">启用</option>
                             <option value="false">禁用</option>
                         </select>
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">压缩间隔(小时)</label>
+                        <label class="form-label" for="cfg-db-compress-interval">压缩间隔(小时)</label>
                         <input type="number" class="form-control" id="cfg-db-compress-interval" min="1">
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">压缩方法</label>
+                        <label class="form-label" for="cfg-db-compress-method">压缩方法</label>
                         <select class="form-select" id="cfg-db-compress-method">
                             <option value="average">平均值</option>
                             <option value="min_max">最大最小值</option>
@@ -165,6 +489,9 @@
                         </select>
                     </div>
                 </div>
+            </div>
+            <div class="panel__footer">
+                <span class="cfg-footer-hint">超出保留天数的数据将被清理，请确认符合现场数据留存要求。</span>
                 <button class="btn btn-primary" onclick="saveSection('database')">
                     <i class="bi bi-check-lg me-1"></i>保存数据库设置
                 </button>
@@ -174,16 +501,19 @@
 
     <!-- ==================== 报警规则 ==================== -->
     <div class="tab-pane fade" id="tab-alarms">
-        <div class="card mb-3">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h6 class="mb-0">报警规则</h6>
+        <div class="panel">
+            <div class="panel__header">
+                <div>
+                    <div class="panel__title"><i class="bi bi-bell"></i> 报警规则</div>
+                    <div class="panel__desc">变量越限条件与报警等级；等级决定报警条与列表的色条颜色</div>
+                </div>
                 <button class="btn btn-sm btn-primary" onclick="showAddRuleModal()">
                     <i class="bi bi-plus-circle me-1"></i>添加规则
                 </button>
             </div>
-            <div class="card-body p-0">
+            <div class="panel__body p-0">
                 <div class="table-responsive">
-                    <table class="table table-hover mb-0">
+                    <table class="table table-hover">
                         <thead>
                             <tr>
                                 <th>规则ID</th>
@@ -191,14 +521,14 @@
                                 <th>设备</th>
                                 <th>变量</th>
                                 <th>条件</th>
-                                <th>阈值</th>
+                                <th class="cfg-num">阈值</th>
                                 <th>等级</th>
                                 <th>启用</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
                         <tbody id="alarm-rules-body">
-                            <tr><td colspan="9" class="text-center text-muted">加载中...</td></tr>
+                            <tr><td colspan="9"><div class="empty-state">加载中...</div></td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -206,41 +536,52 @@
         </div>
 
         <!-- 通知设置 -->
-        <div class="card">
-            <div class="card-header"><h6 class="mb-0">通知设置</h6></div>
-            <div class="card-body">
-                <div class="row mb-3">
+        <div class="panel" data-cfg-section="notification">
+            <div class="panel__header">
+                <div>
+                    <div class="panel__title"><i class="bi bi-envelope"></i> 通知设置</div>
+                    <div class="panel__desc">报警声音提示与邮件通知（SMTP）</div>
+                </div>
+                <span class="tag tag--offline" data-cfg-status="notification">未修改</span>
+            </div>
+            <div class="panel__body">
+                <div class="row g-3 mb-3">
                     <div class="col-md-4">
-                        <div class="form-check form-switch">
+                        <div class="form-check form-switch cfg-switch">
                             <input class="form-check-input" type="checkbox" id="cfg-notify-email">
                             <label class="form-check-label" for="cfg-notify-email">邮件通知</label>
+                            <span class="cfg-switch__state" data-switch-state="cfg-notify-email">已关闭</span>
                         </div>
                     </div>
                     <div class="col-md-4">
-                        <div class="form-check form-switch">
+                        <div class="form-check form-switch cfg-switch">
                             <input class="form-check-input" type="checkbox" id="cfg-notify-sound" checked>
                             <label class="form-check-label" for="cfg-notify-sound">声音报警</label>
+                            <span class="cfg-switch__state" data-switch-state="cfg-notify-sound">已开启</span>
                         </div>
                     </div>
                 </div>
-                <div class="row mb-3" id="email-config-row">
+                <div class="row g-3" id="email-config-row">
                     <div class="col-md-3">
-                        <label class="form-label">SMTP服务器</label>
+                        <label class="form-label" for="cfg-smtp-server">SMTP服务器</label>
                         <input type="text" class="form-control" id="cfg-smtp-server" placeholder="smtp.example.com">
                     </div>
                     <div class="col-md-2">
-                        <label class="form-label">端口</label>
+                        <label class="form-label" for="cfg-smtp-port">端口</label>
                         <input type="number" class="form-control" id="cfg-smtp-port" value="587">
                     </div>
                     <div class="col-md-3">
-                        <label class="form-label">用户名</label>
+                        <label class="form-label" for="cfg-smtp-username">用户名</label>
                         <input type="text" class="form-control" id="cfg-smtp-username">
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">收件人(逗号分隔)</label>
+                        <label class="form-label" for="cfg-smtp-recipients">收件人(逗号分隔)</label>
                         <input type="text" class="form-control" id="cfg-smtp-recipients" placeholder="admin@example.com">
                     </div>
                 </div>
+            </div>
+            <div class="panel__footer">
+                <span class="cfg-footer-hint">邮件通知需填写完整的 SMTP 服务器信息。</span>
                 <button class="btn btn-primary" onclick="saveNotification()">
                     <i class="bi bi-check-lg me-1"></i>保存通知设置
                 </button>
@@ -250,48 +591,71 @@
 
     <!-- ==================== 电价配置 ==================== -->
     <div class="tab-pane fade" id="tab-energy">
-        <div class="row">
+        <div class="row g-4">
             <!-- 分时电价 -->
             <div class="col-md-6">
-                <div class="card mb-3">
-                    <div class="card-header">
-                        <h6 class="mb-0"><i class="bi bi-currency-yen me-2"></i>分时电价设置 (元/kWh)</h6>
+                <div class="panel h-100" data-cfg-section="tariff">
+                    <div class="panel__header">
+                        <div>
+                            <div class="panel__title"><i class="bi bi-currency-yen"></i> 分时电价设置 (元/kWh)</div>
+                            <div class="panel__desc">峰/平/谷单价与碳排放因子，用于能耗成本核算</div>
+                        </div>
+                        <span class="tag tag--offline" data-cfg-status="tariff">未修改</span>
                     </div>
-                    <div class="card-body">
-                        <div class="row mb-3">
+                    <div class="panel__body">
+                        <div class="row g-3 mb-3">
                             <div class="col-4">
-                                <label class="form-label">峰时电价</label>
+                                <label class="form-label" for="cfg-tariff-peak">峰时电价</label>
                                 <div class="input-group">
                                     <input type="number" class="form-control" id="cfg-tariff-peak" step="0.01" min="0">
                                     <span class="input-group-text">元</span>
                                 </div>
-                                <small class="text-muted">高峰时段用电单价</small>
+                                <span class="cfg-hint">高峰时段用电单价</span>
                             </div>
                             <div class="col-4">
-                                <label class="form-label">平时电价</label>
+                                <label class="form-label" for="cfg-tariff-flat">平时电价</label>
                                 <div class="input-group">
                                     <input type="number" class="form-control" id="cfg-tariff-flat" step="0.01" min="0">
                                     <span class="input-group-text">元</span>
                                 </div>
-                                <small class="text-muted">平段时段用电单价</small>
+                                <span class="cfg-hint">平段时段用电单价</span>
                             </div>
                             <div class="col-4">
-                                <label class="form-label">谷时电价</label>
+                                <label class="form-label" for="cfg-tariff-valley">谷时电价</label>
                                 <div class="input-group">
                                     <input type="number" class="form-control" id="cfg-tariff-valley" step="0.01" min="0">
                                     <span class="input-group-text">元</span>
                                 </div>
-                                <small class="text-muted">低谷时段用电单价</small>
+                                <span class="cfg-hint">低谷时段用电单价</span>
                             </div>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">碳排放因子 (kgCO2/kWh)</label>
+                            <label class="form-label" for="cfg-carbon-factor">碳排放因子 (kgCO2/kWh)</label>
                             <div class="input-group">
                                 <input type="number" class="form-control" id="cfg-carbon-factor" step="0.001" min="0">
                                 <span class="input-group-text">kgCO2/kWh</span>
                             </div>
-                            <small class="text-muted">中国电网平均约0.581，用于计算碳排放量</small>
+                            <span class="cfg-hint">中国电网平均约0.581，用于计算碳排放量</span>
                         </div>
+                        <!-- 当前电价预览 -->
+                        <div class="cfg-subtitle">当前电价预览</div>
+                        <div class="row g-3 text-center" id="tariff-preview">
+                            <div class="col-4">
+                                <div class="tag tag--danger mb-1">峰</div>
+                                <div id="preview-peak" class="metric-value" style="font-size: var(--font-lg);">-</div>
+                            </div>
+                            <div class="col-4">
+                                <div class="tag tag--info mb-1">平</div>
+                                <div id="preview-flat" class="metric-value" style="font-size: var(--font-lg);">-</div>
+                            </div>
+                            <div class="col-4">
+                                <div class="tag tag--success mb-1">谷</div>
+                                <div id="preview-valley" class="metric-value" style="font-size: var(--font-lg);">-</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="panel__footer">
+                        <span class="cfg-footer-hint">保存后立即生效，用于能耗费用计算。</span>
                         <button class="btn btn-primary" onclick="saveTariff()">
                             <i class="bi bi-check-lg me-1"></i>保存电价设置
                         </button>
@@ -301,13 +665,19 @@
 
             <!-- 峰谷时段定义 -->
             <div class="col-md-6">
-                <div class="card mb-3">
-                    <div class="card-header">
-                        <h6 class="mb-0"><i class="bi bi-clock me-2"></i>峰谷时段定义 (24小时制)</h6>
+                <div class="panel h-100" data-cfg-section="tariff">
+                    <div class="panel__header">
+                        <div>
+                            <div class="panel__title"><i class="bi bi-clock"></i> 峰谷时段定义 (24小时制)</div>
+                            <div class="panel__desc">峰/谷时段不可重叠，其余小时自动归为平时段</div>
+                        </div>
+                        <span class="tag tag--offline" data-cfg-status="tariff">未修改</span>
                     </div>
-                    <div class="card-body">
+                    <div class="panel__body">
                         <div class="mb-3">
-                            <label class="form-label text-danger"><i class="bi bi-arrow-up-circle me-1"></i>峰时段</label>
+                            <div class="cfg-subtitle" style="color: var(--color-danger);">
+                                <i class="bi bi-arrow-up-circle me-1"></i>峰时段
+                            </div>
                             <div id="peak-periods">
                                 <!-- 动态生成 -->
                             </div>
@@ -316,7 +686,9 @@
                             </button>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label text-success"><i class="bi bi-arrow-down-circle me-1"></i>谷时段</label>
+                            <div class="cfg-subtitle" style="color: var(--color-success);">
+                                <i class="bi bi-arrow-down-circle me-1"></i>谷时段
+                            </div>
                             <div id="valley-periods">
                                 <!-- 动态生成 -->
                             </div>
@@ -324,33 +696,16 @@
                                 <i class="bi bi-plus"></i> 添加谷时段
                             </button>
                         </div>
-                        <div class="alert alert-info small mb-0">
-                            <i class="bi bi-info-circle me-1"></i>
-                            未在峰/谷时段内的小时自动归为<strong>平时段</strong>。时段不可重叠。
+                        <div class="cfg-note">
+                            <i class="bi bi-info-circle"></i>
+                            <span>未在峰/谷时段内的小时自动归为<strong>平时段</strong>。时段不可重叠。</span>
                         </div>
                     </div>
-                </div>
-
-                <!-- 当前电价预览 -->
-                <div class="card">
-                    <div class="card-header">
-                        <h6 class="mb-0"><i class="bi bi-eye me-2"></i>当前电价预览</h6>
-                    </div>
-                    <div class="card-body">
-                        <div class="row text-center" id="tariff-preview">
-                            <div class="col-4">
-                                <div class="badge bg-danger fs-6 mb-1">峰</div>
-                                <div id="preview-peak" class="fw-bold">-</div>
-                            </div>
-                            <div class="col-4">
-                                <div class="badge bg-primary fs-6 mb-1">平</div>
-                                <div id="preview-flat" class="fw-bold">-</div>
-                            </div>
-                            <div class="col-4">
-                                <div class="badge bg-success fs-6 mb-1">谷</div>
-                                <div id="preview-valley" class="fw-bold">-</div>
-                            </div>
-                        </div>
+                    <div class="panel__footer">
+                        <span class="cfg-footer-hint">时段修改需与左侧电价一并保存。</span>
+                        <button class="btn btn-primary" onclick="saveTariff()">
+                            <i class="bi bi-check-lg me-1"></i>保存电价设置
+                        </button>
                     </div>
                 </div>
             </div>
@@ -359,54 +714,62 @@
 
     <!-- ==================== 报警输出配置 ==================== -->
     <div class="tab-pane fade" id="tab-alarm-output">
-        <div class="row">
+        <div class="row g-4">
             <!-- 声光报警器配置 -->
             <div class="col-md-6">
-                <div class="card mb-3">
-                    <div class="card-header">
-                        <h6 class="mb-0"><i class="bi bi-lightbulb me-2"></i>声光报警器配置</h6>
+                <div class="panel h-100" data-cfg-section="alarm-output">
+                    <div class="panel__header">
+                        <div>
+                            <div class="panel__title"><i class="bi bi-lightbulb"></i> 声光报警器配置</div>
+                            <div class="panel__desc">Modbus 灯塔地址与 DO 线圈映射</div>
+                        </div>
+                        <span class="tag tag--offline" data-cfg-status="alarm-output">未修改</span>
                     </div>
-                    <div class="card-body">
+                    <div class="panel__body">
                         <div class="mb-3">
-                            <div class="form-check form-switch">
+                            <div class="form-check form-switch cfg-switch">
                                 <input class="form-check-input" type="checkbox" id="cfg-ao-enabled" checked>
                                 <label class="form-check-label" for="cfg-ao-enabled">启用声光报警器</label>
+                                <span class="cfg-switch__state" data-switch-state="cfg-ao-enabled">已开启</span>
                             </div>
                         </div>
-                        <h6 class="text-muted">主报警灯塔 (Patlite LR7)</h6>
-                        <div class="row mb-3">
+                        <div class="cfg-subtitle">主报警灯塔 (Patlite LR7)</div>
+                        <div class="row g-3 mb-3">
                             <div class="col-6">
-                                <label class="form-label">Modbus IP</label>
+                                <label class="form-label" for="cfg-ao-host">Modbus IP</label>
                                 <input type="text" class="form-control" id="cfg-ao-host" placeholder="192.168.1.70">
                             </div>
                             <div class="col-3">
-                                <label class="form-label">端口</label>
+                                <label class="form-label" for="cfg-ao-port">端口</label>
                                 <input type="number" class="form-control" id="cfg-ao-port" value="502">
                             </div>
                             <div class="col-3">
-                                <label class="form-label">从站ID</label>
+                                <label class="form-label" for="cfg-ao-slave">从站ID</label>
                                 <input type="number" class="form-control" id="cfg-ao-slave" value="1">
                             </div>
                         </div>
-                        <h6 class="text-muted">DO线圈映射</h6>
-                        <div class="row mb-3">
+                        <div class="cfg-subtitle">DO线圈映射</div>
+                        <div class="row g-3">
                             <div class="col-3">
-                                <label class="form-label">红灯 DO</label>
+                                <label class="form-label" for="cfg-ao-do-red">红灯 DO</label>
                                 <input type="number" class="form-control" id="cfg-ao-do-red" value="0" min="0">
                             </div>
                             <div class="col-3">
-                                <label class="form-label">黄灯 DO</label>
+                                <label class="form-label" for="cfg-ao-do-yellow">黄灯 DO</label>
                                 <input type="number" class="form-control" id="cfg-ao-do-yellow" value="1" min="0">
                             </div>
                             <div class="col-3">
-                                <label class="form-label">绿灯 DO</label>
+                                <label class="form-label" for="cfg-ao-do-green">绿灯 DO</label>
                                 <input type="number" class="form-control" id="cfg-ao-do-green" value="2" min="0">
                             </div>
                             <div class="col-3">
-                                <label class="form-label">蜂鸣器 DO</label>
+                                <label class="form-label" for="cfg-ao-do-buzzer">蜂鸣器 DO</label>
                                 <input type="number" class="form-control" id="cfg-ao-do-buzzer" value="5" min="0">
                             </div>
                         </div>
+                    </div>
+                    <div class="panel__footer">
+                        <span class="cfg-footer-hint">DO 编号需与现场接线一致，误配将导致信号灯错亮。</span>
                         <button class="btn btn-primary" onclick="saveAlarmOutputConfig()">
                             <i class="bi bi-check-lg me-1"></i>保存报警输出配置
                         </button>
@@ -416,47 +779,55 @@
 
             <!-- 广播系统配置 -->
             <div class="col-md-6">
-                <div class="card mb-3">
-                    <div class="card-header">
-                        <h6 class="mb-0"><i class="bi bi-megaphone me-2"></i>广播系统配置</h6>
+                <div class="panel h-100" data-cfg-section="broadcast">
+                    <div class="panel__header">
+                        <div>
+                            <div class="panel__title"><i class="bi bi-megaphone"></i> 广播系统配置</div>
+                            <div class="panel__desc">MQTT 对接 IP 网络广播 / PA 系统</div>
+                        </div>
+                        <span class="tag tag--offline" data-cfg-status="broadcast">未修改</span>
                     </div>
-                    <div class="card-body">
+                    <div class="panel__body">
                         <div class="mb-3">
-                            <div class="form-check form-switch">
+                            <div class="form-check form-switch cfg-switch">
                                 <input class="form-check-input" type="checkbox" id="cfg-bc-enabled" checked>
                                 <label class="form-check-label" for="cfg-bc-enabled">启用广播系统</label>
+                                <span class="cfg-switch__state" data-switch-state="cfg-bc-enabled">已开启</span>
                             </div>
                         </div>
-                        <h6 class="text-muted">MQTT连接 (对接IP网络广播/PA系统)</h6>
-                        <div class="row mb-3">
+                        <div class="cfg-subtitle">MQTT连接 (对接IP网络广播/PA系统)</div>
+                        <div class="row g-3 mb-3">
                             <div class="col-6">
-                                <label class="form-label">MQTT Broker</label>
+                                <label class="form-label" for="cfg-bc-broker">MQTT Broker</label>
                                 <input type="text" class="form-control" id="cfg-bc-broker" placeholder="192.168.1.200">
                             </div>
                             <div class="col-3">
-                                <label class="form-label">端口</label>
+                                <label class="form-label" for="cfg-bc-port">端口</label>
                                 <input type="number" class="form-control" id="cfg-bc-port" value="1883">
                             </div>
                             <div class="col-3">
-                                <label class="form-label">主题前缀</label>
+                                <label class="form-label" for="cfg-bc-topic">主题前缀</label>
                                 <input type="text" class="form-control" id="cfg-bc-topic" value="pa/">
                             </div>
                         </div>
-                        <div class="row mb-3">
+                        <div class="row g-3 mb-3">
                             <div class="col-6">
-                                <label class="form-label">用户名</label>
+                                <label class="form-label" for="cfg-bc-username">用户名</label>
                                 <input type="text" class="form-control" id="cfg-bc-username" placeholder="可选">
                             </div>
                             <div class="col-6">
-                                <label class="form-label">密码</label>
+                                <label class="form-label" for="cfg-bc-password">密码</label>
                                 <input type="password" class="form-control" id="cfg-bc-password" placeholder="可选">
                             </div>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label">广播区域 (逗号分隔)</label>
+                        <div class="mb-1">
+                            <label class="form-label" for="cfg-bc-areas">广播区域 (逗号分隔)</label>
                             <input type="text" class="form-control" id="cfg-bc-areas" placeholder="车间A,车间B,仓库,办公楼">
-                            <small class="text-muted">多个区域用逗号分隔</small>
+                            <span class="cfg-hint">多个区域用逗号分隔</span>
                         </div>
+                    </div>
+                    <div class="panel__footer">
+                        <span class="cfg-footer-hint">需保证 SCADA 主机可访问 MQTT Broker。</span>
                         <button class="btn btn-primary" onclick="saveBroadcastConfig()">
                             <i class="bi bi-check-lg me-1"></i>保存广播配置
                         </button>
@@ -468,27 +839,38 @@
 
     <!-- ==================== 日志设置 ==================== -->
     <div class="tab-pane fade" id="tab-logging">
-        <div class="card">
-            <div class="card-body">
-                <div class="row mb-3">
+        <div class="panel" data-cfg-section="logging">
+            <div class="panel__header">
+                <div>
+                    <div class="panel__title"><i class="bi bi-journal-text"></i> 日志设置</div>
+                    <div class="panel__desc">日志级别与日志文件滚动策略</div>
+                </div>
+                <span class="tag tag--offline" data-cfg-status="logging">未修改</span>
+            </div>
+            <div class="panel__body">
+                <div class="row g-3">
                     <div class="col-md-4">
-                        <label class="form-label">日志级别</label>
+                        <label class="form-label" for="cfg-log-level">日志级别</label>
                         <select class="form-select" id="cfg-log-level">
                             <option value="DEBUG">DEBUG</option>
                             <option value="INFO">INFO</option>
                             <option value="WARNING">WARNING</option>
                             <option value="ERROR">ERROR</option>
                         </select>
+                        <span class="cfg-hint">生产环境建议 INFO 及以上</span>
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">日志文件最大(MB)</label>
+                        <label class="form-label" for="cfg-log-max-size">日志文件最大(MB)</label>
                         <input type="number" class="form-control" id="cfg-log-max-size" min="1">
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">日志备份数</label>
+                        <label class="form-label" for="cfg-log-backup-count">日志备份数</label>
                         <input type="number" class="form-control" id="cfg-log-backup-count" min="0">
                     </div>
                 </div>
+            </div>
+            <div class="panel__footer">
+                <span class="cfg-footer-hint">调试完成后请调回 INFO，避免日志文件快速增长。</span>
                 <button class="btn btn-primary" onclick="saveSection('logging')">
                     <i class="bi bi-check-lg me-1"></i>保存日志设置
                 </button>
@@ -498,16 +880,39 @@
 </div>
 
 <!-- 系统信息卡片 -->
-<div class="card mt-4">
-    <div class="card-header"><h6 class="mb-0"><i class="bi bi-info-circle me-2"></i>系统运行状态</h6></div>
-    <div class="card-body">
-        <div class="row" id="system-info">
-            <div class="col-md-2"><strong>数据库:</strong> <span id="info-db-size">-</span></div>
-            <div class="col-md-2"><strong>数据记录:</strong> <span id="info-data-count">-</span></div>
-            <div class="col-md-2"><strong>报警记录:</strong> <span id="info-alarm-count">-</span></div>
-            <div class="col-md-2"><strong>采集成功率:</strong> <span id="info-success-rate">-</span></div>
-            <div class="col-md-2"><strong>运行模式:</strong> <span id="info-sim-mode">-</span></div>
-            <div class="col-md-2"><strong>运行时间:</strong> <span id="info-uptime">-</span></div>
+<div class="panel mt-4">
+    <div class="panel__header">
+        <div>
+            <div class="panel__title"><i class="bi bi-info-circle"></i> 系统运行状态</div>
+            <div class="panel__desc">每 10 秒自动刷新</div>
+        </div>
+    </div>
+    <div class="panel__body p-0">
+        <div class="row g-0" id="system-info">
+            <div class="col-6 col-md-2 info-item">
+                <span class="metric-label">数据库</span>
+                <div id="info-db-size" class="info-item__value">-</div>
+            </div>
+            <div class="col-6 col-md-2 info-item">
+                <span class="metric-label">数据记录</span>
+                <div id="info-data-count" class="info-item__value">-</div>
+            </div>
+            <div class="col-6 col-md-2 info-item">
+                <span class="metric-label">报警记录</span>
+                <div id="info-alarm-count" class="info-item__value">-</div>
+            </div>
+            <div class="col-6 col-md-2 info-item">
+                <span class="metric-label">采集成功率</span>
+                <div id="info-success-rate" class="info-item__value">-</div>
+            </div>
+            <div class="col-6 col-md-2 info-item">
+                <span class="metric-label">运行模式</span>
+                <div id="info-sim-mode" class="info-item__value">-</div>
+            </div>
+            <div class="col-6 col-md-2 info-item">
+                <span class="metric-label">运行时间</span>
+                <div id="info-uptime" class="info-item__value">-</div>
+            </div>
         </div>
     </div>
 </div>
@@ -523,33 +928,33 @@
             <div class="modal-body">
                 <form id="ruleForm">
                     <input type="hidden" id="rule-id-old" value="">
-                    <div class="row mb-3">
+                    <div class="row g-3 mb-3">
                         <div class="col-md-6">
-                            <label class="form-label">规则ID <span class="text-danger">*</span></label>
+                            <label class="form-label" for="rule-id">规则ID <span class="cfg-required">*</span></label>
                             <input type="text" class="form-control" id="rule-id" required placeholder="如: temp_high" pattern="[a-zA-Z0-9_]+">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">规则名称 <span class="text-danger">*</span></label>
+                            <label class="form-label" for="rule-name">规则名称 <span class="cfg-required">*</span></label>
                             <input type="text" class="form-control" id="rule-name" required placeholder="如: 温度过高">
                         </div>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">描述</label>
+                        <label class="form-label" for="rule-description">描述</label>
                         <input type="text" class="form-control" id="rule-description" placeholder="温度超过上限">
                     </div>
-                    <div class="row mb-3">
+                    <div class="row g-3 mb-3">
                         <div class="col-md-6">
-                            <label class="form-label">设备ID <span class="text-danger">*</span></label>
+                            <label class="form-label" for="rule-device-id">设备ID <span class="cfg-required">*</span></label>
                             <select class="form-select" id="rule-device-id"></select>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">变量名 <span class="text-danger">*</span></label>
+                            <label class="form-label" for="rule-register-name">变量名 <span class="cfg-required">*</span></label>
                             <select class="form-select" id="rule-register-name"></select>
                         </div>
                     </div>
-                    <div class="row mb-3">
+                    <div class="row g-3 mb-3">
                         <div class="col-md-4">
-                            <label class="form-label">条件</label>
+                            <label class="form-label" for="rule-condition">条件</label>
                             <select class="form-select" id="rule-condition">
                                 <option value="greater_than">大于</option>
                                 <option value="less_than">小于</option>
@@ -559,11 +964,11 @@
                             </select>
                         </div>
                         <div class="col-md-4">
-                            <label class="form-label">阈值 <span class="text-danger">*</span></label>
+                            <label class="form-label" for="rule-threshold">阈值 <span class="cfg-required">*</span></label>
                             <input type="number" class="form-control" id="rule-threshold" step="0.01" required>
                         </div>
                         <div class="col-md-4">
-                            <label class="form-label">等级</label>
+                            <label class="form-label" for="rule-level">等级</label>
                             <select class="form-select" id="rule-level">
                                 <option value="warning">警告</option>
                                 <option value="danger">危险</option>
@@ -571,13 +976,13 @@
                             </select>
                         </div>
                     </div>
-                    <div class="row mb-3">
+                    <div class="row g-3 mb-3">
                         <div class="col-md-6">
-                            <label class="form-label">延迟(秒)</label>
+                            <label class="form-label" for="rule-delay">延迟(秒)</label>
                             <input type="number" class="form-control" id="rule-delay" value="0" min="0">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">启用</label>
+                            <label class="form-label" for="rule-enabled">启用</label>
                             <select class="form-select" id="rule-enabled">
                                 <option value="true">启用</option>
                                 <option value="false">禁用</option>
@@ -600,6 +1005,8 @@
 // ==================== 页面加载 ====================
 
 document.addEventListener('DOMContentLoaded', function() {
+    bindConfigDirtyTracking();
+    bindSwitchStates();
     loadConfig();
     loadAlarmRules();
     loadSystemStatus();
@@ -608,6 +1015,74 @@ document.addEventListener('DOMContentLoaded', function() {
     loadBroadcastConfig();
 });
 
+// ==================== 保存状态（未修改 / 未保存 / 已保存）====================
+// 只做呈现：把「有改动未保存」这件事显式告诉操作者，避免误以为已生效。
+
+const CFG_STATUS_CLASS = {
+    idle: 'tag--offline',
+    dirty: 'tag--warning',
+    saved: 'tag--success',
+    failed: 'tag--danger'
+};
+
+const CFG_STATUS_TEXT = {
+    idle: '未修改',
+    dirty: '未保存',
+    saved: '已保存',
+    failed: '保存失败'
+};
+
+function setSectionStatus(section, state, extraText) {
+    document.querySelectorAll(`[data-cfg-status="${section}"]`).forEach(tag => {
+        tag.className = 'tag ' + CFG_STATUS_CLASS[state];
+        tag.textContent = extraText || CFG_STATUS_TEXT[state];
+    });
+}
+
+function markSectionDirty(section) {
+    setSectionStatus(section, 'dirty');
+}
+
+function markSectionSaved(section) {
+    const time = new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'});
+    setSectionStatus(section, 'saved', '已保存 ' + time);
+}
+
+function markSectionFailed(section) {
+    setSectionStatus(section, 'failed');
+}
+
+// 监听各分区内的输入变化 → 标记为「未保存」
+function bindConfigDirtyTracking() {
+    document.querySelectorAll('[data-cfg-section]').forEach(panel => {
+        const section = panel.dataset.cfgSection;
+        panel.addEventListener('input', () => markSectionDirty(section));
+        panel.addEventListener('change', () => markSectionDirty(section));
+    });
+}
+
+// ==================== 开关状态文字（开启/关闭可见）====================
+
+function refreshSwitchStates() {
+    document.querySelectorAll('[data-switch-state]').forEach(el => {
+        const input = document.getElementById(el.dataset.switchState);
+        if (!input) return;
+        el.textContent = input.checked ? '已开启' : '已关闭';
+        el.classList.toggle('is-on', input.checked);
+    });
+}
+
+function bindSwitchStates() {
+    document.querySelectorAll('[data-switch-state]').forEach(el => {
+        const input = document.getElementById(el.dataset.switchState);
+        if (input && !input.dataset.stateBound) {
+            input.dataset.stateBound = '1';
+            input.addEventListener('change', refreshSwitchStates);
+        }
+    });
+    refreshSwitchStates();
+}
+
 // ==================== 系统配置加载 & 保存 ====================
 
 async function loadConfig() {
@@ -615,9 +1090,9 @@ async function loadConfig() {
         const response = await fetch('/api/config', { headers: getAuthHeaders() });
         const data = await response.json();
         if (!data.config) return;
-        
+
         const c = data.config;
-        
+
         // 系统设置
         setVal('cfg-system-name', c.system?.name);
         setVal('cfg-system-version', c.system?.version);
@@ -626,14 +1101,14 @@ async function loadConfig() {
         setVal('cfg-web-host', c.web?.host);
         setVal('cfg-web-debug', c.web?.debug === true ? 'true' : 'false');
         setVal('cfg-cors-enabled', c.web?.cors?.enabled === true ? 'true' : 'false');
-        
+
         // 采集设置
         setVal('cfg-col-interval', c.collection?.default_interval);
         setVal('cfg-col-concurrent', c.collection?.max_concurrent);
         setVal('cfg-col-timeout', c.collection?.timeout);
         setVal('cfg-col-retry', c.collection?.retry?.max_attempts);
         setVal('cfg-col-retry-interval', c.collection?.retry?.interval_seconds);
-        
+
         // 数据库设置
         setVal('cfg-db-raw-days', c.database?.retention?.raw_data_days);
         setVal('cfg-db-compressed-days', c.database?.retention?.compressed_data_days);
@@ -641,12 +1116,15 @@ async function loadConfig() {
         setVal('cfg-db-compress-enabled', c.database?.compression?.enabled === true ? 'true' : 'false');
         setVal('cfg-db-compress-interval', c.database?.compression?.interval_hours);
         setVal('cfg-db-compress-method', c.database?.compression?.method);
-        
+
         // 日志设置
         setVal('cfg-log-level', c.logging?.level);
         setVal('cfg-log-max-size', c.logging?.file?.max_size_mb);
         setVal('cfg-log-backup-count', c.logging?.file?.backup_count);
-        
+
+        // 加载完成后统一回到「未修改」状态
+        ['system', 'collection', 'database', 'logging'].forEach(s => setSectionStatus(s, 'idle'));
+
     } catch (error) {
         console.error('加载配置失败:', error);
     }
@@ -661,7 +1139,7 @@ function setVal(id, value) {
 
 async function saveSection(section) {
     let data = {};
-    
+
     if (section === 'system') {
         data = {
             section: 'system',
@@ -730,7 +1208,7 @@ async function saveSection(section) {
             }
         };
     }
-    
+
     try {
         const response = await fetch('/api/config', {
             method: 'PUT',
@@ -740,11 +1218,14 @@ async function saveSection(section) {
         const result = await response.json();
         if (result.success) {
             showAlert(result.message, 'success');
+            markSectionSaved(section);
         } else {
             showAlert(result.message || '保存失败', 'danger');
+            markSectionFailed(section);
         }
     } catch (error) {
         showAlert('保存失败: ' + error.message, 'danger');
+        markSectionFailed(section);
     }
 }
 
@@ -757,17 +1238,17 @@ async function loadAlarmRules() {
     try {
         const response = await fetch('/api/alarm-rules', { headers: getAuthHeaders() });
         const data = await response.json();
-        
+
         alarmRulesList = data.rules || [];
         document.getElementById('alarm-count-badge').textContent = alarmRulesList.length;
-        
+
         // 同时加载设备列表用于填充下拉框
         const devResp = await fetch('/api/devices', { headers: getAuthHeaders() });
         const devData = await devResp.json();
         devicesCache = devData.devices || [];
-        
+
         renderAlarmRules(alarmRulesList);
-        
+
         // 填充通知设置
         if (data.notification) {
             document.getElementById('cfg-notify-email').checked = data.notification.email?.enabled || false;
@@ -777,7 +1258,11 @@ async function loadAlarmRules() {
             document.getElementById('cfg-smtp-username').value = data.notification.email?.username || '';
             document.getElementById('cfg-smtp-recipients').value = (data.notification.email?.recipients || []).join(',');
         }
-        
+
+        // 开关是由代码赋值的，不触发 change，这里同步一次状态文字
+        refreshSwitchStates();
+        setSectionStatus('notification', 'idle');
+
     } catch (error) {
         console.error('加载报警规则失败:', error);
     }
@@ -785,12 +1270,12 @@ async function loadAlarmRules() {
 
 function renderAlarmRules(rules) {
     const tbody = document.getElementById('alarm-rules-body');
-    
+
     if (!rules || rules.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-3">暂无报警规则</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state">暂无报警规则</div></td></tr>';
         return;
     }
-    
+
     const condMap = {
         'greater_than': '> 大于',
         'less_than': '< 小于',
@@ -798,22 +1283,23 @@ function renderAlarmRules(rules) {
         'greater_equal': '>= 大于等于',
         'less_equal': '<= 小于等于'
     };
+    // 等级统一用 .tag--* 表达（严重/危险=红，警告=黄）
     const levelMap = {
-        'warning': '<span class="badge bg-warning">警告</span>',
-        'danger': '<span class="badge bg-orange">危险</span>',
-        'critical': '<span class="badge bg-danger">严重</span>'
+        'warning': '<span class="tag tag--warning">警告</span>',
+        'danger': '<span class="tag tag--danger">危险</span>',
+        'critical': '<span class="tag tag--danger">严重</span>'
     };
-    
+
     tbody.innerHTML = rules.map(r => `
         <tr>
-            <td><code>${r.id}</code></td>
+            <td><span class="cfg-code">${r.id}</span></td>
             <td>${r.name || '-'}</td>
             <td>${r.device_id || '-'}</td>
             <td>${r.register_name || '-'}</td>
             <td>${condMap[r.condition] || r.condition}</td>
-            <td>${r.threshold}</td>
+            <td class="cfg-num">${r.threshold}</td>
             <td>${levelMap[r.level] || r.level}</td>
-            <td>${r.enabled !== false ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-muted"></i>'}</td>
+            <td><span class="tag ${r.enabled !== false ? 'tag--success' : 'tag--offline'}">${r.enabled !== false ? '启用' : '禁用'}</span></td>
             <td>
                 <div class="btn-group btn-group-sm">
                     <button class="btn btn-outline-secondary" onclick="editRule('${r.id}')" title="编辑"><i class="bi bi-pencil"></i></button>
@@ -826,7 +1312,7 @@ function renderAlarmRules(rules) {
 
 function populateDeviceSelect() {
     const select = document.getElementById('rule-device-id');
-    select.innerHTML = '<option value="">选择设备</option>' + 
+    select.innerHTML = '<option value="">选择设备</option>' +
         devicesCache.map(d => `<option value="${d.device_id}">${d.name} (${d.device_id})</option>`).join('');
     select.onchange = function() {
         const device = devicesCache.find(d => d.device_id === this.value);
@@ -838,7 +1324,7 @@ function populateDeviceSelect() {
             else if (device.topics) vars = device.topics.map(t => t.name);
             else if (device.endpoints) vars = device.endpoints.map(e => e.name);
         }
-        regSelect.innerHTML = '<option value="">选择变量</option>' + 
+        regSelect.innerHTML = '<option value="">选择变量</option>' +
             vars.map(v => `<option value="${v}">${v}</option>`).join('');
     };
 }
@@ -850,7 +1336,7 @@ function showAddRuleModal() {
     document.getElementById('rule-id').disabled = false;
     document.getElementById('rule-delay').value = '0';
     populateDeviceSelect();
-    
+
     const modal = new bootstrap.Modal(document.getElementById('ruleModal'));
     modal.show();
 }
@@ -858,7 +1344,7 @@ function showAddRuleModal() {
 function editRule(ruleId) {
     const rule = alarmRulesList.find(r => r.id === ruleId);
     if (!rule) return;
-    
+
     document.getElementById('ruleModalTitle').textContent = '编辑报警规则';
     document.getElementById('rule-id-old').value = ruleId;
     document.getElementById('rule-id').value = ruleId;
@@ -870,14 +1356,14 @@ function editRule(ruleId) {
     document.getElementById('rule-level').value = rule.level || 'warning';
     document.getElementById('rule-delay').value = rule.delay ?? 0;
     document.getElementById('rule-enabled').value = rule.enabled !== false ? 'true' : 'false';
-    
+
     populateDeviceSelect();
     document.getElementById('rule-device-id').value = rule.device_id || '';
     document.getElementById('rule-device-id').onchange(); // 触发加载变量
     setTimeout(() => {
         document.getElementById('rule-register-name').value = rule.register_name || '';
     }, 100);
-    
+
     const modal = new bootstrap.Modal(document.getElementById('ruleModal'));
     modal.show();
 }
@@ -886,11 +1372,11 @@ async function saveRule() {
     const ruleId = document.getElementById('rule-id').value.trim();
     const oldId = document.getElementById('rule-id-old').value;
     const isEdit = !!oldId;
-    
+
     if (!ruleId) { showAlert('请输入规则ID', 'warning'); return; }
     if (!document.getElementById('rule-name').value.trim()) { showAlert('请输入规则名称', 'warning'); return; }
     if (!document.getElementById('rule-threshold').value) { showAlert('请输入阈值', 'warning'); return; }
-    
+
     const ruleData = {
         id: ruleId,
         name: document.getElementById('rule-name').value.trim(),
@@ -903,17 +1389,17 @@ async function saveRule() {
         delay: parseInt(document.getElementById('rule-delay').value) || 0,
         enabled: document.getElementById('rule-enabled').value === 'true'
     };
-    
+
     try {
         const url = isEdit ? `/api/alarm-rules/${oldId}` : '/api/alarm-rules';
         const method = isEdit ? 'PUT' : 'POST';
-        
+
         const response = await fetch(url, {
             method: method,
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify(ruleData)
         });
-        
+
         const result = await response.json();
         if (result.success) {
             showAlert(result.message, 'success');
@@ -928,8 +1414,8 @@ async function saveRule() {
 }
 
 async function deleteRule(ruleId) {
-    if (!confirm(`确定要删除规则 "${ruleId}" 吗？`)) return;
-    
+    if (!confirm(`确定要删除规则 "${ruleId}" 吗？\n\n删除后该变量将不再触发报警。`)) return;
+
     try {
         const response = await fetch(`/api/alarm-rules/${ruleId}`, {
             method: 'DELETE',
@@ -960,7 +1446,7 @@ async function saveNotification() {
             enabled: document.getElementById('cfg-notify-sound').checked
         }
     };
-    
+
     try {
         const response = await fetch('/api/alarm-rules/notification', {
             method: 'PUT',
@@ -969,8 +1455,10 @@ async function saveNotification() {
         });
         const result = await response.json();
         showAlert(result.success ? '通知设置已保存' : '保存失败', result.success ? 'success' : 'danger');
+        result.success ? markSectionSaved('notification') : markSectionFailed('notification');
     } catch (error) {
         showAlert('保存失败', 'danger');
+        markSectionFailed('notification');
     }
 }
 
@@ -980,7 +1468,7 @@ async function loadSystemStatus() {
     try {
         const response = await fetch('/api/system/status', { headers: getAuthHeaders() });
         const data = await response.json();
-        
+
         if (data.database) {
             document.getElementById('info-db-size').textContent = data.database.database_size_mb + ' MB';
             document.getElementById('info-data-count').textContent = (data.database.total_records || data.database.realtime_records).toLocaleString();
@@ -991,14 +1479,14 @@ async function loadSystemStatus() {
             const success = data.collector.successful_collections || 0;
             document.getElementById('info-success-rate').textContent = total > 0 ? ((success / total) * 100).toFixed(1) + '%' : '-';
         }
-        
-        // 更新模拟模式显示
+
+        // 更新模拟模式显示（用 .tag--* 表达，随主题切换）
         const simModeEl = document.getElementById('info-sim-mode');
         if (simModeEl) {
             simModeEl.textContent = data.simulation_mode ? '模拟模式' : '真实设备';
-            simModeEl.className = `badge ${data.simulation_mode ? 'bg-info' : 'bg-success'}`;
+            simModeEl.className = 'tag ' + (data.simulation_mode ? 'tag--info' : 'tag--success');
         }
-        
+
         if (data.uptime_seconds) {
             const days = Math.floor(data.uptime_seconds / 86400);
             const h = Math.floor((data.uptime_seconds % 86400) / 3600);
@@ -1029,29 +1517,30 @@ async function loadTariffConfig() {
         const r = await fetch('/api/industry40/energy/tariff', { headers: getAuthHeaders() });
         const data = await r.json();
         if (!data.success || !data.data) return;
-        
+
         const cfg = data.data;
-        
+
         // 电价
         if (cfg.tariff) {
             setVal('cfg-tariff-peak', cfg.tariff.peak);
             setVal('cfg-tariff-flat', cfg.tariff.flat);
             setVal('cfg-tariff-valley', cfg.tariff.valley);
         }
-        
+
         // 碳排放因子
         if (cfg.carbon_factor !== undefined) {
             setVal('cfg-carbon-factor', cfg.carbon_factor);
         }
-        
+
         // 时段
         if (cfg.tariff_periods) {
             renderPeriods('peak', cfg.tariff_periods.peak || []);
             renderPeriods('valley', cfg.tariff_periods.valley || []);
         }
-        
+
         // 预览
         updateTariffPreview();
+        setSectionStatus('tariff', 'idle');
     } catch(e) {
         console.error('加载电价配置失败:', e);
     }
@@ -1062,22 +1551,16 @@ function renderPeriods(type, periods) {
     container.innerHTML = '';
     periods.forEach((p, i) => {
         const row = document.createElement('div');
-        row.className = 'row g-1 mb-1';
+        row.className = 'cfg-period-row';
         row.innerHTML = `
-            <div class="col-4">
-                <input type="number" class="form-control form-control-sm" 
-                       value="${p[0]}" min="0" max="23" data-type="${type}" data-idx="${i}" data-field="start">
-            </div>
-            <div class="col-1 text-center align-self-center">-</div>
-            <div class="col-4">
-                <input type="number" class="form-control form-control-sm" 
-                       value="${p[1]}" min="1" max="24" data-type="${type}" data-idx="${i}" data-field="end">
-            </div>
-            <div class="col-3">
-                <button class="btn btn-sm btn-outline-danger w-100" onclick="removePeriod('${type}', ${i})">
-                    <i class="bi bi-trash"></i>
-                </button>
-            </div>
+            <input type="number" class="form-control form-control-sm"
+                   value="${p[0]}" min="0" max="23" data-type="${type}" data-idx="${i}" data-field="start">
+            <span class="cfg-period-sep">-</span>
+            <input type="number" class="form-control form-control-sm"
+                   value="${p[1]}" min="1" max="24" data-type="${type}" data-idx="${i}" data-field="end">
+            <button class="btn btn-sm btn-outline-danger" onclick="removePeriod('${type}', ${i})" title="删除该时段">
+                <i class="bi bi-trash"></i>
+            </button>
         `;
         container.appendChild(row);
     });
@@ -1087,24 +1570,19 @@ function addPeriod(type) {
     const container = document.getElementById(`${type}-periods`);
     const idx = container.children.length;
     const row = document.createElement('div');
-    row.className = 'row g-1 mb-1';
+    row.className = 'cfg-period-row';
     row.innerHTML = `
-        <div class="col-4">
-            <input type="number" class="form-control form-control-sm" 
-                   value="0" min="0" max="23" data-type="${type}" data-idx="${idx}" data-field="start">
-        </div>
-        <div class="col-1 text-center align-self-center">-</div>
-        <div class="col-4">
-            <input type="number" class="form-control form-control-sm" 
-                   value="8" min="1" max="24" data-type="${type}" data-idx="${idx}" data-field="end">
-        </div>
-        <div class="col-3">
-            <button class="btn btn-sm btn-outline-danger w-100" onclick="this.closest('.row').remove()">
-                <i class="bi bi-trash"></i>
-            </button>
-        </div>
+        <input type="number" class="form-control form-control-sm"
+               value="0" min="0" max="23" data-type="${type}" data-idx="${idx}" data-field="start">
+        <span class="cfg-period-sep">-</span>
+        <input type="number" class="form-control form-control-sm"
+               value="8" min="1" max="24" data-type="${type}" data-idx="${idx}" data-field="end">
+        <button class="btn btn-sm btn-outline-danger" onclick="this.closest('.cfg-period-row').remove(); markSectionDirty('tariff')" title="删除该时段">
+            <i class="bi bi-trash"></i>
+        </button>
     `;
     container.appendChild(row);
+    markSectionDirty('tariff');
 }
 
 function removePeriod(type, idx) {
@@ -1112,12 +1590,13 @@ function removePeriod(type, idx) {
     if (container.children[idx]) {
         container.children[idx].remove();
     }
+    markSectionDirty('tariff');
 }
 
 function collectPeriods(type) {
     const container = document.getElementById(`${type}-periods`);
     const periods = [];
-    container.querySelectorAll('.row').forEach(row => {
+    container.querySelectorAll('.cfg-period-row').forEach(row => {
         const inputs = row.querySelectorAll('input[type="number"]');
         if (inputs.length >= 2) {
             const start = parseInt(inputs[0].value);
@@ -1151,14 +1630,14 @@ async function saveTariff() {
         flat: parseFloat(document.getElementById('cfg-tariff-flat').value),
         valley: parseFloat(document.getElementById('cfg-tariff-valley').value),
     };
-    
+
     if (isNaN(tariff.peak) || isNaN(tariff.flat) || isNaN(tariff.valley)) {
         showAlert('请填写完整的电价信息', 'warning');
         return;
     }
-    
+
     const carbonFactor = parseFloat(document.getElementById('cfg-carbon-factor').value);
-    
+
     const payload = {
         tariff: tariff,
         tariff_periods: {
@@ -1166,11 +1645,11 @@ async function saveTariff() {
             valley: collectPeriods('valley'),
         },
     };
-    
+
     if (!isNaN(carbonFactor) && carbonFactor > 0) {
         payload.carbon_factor = carbonFactor;
     }
-    
+
     try {
         const r = await fetch('/api/industry40/energy/tariff', {
             method: 'PUT',
@@ -1181,11 +1660,14 @@ async function saveTariff() {
         if (data.success) {
             showAlert('电价配置已保存并实时生效', 'success');
             updateTariffPreview();
+            markSectionSaved('tariff');
         } else {
             showAlert(data.error || data.message || '保存失败', 'danger');
+            markSectionFailed('tariff');
         }
     } catch(e) {
         showAlert('保存失败: ' + e.message, 'danger');
+        markSectionFailed('tariff');
     }
 }
 
@@ -1196,21 +1678,24 @@ async function loadAlarmOutputConfig() {
         const r = await fetch('/api/alarm-output/config', { headers: getAuthHeaders() });
         const data = await r.json();
         if (!data.success || !data.config) return;
-        
+
         const cfg = data.config;
-        
+
         document.getElementById('cfg-ao-enabled').checked = cfg.enabled !== false;
-        
+
         const tower = cfg.signal_tower || {};
         setVal('cfg-ao-host', tower.host);
         setVal('cfg-ao-port', tower.port);
         setVal('cfg-ao-slave', tower.slave_id);
-        
+
         const doMap = tower.do_mapping || {};
         setVal('cfg-ao-do-red', doMap.red_light);
         setVal('cfg-ao-do-yellow', doMap.yellow_light);
         setVal('cfg-ao-do-green', doMap.green_light);
         setVal('cfg-ao-do-buzzer', doMap.buzzer);
+
+        refreshSwitchStates();
+        setSectionStatus('alarm-output', 'idle');
     } catch(e) {
         console.error('加载报警输出配置失败:', e);
     }
@@ -1231,7 +1716,7 @@ async function saveAlarmOutputConfig() {
             }
         }
     };
-    
+
     try {
         const r = await fetch('/api/alarm-output/config', {
             method: 'PUT',
@@ -1241,11 +1726,14 @@ async function saveAlarmOutputConfig() {
         const data = await r.json();
         if (data.success) {
             showAlert('报警输出配置已保存并实时生效', 'success');
+            markSectionSaved('alarm-output');
         } else {
             showAlert(data.message || '保存失败', 'danger');
+            markSectionFailed('alarm-output');
         }
     } catch(e) {
         showAlert('保存失败: ' + e.message, 'danger');
+        markSectionFailed('alarm-output');
     }
 }
 
@@ -1256,20 +1744,23 @@ async function loadBroadcastConfig() {
         const r = await fetch('/api/broadcast/config', { headers: getAuthHeaders() });
         const data = await r.json();
         if (!data.success) return;
-        
+
         const cfg = data.config || {};
         const runtime = data.runtime || {};
-        
+
         document.getElementById('cfg-bc-enabled').checked = runtime.enabled !== false;
-        
+
         const mqtt = cfg.mqtt || {};
         setVal('cfg-bc-broker', mqtt.broker || runtime.broker);
         setVal('cfg-bc-port', mqtt.port);
         setVal('cfg-bc-topic', mqtt.topic_prefix);
         setVal('cfg-bc-username', mqtt.username);
-        
+
         const areas = cfg.areas || runtime.areas || [];
         setVal('cfg-bc-areas', areas.join(','));
+
+        refreshSwitchStates();
+        setSectionStatus('broadcast', 'idle');
     } catch(e) {
         console.error('加载广播配置失败:', e);
     }
@@ -1278,7 +1769,7 @@ async function loadBroadcastConfig() {
 async function saveBroadcastConfig() {
     const areasStr = document.getElementById('cfg-bc-areas').value;
     const areas = areasStr.split(',').map(s => s.trim()).filter(Boolean);
-    
+
     const payload = {
         enabled: document.getElementById('cfg-bc-enabled').checked,
         mqtt: {
@@ -1290,7 +1781,7 @@ async function saveBroadcastConfig() {
         },
         areas: areas,
     };
-    
+
     try {
         const r = await fetch('/api/broadcast/config', {
             method: 'PUT',
@@ -1300,11 +1791,14 @@ async function saveBroadcastConfig() {
         const data = await r.json();
         if (data.success) {
             showAlert('广播系统配置已保存并实时生效', 'success');
+            markSectionSaved('broadcast');
         } else {
             showAlert(data.message || '保存失败', 'danger');
+            markSectionFailed('broadcast');
         }
     } catch(e) {
         showAlert('保存失败: ' + e.message, 'danger');
+        markSectionFailed('broadcast');
     }
 }
 
@@ -1313,7 +1807,7 @@ async function saveBroadcastConfig() {
 function showAlert(message, type = 'info') {
     const existing = document.querySelector('.alert-floating');
     if (existing) existing.remove();
-    
+
     const alert = document.createElement('div');
     alert.className = `alert alert-${type} alert-dismissible fade show alert-floating`;
     alert.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 9999; min-width: 300px;';

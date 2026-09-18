@@ -3,189 +3,330 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
     <title>登录 - 工业数据采集与监控系统</title>
+
+    <!-- 深浅色：跟随系统偏好，驱动设计令牌(data-theme)与 Bootstrap/Tabler(data-bs-theme) -->
+    <script>
+        (function () {
+            var mq = window.matchMedia('(prefers-color-scheme: dark)');
+            function apply(dark) {
+                var root = document.documentElement;
+                root.setAttribute('data-theme', dark ? 'dark' : 'light');
+                root.setAttribute('data-bs-theme', dark ? 'dark' : 'light');
+            }
+            apply(mq.matches);
+            var onChange = function (e) { apply(e.matches); };
+            if (mq.addEventListener) { mq.addEventListener('change', onChange); }
+            else if (mq.addListener) { mq.addListener(onChange); }
+        })();
+    </script>
+
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/design-tokens.css') }}" rel="stylesheet">
+
     <style>
+        /* 登录页：门面页面。扁平纯色（不用渐变），颜色/间距/字号全部取设计令牌，
+           输入框与按钮高度 ≥44px（可触达性），深色模式随 data-theme 自动生效。 */
+        html, body {
+            height: 100%;
+        }
+
         body {
-            background: linear-gradient(135deg, #1a237e 0%, #0d47a1 50%, #01579b 100%);
-            min-height: 100vh;
+            margin: 0;
+            background: var(--bg-page);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: var(--font-base);
+            line-height: var(--leading-base);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            padding: var(--space-5);
         }
+
         .login-container {
             width: 100%;
             max-width: 420px;
-            padding: 15px;
         }
+
         .login-card {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            background: var(--bg-surface);
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
             overflow: hidden;
-            backdrop-filter: blur(10px);
         }
-        .login-header {
-            background: linear-gradient(135deg, #1565c0, #0d47a1);
-            color: white;
-            padding: 30px;
+
+        /* ---------- 品牌区：产品名 / 副标题 / 系统标识 ---------- */
+        .login-brand {
+            padding: var(--space-8) var(--space-6) var(--space-5);
             text-align: center;
+            border-bottom: 1px solid var(--border-base);
         }
-        .login-header h2 {
-            margin: 0;
-            font-size: 1.5rem;
-            font-weight: 600;
-        }
-        .login-header p {
-            margin: 8px 0 0;
-            opacity: 0.85;
-            font-size: 0.9rem;
-        }
-        .login-header .system-icon {
-            font-size: 3rem;
-            margin-bottom: 15px;
-        }
-        .login-body {
-            padding: 30px;
-        }
-        .form-floating {
-            margin-bottom: 16px;
-        }
-        .form-floating .form-control {
-            border-radius: 10px;
-            border: 2px solid #e0e0e0;
-            padding: 12px 16px;
+
+        .login-brand__icon {
+            width: 56px;
             height: 56px;
-            transition: all 0.3s;
+            margin: 0 auto var(--space-4);
+            border-radius: var(--radius-lg);
+            background: var(--color-brand-soft);
+            color: var(--color-brand);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: var(--font-2xl);
         }
-        .form-floating .form-control:focus {
-            border-color: #1565c0;
-            box-shadow: 0 0 0 3px rgba(21, 101, 192, 0.15);
+
+        .login-brand__name {
+            margin: 0;
+            font-size: var(--font-xl);
+            font-weight: var(--weight-semibold);
+            letter-spacing: 0.01em;
+            color: var(--text-primary);
         }
+
+        .login-brand__subtitle {
+            margin: var(--space-2) 0 0;
+            font-size: var(--font-sm);
+            color: var(--text-muted);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        /* ---------- 表单区 ---------- */
+        .login-body {
+            padding: var(--space-6);
+        }
+
+        .login-field {
+            margin-bottom: var(--space-4);
+        }
+
+        .login-field .form-label {
+            font-size: var(--font-sm);
+            font-weight: var(--weight-medium);
+            color: var(--text-secondary);
+            margin-bottom: var(--space-2);
+        }
+
+        .login-field .form-control {
+            height: 48px;
+            padding: 0 var(--space-4);
+            font-size: var(--font-base);
+            color: var(--text-primary);
+            background: var(--bg-surface);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-md);
+            transition: border-color var(--duration-fast) var(--ease-out),
+                        box-shadow var(--duration-fast) var(--ease-out);
+        }
+
+        .login-field .form-control::placeholder {
+            color: var(--text-disabled);
+        }
+
+        .login-field .form-control:focus {
+            background: var(--bg-surface);
+            color: var(--text-primary);
+            border-color: var(--color-brand);
+            box-shadow: var(--focus-ring);
+        }
+
+        .login-options {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: var(--space-5);
+        }
+
+        .login-options .form-check-label {
+            font-size: var(--font-sm);
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+
+        .login-options .form-check-input {
+            margin-top: 0.2em;
+            border-color: var(--border-strong);
+            cursor: pointer;
+        }
+
+        .login-options .form-check-input:checked {
+            background-color: var(--color-brand);
+            border-color: var(--color-brand);
+        }
+
+        /* ---------- 主按钮 ---------- */
         .btn-login {
             width: 100%;
-            padding: 12px;
-            border-radius: 10px;
-            font-size: 1.05rem;
-            font-weight: 600;
-            background: linear-gradient(135deg, #1565c0, #0d47a1);
-            border: none;
-            transition: all 0.3s;
+            height: 48px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: var(--space-2);
+            font-size: var(--font-lg);
+            font-weight: var(--weight-semibold);
+            letter-spacing: 0.08em;
+            color: var(--text-inverse);
+            background: var(--color-brand);
+            border: 1px solid var(--color-brand);
+            border-radius: var(--radius-md);
+            transition: background var(--duration-fast) var(--ease-out),
+                        border-color var(--duration-fast) var(--ease-out);
         }
-        .btn-login:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(21, 101, 192, 0.4);
-            background: linear-gradient(135deg, #1976d2, #1565c0);
+
+        .btn-login:hover:not(:disabled) {
+            background: var(--color-brand-strong);
+            border-color: var(--color-brand-strong);
+            color: var(--text-inverse);
         }
-        .btn-login:active {
-            transform: translateY(0);
+
+        .btn-login:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
         }
-        .login-footer {
-            text-align: center;
-            padding: 0 30px 20px;
-            color: #666;
-            font-size: 0.85rem;
+
+        /* ---------- 错误提示：底色 + 左边框色条 + 文字，不使用渐变 ---------- */
+        .login-alert {
+            display: flex;
+            align-items: flex-start;
+            gap: var(--space-2);
+            padding: var(--space-3) var(--space-4);
+            margin-bottom: var(--space-5);
+            background: var(--color-danger-soft);
+            border: 1px solid var(--color-danger);
+            border-left: 4px solid var(--color-danger);
+            border-radius: var(--radius-md);
+            color: var(--color-danger);
+            font-size: var(--font-sm);
+            font-weight: var(--weight-medium);
         }
-        .alert {
-            border-radius: 10px;
-            font-size: 0.9rem;
+
+        .login-alert i {
+            font-size: var(--font-lg);
+            line-height: var(--leading-tight);
         }
+
+        /* ---------- 默认账户提示 ---------- */
         .default-accounts {
-            background: #e3f2fd;
-            border-radius: 10px;
-            padding: 12px 16px;
-            margin-top: 16px;
-            font-size: 0.85rem;
+            margin-top: var(--space-5);
+            padding: var(--space-3) var(--space-4);
+            background: var(--bg-sunken);
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-md);
+            font-size: var(--font-xs);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: background var(--duration-fast) var(--ease-out);
         }
+
+        .default-accounts:hover {
+            background: var(--bg-hover);
+        }
+
         .default-accounts .title {
-            font-weight: 600;
-            color: #1565c0;
-            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            font-size: var(--font-xs);
+            font-weight: var(--weight-semibold);
+            color: var(--text-primary);
+            margin-bottom: var(--space-2);
         }
+
         .default-accounts code {
-            background: rgba(21, 101, 192, 0.1);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.85rem;
+            font-family: var(--font-mono);
+            font-size: var(--font-xs);
+            color: var(--text-primary);
+            background: var(--bg-surface);
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-sm);
+            padding: 1px var(--space-1);
         }
-        .loading-spinner {
-            display: none;
+
+        .default-accounts .hint {
+            margin-top: var(--space-2);
+            color: var(--text-muted);
         }
-        .loading .loading-spinner {
-            display: inline-block;
+
+        /* ---------- 页脚 ---------- */
+        .login-footer {
+            padding: var(--space-4) var(--space-6);
+            border-top: 1px solid var(--border-base);
+            background: var(--bg-sunken);
+            text-align: center;
+            font-size: var(--font-xs);
+            color: var(--text-muted);
         }
-        .loading .btn-text {
-            display: none;
-        }
+
+        /* ---------- 提交中状态 ---------- */
+        .loading-spinner { display: none; }
+
+        .loading .loading-spinner { display: inline-block; }
+
+        .loading .btn-text { display: none; }
     </style>
 </head>
 <body>
     <div class="login-container">
         <div class="login-card">
-            <div class="login-header">
-                <div class="system-icon">
+            <!-- 品牌区 -->
+            <div class="login-brand">
+                <div class="login-brand__icon">
                     <i class="bi bi-gear-wide-connected"></i>
                 </div>
-                <h2>工业数据采集与监控系统</h2>
-                <p>Industrial SCADA System</p>
+                <h1 class="login-brand__name">工业数据采集与监控系统</h1>
+                <p class="login-brand__subtitle">Industrial SCADA System</p>
             </div>
-            
+
+            <!-- 表单区 -->
             <div class="login-body">
-                <div id="alertBox" class="alert alert-danger d-none" role="alert">
-                    <i class="bi bi-exclamation-circle me-2"></i>
+                <div id="alertBox" class="login-alert d-none" role="alert" aria-live="assertive">
+                    <i class="bi bi-exclamation-circle-fill"></i>
                     <span id="alertMessage"></span>
                 </div>
-                
+
                 <form id="loginForm" onsubmit="handleLogin(event)">
-                    <div class="form-floating">
-                        <input type="text" class="form-control" id="username" 
-                               placeholder="用户名" required autocomplete="username">
-                        <label for="username">
-                            <i class="bi bi-person me-1"></i>用户名
-                        </label>
+                    <div class="login-field">
+                        <label class="form-label" for="username">用户名</label>
+                        <input type="text" class="form-control" id="username"
+                               placeholder="请输入用户名" required autocomplete="username">
                     </div>
-                    
-                    <div class="form-floating">
-                        <input type="password" class="form-control" id="password" 
-                               placeholder="密码" required autocomplete="current-password">
-                        <label for="password">
-                            <i class="bi bi-lock me-1"></i>密码
-                        </label>
+
+                    <div class="login-field">
+                        <label class="form-label" for="password">密码</label>
+                        <input type="password" class="form-control" id="password"
+                               placeholder="请输入密码" required autocomplete="current-password">
                     </div>
-                    
-                    <div class="form-check mb-3">
-                        <input class="form-check-input" type="checkbox" id="rememberMe">
-                        <label class="form-check-label" for="rememberMe">
-                            记住我
-                        </label>
+
+                    <div class="login-options">
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" id="rememberMe">
+                            <label class="form-check-label" for="rememberMe">记住我</label>
+                        </div>
                     </div>
-                    
-                    <button type="submit" class="btn btn-primary btn-login" id="loginBtn">
+
+                    <button type="submit" class="btn btn-login" id="loginBtn">
                         <span class="btn-text">
-                            <i class="bi bi-box-arrow-in-right me-2"></i>登 录
+                            <i class="bi bi-box-arrow-in-right"></i> 登 录
                         </span>
-                        <span class="loading-spinner spinner-border spinner-border-sm" role="status"></span>
+                        <span class="loading-spinner spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                     </button>
                 </form>
-                
-                <div class="default-accounts" style="cursor:pointer" onclick="fillDefault('admin','admin123')" title="点击自动填入">
+
+                <div class="default-accounts" onclick="fillDefault('admin','admin123')" title="点击自动填入">
                     <div class="title">
                         <i class="bi bi-info-circle me-1"></i>默认账户（点击填入）
                     </div>
                     <div>管理员: <code>admin</code> / <code>admin123</code></div>
-                    <div class="mt-1 text-muted" style="font-size: 0.8rem;">
-                        首次登录请修改默认密码
-                    </div>
+                    <div class="hint">首次登录请修改默认密码</div>
                 </div>
             </div>
-            
+
             <div class="login-footer">
-                <small>
-                    <i class="bi bi-shield-check me-1"></i>
-                    基于JWT的安全认证 | v2.1
-                </small>
+                <i class="bi bi-shield-check me-1"></i>
+                基于JWT的安全认证 | v2.1
             </div>
         </div>
     </div>
@@ -223,7 +364,7 @@
             const alertMessage = document.getElementById('alertMessage');
             alertMessage.textContent = message;
             alertBox.classList.remove('d-none');
-            
+
             // 3秒后自动隐藏
             setTimeout(() => {
                 alertBox.classList.add('d-none');
@@ -232,21 +373,21 @@
 
         async function handleLogin(event) {
             event.preventDefault();
-            
+
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value;
             const rememberMe = document.getElementById('rememberMe').checked;
             const loginBtn = document.getElementById('loginBtn');
-            
+
             if (!username || !password) {
                 showAlert('请输入用户名和密码');
                 return;
             }
-            
+
             // 显示加载状态
             loginBtn.classList.add('loading');
             loginBtn.disabled = true;
-            
+
             try {
                 const response = await fetch('/api/auth/login', {
                     method: 'POST',
@@ -255,9 +396,9 @@
                     },
                     body: JSON.stringify({ username, password })
                 });
-                
+
                 const data = await response.json();
-                
+
                 if (data.success) {
                     // 保存token和用户信息
                     localStorage.setItem('auth_token', data.token);
@@ -274,6 +415,7 @@
                     window.location.href = '/dashboard';
                 } else {
                     showAlert(data.message || '登录失败');
+                    document.getElementById('password').select();
                 }
             } catch (error) {
                 console.error('Login error:', error);

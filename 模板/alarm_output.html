@@ -4,182 +4,249 @@
 
 {% block extra_css %}
 <style>
-/* 报警灯塔 */
+/* ==================== 报警输出页（声光/广播） ==================== */
+
+/* ---------- 顶部状态栏 ---------- */
+.status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding: var(--space-2) var(--space-4);
+}
+.status-bar__item { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--font-sm); color: var(--text-secondary); }
+.status-bar__label { font-weight: var(--weight-medium); color: var(--text-muted); }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ---------- 灯塔示意图 ---------- */
 .light-tower {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    padding: 20px;
+    padding: var(--space-2) 0;
+}
+/* 灯体：三段堆叠，亮=语义色实心，灭=下沉底色+边框 */
+.light-tower__stack {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-1);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
 }
 .light-lamp {
-    width: 80px;
-    height: 80px;
-    border-radius: 50%;
-    border: 4px solid #444;
+    width: 116px;
+    height: 42px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: bold;
-    font-size: 12px;
-    color: #fff;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
-    transition: all 0.3s;
-    position: relative;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--bg-sunken);
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.08em;
+    transition: background-color var(--duration-fast) var(--ease-out),
+                color var(--duration-fast) var(--ease-out);
 }
 .light-lamp.off {
-    background: #333;
-    box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+    background: var(--bg-sunken);
+    color: var(--text-muted);
+    border-color: var(--border-strong);
 }
-.light-lamp.red.on {
-    background: radial-gradient(circle at 40% 35%, #ff6b6b, #cc0000);
-    box-shadow: 0 0 30px rgba(255,0,0,0.6), 0 0 60px rgba(255,0,0,0.3), inset 0 0 15px rgba(255,255,255,0.2);
-}
-.light-lamp.yellow.on {
-    background: radial-gradient(circle at 40% 35%, #ffd93d, #e6a800);
-    box-shadow: 0 0 30px rgba(255,200,0,0.6), 0 0 60px rgba(255,200,0,0.3), inset 0 0 15px rgba(255,255,255,0.2);
-}
-.light-lamp.green.on {
-    background: radial-gradient(circle at 40% 35%, #6bff6b, #00aa00);
-    box-shadow: 0 0 30px rgba(0,200,0,0.6), 0 0 60px rgba(0,200,0,0.3), inset 0 0 15px rgba(255,255,255,0.2);
-}
-.light-lamp.flashing {
-    animation: flash-anim 0.5s ease-in-out infinite;
-}
-.light-lamp.fast-flash {
-    animation: flash-anim 0.25s ease-in-out infinite;
-}
-@keyframes flash-anim {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.2; }
-}
-.tower-pole {
-    width: 12px;
-    height: 20px;
-    background: linear-gradient(90deg, #666, #999, #666);
-    border-radius: 2px;
-}
-.buzzer-icon {
-    font-size: 40px;
-    transition: all 0.3s;
-}
-.buzzer-icon.active {
-    color: #dc3545;
-    animation: buzz-anim 0.15s linear infinite;
-}
-.buzzer-icon.pulse {
-    color: #ffc107;
-    animation: buzz-pulse 1s ease-in-out infinite;
-}
-@keyframes buzz-pulse {
-    0%, 30% { opacity: 1; transform: rotate(-5deg); }
-    35%, 65% { opacity: 0.3; transform: rotate(0deg); }
-    70%, 100% { opacity: 1; transform: rotate(5deg); }
-}
-@keyframes buzz-anim {
-    0% { transform: rotate(-5deg); }
-    50% { transform: rotate(5deg); }
-    100% { transform: rotate(-5deg); }
-}
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
+.light-lamp.red.on { background: var(--color-danger); color: var(--text-inverse); border-color: var(--color-danger); }
+.light-lamp.yellow.on { background: var(--color-warning); color: var(--text-inverse); border-color: var(--color-warning); }
+.light-lamp.green.on { background: var(--color-success); color: var(--text-inverse); border-color: var(--color-success); }
+/* 报警活动强调：仅用描边环，不做闪烁/呼吸动画 */
+.light-lamp.flashing { outline: 3px solid var(--color-warning); outline-offset: 2px; }
+.light-lamp.fast-flash { outline: 3px solid var(--color-danger); outline-offset: 2px; }
 
-/* 广播历史 */
+.light-tower__pole { width: 10px; height: 16px; background: var(--border-strong); }
+.light-tower__base { width: 76px; height: 8px; background: var(--border-base); border-radius: var(--radius-sm); }
+.light-tower__caption { font-size: var(--font-xs); color: var(--text-muted); margin-top: var(--space-2); }
+
+.buzzer-block {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-md);
+    background: var(--bg-sunken);
+}
+.buzzer-icon { font-size: 24px; color: var(--text-disabled); }
+.buzzer-icon--alarm { color: var(--color-danger); }
+.buzzer-icon--warning { color: var(--color-warning); }
+.buzzer-block__state { font-size: var(--font-xs); color: var(--text-secondary); }
+
+/* 当前等级：色条 + 标签（色条表达等级，取代整行闪烁） */
+.level-row { display: flex; align-items: center; gap: var(--space-2); }
+.level-row .level-bar { min-height: 24px; }
+.level-bar--normal { background: var(--color-success); }
+.tag--lg { font-size: var(--font-sm); padding: var(--space-1) var(--space-3); }
+
+/* ---------- 分区（广播区） ---------- */
+.zone {
+    padding: var(--space-3);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-md);
+    background: var(--bg-sunken);
+    margin-bottom: var(--space-3);
+}
+.zone__title {
+    font-size: var(--font-xs);
+    font-weight: var(--weight-semibold);
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+    margin-bottom: var(--space-2);
+}
+.zone .form-label { font-size: var(--font-sm); font-weight: var(--weight-medium); color: var(--text-secondary); margin-bottom: var(--space-1); }
+.preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+@media (max-width: 575.98px) { .preset-grid { grid-template-columns: 1fr; } }
+
+/* ---------- 广播历史 ---------- */
 .broadcast-item {
-    padding: 8px 12px;
-    border-left: 3px solid #6c757d;
-    margin-bottom: 6px;
-    background: #f8f9fa;
-    border-radius: 0 4px 4px 0;
-    font-size: 13px;
+    padding: var(--space-2) var(--space-3);
+    border-left: 3px solid var(--border-strong);
+    background: var(--bg-surface);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    margin-bottom: var(--space-2);
+    font-size: var(--font-sm);
 }
-.broadcast-item.critical { border-left-color: #dc3545; background: #fff5f5; }
-.broadcast-item.warning { border-left-color: #ffc107; background: #fffdf0; }
+.broadcast-item.critical { border-left-color: var(--color-danger); }
+.broadcast-item.warning { border-left-color: var(--color-warning); }
+.broadcast-item.info { border-left-color: var(--color-info); }
+.broadcast-item__meta { font-size: var(--font-xs); color: var(--text-muted); }
+.broadcast-item__text { color: var(--text-primary); margin-top: 2px; }
 
-/* 报警规则表格 */
-.rule-enabled { cursor: pointer; }
+/* ---------- 规则表格 ---------- */
+.rules-table { margin-bottom: 0; }
+.rules-table thead th {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-xs);
+    font-weight: var(--weight-semibold);
+    color: var(--text-muted);
+    background: var(--bg-sunken);
+    border-bottom: 1px solid var(--border-strong);
+    white-space: nowrap;
+}
+.rules-table tbody td {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-sm);
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-base);
+    vertical-align: middle;
+}
+.rules-table tbody tr:last-child td { border-bottom: 0; }
+.rules-table .col-num {
+    text-align: right;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+.stat-cell { text-align: center; }
+.stat-cell .metric-label { display: block; margin-top: var(--space-1); }
 
-/* 手动控制按钮 */
-#btn-red, #btn-yellow, #btn-green, #btn-buzzer {
-    transition: all 0.2s ease;
-    font-size: 13px;
-}
-#btn-red.active, #btn-yellow.active, #btn-green.active, #btn-buzzer.active {
-    box-shadow: inset 0 0 8px rgba(255,255,255,0.3);
-}
+/* ---------- 手动控制 ---------- */
+.manual-note { font-size: var(--font-xs); color: var(--text-muted); }
+#btn-red, #btn-yellow, #btn-green, #btn-buzzer { font-size: var(--font-sm); }
+
+/* ---------- 空态 / 加载态 ---------- */
+.state-box { padding: var(--space-6) var(--space-4); text-align: center; }
+.state-box--inline { padding: var(--space-3); }
+.state-box__icon { display: block; font-size: 24px; color: var(--text-disabled); margin-bottom: var(--space-1); }
+.state-box__title { font-size: var(--font-sm); color: var(--text-secondary); }
+.state-box .spinner-border { color: var(--color-brand); }
+
+/* ---------- 弹窗 ---------- */
+.modal-content { border: 1px solid var(--border-base); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.modal-header { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-base); }
+.modal-title { font-size: var(--font-lg); font-weight: var(--weight-semibold); }
+.modal-body { padding: var(--space-4); }
+.modal-footer { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border-base); gap: var(--space-2); }
+.modal .form-label { font-size: var(--font-sm); font-weight: var(--weight-medium); color: var(--text-secondary); margin-bottom: var(--space-1); }
+
+/* ---------- 按钮 loading 态 ---------- */
+.btn[disabled] { cursor: not-allowed; opacity: 0.7; }
 </style>
 {% endblock %}
 
 {% block content %}
 <!-- 顶部状态栏 -->
-<div class="row mb-3">
-    <div class="col-12">
-        <div class="card border-0 bg-dark text-white">
-            <div class="card-body py-2 d-flex align-items-center justify-content-between">
-                <div>
-                    <i class="bi bi-lightning-charge-fill text-warning"></i>
-                    <strong>报警输出状态：</strong>
-                    <span id="output-status-text" class="badge bg-secondary">加载中...</span>
-                </div>
-                <div>
-                    <strong>广播系统：</strong>
-                    <span id="broadcast-status-text" class="badge bg-secondary">加载中...</span>
-                </div>
-                <div class="d-flex align-items-center gap-2">
-                    <button class="btn btn-sm btn-outline-light" id="btn-sound-toggle" onclick="toggleSound()" title="浏览器报警音">
-                        <i class="bi bi-volume-up-fill"></i> 报警音开
-                    </button>
-                    <button class="btn btn-sm btn-outline-light" onclick="loadAll()">
-                        <i class="bi bi-arrow-clockwise"></i> 刷新
-                    </button>
-                </div>
-            </div>
-        </div>
+<div class="panel mb-3">
+    <div class="status-bar">
+        <span class="status-bar__item">
+            <i class="bi bi-lightning-charge-fill" style="color:var(--color-warning)"></i>
+            <span class="status-bar__label">报警输出状态：</span>
+            <span id="output-status-text" class="tag tag--offline">加载中…</span>
+        </span>
+        <span class="status-bar__item">
+            <i class="bi bi-megaphone" style="color:var(--color-info)"></i>
+            <span class="status-bar__label">广播系统：</span>
+            <span id="broadcast-status-text" class="tag tag--offline">加载中…</span>
+        </span>
+        <span class="d-flex align-items-center gap-2">
+            <button class="btn btn-sm btn-outline-secondary" id="btn-sound-toggle" onclick="toggleSound()" title="浏览器报警音">
+                <i class="bi bi-volume-up-fill"></i> 报警音开
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="loadAll()">
+                <i class="bi bi-arrow-clockwise"></i> 刷新
+            </button>
+        </span>
     </div>
 </div>
 
-<div class="row">
+<div class="row g-3">
     <!-- 左栏：报警灯塔 -->
-    <div class="col-md-4">
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-lightbulb"></i> 现场声光报警器</h5>
+    <div class="col-lg-4">
+        <div class="panel mb-3">
+            <div class="panel__header">
+                <span><i class="bi bi-lightbulb me-2"></i>现场声光报警器</span>
+                <span class="tag tag--offline" id="lamp-mode-tag">按等级自动</span>
             </div>
-            <div class="card-body">
-                <div class="row align-items-center">
-                    <div class="col-6">
+            <div class="panel__body">
+                <div class="row g-3 align-items-start">
+                    <div class="col-sm-6">
+                        <!-- 灯塔示意图：红/黄/绿三段 + 蜂鸣器 -->
                         <div class="light-tower">
-                            <div class="light-lamp red off" id="lamp-red">红灯</div>
-                            <div class="tower-pole"></div>
-                            <div class="light-lamp yellow off" id="lamp-yellow">黄灯</div>
-                            <div class="tower-pole"></div>
-                            <div class="light-lamp green on" id="lamp-green">绿灯</div>
-                            <div class="tower-pole"></div>
-                            <div class="buzzer-icon text-muted" id="buzzer-icon">
-                                <i class="bi bi-volume-up-fill"></i>
+                            <div class="light-tower__stack">
+                                <div class="light-lamp red off" id="lamp-red">红灯</div>
+                                <div class="light-lamp yellow off" id="lamp-yellow">黄灯</div>
+                                <div class="light-lamp green on" id="lamp-green">绿灯</div>
+                            </div>
+                            <div class="light-tower__pole"></div>
+                            <div class="light-tower__base"></div>
+                            <div class="light-tower__caption">灯体：实心＝点亮 / 下沉＝熄灭</div>
+                            <div class="buzzer-block">
+                                <i class="bi bi-volume-up-fill buzzer-icon" id="buzzer-icon"></i>
+                                <span class="buzzer-block__state">蜂鸣器：<span id="buzzer-state">静音</span></span>
                             </div>
                         </div>
                     </div>
-                    <div class="col-6">
-                        <div class="mb-2">
-                            <small class="text-muted">当前状态</small>
-                            <div id="alarm-level-display" class="fs-5 fw-bold text-success">正常</div>
-                        </div>
-                        <div class="mb-2">
-                            <small class="text-muted">报警信息</small>
-                            <div id="alarm-message-display" class="small">-</div>
+                    <div class="col-sm-6">
+                        <div class="mb-3">
+                            <div class="metric-label">当前等级</div>
+                            <div class="level-row mt-1">
+                                <span class="level-bar" id="alarm-level-bar" style="display:none"></span>
+                                <span id="alarm-level-display" class="tag tag--success tag--lg">正常</span>
+                            </div>
                         </div>
                         <div class="mb-3">
-                            <small class="text-muted">持续时间</small>
-                            <div id="alarm-since-display" class="small">-</div>
+                            <div class="metric-label">报警信息</div>
+                            <div id="alarm-message-display" class="small text-break">-</div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="metric-label">持续时间起算</div>
+                            <div id="alarm-since-display" class="small mono">-</div>
                         </div>
                         <div class="d-grid gap-2">
-                            <button class="btn btn-warning btn-sm" onclick="acknowledgeOutput()">
+                            <button class="btn btn-outline-warning btn-sm" id="btn-ack" onclick="acknowledgeOutput()">
                                 <i class="bi bi-volume-mute"></i> 消音
                             </button>
-                            <button class="btn btn-success btn-sm" onclick="resetOutput()">
+                            <button class="btn btn-outline-success btn-sm" id="btn-reset-output" onclick="resetOutput()">
                                 <i class="bi bi-arrow-counterclockwise"></i> 复位
                             </button>
                         </div>
@@ -189,13 +256,14 @@
         </div>
 
         <!-- 手动控制面板 -->
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-sliders"></i> 手动控制面板</h5>
+        <div class="panel mb-3">
+            <div class="panel__header">
+                <span><i class="bi bi-sliders me-2"></i>手动控制面板</span>
+                <span class="tag tag--offline">手动会接管自动控制</span>
             </div>
-            <div class="card-body">
-                <div class="mb-2">
-                    <small class="text-muted d-block mb-2">点击切换开/关（手动模式会接管报警控制）</small>
+            <div class="panel__body">
+                <div class="manual-note mb-3">
+                    <i class="bi bi-info-circle me-1"></i>点击切换开/关；手动模式会接管报警自动控制。
                 </div>
                 <div class="row g-2 mb-3">
                     <div class="col-4">
@@ -209,7 +277,7 @@
                         </button>
                     </div>
                     <div class="col-4">
-                        <button class="btn btn-outline-success w-100" id="btn-green" onclick="manualLight('green')">
+                        <button class="btn btn-success w-100" id="btn-green" onclick="manualLight('green')">
                             <i class="bi bi-circle-fill"></i> 绿灯 ON
                         </button>
                     </div>
@@ -223,13 +291,13 @@
                     <div class="col-6">
                         <div class="input-group input-group-sm">
                             <span class="input-group-text">持续(秒)</span>
-                            <input type="number" id="manual-duration" class="form-control" value="0" min="0" max="60">
+                            <input type="number" id="manual-duration" class="form-control mono" value="0" min="0" max="60">
                         </div>
                     </div>
                 </div>
                 <hr>
                 <div class="d-grid gap-2">
-                    <button class="btn btn-outline-dark btn-sm" onclick="manualAllOff()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="manualAllOff()">
                         <i class="bi bi-x-circle"></i> 全部关闭（恢复绿灯正常）
                     </button>
                     <button class="btn btn-outline-primary btn-sm" onclick="manualTest()">
@@ -241,83 +309,96 @@
     </div>
 
     <!-- 中栏：广播系统 -->
-    <div class="col-md-4">
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="card-title mb-0"><i class="bi bi-megaphone"></i> 语音广播系统</h5>
+    <div class="col-lg-4">
+        <div class="panel mb-3">
+            <div class="panel__header">
+                <span><i class="bi bi-megaphone me-2"></i>语音广播系统</span>
+                <span class="tag tag--offline" id="broadcast-zone-count">-</span>
             </div>
-            <div class="card-body">
-                <div class="mb-3">
-                    <label class="form-label">广播区域</label>
-                    <select id="broadcast-area" class="form-select">
-                        <option value="all">全厂广播</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">广播内容</label>
-                    <textarea id="broadcast-text" class="form-control" rows="3"
-                              placeholder="输入要广播的内容..."></textarea>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">广播级别</label>
-                    <select id="broadcast-level" class="form-select">
-                        <option value="info">信息</option>
-                        <option value="warning">警告</option>
-                        <option value="critical">紧急</option>
-                    </select>
-                </div>
-                <div class="d-grid gap-2 mb-3">
-                    <button class="btn btn-primary" onclick="speakBroadcast()">
+            <div class="panel__body">
+                <!-- 分区 1：区域与内容 -->
+                <div class="zone">
+                    <div class="zone__title">① 区域与内容</div>
+                    <div class="mb-3">
+                        <label class="form-label">广播区域</label>
+                        <select id="broadcast-area" class="form-select">
+                            <option value="all">全厂广播</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">广播内容</label>
+                        <textarea id="broadcast-text" class="form-control" rows="3"
+                                  placeholder="输入要广播的内容..."></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">广播级别</label>
+                        <select id="broadcast-level" class="form-select">
+                            <option value="info">信息</option>
+                            <option value="warning">警告</option>
+                            <option value="critical">紧急</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary w-100" id="btn-speak" onclick="speakBroadcast()">
                         <i class="bi bi-megaphone-fill"></i> 广播喊话
                     </button>
                 </div>
-                <hr>
-                <h6>预设话术</h6>
-                <div class="d-grid gap-1">
-                    <button class="btn btn-outline-warning btn-sm" onclick="speakPreset('alarm_critical', '车间A发生严重报警，请立即处置')">
-                        紧急报警广播
-                    </button>
-                    <button class="btn btn-outline-info btn-sm" onclick="speakPreset('alarm_warning', '车间A出现告警，请关注')">
-                        警告提醒广播
-                    </button>
-                    <button class="btn btn-outline-danger btn-sm" onclick="speakPreset('evacuation', '发生紧急状况，请沿疏散通道撤离')">
-                        紧急疏散广播
-                    </button>
-                    <button class="btn btn-outline-success btn-sm" onclick="speakPreset('all_clear', '警报解除，恢复正常')">
-                        警报解除广播
-                    </button>
+
+                <!-- 分区 2：预设话术 -->
+                <div class="zone mb-0">
+                    <div class="zone__title">② 预设话术模板</div>
+                    <div class="preset-grid">
+                        <button class="btn btn-outline-danger btn-sm preset-speak" data-preset-key="alarm_critical"
+                                onclick="speakPreset('alarm_critical', '车间A发生严重报警，请立即处置')">
+                            紧急报警广播
+                        </button>
+                        <button class="btn btn-outline-warning btn-sm preset-speak" data-preset-key="alarm_warning"
+                                onclick="speakPreset('alarm_warning', '车间A出现告警，请关注')">
+                            警告提醒广播
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm preset-speak" data-preset-key="evacuation"
+                                onclick="speakPreset('evacuation', '发生紧急状况，请沿疏散通道撤离')">
+                            紧急疏散广播
+                        </button>
+                        <button class="btn btn-outline-success btn-sm preset-speak" data-preset-key="all_clear"
+                                onclick="speakPreset('all_clear', '警报解除，恢复正常')">
+                            警报解除广播
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- 广播历史 -->
-        <div class="card mb-3">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="card-title mb-0"><i class="bi bi-clock-history"></i> 广播历史</h5>
-                <button class="btn btn-sm btn-outline-secondary" onclick="loadBroadcastHistory()">
+        <!-- 分区 3：广播历史 -->
+        <div class="panel mb-3">
+            <div class="panel__header">
+                <span><i class="bi bi-clock-history me-2"></i>③ 广播历史</span>
+                <button class="btn btn-sm btn-outline-secondary" onclick="loadBroadcastHistory()" title="刷新广播历史">
                     <i class="bi bi-arrow-clockwise"></i>
                 </button>
             </div>
-            <div class="card-body p-2" style="max-height:300px;overflow-y:auto;">
+            <div class="panel__body" style="max-height:320px;overflow-y:auto;">
                 <div id="broadcast-history">
-                    <div class="text-muted text-center py-3">暂无广播记录</div>
+                    <div class="state-box state-box--inline text-muted text-center">
+                        <i class="bi bi-megaphone state-box__icon"></i>
+                        <div class="state-box__title">暂无广播记录</div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- 右栏：报警触发规则 -->
-    <div class="col-md-4">
-        <div class="card mb-3">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="card-title mb-0"><i class="bi bi-gear"></i> 报警触发规则</h5>
+    <div class="col-lg-4">
+        <div class="panel mb-3">
+            <div class="panel__header">
+                <span><i class="bi bi-gear me-2"></i>报警触发规则</span>
                 <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#ruleModal" onclick="openAddRule()">
                     <i class="bi bi-plus"></i> 新增
                 </button>
             </div>
-            <div class="card-body p-0" style="max-height:650px;overflow-y:auto;">
+            <div class="panel__body p-0" style="max-height:660px;overflow-y:auto;">
                 <div id="rules-list">
-                    <div class="text-muted text-center py-3">加载中...</div>
+                    <div class="state-box state-box--inline"><span class="spinner-border spinner-border-sm me-2"></span>加载中…</div>
                 </div>
             </div>
         </div>
@@ -337,7 +418,7 @@
                 <input type="hidden" id="rule-original-id" value="">
                 <div class="mb-3">
                     <label class="form-label">规则ID</label>
-                    <input type="text" id="rule-id" class="form-control" placeholder="如: temp_high_v2">
+                    <input type="text" id="rule-id" class="form-control mono" placeholder="如: temp_high_v2">
                 </div>
                 <div class="mb-3">
                     <label class="form-label">规则名称</label>
@@ -364,15 +445,15 @@
                     </div>
                     <div class="col-6">
                         <label class="form-label">阈值</label>
-                        <input type="number" id="rule-threshold" class="form-control" step="0.01" placeholder="如: 32.0">
+                        <input type="number" id="rule-threshold" class="form-control mono" step="0.01" placeholder="如: 32.0">
                     </div>
                 </div>
                 <div class="row mb-3">
                     <div class="col-6">
                         <label class="form-label">报警级别</label>
                         <select id="rule-level" class="form-select">
-                            <option value="critical">严重（红灯快闪+蜂鸣器）</option>
-                            <option value="warning">警告（黄灯慢闪+蜂鸣器）</option>
+                            <option value="critical">严重（红灯 + 蜂鸣器）</option>
+                            <option value="warning">警告（黄灯 + 蜂鸣器）</option>
                             <option value="info">信息（仅记录）</option>
                         </select>
                     </div>
@@ -452,7 +533,7 @@ function toggleSound() {
     const btn = document.getElementById('btn-sound-toggle');
     if (soundEnabled) {
         btn.innerHTML = '<i class="bi bi-volume-up-fill"></i> 报警音开';
-        btn.className = 'btn btn-sm btn-outline-light';
+        btn.className = 'btn btn-sm btn-outline-secondary';
     } else {
         btn.innerHTML = '<i class="bi bi-volume-mute"></i> 报警音关';
         btn.className = 'btn btn-sm btn-outline-secondary';
@@ -487,6 +568,13 @@ function initAlarmWebSocket() {
 
 // showToast 已移除 — 报警统一使用顶部报警条（base.html alarm-banner），不弹窗
 
+// 广播级别 → 标签样式（呈现用）
+function levelTagClass(level) {
+    if (level === 'critical') return 'tag--danger';
+    if (level === 'warning') return 'tag--warning';
+    return 'tag--info';
+}
+
 // 实时插入广播历史（最新在前）
 function prependBroadcastHistory(broadcast) {
     const container = document.getElementById('broadcast-history');
@@ -496,12 +584,15 @@ function prependBroadcastHistory(broadcast) {
     if (empty) empty.remove();
     const level = broadcast.level || 'info';
     const html = `
-        <div class="broadcast-item ${level}" style="animation: fadeIn 0.3s">
-            <div class="d-flex justify-content-between">
-                <span><strong>${broadcast.area || 'all'}</strong> | ${broadcast.source || 'system'}</span>
-                <small class="text-muted">${new Date(broadcast.timestamp).toLocaleTimeString()}</small>
+        <div class="broadcast-item ${level}">
+            <div class="d-flex justify-content-between align-items-center gap-2">
+                <span class="broadcast-item__meta">
+                    <span class="tag ${levelTagClass(level)}">${level}</span>
+                    <strong class="ms-1">${broadcast.area || 'all'}</strong> | ${broadcast.source || 'system'}
+                </span>
+                <small class="text-muted mono">${new Date(broadcast.timestamp).toLocaleTimeString()}</small>
             </div>
-            <div>${broadcast.text || ''}</div>
+            <div class="broadcast-item__text">${broadcast.text || ''}</div>
         </div>
     `;
     container.insertAdjacentHTML('afterbegin', html);
@@ -527,6 +618,15 @@ async function loadAll() {
     ]);
 }
 
+// 按钮 loading 态
+function setBtnLoading(btn, loading, label) {
+    if (!btn) return;
+    btn.disabled = loading;
+    btn.innerHTML = loading
+        ? '<span class="spinner-border spinner-border-sm me-2"></span>发送中…'
+        : label;
+}
+
 // ==================== 报警输出状态 ====================
 async function loadAlarmOutputStatus() {
     try {
@@ -536,6 +636,19 @@ async function loadAlarmOutputStatus() {
     } catch(e) {
         console.error('加载报警输出状态失败:', e);
     }
+}
+
+// 等级色条（取代整行闪烁动画）
+function setLevelBar(level) {
+    const el = document.getElementById('alarm-level-bar');
+    if (!el) return;
+    if (!level) {
+        el.className = 'level-bar';
+        el.style.display = 'none';
+        return;
+    }
+    el.className = 'level-bar level-bar--' + level;
+    el.style.display = 'block';
 }
 
 function renderAlarmOutput(data) {
@@ -555,35 +668,51 @@ function renderAlarmOutput(data) {
         const isCritical = st.level === 'critical';
         const isWarning = st.level === 'warning';
 
-        // 更新灯塔
+        // 更新灯塔（灯体：实心=点亮 / 下沉=熄灭；活动状态用描边环强调）
         updateLamp('lamp-red', st.red, isCritical ? 'fast-flash' : '');
         updateLamp('lamp-yellow', st.yellow, isWarning ? 'flashing' : '');
         updateLamp('lamp-green', st.green, '');
 
-        // 蜂鸣器（区分常响/脉冲）
+        // 蜂鸣器（区分常响/提示/静音）—— 仅用颜色与文字表达，不做动画
         const buzzerEl = document.getElementById('buzzer-icon');
+        const buzzerState = document.getElementById('buzzer-state');
         if (st.buzzer && isCritical) {
-            buzzerEl.className = 'buzzer-icon active text-danger';
+            buzzerEl.className = 'buzzer-icon buzzer-icon--alarm';
+            if (buzzerState) buzzerState.textContent = '常响';
         } else if (st.buzzer && isWarning) {
-            buzzerEl.className = 'buzzer-icon pulse';
+            buzzerEl.className = 'buzzer-icon buzzer-icon--warning';
+            if (buzzerState) buzzerState.textContent = '提示';
         } else {
-            buzzerEl.className = 'buzzer-icon text-muted';
+            buzzerEl.className = 'buzzer-icon';
+            if (buzzerState) buzzerState.textContent = '静音';
         }
 
-        // 状态文字
+        // 状态文字 + 等级色条
         const levelDisplay = document.getElementById('alarm-level-display');
         if (isCritical) {
             levelDisplay.textContent = '严重报警';
-            levelDisplay.className = 'fs-5 fw-bold text-danger';
+            levelDisplay.className = 'tag tag--danger tag--lg';
+            setLevelBar('critical');
         } else if (isWarning) {
             levelDisplay.textContent = '警告';
-            levelDisplay.className = 'fs-5 fw-bold text-warning';
+            levelDisplay.className = 'tag tag--warning tag--lg';
+            setLevelBar('warning');
         } else if (st.level === 'manual') {
             levelDisplay.textContent = '手动模式';
-            levelDisplay.className = 'fs-5 fw-bold text-info';
+            levelDisplay.className = 'tag tag--info tag--lg';
+            setLevelBar('info');
         } else {
             levelDisplay.textContent = '正常';
-            levelDisplay.className = 'fs-5 fw-bold text-success';
+            levelDisplay.className = 'tag tag--success tag--lg';
+            setLevelBar('normal');
+        }
+
+        // 模式标签：自动 / 手动接管
+        const modeTag = document.getElementById('lamp-mode-tag');
+        if (modeTag) {
+            const isManual = st.level === 'manual';
+            modeTag.textContent = isManual ? '手动接管' : '按等级自动';
+            modeTag.className = isManual ? 'tag tag--warning' : 'tag tag--offline';
         }
 
         document.getElementById('alarm-message-display').textContent = st.message || '-';
@@ -591,12 +720,12 @@ function renderAlarmOutput(data) {
 
         // 状态栏
         document.getElementById('output-status-text').textContent = output.simulation ? '模拟模式' : '硬件模式';
-        document.getElementById('output-status-text').className = output.simulation ? 'badge bg-info' : 'badge bg-success';
+        document.getElementById('output-status-text').className = output.simulation ? 'tag tag--info' : 'tag tag--success';
     }
 
     if (broadcast) {
         document.getElementById('broadcast-status-text').textContent = broadcast.simulation ? '模拟模式' : (broadcast.mqtt_connected ? 'MQTT已连接' : 'MQTT未连接');
-        document.getElementById('broadcast-status-text').className = broadcast.simulation ? 'badge bg-info' : (broadcast.mqtt_connected ? 'badge bg-success' : 'badge bg-warning');
+        document.getElementById('broadcast-status-text').className = broadcast.simulation ? 'tag tag--info' : (broadcast.mqtt_connected ? 'tag tag--success' : 'tag tag--warning');
     }
 }
 
@@ -611,6 +740,8 @@ function updateLamp(id, isOn, flashClass) {
 
 // ==================== 消音/复位 ====================
 async function acknowledgeOutput() {
+    const btn = document.getElementById('btn-ack');
+    if (btn) btn.disabled = true;
     try {
         const r = await fetch('/api/alarm-output/acknowledge', {
             method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
@@ -619,10 +750,13 @@ async function acknowledgeOutput() {
         alert(data.message);
         loadAlarmOutputStatus();
     } catch(e) { alert('操作失败'); }
+    finally { if (btn) btn.disabled = false; }
 }
 
 async function resetOutput() {
     if (!confirm('确认复位报警输出？将恢复绿灯正常状态。')) return;
+    const btn = document.getElementById('btn-reset-output');
+    if (btn) btn.disabled = true;
     try {
         const r = await fetch('/api/alarm-output/reset', {
             method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
@@ -631,6 +765,7 @@ async function resetOutput() {
         alert(data.message);
         loadAlarmOutputStatus();
     } catch(e) { alert('操作失败'); }
+    finally { if (btn) btn.disabled = false; }
 }
 
 // ==================== 手动控制 ====================
@@ -749,12 +884,18 @@ async function loadBroadcastAreas() {
                 ruleSel.innerHTML += `<option value="${a}">${a}</option>`;
             }
         });
+        const cnt = document.getElementById('broadcast-zone-count');
+        if (cnt) cnt.textContent = (data.areas || []).length + ' 个区域';
     } catch(e) {}
 }
 
 async function speakBroadcast() {
     const text = document.getElementById('broadcast-text').value.trim();
     if (!text) { alert('请输入广播内容'); return; }
+
+    const btn = document.getElementById('btn-speak');
+    const originalLabel = '<i class="bi bi-megaphone-fill"></i> 广播喊话';
+    setBtnLoading(btn, true, originalLabel);
 
     try {
         const r = await fetch('/api/broadcast/speak', {
@@ -773,12 +914,17 @@ async function speakBroadcast() {
         }
         alert(data.message);
     } catch(e) { alert('广播发送失败'); }
+    finally { setBtnLoading(btn, false, originalLabel); }
 }
 
 async function speakPreset(key, defaultMessage) {
     const area = document.getElementById('broadcast-area').value;
     const text = prompt('确认广播内容:', defaultMessage);
     if (!text) return;
+
+    const btn = document.querySelector(`.preset-speak[data-preset-key="${key}"]`);
+    const originalLabel = btn ? btn.innerHTML : '';
+    setBtnLoading(btn, true, originalLabel);
 
     try {
         await fetch('/api/broadcast/speak', {
@@ -788,6 +934,7 @@ async function speakPreset(key, defaultMessage) {
         });
         loadBroadcastHistory();
     } catch(e) { alert('广播发送失败'); }
+    finally { setBtnLoading(btn, false, originalLabel); }
 }
 
 async function loadBroadcastHistory() {
@@ -798,17 +945,24 @@ async function loadBroadcastHistory() {
         const history = data.history || [];
 
         if (history.length === 0) {
-            container.innerHTML = '<div class="text-muted text-center py-3">暂无广播记录</div>';
+            container.innerHTML = `
+                <div class="state-box state-box--inline text-muted text-center">
+                    <i class="bi bi-megaphone state-box__icon"></i>
+                    <div class="state-box__title">暂无广播记录</div>
+                </div>`;
             return;
         }
 
         container.innerHTML = history.map(h => `
             <div class="broadcast-item ${h.level}">
-                <div class="d-flex justify-content-between">
-                    <span><strong>${h.area}</strong> | ${h.source}</span>
-                    <small class="text-muted">${new Date(h.timestamp).toLocaleTimeString()}</small>
+                <div class="d-flex justify-content-between align-items-center gap-2">
+                    <span class="broadcast-item__meta">
+                        <span class="tag ${levelTagClass(h.level)}">${h.level}</span>
+                        <strong class="ms-1">${h.area}</strong> | ${h.source}
+                    </span>
+                    <small class="text-muted mono">${new Date(h.timestamp).toLocaleTimeString()}</small>
                 </div>
-                <div>${h.text}</div>
+                <div class="broadcast-item__text">${h.text}</div>
             </div>
         `).join('');
     } catch(e) {}
@@ -875,24 +1029,23 @@ function renderRulesList(stats) {
 
     container.innerHTML = `
         <div class="p-3">
-            <div class="row text-center mb-3">
-                <div class="col-4">
-                    <h4 class="text-primary">${totalRules}</h4>
-                    <small class="text-muted">总规则数</small>
+            <div class="row g-2 mb-3">
+                <div class="col-4 stat-cell">
+                    <div class="metric-value">${totalRules}</div>
+                    <span class="metric-label">总规则数</span>
                 </div>
-                <div class="col-4">
-                    <h4 class="text-success">${enabledRules}</h4>
-                    <small class="text-muted">已启用</small>
+                <div class="col-4 stat-cell">
+                    <div class="metric-value" style="color:var(--color-success)">${enabledRules}</div>
+                    <span class="metric-label">已启用</span>
                 </div>
-                <div class="col-4">
-                    <h4 class="text-danger">${activeAlarms}</h4>
-                    <small class="text-muted">活动报警</small>
+                <div class="col-4 stat-cell">
+                    <div class="metric-value" style="color:var(--color-danger)">${activeAlarms}</div>
+                    <span class="metric-label">活动报警</span>
                 </div>
             </div>
-            <hr>
-            <h6>当前规则概览</h6>
+            <h6 class="mb-2" style="font-size:var(--font-sm);color:var(--text-secondary)">当前规则触发记录</h6>
             <div id="rules-detail-list">
-                <div class="text-muted">规则详情加载中...</div>
+                <div class="state-box state-box--inline"><span class="spinner-border spinner-border-sm me-2"></span>加载中…</div>
             </div>
         </div>
     `;
@@ -928,23 +1081,44 @@ async function loadRulesDetail() {
         });
 
         if (rules.length === 0) {
-            container.innerHTML = '<div class="text-muted small">暂无触发记录</div>';
+            container.innerHTML = `
+                <div class="state-box state-box--inline">
+                    <i class="bi bi-inbox state-box__icon"></i>
+                    <div class="state-box__title">暂无触发记录</div>
+                </div>`;
             return;
         }
 
-        container.innerHTML = rules.map(r => `
-            <div class="d-flex justify-content-between align-items-center border-bottom py-2">
-                <div>
-                    <span class="badge bg-${r.level === 'critical' ? 'danger' : 'warning'} me-1">
-                        ${r.level === 'critical' ? '严重' : '警告'}
-                    </span>
-                    <strong>${r.message || r.id}</strong>
-                    <br><small class="text-muted">${r.device_id} / ${r.register_name} | 阈值: ${r.threshold}</small>
-                </div>
-            </div>
-        `).join('');
+        // 配置类表格：数值列（阈值）右对齐 + 等宽
+        container.innerHTML = `
+            <table class="table rules-table">
+                <thead>
+                    <tr>
+                        <th>级别</th>
+                        <th>规则 / 设备</th>
+                        <th class="col-num">阈值</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rules.map(item => `
+                        <tr>
+                            <td><span class="tag ${item.level === 'critical' ? 'tag--danger' : 'tag--warning'}">${item.level === 'critical' ? '严重' : '警告'}</span></td>
+                            <td>
+                                <div>${item.message || item.id}</div>
+                                <div class="text-muted" style="font-size:var(--font-xs)">${item.device_id} / ${item.register_name}</div>
+                            </td>
+                            <td class="col-num">${item.threshold}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
     } catch(e) {
-        container.innerHTML = '<div class="text-danger small">加载失败</div>';
+        container.innerHTML = `
+            <div class="state-box state-box--inline">
+                <i class="bi bi-exclamation-triangle state-box__icon"></i>
+                <div class="state-box__title">规则加载失败</div>
+            </div>`;
     }
 }
 

@@ -2,17 +2,198 @@
 
 {% block title %}设备管理 - 工业数据采集与监控系统{% endblock %}
 
+{% block extra_css %}
+<style>
+/* ==================== 设备管理页 ==================== */
+.page-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-4);
+}
+.page-head__title {
+    font-size: var(--font-xl);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+    margin-bottom: var(--space-1);
+}
+.page-head__desc {
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+    margin: 0;
+}
+/* 正文/标签字号下限：12px（原页面大量 10-11px 已清理） */
+.page-head__desc, .cell-sub, .form-text, .modal .form-text, #deviceForm small { font-size: var(--font-xs); }
+
+/* ---------- 工具栏 ---------- */
+.page-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+/* ---------- 表格：表头与行高统一 ---------- */
+.device-table { margin-bottom: 0; }
+.device-table thead th {
+    padding: var(--space-3) var(--space-3);
+    font-size: var(--font-xs);
+    font-weight: var(--weight-semibold);
+    color: var(--text-muted);
+    background: var(--bg-sunken);
+    border-bottom: 1px solid var(--border-strong);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+.device-table tbody td {
+    padding: var(--space-3) var(--space-3);
+    font-size: var(--font-sm);
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-base);
+    vertical-align: middle;
+}
+.device-table tbody tr:last-child td { border-bottom: 0; }
+.device-table tbody tr:hover td { background: var(--bg-hover); }
+/* 数值列：右对齐 + 等宽 */
+.device-table .col-num {
+    text-align: right;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.cell-title { font-weight: var(--weight-medium); color: var(--text-primary); }
+.cell-sub { color: var(--text-muted); }
+.addr { font-size: var(--font-xs); font-family: var(--font-mono); color: var(--text-secondary); }
+
+/* 中性标签：协议/型号等非状态信息，不使用语义色 */
+.tag--neutral {
+    background: var(--bg-sunken);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-base);
+}
+.tag--mono { font-family: var(--font-mono); letter-spacing: 0.02em; }
+
+/* ---------- 操作按钮分组 ---------- */
+.cell-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
+.action-group { display: inline-flex; align-items: center; gap: var(--space-1); }
+.action-group--danger { padding-left: var(--space-2); border-left: 1px solid var(--border-base); }
+.btn-icon {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-sm);
+}
+/* 危险操作：统一使用 --color-danger */
+.btn-danger-token {
+    background: var(--color-danger);
+    border: 1px solid var(--color-danger);
+    color: var(--text-inverse);
+}
+.btn-danger-token:hover, .btn-danger-token:focus {
+    background: var(--color-danger);
+    border-color: var(--color-danger);
+    color: var(--text-inverse);
+    filter: brightness(0.92);
+}
+.btn-danger-outline-token {
+    background: transparent;
+    border: 1px solid var(--color-danger);
+    color: var(--color-danger);
+}
+.btn-danger-outline-token:hover, .btn-danger-outline-token:focus {
+    background: var(--color-danger-soft);
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+}
+
+/* ---------- 空态 / 加载态 ---------- */
+.state-box { padding: var(--space-8) var(--space-4); text-align: center; }
+.state-box--inline { padding: var(--space-4); }
+.state-box__icon { display: block; font-size: 32px; color: var(--text-disabled); margin-bottom: var(--space-2); }
+.state-box__title { font-size: var(--font-base); color: var(--text-secondary); margin-bottom: var(--space-1); }
+.state-box__hint { font-size: var(--font-xs); color: var(--text-muted); }
+.state-box .spinner-border { color: var(--color-brand); }
+
+/* ---------- 弹窗表单 ---------- */
+.modal-content { border: 1px solid var(--border-base); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.modal-header {
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-base);
+}
+.modal-header--warning { background: var(--color-warning-soft); color: var(--color-warning); }
+.modal-header--warning .modal-title { color: var(--color-warning); }
+.modal-title { font-size: var(--font-lg); font-weight: var(--weight-semibold); }
+.modal-body { padding: var(--space-4); }
+.modal-footer {
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid var(--border-base);
+    gap: var(--space-2);
+}
+.modal .form-label {
+    font-size: var(--font-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-secondary);
+    margin-bottom: var(--space-1);
+}
+.modal .form-control, .modal .form-select { font-size: var(--font-sm); }
+.modal hr { border-color: var(--border-base); margin: var(--space-4) 0; }
+.modal h6 { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.form-section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    font-size: var(--font-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+    margin: var(--space-4) 0 var(--space-3);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-base);
+}
+
+/* 数据点行：保持 .card 类（JS 依赖 .card 做收集与删除） */
+.protocol-fields .data-row {
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-base);
+    border-left: 3px solid var(--color-brand);
+    border-radius: var(--radius-md);
+}
+.protocol-fields .data-row .field-label {
+    display: block;
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    margin-bottom: var(--space-1);
+}
+.protocol-fields .data-row .card-body { padding: var(--space-2) var(--space-3); }
+
+/* ---------- 预设 / 模板卡片 ---------- */
+.preset-card, .template-card {
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    transition: border-color var(--duration-fast) var(--ease-out),
+                box-shadow var(--duration-fast) var(--ease-out);
+}
+.template-card:hover { border-color: var(--color-brand); box-shadow: var(--focus-ring); }
+.preset-card:hover { border-color: var(--color-success); box-shadow: var(--focus-ring); }
+.preset-card .card-title, .template-card .card-title { font-size: var(--font-base); color: var(--text-primary); }
+
+/* ---------- 浮动提示 ---------- */
+.alert-floating { box-shadow: var(--shadow-lg); font-size: var(--font-sm); }
+</style>
+{% endblock %}
+
 {% block breadcrumb %}
 <li class="breadcrumb-item active">设备管理</li>
 {% endblock %}
 
 {% block content %}
-<div class="row mb-4">
-    <div class="col">
-        <h2><i class="bi bi-hdd-rack me-2"></i>设备管理</h2>
-        <p class="text-muted">添加、编辑和监控工业设备（支持 Modbus / OPC UA / MQTT / REST）</p>
+<div class="page-head">
+    <div>
+        <h2 class="page-head__title"><i class="bi bi-hdd-rack me-2"></i>设备管理</h2>
+        <p class="page-head__desc">添加、编辑和监控工业设备（支持 Modbus / OPC UA / MQTT / REST）</p>
     </div>
-    <div class="col-auto">
+    <div class="page-actions">
         <button class="btn btn-success" onclick="showPresetsPanel()">
             <i class="bi bi-grid-3x3-gap me-1"></i>预设设备
         </button>
@@ -26,19 +207,19 @@
 </div>
 
 <!-- 预设设备面板（默认隐藏） -->
-<div class="card mb-4" id="presets-panel" style="display:none;">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h6 class="mb-0"><i class="bi bi-grid-3x3-gap me-2"></i>模拟设备预设 — 一键添加</h6>
-        <div>
+<div class="panel mb-4" id="presets-panel" style="display:none;">
+    <div class="panel__header">
+        <span><i class="bi bi-grid-3x3-gap me-2"></i>模拟设备预设 — 一键添加</span>
+        <div class="page-actions">
             <button class="btn btn-sm btn-success" onclick="addAllPresets()">
                 <i class="bi bi-lightning me-1"></i>一键全部添加
             </button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="hidePresetsPanel()">
+            <button class="btn btn-sm btn-outline-secondary btn-icon" onclick="hidePresetsPanel()" title="关闭" aria-label="关闭">
                 <i class="bi bi-x-lg"></i>
             </button>
         </div>
     </div>
-    <div class="card-body">
+    <div class="panel__body">
         <!-- 分类标签 -->
         <ul class="nav nav-pills mb-3" id="preset-category-tabs">
             <li class="nav-item">
@@ -47,16 +228,22 @@
         </ul>
         <!-- 预设卡片网格 -->
         <div class="row" id="presets-grid">
-            <div class="col text-center text-muted py-3">加载中...</div>
+            <div class="col-12">
+                <div class="state-box state-box--inline"><span class="spinner-border spinner-border-sm me-2"></span>加载中…</div>
+            </div>
         </div>
     </div>
 </div>
 
 <!-- 设备列表 -->
-<div class="card">
-    <div class="card-body">
+<div class="panel">
+    <div class="panel__header">
+        <span><i class="bi bi-list-ul me-2"></i>设备列表</span>
+        <span class="tag tag--offline" id="devices-count">加载中…</span>
+    </div>
+    <div class="panel__body p-0">
         <div class="table-responsive">
-            <table class="table table-hover">
+            <table class="table table-hover device-table">
                 <thead>
                     <tr>
                         <th>设备ID</th>
@@ -64,13 +251,15 @@
                         <th>协议</th>
                         <th>地址</th>
                         <th>状态</th>
-                        <th>数据点</th>
-                        <th>操作</th>
+                        <th class="col-num">数据点</th>
+                        <th class="text-end">操作</th>
                     </tr>
                 </thead>
                 <tbody id="devices-table-body">
                     <tr>
-                        <td colspan="7" class="text-center text-muted">加载中...</td>
+                        <td colspan="7">
+                            <div class="state-box"><span class="spinner-border me-2"></span>加载中…</div>
+                        </td>
                     </tr>
                 </tbody>
             </table>
@@ -91,10 +280,11 @@
                     <input type="hidden" id="device-id-old" value="">
                     
                     <!-- 基本信息 -->
+                    <div class="form-section-title"><span><i class="bi bi-info-circle me-2"></i>基本信息</span></div>
                     <div class="row mb-3">
                         <div class="col-md-4">
                             <label class="form-label">设备ID <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="device-id" required 
+                            <input type="text" class="form-control mono" id="device-id" required 
                                    placeholder="如: temp_sensor_01" pattern="[a-zA-Z0-9_]+">
                             <small class="text-muted">仅支持字母、数字和下划线</small>
                         </div>
@@ -137,10 +327,11 @@
                     </div>
 
                     <!-- 通用字段：采集间隔 + 启用状态 -->
+                    <div class="form-section-title"><span><i class="bi bi-sliders me-2"></i>采集与启用</span></div>
                     <div class="row mb-3">
                         <div class="col-md-6">
                             <label class="form-label">采集间隔(秒)</label>
-                            <input type="number" class="form-control" id="device-interval"
+                            <input type="number" class="form-control mono" id="device-interval"
                                    value="5" min="1" max="3600">
                         </div>
                         <div class="col-md-6">
@@ -151,30 +342,29 @@
                             </select>
                         </div>
                     </div>
-                    
-                    <hr>
 
                     <!-- ==================== Modbus TCP/RTU 专属字段 ==================== -->
                     <div id="modbus-fields" class="protocol-fields">
+                        <div class="form-section-title"><span><i class="bi bi-ethernet me-2"></i>Modbus 连接与寄存器</span></div>
                         <div class="row mb-3">
                             <div class="col-md-3">
                                 <label class="form-label">IP地址/串口 <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="device-host"
+                                <input type="text" class="form-control mono" id="device-host"
                                        placeholder="192.168.1.100">
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label">端口 <span class="text-danger">*</span></label>
-                                <input type="number" class="form-control" id="device-port"
+                                <input type="number" class="form-control mono" id="device-port"
                                        value="502" min="1" max="65535">
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label">从站地址</label>
-                                <input type="number" class="form-control" id="device-slave-id"
+                                <input type="number" class="form-control mono" id="device-slave-id"
                                        value="1" min="1" max="247">
                             </div>
                             <div class="col-md-3" id="modbus-rtu-extra" style="display:none;">
                                 <label class="form-label">波特率</label>
-                                <select class="form-select" id="device-baudrate">
+                                <select class="form-select mono" id="device-baudrate">
                                     <option value="9600">9600</option>
                                     <option value="19200">19200</option>
                                     <option value="38400">38400</option>
@@ -184,25 +374,27 @@
                             </div>
                         </div>
                         
-                        <h6 class="mb-3">
-                            寄存器配置
-                            <button type="button" class="btn btn-sm btn-outline-primary float-end" onclick="addRegisterRow()">
+                        <div class="form-section-title">
+                            <span>寄存器配置</span>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addRegisterRow()">
                                 <i class="bi bi-plus"></i> 添加寄存器
                             </button>
-                        </h6>
+                        </div>
                         
                         <div id="registers-container"></div>
-                        <div class="text-center text-muted py-3" id="no-registers-hint">
-                            <i class="bi bi-info-circle"></i> 点击上方按钮添加寄存器，或使用模板快速配置
+                        <div class="state-box state-box--inline" id="no-registers-hint">
+                            <div class="state-box__title"><i class="bi bi-info-circle me-2"></i>尚未配置寄存器</div>
+                            <div class="state-box__hint">点击上方「添加寄存器」，或使用模板快速配置</div>
                         </div>
                     </div>
 
                     <!-- ==================== OPC UA 专属字段 ==================== -->
                     <div id="opcua-fields" class="protocol-fields" style="display:none;">
+                        <div class="form-section-title"><span><i class="bi bi-diagram-3 me-2"></i>OPC UA 连接与节点</span></div>
                         <div class="row mb-3">
                             <div class="col-md-6">
                                 <label class="form-label">Endpoint URL <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="opcua-endpoint"
+                                <input type="text" class="form-control mono" id="opcua-endpoint"
                                        placeholder="opc.tcp://192.168.1.50:4840">
                             </div>
                             <div class="col-md-3">
@@ -232,30 +424,32 @@
                             </div>
                         </div>
                         
-                        <h6 class="mb-3">
-                            节点配置
-                            <button type="button" class="btn btn-sm btn-outline-primary float-end" onclick="addNodeRow()">
+                        <div class="form-section-title">
+                            <span>节点配置</span>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addNodeRow()">
                                 <i class="bi bi-plus"></i> 添加节点
                             </button>
-                        </h6>
+                        </div>
                         
                         <div id="nodes-container"></div>
-                        <div class="text-center text-muted py-3" id="no-nodes-hint">
-                            <i class="bi bi-info-circle"></i> 点击上方按钮添加 OPC UA 节点
+                        <div class="state-box state-box--inline" id="no-nodes-hint">
+                            <div class="state-box__title"><i class="bi bi-info-circle me-2"></i>尚未配置节点</div>
+                            <div class="state-box__hint">点击上方「添加节点」补充 OPC UA 节点</div>
                         </div>
                     </div>
 
                     <!-- ==================== MQTT 专属字段 ==================== -->
                     <div id="mqtt-fields" class="protocol-fields" style="display:none;">
+                        <div class="form-section-title"><span><i class="bi bi-broadcast me-2"></i>MQTT 连接与主题</span></div>
                         <div class="row mb-3">
                             <div class="col-md-3">
                                 <label class="form-label">Broker地址 <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="mqtt-host"
+                                <input type="text" class="form-control mono" id="mqtt-host"
                                        placeholder="192.168.1.200">
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label">端口 <span class="text-danger">*</span></label>
-                                <input type="number" class="form-control" id="mqtt-port"
+                                <input type="number" class="form-control mono" id="mqtt-port"
                                        value="1883" min="1" max="65535">
                             </div>
                             <div class="col-md-3">
@@ -268,30 +462,32 @@
                             </div>
                         </div>
                         
-                        <h6 class="mb-3">
-                            主题订阅
-                            <button type="button" class="btn btn-sm btn-outline-primary float-end" onclick="addTopicRow()">
+                        <div class="form-section-title">
+                            <span>主题订阅</span>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addTopicRow()">
                                 <i class="bi bi-plus"></i> 添加主题
                             </button>
-                        </h6>
+                        </div>
                         
                         <div id="topics-container"></div>
-                        <div class="text-center text-muted py-3" id="no-topics-hint">
-                            <i class="bi bi-info-circle"></i> 点击上方按钮添加 MQTT 订阅主题
+                        <div class="state-box state-box--inline" id="no-topics-hint">
+                            <div class="state-box__title"><i class="bi bi-info-circle me-2"></i>尚未配置订阅主题</div>
+                            <div class="state-box__hint">点击上方「添加主题」订阅 MQTT 数据点</div>
                         </div>
                     </div>
 
                     <!-- ==================== REST HTTP 专属字段 ==================== -->
                     <div id="rest-fields" class="protocol-fields" style="display:none;">
+                        <div class="form-section-title"><span><i class="bi bi-cloud-arrow-down me-2"></i>REST 连接与端点</span></div>
                         <div class="row mb-3">
                             <div class="col-md-4">
                                 <label class="form-label">Base URL <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="rest-base-url"
+                                <input type="text" class="form-control mono" id="rest-base-url"
                                        placeholder="http://192.168.1.250/api">
                             </div>
                             <div class="col-md-2">
                                 <label class="form-label">轮询间隔(秒)</label>
-                                <input type="number" class="form-control" id="rest-poll-interval"
+                                <input type="number" class="form-control mono" id="rest-poll-interval"
                                        value="10" min="1" max="3600">
                             </div>
                             <div class="col-md-3">
@@ -305,7 +501,7 @@
                             </div>
                             <div class="col-md-3" id="rest-token-col">
                                 <label class="form-label" id="rest-auth-label">Token</label>
-                                <input type="text" class="form-control" id="rest-auth-token" placeholder="Bearer Token">
+                                <input type="text" class="form-control mono" id="rest-auth-token" placeholder="Bearer Token">
                             </div>
                         </div>
                         <div class="row mb-3" id="rest-basic-auth-row" style="display:none;">
@@ -319,16 +515,17 @@
                             </div>
                         </div>
                         
-                        <h6 class="mb-3">
-                            API端点
-                            <button type="button" class="btn btn-sm btn-outline-primary float-end" onclick="addEndpointRow()">
+                        <div class="form-section-title">
+                            <span>API端点</span>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addEndpointRow()">
                                 <i class="bi bi-plus"></i> 添加端点
                             </button>
-                        </h6>
+                        </div>
                         
                         <div id="endpoints-container"></div>
-                        <div class="text-center text-muted py-3" id="no-endpoints-hint">
-                            <i class="bi bi-info-circle"></i> 点击上方按钮添加 REST API 端点
+                        <div class="state-box state-box--inline" id="no-endpoints-hint">
+                            <div class="state-box__title"><i class="bi bi-info-circle me-2"></i>尚未配置 API 端点</div>
+                            <div class="state-box__hint">点击上方「添加端点」补充 REST 数据源</div>
                         </div>
                     </div>
                 </form>
@@ -448,7 +645,40 @@ function toggleRestAuth() {
 
 // ==================== 设备列表加载 & 渲染 ====================
 
+// 加载态：表体
+function renderTableLoading() {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    tbody.innerHTML = `
+        <tr>
+            <td colspan="7">
+                <div class="state-box"><span class="spinner-border me-2"></span>加载中…</div>
+            </td>
+        </tr>
+    `;
+    const countEl = document.getElementById('devices-count');
+    if (countEl) countEl.textContent = '加载中…';
+}
+
+// 空态：表体
+function renderTableEmpty() {
+    const tbody = document.getElementById('devices-table-body');
+    if (!tbody) return;
+    tbody.innerHTML = `
+        <tr>
+            <td colspan="7">
+                <div class="state-box">
+                    <i class="bi bi-inbox state-box__icon"></i>
+                    <div class="state-box__title">暂无设备</div>
+                    <div class="state-box__hint">点击右上角「预设设备」一键添加，或「自定义添加」手工配置</div>
+                </div>
+            </td>
+        </tr>
+    `;
+}
+
 async function loadDevices() {
+    renderTableLoading();
     try {
         const response = await fetch('/api/devices', {
             headers: getAuthHeaders()
@@ -458,9 +688,13 @@ async function loadDevices() {
         if (data.devices) {
             devicesList = data.devices;
             renderDevicesTable(data.devices);
+        } else {
+            devicesList = [];
+            renderTableEmpty();
         }
     } catch (error) {
         console.error('加载设备列表失败:', error);
+        renderTableEmpty();
         showAlert('加载设备列表失败', 'danger');
     }
 }
@@ -493,83 +727,77 @@ function getDataPointCount(device) {
     return 0;
 }
 
-function getProtocolBadgeColor(protocol) {
-    const colors = {
-        'modbus_tcp': 'primary',
-        'modbus_rtu': 'info',
-        'opcua': 'success',
-        'mqtt': 'warning',
-        'rest': 'secondary'
-    };
-    return colors[protocol] || 'secondary';
-}
-
 function renderDevicesTable(devices) {
     const tbody = document.getElementById('devices-table-body');
+    const countEl = document.getElementById('devices-count');
+    if (countEl) countEl.textContent = `${devices.length} 台设备`;
     
     if (devices.length === 0) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="7" class="text-center text-muted py-4">
-                    <i class="bi bi-inbox" style="font-size: 2rem;"></i>
-                    <p class="mt-2">暂无设备，点击"添加设备"开始</p>
-                </td>
-            </tr>
-        `;
+        renderTableEmpty();
         return;
     }
     
     tbody.innerHTML = devices.map(device => {
         const protocol = device.protocol || 'modbus_tcp';
-const statusClass = device.stopped ? 'stopped' : (device.connected ? 'online' : (device.enabled === false ? 'offline' : 'warning'));
-const statusText = device.stopped ? '已停止' : (device.connected ? '在线' : (device.enabled === false ? '已禁用' : '离线'));
-        
+        const isMechanical = device.device_category === 'mechanical';
+        const stopped = !!device.stopped;
+        const online = !!device.connected;
+        const disabled = device.enabled === false;
+
+        // 状态 → 语义标签（停止=危险 / 在线=正常 / 禁用=离线 / 其它=警告）
+        let statusTag, statusDot, statusText;
+        if (stopped) {
+            statusTag = 'tag--danger'; statusDot = 'status-dot--danger'; statusText = '已停止';
+        } else if (online) {
+            statusTag = 'tag--success'; statusDot = 'status-dot--success'; statusText = '在线';
+        } else if (disabled) {
+            statusTag = 'tag--offline'; statusDot = 'status-dot--offline'; statusText = '已禁用';
+        } else {
+            statusTag = 'tag--warning'; statusDot = 'status-dot--warning'; statusText = '离线';
+        }
+
         return `
         <tr>
-            <td><code>${device.device_id}</code></td>
+            <td><code class="mono">${device.device_id}</code></td>
             <td>
-                <div class="d-flex align-items-center">
-                    <i class="bi bi-hdd-rack me-2 text-muted"></i>
-                    <div>
-                        <div class="fw-medium">${device.name}</div>
-                        <small class="text-muted">${device.description || ''}</small>
+                <div class="cell-title">${device.name}</div>
+                <div class="cell-sub">${device.description || '—'}</div>
+            </td>
+            <td><span class="tag tag--neutral tag--mono">${protocol.toUpperCase()}</span></td>
+            <td><span class="addr">${getDeviceAddress(device)}</span></td>
+            <td><span class="tag ${statusTag}"><span class="status-dot ${statusDot}"></span>${statusText}</span></td>
+            <td class="col-num">${getDataPointCount(device)}</td>
+            <td class="text-end">
+                <div class="cell-actions">
+                    <div class="action-group">
+                        <button class="btn btn-outline-secondary btn-icon" onclick="testDevice('${device.device_id}')" title="测试连接" aria-label="测试连接">
+                            <i class="bi bi-wifi"></i>
+                        </button>
+                        <button class="btn btn-outline-secondary btn-icon" onclick="editDevice('${device.device_id}')" title="编辑设备" aria-label="编辑设备">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="btn btn-outline-info btn-icon" onclick="viewDeviceData('${device.device_id}')" title="查看数据" aria-label="查看数据" style="display:none">
+                            <i class="bi bi-graph-up"></i>
+                        </button>
                     </div>
-                </div>
-            </td>
-            <td><span class="badge bg-${getProtocolBadgeColor(protocol)}">${protocol.toUpperCase()}</span></td>
-            <td><small class="text-muted">${getDeviceAddress(device)}</small></td>
-            <td>
-                <span class="device-status-badge ${statusClass}">
-                    <i class="bi bi-${device.stopped ? 'stop-circle' : (device.connected ? 'check-circle' : 'x-circle')} me-1"></i>
-                    ${statusText}
-                </span>
-            </td>
-            <td><span class="badge bg-light text-dark">${getDataPointCount(device)} 个</span></td>
-            <td>
-                <div class="action-btn-group">
-                    <button class="btn btn-outline-primary btn-sm" onclick="testDevice('${device.device_id}')" title="测试连接">
-                        <i class="bi bi-wifi"></i>
-                    </button>
-                    <button class="btn btn-outline-secondary btn-sm" onclick="editDevice('${device.device_id}')" title="编辑">
-                        <i class="bi bi-pencil"></i>
-                    </button>
-                    <button class="btn btn-outline-info btn-sm" onclick="viewDeviceData('${device.device_id}')" title="查看数据" style="display:none">
-                        <i class="bi bi-graph-up"></i>
-                    </button>
-                    <button class="btn btn-outline-danger btn-sm" onclick="deleteDevice('${device.device_id}')" title="删除">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                    ${device.device_category === 'mechanical' && !device.stopped ?
-                    `<button class="btn btn-outline-warning btn-sm" onclick="stopDevice('${device.device_id}')" title="停止">
-                        <i class="bi bi-stop-circle"></i>
-                    </button>` : ''}
-                    ${device.device_category === 'mechanical' && device.stopped ?
-                    `<button class="btn btn-outline-success btn-sm" onclick="startDevice('${device.device_id}')" title="启动">
-                        <i class="bi bi-play-circle"></i>
-                    </button>` : ''}
-                    <button class="btn btn-outline-warning btn-sm" onclick="showFaultInjectionModal('${device.device_id}')" title="故障注入">
-                        <i class="bi bi-exclamation-triangle"></i>
-                    </button>
+                    <div class="action-group">
+                        ${isMechanical && !stopped ?
+                        `<button class="btn btn-danger-outline-token btn-icon" onclick="stopDevice('${device.device_id}')" title="停止设备（需二次确认）" aria-label="停止设备">
+                            <i class="bi bi-stop-circle"></i>
+                        </button>` : ''}
+                        ${isMechanical && stopped ?
+                        `<button class="btn btn-outline-success btn-icon" onclick="startDevice('${device.device_id}')" title="启动设备" aria-label="启动设备">
+                            <i class="bi bi-play-circle"></i>
+                        </button>` : ''}
+                        <button class="btn btn-outline-warning btn-icon" onclick="showFaultInjectionModal('${device.device_id}')" title="故障注入（测试用）" aria-label="故障注入">
+                            <i class="bi bi-exclamation-triangle"></i>
+                        </button>
+                    </div>
+                    <div class="action-group action-group--danger">
+                        <button class="btn btn-danger-token btn-icon" onclick="deleteDevice('${device.device_id}')" title="删除设备（不可恢复，需二次确认）" aria-label="删除设备">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </div>
                 </div>
             </td>
         </tr>
@@ -688,33 +916,38 @@ function editDevice(deviceId) {
 
 // ==================== 数据点行添加函数 ====================
 
-// Modbus 寄存器行
+// Modbus 寄存器行（保持 .card 类：collectDataPoints / 删除按钮依赖）
 function addRegisterRow(reg = null) {
     const container = document.getElementById('registers-container');
     
     const row = document.createElement('div');
-    row.className = 'card mb-2';
+    row.className = 'card data-row mb-2';
     row.innerHTML = `
-        <div class="card-body p-2">
-            <div class="row align-items-center">
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
                 <div class="col-md-2">
+                    <label class="field-label">名称</label>
                     <input type="text" class="form-control form-control-sm" placeholder="名称" 
                            value="${reg ? reg.name : ''}" data-field="name" required>
                 </div>
                 <div class="col-md-2">
+                    <label class="field-label">描述</label>
                     <input type="text" class="form-control form-control-sm" placeholder="描述" 
                            value="${reg ? reg.description : ''}" data-field="description">
                 </div>
                 <div class="col-md-1">
-                    <input type="number" class="form-control form-control-sm" placeholder="地址" 
+                    <label class="field-label">地址</label>
+                    <input type="number" class="form-control form-control-sm mono" placeholder="地址" 
                            value="${reg ? reg.address : 0}" data-field="address" min="0">
                 </div>
                 <div class="col-md-1">
-                    <input type="number" class="form-control form-control-sm" placeholder="长度" 
+                    <label class="field-label">长度</label>
+                    <input type="number" class="form-control form-control-sm mono" placeholder="长度" 
                            value="${reg ? reg.length : 1}" data-field="length" min="1">
                 </div>
                 <div class="col-md-2">
-                    <select class="form-select form-select-sm" data-field="data_type">
+                    <label class="field-label">数据类型</label>
+                    <select class="form-select form-select-sm mono" data-field="data_type">
                         <option value="float32" ${reg && reg.data_type === 'float32' ? 'selected' : ''}>Float32</option>
                         <option value="float64" ${reg && reg.data_type === 'float64' ? 'selected' : ''}>Float64</option>
                         <option value="uint16" ${reg && reg.data_type === 'uint16' ? 'selected' : ''}>UInt16</option>
@@ -723,15 +956,18 @@ function addRegisterRow(reg = null) {
                     </select>
                 </div>
                 <div class="col-md-1">
-                    <input type="number" class="form-control form-control-sm" placeholder="缩放" 
+                    <label class="field-label">缩放</label>
+                    <input type="number" class="form-control form-control-sm mono" placeholder="缩放" 
                            value="${reg ? reg.scale : 1}" data-field="scale" step="0.001">
                 </div>
-                <div class="col-md-1">
+                <div class="col-md-2">
+                    <label class="field-label">单位</label>
                     <input type="text" class="form-control form-control-sm" placeholder="单位" 
                            value="${reg ? reg.unit : ''}" data-field="unit">
                 </div>
-                <div class="col-md-1">
-                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('.card').remove()">
+                <div class="col-md-1 text-end">
+                    <button type="button" class="btn btn-sm btn-danger-outline-token btn-icon" title="移除该寄存器" aria-label="移除该寄存器"
+                            onclick="this.closest('.card').remove()">
                         <i class="bi bi-x"></i>
                     </button>
                 </div>
@@ -748,28 +984,33 @@ function addNodeRow(node = null) {
     const container = document.getElementById('nodes-container');
     
     const row = document.createElement('div');
-    row.className = 'card mb-2';
+    row.className = 'card data-row mb-2';
     row.innerHTML = `
-        <div class="card-body p-2">
-            <div class="row align-items-center">
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
                 <div class="col-md-4">
-                    <input type="text" class="form-control form-control-sm" placeholder="节点ID (如 ns=3;s=Temperature)" 
+                    <label class="field-label">节点ID</label>
+                    <input type="text" class="form-control form-control-sm mono" placeholder="节点ID (如 ns=3;s=Temperature)" 
                            value="${node ? node.node_id : ''}" data-field="node_id" required>
                 </div>
                 <div class="col-md-2">
+                    <label class="field-label">名称</label>
                     <input type="text" class="form-control form-control-sm" placeholder="名称" 
                            value="${node ? node.name : ''}" data-field="name" required>
                 </div>
                 <div class="col-md-3">
+                    <label class="field-label">描述</label>
                     <input type="text" class="form-control form-control-sm" placeholder="描述" 
                            value="${node ? (node.description || '') : ''}" data-field="description">
                 </div>
                 <div class="col-md-2">
+                    <label class="field-label">单位</label>
                     <input type="text" class="form-control form-control-sm" placeholder="单位" 
                            value="${node ? node.unit : ''}" data-field="unit">
                 </div>
-                <div class="col-md-1">
-                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('.card').remove()">
+                <div class="col-md-1 text-end">
+                    <button type="button" class="btn btn-sm btn-danger-outline-token btn-icon" title="移除该节点" aria-label="移除该节点"
+                            onclick="this.closest('.card').remove()">
                         <i class="bi bi-x"></i>
                     </button>
                 </div>
@@ -786,28 +1027,33 @@ function addTopicRow(topic = null) {
     const container = document.getElementById('topics-container');
     
     const row = document.createElement('div');
-    row.className = 'card mb-2';
+    row.className = 'card data-row mb-2';
     row.innerHTML = `
-        <div class="card-body p-2">
-            <div class="row align-items-center">
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
                 <div class="col-md-4">
-                    <input type="text" class="form-control form-control-sm" placeholder="主题 (如 factory/workshop_a/temp)" 
+                    <label class="field-label">主题</label>
+                    <input type="text" class="form-control form-control-sm mono" placeholder="主题 (如 factory/workshop_a/temp)" 
                            value="${topic ? topic.topic : ''}" data-field="topic" required>
                 </div>
                 <div class="col-md-2">
+                    <label class="field-label">名称</label>
                     <input type="text" class="form-control form-control-sm" placeholder="名称" 
                            value="${topic ? topic.name : ''}" data-field="name" required>
                 </div>
                 <div class="col-md-2">
-                    <input type="text" class="form-control form-control-sm" placeholder="JSON路径" 
+                    <label class="field-label">JSON路径</label>
+                    <input type="text" class="form-control form-control-sm mono" placeholder="JSON路径" 
                            value="${topic ? (topic.json_path || 'value') : 'value'}" data-field="json_path">
                 </div>
                 <div class="col-md-2">
+                    <label class="field-label">单位</label>
                     <input type="text" class="form-control form-control-sm" placeholder="单位" 
                            value="${topic ? topic.unit : ''}" data-field="unit">
                 </div>
-                <div class="col-md-1">
-                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('.card').remove()">
+                <div class="col-md-1 text-end">
+                    <button type="button" class="btn btn-sm btn-danger-outline-token btn-icon" title="移除该主题" aria-label="移除该主题"
+                            onclick="this.closest('.card').remove()">
                         <i class="bi bi-x"></i>
                     </button>
                 </div>
@@ -824,34 +1070,40 @@ function addEndpointRow(ep = null) {
     const container = document.getElementById('endpoints-container');
     
     const row = document.createElement('div');
-    row.className = 'card mb-2';
+    row.className = 'card data-row mb-2';
     row.innerHTML = `
-        <div class="card-body p-2">
-            <div class="row align-items-center">
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
                 <div class="col-md-3">
-                    <input type="text" class="form-control form-control-sm" placeholder="路径 (如 /sensors/temp)" 
+                    <label class="field-label">路径</label>
+                    <input type="text" class="form-control form-control-sm mono" placeholder="路径 (如 /sensors/temp)" 
                            value="${ep ? ep.path : ''}" data-field="path" required>
                 </div>
                 <div class="col-md-2">
+                    <label class="field-label">名称</label>
                     <input type="text" class="form-control form-control-sm" placeholder="名称" 
                            value="${ep ? ep.name : ''}" data-field="name" required>
                 </div>
                 <div class="col-md-1">
-                    <select class="form-select form-select-sm" data-field="method">
+                    <label class="field-label">方法</label>
+                    <select class="form-select form-select-sm mono" data-field="method">
                         <option value="GET" ${!ep || ep.method === 'GET' ? 'selected' : ''}>GET</option>
                         <option value="POST" ${ep && ep.method === 'POST' ? 'selected' : ''}>POST</option>
                     </select>
                 </div>
                 <div class="col-md-2">
-                    <input type="text" class="form-control form-control-sm" placeholder="JSON路径" 
+                    <label class="field-label">JSON路径</label>
+                    <input type="text" class="form-control form-control-sm mono" placeholder="JSON路径" 
                            value="${ep ? (ep.json_path || 'value') : 'value'}" data-field="json_path">
                 </div>
                 <div class="col-md-2">
+                    <label class="field-label">单位</label>
                     <input type="text" class="form-control form-control-sm" placeholder="单位" 
                            value="${ep ? ep.unit : ''}" data-field="unit">
                 </div>
-                <div class="col-md-1">
-                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('.card').remove()">
+                <div class="col-md-1 text-end">
+                    <button type="button" class="btn btn-sm btn-danger-outline-token btn-icon" title="移除该端点" aria-label="移除该端点"
+                            onclick="this.closest('.card').remove()">
                         <i class="bi bi-x"></i>
                     </button>
                 </div>
@@ -1011,7 +1263,7 @@ function viewDeviceData(deviceId) {
 }
 
 async function deleteDevice(deviceId) {
-    if (!confirm(`确定要删除设备 "${deviceId}" 吗？此操作不可恢复。`)) {
+    if (!confirm(`删除设备 "${deviceId}"？\n\n该操作不可恢复：设备及其采集配置将被一并移除。\n请确认已了解影响后再继续。`)) {
         return;
     }
     
@@ -1043,7 +1295,7 @@ async function deleteDevice(deviceId) {
 
 
 async function stopDevice(deviceId) {
-    if (!confirm(`确定停止设备 "${deviceId}" 吗？`)) return;
+    if (!confirm(`停止设备 "${deviceId}"？\n\n设备将停止运行，机械类设备数据将归零。`)) return;
     try {
         const r = await fetch(`/api/devices/${deviceId}/stop`, { method: 'POST', headers: getAuthHeaders() });
         const d = await r.json();
@@ -1084,7 +1336,7 @@ async function testDevice(deviceId) {
                     ${sd.register ? '寄存器: ' + sd.register : ''}
                     ${sd.node ? '节点: ' + sd.node : ''}
                     ${sd.endpoint ? '端点: ' + sd.endpoint : ''}<br>
-                    值: ${sd.value} ${sd.unit || ''}
+                    值: <span class="mono">${sd.value}</span> <span class="metric-unit">${sd.unit || ''}</span>
                 </div>
             `;
         }
@@ -1092,13 +1344,13 @@ async function testDevice(deviceId) {
         content.innerHTML = `
             <div class="text-center mb-3">
                 <i class="bi ${result.success ? 'bi-check-circle text-success' : 'bi-x-circle text-danger'}" 
-                   style="font-size: 3rem;"></i>
+                   style="font-size: 48px;"></i>
             </div>
             <h5 class="text-center ${result.success ? 'text-success' : 'text-danger'}">
                 ${result.success ? '连接成功' : '连接失败'}
             </h5>
             <p class="text-center">${result.message}</p>
-            ${result.protocol ? '<p class="text-center"><span class="badge bg-info">' + result.protocol + '</span></p>' : ''}
+            ${result.protocol ? '<p class="text-center"><span class="tag tag--neutral tag--mono">' + result.protocol + '</span></p>' : ''}
             ${sampleHtml}
             ${result.warning ? `
                 <div class="alert alert-warning">
@@ -1133,18 +1385,18 @@ async function showTemplatesModal() {
                         <h6 class="card-title">
                             <i class="bi bi-cpu me-2"></i>${template.name}
                         </h6>
-                        <p class="card-text text-muted small">${template.description}</p>
-                        <div class="mb-2">
-                            <span class="badge bg-${getProtocolBadgeColor(template.protocol)}">${template.protocol}</span>
-                            ${template.port ? '<span class="badge bg-secondary">端口: ' + template.port + '</span>' : ''}
-                            ${template.endpoint ? '<small class="text-muted ms-1">' + template.endpoint + '</small>' : ''}
+                        <p class="card-text cell-sub mb-2">${template.description}</p>
+                        <div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
+                            <span class="tag tag--neutral tag--mono">${template.protocol}</span>
+                            ${template.port ? '<span class="tag tag--neutral mono">端口 ' + template.port + '</span>' : ''}
+                            ${template.endpoint ? '<span class="cell-sub mono">' + template.endpoint + '</span>' : ''}
                         </div>
-                        <small class="text-muted">
+                        <div class="cell-sub">
                             ${template.registers ? '寄存器: ' + template.registers.map(r => r.name).join(', ') : ''}
                             ${template.nodes ? '节点: ' + template.nodes.map(n => n.name).join(', ') : ''}
                             ${template.topics ? '主题: ' + template.topics.map(t => t.name).join(', ') : ''}
                             ${template.endpoints ? '端点: ' + template.endpoints.map(e => e.name).join(', ') : ''}
-                        </small>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1290,27 +1542,25 @@ function renderPresets(presets) {
     const grid = document.getElementById('presets-grid');
 
     if (!presets || presets.length === 0) {
-        grid.innerHTML = '<div class="col text-center text-muted py-3">暂无可用预设</div>';
+        grid.innerHTML = `
+            <div class="col-12">
+                <div class="state-box state-box--inline">
+                    <i class="bi bi-inbox state-box__icon"></i>
+                    <div class="state-box__title">暂无可用预设</div>
+                </div>
+            </div>`;
         return;
     }
-
-    const protocolColors = {
-        'modbus_tcp': 'primary',
-        'modbus_rtu': 'primary',
-        'opcua': 'info',
-        'mqtt': 'warning',
-        'rest': 'success'
-    };
 
     grid.innerHTML = presets.map(p => `
         <div class="col-md-4 col-lg-3 mb-3">
             <div class="card h-100 preset-card">
-                <div class="card-body p-3">
+                <div class="card-body">
                     <h6 class="card-title mb-1">${p.name}</h6>
-                    <p class="text-muted small mb-2">${p.description}</p>
-                    <div class="mb-2">
-                        <span class="badge bg-${protocolColors[p.protocol] || 'secondary'}">${p.protocol.toUpperCase()}</span>
-                        <code class="small ms-1">${p.device_id}</code>
+                    <p class="cell-sub mb-2">${p.description}</p>
+                    <div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
+                        <span class="tag tag--neutral tag--mono">${p.protocol.toUpperCase()}</span>
+                        <code class="cell-sub">${p.device_id}</code>
                     </div>
                     <button class="btn btn-sm btn-outline-success w-100" onclick="addPreset('${p.preset_id}')">
                         <i class="bi bi-plus-circle me-1"></i>添加
@@ -1411,20 +1661,20 @@ function showFaultInjectionModal(deviceId) {
         modal.innerHTML = `
             <div class="modal-dialog">
                 <div class="modal-content">
-                    <div class="modal-header bg-warning text-dark">
+                    <div class="modal-header modal-header--warning">
                         <h5 class="modal-title"><i class="bi bi-exclamation-triangle me-2"></i>故障注入测试</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
                         <div class="alert alert-warning">
                             <i class="bi bi-info-circle me-1"></i>
-                            <strong>警告：</strong>此功能仅用于测试目的，会模拟设备故障状态。
+                            <strong>警告：</strong>此功能会向设备写入模拟故障状态，仅用于测试，请勿在生产运行期间使用。
                         </div>
                         <form id="faultInjectionForm">
                             <input type="hidden" id="fault-device-id">
                             <div class="mb-3">
                                 <label class="form-label">设备</label>
-                                <input type="text" class="form-control" id="fault-device-name" readonly>
+                                <input type="text" class="form-control mono" id="fault-device-name" readonly>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">故障类型</label>
@@ -1438,7 +1688,7 @@ function showFaultInjectionModal(deviceId) {
                                 </select>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">严重程度: <span id="severity-value">0.5</span></label>
+                                <label class="form-label">严重程度: <span id="severity-value" class="mono">0.5</span></label>
                                 <input type="range" class="form-range" id="fault-severity" min="0.1" max="1.0" step="0.1" value="0.5"
                                        oninput="document.getElementById('severity-value').textContent = this.value">
                                 <div class="d-flex justify-content-between">
@@ -1450,8 +1700,8 @@ function showFaultInjectionModal(deviceId) {
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                        <button type="button" class="btn btn-warning" onclick="injectFault()">
-                            <i class="bi bi-exclamation-triangle me-1"></i>注入故障
+                        <button type="button" class="btn btn-danger-token" onclick="injectFault()">
+                            <i class="bi bi-exclamation-triangle me-1"></i>确认注入故障
                         </button>
                     </div>
                 </div>
@@ -1507,23 +1757,4 @@ async function injectFault() {
     }
 }
 </script>
-
-<style>
-.template-card:hover {
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
-}
-.protocol-fields .card {
-    border-left: 3px solid #0d6efd;
-}
-.preset-card {
-    transition: all 0.2s;
-    border: 1px solid #dee2e6;
-}
-.preset-card:hover {
-    border-color: #198754;
-    box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.25);
-    transform: translateY(-2px);
-}
-</style>
 {% endblock %}
