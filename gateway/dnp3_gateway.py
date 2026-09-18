@@ -100,6 +100,15 @@ class DNP3Parser:
             'control': control,
             'destination': destination,
             'source': source,
+            # 帧头 CRC（data[8:10]）。原实现解析出来却从未使用、也没放进返回值 ——
+            # 等于**帧头校验形同虚设**：线路噪声造成的位翻转不会被发现，
+            # 损坏的帧会带着 'valid': True 一路往上走。
+            # 这里先把值透出来（调用方与测试可用），**但本函数仍不做校验**：
+            # 真正的校验要按 DNP3 的 8 字节块 + 多项式 0x3D65 重算比对，
+            # 属于独立改动 —— 在解析函数里悄悄加上，一旦算错就会拒掉合法帧，
+            # 比不校验更危险。
+            'crc': crc,
+            'crc_verified': False,
             'function_code': function_code,
             'app_control': app_control,
             'data': app_data,

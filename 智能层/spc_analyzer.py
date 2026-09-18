@@ -168,13 +168,19 @@ class SPCAnalyzer:
         xbar_lcl = xbar_bar - a2 * r_bar
 
         # R图控制限
+        # d3 是 R 图**下限**系数：n<=6 时 d3=0（此时下限为 0 是标准做法），
+        # n>=7 时 d3>0，下限必须是正数。
+        # 原先 d3_table 定义了却从未使用、r_lcl 直接硬编码为 0 —— 于是 n>=7 时
+        # 「极差过小」这类异常永远检不出来：数据被抹平、测量分辨率不足、
+        # 采样被平滑处理，在 R 图上都表现为 R 偏小。
         d3_table = {2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0.076, 8: 0.136, 9: 0.184, 10: 0.223}
         d4_table = {2: 3.267, 3: 2.574, 4: 2.282, 5: 2.114,
                     6: 2.004, 7: 1.924, 8: 1.864, 9: 1.816, 10: 1.777}
+        d3 = d3_table.get(n, 0)
         d4 = d4_table.get(n, 2.114)
 
         r_ucl = d4 * r_bar
-        r_lcl = 0  # R图下限为0
+        r_lcl = max(0.0, d3 * r_bar)
 
         # 判异检测
         violations = self._check_violations(xbar_values, xbar_bar, xbar_ucl, xbar_lcl)

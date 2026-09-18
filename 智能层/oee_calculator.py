@@ -344,6 +344,11 @@ class OEECalculator:
 
         return {
             '故障停机损失_秒': round(downtime, 1),
+            # 按可用率推算的损失（= 计划生产时间 - 实际运行时间）。
+            # 原先这个值算出来却从没放进返回值 —— 调用方只能看到「实际停机损失」，
+            # 看不到「按可用率推算的损失」，两者对不上时（计划时间没算对、
+            # 实际运行时间被高估）完全无从发现。
+            '可用率损失_秒': round(availability_loss, 1),
             '可用率损失占比_百分比': round((1 - availability) * 100, 1),
             '性能损失_秒': round(performance_loss, 1),
             '性能率损失占比_百分比': round((1 - performance) * 100, 1),
