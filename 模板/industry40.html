@@ -8,109 +8,145 @@
 
 {% block extra_css %}
 <style>
+    /* ==========================================================================
+       工业4.0 仪表盘
+       颜色 / 字号 / 间距 / 圆角 / 阴影全部取 design-tokens.css 令牌：
+         - 卡片、表格随 data-theme 自动切换深浅色（不再写死深色底与霓虹色）
+         - 无渐变 / 无发光，避免车间长时间盯屏的视觉疲劳
+         - 所有文字 ≥12px；数值列等宽字体 + 右对齐
+       ========================================================================== */
+
     /* ===== 卡片基础 ===== */
     .i4-card {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        border: 1px solid #0f3460;
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 20px;
-        color: #e0e0e0;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        background: var(--bg-surface);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-sm);
+        padding: var(--space-5);
+        margin-bottom: var(--space-5);
+        color: var(--text-primary);
     }
     .i4-card-header {
         display: flex;
         align-items: center;
-        margin-bottom: 15px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid #0f3460;
+        gap: var(--space-3);
+        margin-bottom: var(--space-4);
+        padding-bottom: var(--space-3);
+        border-bottom: 1px solid var(--border-base);
     }
     .i4-card-header i {
-        font-size: 1.5rem;
-        margin-right: 10px;
-        color: #00d4ff;
+        font-size: var(--font-xl);
+        color: var(--color-info);
     }
     .i4-card-header h5 {
         margin: 0;
-        font-weight: 600;
-        color: #ffffff;
+        font-size: var(--font-lg);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
     }
 
-    /* ===== 指标卡片 ===== */
+    /* ===== 指标卡片（数值排版复用 design-tokens 的 .metric-value / .metric-label） ===== */
     .metric-box {
+        padding: var(--space-4);
         text-align: center;
-        padding: 15px;
-        background: rgba(0,212,255,0.05);
-        border-radius: 8px;
-        border: 1px solid rgba(0,212,255,0.2);
-    }
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #00d4ff;
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #8899aa;
-        margin-top: 5px;
+        background: var(--bg-sunken);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-md);
     }
 
-    /* ===== 健康评分颜色 ===== */
-    .health-excellent { color: #00ff88; }
-    .health-good { color: #88ff00; }
-    .health-warning { color: #ffaa00; }
-    .health-critical { color: #ff4444; }
+    /* ===== 图表容器（固定高度，保证 ECharts 初始化时尺寸非 0） ===== */
+    .i4-chart { width: 100%; height: 260px; }
+    .i4-chart--tall { height: 320px; }
+
+    /* ===== 空态 / 加载态：全页面统一形态 ===== */
+    .i4-empty,
+    .i4-loading {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-2);
+        padding: var(--space-8) var(--space-4);
+        font-size: var(--font-sm);
+        color: var(--text-muted);
+        text-align: center;
+    }
+    .i4-empty i,
+    .i4-loading i { font-size: var(--font-2xl); color: var(--text-disabled); }
+    .i4-loading i { color: var(--color-info); animation: spin 1s linear infinite; }
+
+    /* ===== 健康评分分级色（优秀 / 良好 / 警告 / 严重，四级可辨） ===== */
+    .health-excellent { color: var(--color-success); }
+    .health-good      { color: var(--color-info); }
+    .health-warning   { color: var(--color-warning); }
+    .health-critical  { color: var(--color-danger); }
 
     /* ===== 仪表盘 ===== */
-    .oee-gauge { height: 200px; }
+    .oee-gauge { width: 100%; height: 220px; }
 
-    /* ===== 报警条目 ===== */
+    /* ===== 报警 / 维护建议条目 =====
+     * 等级只由左侧 .level-bar--* 色条表达（design-tokens 提供），
+     * 不做整行背景闪烁；命名与 style.css 一致 */
     .alert-item {
-        padding: 10px 15px;
-        margin-bottom: 8px;
-        border-radius: 8px;
-        border-left: 4px solid;
+        display: flex;
+        align-items: stretch;
+        gap: var(--space-3);
+        padding: var(--space-3);
+        margin-bottom: var(--space-2);
+        background: var(--bg-sunken);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-md);
+        font-size: var(--font-sm);
     }
-    .alert-critical { border-color: #ff4444; background: rgba(255,68,68,0.1); }
-    .alert-warning { border-color: #ffaa00; background: rgba(255,170,0,0.1); }
-    .alert-info { border-color: #00d4ff; background: rgba(0,212,255,0.1); }
+    .alert-body { flex: 1 1 auto; min-width: 0; }
+    .alert-body .alert-time {
+        float: right;
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: var(--font-xs);
+        color: var(--text-muted);
+    }
 
-    /* ===== 工艺流程 ===== */
+    /* ===== 工艺流程（总览） ===== */
     .process-flow {
         position: relative;
         height: 300px;
-        background: rgba(0,0,0,0.3);
-        border-radius: 12px;
+        background: var(--bg-sunken);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-lg);
         overflow: hidden;
     }
     .flow-node {
         position: absolute;
-        width: 80px;
-        height: 80px;
+        width: 84px;
+        height: 84px;
         border-radius: 50%;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        font-size: 0.75rem;
-        font-weight: 600;
-        border: 2px solid;
+        gap: 2px;
+        font-size: var(--font-xs);
+        font-weight: var(--weight-semibold);
+        border: 2px solid var(--border-strong);
+        background: var(--bg-surface);
+        color: var(--text-secondary);
         cursor: pointer;
-        transition: all 0.3s;
+        transition: box-shadow var(--duration-fast) var(--ease-out);
     }
-    .flow-node:hover {
-        transform: scale(1.1);
-        box-shadow: 0 0 20px rgba(0,212,255,0.5);
+    .flow-node:hover { box-shadow: var(--shadow-md); }
+    .flow-node.running { border-color: var(--color-success); }
+    .flow-node.stopped { border-color: var(--color-offline); color: var(--text-muted); }
+    .flow-node.idle    { border-color: var(--color-warning); }
+    .flow-node.fault   { border-color: var(--color-danger); }
+    .flow-node .flow-node-icon { font-size: var(--font-xl); line-height: 1; }
+    .flow-node .flow-node-oee {
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: var(--font-xs);
+        color: var(--text-primary);
     }
-    .flow-node.running { border-color: #00ff88; background: rgba(0,255,136,0.15); color: #00ff88; }
-    .flow-node.stopped { border-color: #ff4444; background: rgba(255,68,68,0.15); color: #ff4444; }
-    .flow-node.idle { border-color: #ffaa00; background: rgba(255,170,0,0.15); color: #ffaa00; }
-    .flow-node.fault { border-color: #ff4444; background: rgba(255,68,68,0.25); color: #ff4444; }
-    .flow-pipe {
-        position: absolute;
-        background: linear-gradient(90deg, #0f3460, #00d4ff, #0f3460);
-        height: 3px;
-    }
+    .flow-pipe { position: absolute; height: 3px; background: var(--border-strong); }
 
     /* ===== 图表容器 ===== */
     .spc-chart { height: 250px; }
@@ -119,95 +155,113 @@
     /* ===== 状态徽章 ===== */
     .status-badge {
         display: inline-block;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        font-weight: 600;
+        padding: 2px var(--space-3);
+        border-radius: var(--radius-pill);
+        font-size: var(--font-xs);
+        font-weight: var(--weight-medium);
     }
-    .badge-active { background: rgba(0,255,136,0.2); color: #00ff88; border: 1px solid #00ff88; }
-    .badge-inactive { background: rgba(255,68,68,0.2); color: #ff4444; border: 1px solid #ff4444; }
+    .badge-active   { background: var(--color-success-soft); color: var(--color-success); }
+    .badge-inactive { background: var(--color-danger-soft);  color: var(--color-danger); }
 
     /* ===== Tab样式 ===== */
     .tab-custom .nav-link {
-        color: #8899aa;
+        color: var(--text-muted);
         border: none;
-        padding: 10px 20px;
+        padding: var(--space-2) var(--space-5);
+        font-size: var(--font-base);
     }
+    .tab-custom .nav-link:hover { color: var(--text-primary); }
     .tab-custom .nav-link.active {
-        color: #00d4ff;
-        border-bottom: 2px solid #00d4ff;
+        color: var(--color-brand);
+        border-bottom: 2px solid var(--color-brand);
         background: transparent;
     }
 
     /* ===== 数据表格 ===== */
-    .data-table { color: #e0e0e0; }
+    .data-table { color: var(--text-primary); }
     .data-table th {
-        background: rgba(0,212,255,0.1);
-        border-color: #0f3460;
-        color: #00d4ff;
-        font-weight: 600;
+        background: var(--bg-sunken);
+        border-color: var(--border-base);
+        color: var(--text-secondary);
+        font-size: var(--font-sm);
+        font-weight: var(--weight-semibold);
+        white-space: nowrap;
+        vertical-align: middle;
     }
-    .data-table td { border-color: #0f3460; }
-    .data-table tr:hover { background: rgba(0,212,255,0.05); }
+    .data-table td {
+        border-color: var(--border-base);
+        font-size: var(--font-sm);
+        vertical-align: middle;
+    }
+    .data-table tr:hover { background: var(--bg-hover); }
+    /* 数值列：右对齐 + 等宽字体，纵向比对位数不跳动 */
+    .data-table th.num,
+    .data-table td.num {
+        text-align: right;
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+    }
 
     /* ===== 设备选择器 ===== */
     .device-select {
-        background: #1a1a2e;
-        color: #e0e0e0;
-        border: 1px solid #0f3460;
-        border-radius: 6px;
-        padding: 6px 12px;
-        font-size: 0.9rem;
+        background: var(--bg-sunken);
+        color: var(--text-primary);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-md);
+        padding: var(--space-1) var(--space-3);
+        font-family: var(--font-sans);
+        font-size: var(--font-sm);
     }
     .device-select:focus {
-        border-color: #00d4ff;
-        box-shadow: 0 0 0 2px rgba(0,212,255,0.2);
+        border-color: var(--color-brand);
+        box-shadow: var(--focus-ring);
         outline: none;
     }
     .device-select option {
-        background: #1a1a2e;
-        color: #e0e0e0;
+        background: var(--bg-surface);
+        color: var(--text-primary);
     }
 
     /* ===== 调试面板 ===== */
     .debug-panel {
         position: fixed;
-        bottom: 10px;
-        right: 10px;
+        bottom: var(--space-3);
+        right: var(--space-3);
         width: 420px;
         max-height: 300px;
-        background: rgba(0,0,0,0.9);
-        border: 1px solid #0f3460;
-        border-radius: 8px;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-lg);
         z-index: 9998;
-        font-family: monospace;
-        font-size: 0.75rem;
-        color: #00ff88;
+        font-family: var(--font-mono);
+        font-size: var(--font-xs);
+        color: var(--text-secondary);
         overflow-y: auto;
         display: none;
     }
     .debug-panel.show { display: block; }
     .debug-panel-header {
-        padding: 6px 10px;
-        background: #0f3460;
-        color: #00d4ff;
+        padding: var(--space-2) var(--space-3);
+        background: var(--bg-sunken);
+        border-bottom: 1px solid var(--border-base);
+        color: var(--text-primary);
         display: flex;
         justify-content: space-between;
         align-items: center;
         cursor: pointer;
-        border-radius: 8px 8px 0 0;
     }
     .debug-panel-body {
-        padding: 8px 10px;
+        padding: var(--space-2) var(--space-3);
     }
     .debug-entry {
         padding: 2px 0;
-        border-bottom: 1px solid rgba(15,52,96,0.5);
+        border-bottom: 1px solid var(--border-subtle);
     }
-    .debug-time { color: #666; }
-    .debug-ok { color: #00ff88; }
-    .debug-err { color: #ff4444; }
-    .debug-warn { color: #ffaa00; }
+    .debug-time { color: var(--text-muted); }
+    .debug-ok { color: var(--color-success); }
+    .debug-err { color: var(--color-danger); }
+    .debug-warn { color: var(--color-warning); }
 
     /* ===== 刷新按钮动画 ===== */
     .btn-refresh.spinning i {
@@ -223,72 +277,47 @@
         position: relative;
         min-height: 350px;
         min-width: 820px;
-        background: linear-gradient(135deg, #0a0a1a 0%, #0d1b2a 50%, #1b2838 100%);
-        border-radius: 12px;
+        background: var(--bg-sunken);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-lg);
         overflow: hidden;
-        border: 1px solid #0f3460;
-    }
-    .twin-floor::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background-image:
-            linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
-        background-size: 30px 30px;
-        pointer-events: none;
     }
     .twin-node {
         position: absolute;
         width: 130px;
-        padding: 12px 8px;
-        border-radius: 10px;
+        padding: var(--space-3) var(--space-2);
+        border-radius: var(--radius-md);
+        background: var(--bg-surface);
         text-align: center;
         cursor: pointer;
-        transition: all 0.3s ease;
+        transition: box-shadow var(--duration-fast) var(--ease-out);
         z-index: 2;
-        border: 2px solid;
+        border: 2px solid var(--border-strong);
     }
     .twin-node:hover {
-        transform: scale(1.08);
+        box-shadow: var(--shadow-md);
         z-index: 10;
     }
-    .twin-node.running {
-        border-color: #00ff88;
-        background: rgba(0,255,136,0.1);
-        box-shadow: 0 0 15px rgba(0,255,136,0.3);
+    .twin-node.running { border-color: var(--color-success); }
+    .twin-node.idle    { border-color: var(--color-warning); }
+    .twin-node.fault   { border-color: var(--color-danger); }
+    .twin-node.stopped { border-color: var(--color-offline); }
+    .twin-node-icon { display: block; font-size: var(--font-2xl); margin-bottom: var(--space-1); }
+    .twin-node-label { font-size: var(--font-sm); font-weight: var(--weight-semibold); color: var(--text-primary); }
+    .twin-node-status {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 2px;
+        margin-top: var(--space-1);
     }
-    .twin-node.idle {
-        border-color: #ffaa00;
-        background: rgba(255,170,0,0.1);
-        box-shadow: 0 0 15px rgba(255,170,0,0.2);
-    }
-    .twin-node.fault {
-        border-color: #ff4444;
-        background: rgba(255,68,68,0.15);
-        box-shadow: 0 0 20px rgba(255,68,68,0.4);
-        animation: twin-fault-pulse 1.5s ease-in-out infinite;
-    }
-    .twin-node.stopped {
-        border-color: #666;
-        background: rgba(102,102,102,0.1);
-        opacity: 0.7;
-    }
-    @keyframes twin-fault-pulse {
-        0%, 100% { box-shadow: 0 0 15px rgba(255,68,68,0.3); }
-        50% { box-shadow: 0 0 30px rgba(255,68,68,0.6); }
-    }
-    .twin-node-icon { font-size: 2rem; display: block; margin-bottom: 4px; }
-    .twin-node-label { font-size: 0.8rem; font-weight: 600; color: #e0e0e0; }
-    .twin-node-status { font-size: 0.7rem; margin-top: 4px; }
     .twin-link { position: absolute; z-index: 1; overflow: visible; }
     .twin-particle {
         position: absolute;
         width: 6px;
         height: 6px;
-        border-radius: 50%;
-        background: #00d4ff;
-        box-shadow: 0 0 8px #00d4ff;
+        border-radius: var(--radius-pill);
+        background: var(--color-info);
         top: 50%;
         transform: translateY(-50%);
         animation: twin-particle-move 2.5s linear infinite;
@@ -301,71 +330,140 @@
     }
     .twin-param {
         display: inline-block;
-        padding: 1px 6px;
-        border-radius: 10px;
-        font-size: 0.65rem;
-        margin: 1px;
-        background: rgba(0,212,255,0.15);
-        color: #00d4ff;
-        border: 1px solid rgba(0,212,255,0.3);
+        padding: 1px var(--space-2);
+        border-radius: var(--radius-pill);
+        font-size: var(--font-xs);
+        background: var(--color-info-soft);
+        color: var(--color-info);
     }
     .twin-param.hot {
-        background: rgba(255,68,68,0.15);
-        color: #ff6666;
-        border-color: rgba(255,68,68,0.3);
+        background: var(--color-danger-soft);
+        color: var(--color-danger);
     }
     .twin-detail-empty {
+        padding: var(--space-10) var(--space-5);
         text-align: center;
-        padding: 60px 20px;
-        color: #666;
+        font-size: var(--font-sm);
+        color: var(--text-muted);
     }
     .twin-detail-empty i {
-        font-size: 3rem;
-        margin-bottom: 15px;
         display: block;
-        color: #0f3460;
+        margin-bottom: var(--space-3);
+        font-size: var(--font-3xl);
+        color: var(--text-disabled);
     }
     .twin-detail-row {
         display: flex;
         justify-content: space-between;
-        padding: 8px 0;
-        border-bottom: 1px solid rgba(15,52,96,0.5);
-        font-size: 0.85rem;
+        gap: var(--space-3);
+        padding: var(--space-2) 0;
+        border-bottom: 1px solid var(--border-subtle);
+        font-size: var(--font-sm);
     }
-    .twin-detail-label { color: #8899aa; }
-    .twin-detail-value { color: #e0e0e0; font-weight: 600; }
+    .twin-detail-label { color: var(--text-muted); }
+    .twin-detail-value {
+        color: var(--text-primary);
+        font-weight: var(--weight-semibold);
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+    }
     .twin-metric-card {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        border: 1px solid #0f3460;
-        border-radius: 10px;
-        padding: 15px;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-sm);
+        padding: var(--space-4);
         text-align: center;
     }
-    .twin-metric-icon { font-size: 1.5rem; margin-bottom: 5px; }
-    .twin-metric-value { font-size: 1.8rem; font-weight: 700; color: #00d4ff; }
-    .twin-metric-label { font-size: 0.8rem; color: #8899aa; margin-top: 3px; }
-    .twin-params-table { color: #e0e0e0; }
+    .twin-metric-icon { font-size: var(--font-xl); margin-bottom: var(--space-1); }
+    .twin-metric-value {
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: var(--font-2xl);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+    .twin-metric-label { font-size: var(--font-xs); color: var(--text-muted); margin-top: var(--space-1); }
+    .twin-params-table { color: var(--text-primary); }
     .twin-params-table th {
-        background: rgba(0,212,255,0.1);
-        border-color: #0f3460;
-        color: #00d4ff;
-        font-weight: 600;
-        font-size: 0.85rem;
+        background: var(--bg-sunken);
+        border-color: var(--border-base);
+        color: var(--text-secondary);
+        font-size: var(--font-sm);
+        font-weight: var(--weight-semibold);
+        white-space: nowrap;
     }
-    .twin-params-table td { border-color: #0f3460; font-size: 0.85rem; }
-    .twin-params-table tr:hover { background: rgba(0,212,255,0.05); }
+    .twin-params-table td { border-color: var(--border-base); font-size: var(--font-sm); }
+    .twin-params-table tr:hover { background: var(--bg-hover); }
     .twin-params-table tr { cursor: pointer; }
-    .twin-status-dot {
-        display: inline-block;
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        margin-right: 6px;
+    .twin-params-table .status-dot { margin-right: var(--space-2); vertical-align: middle; }
+    .twin-params-table th.num,
+    .twin-params-table td.num {
+        text-align: right;
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
     }
-    .twin-status-dot.running { background: #00ff88; box-shadow: 0 0 6px #00ff88; }
-    .twin-status-dot.idle { background: #ffaa00; }
-    .twin-status-dot.fault { background: #ff4444; box-shadow: 0 0 6px #ff4444; }
-    .twin-status-dot.stopped { background: #666; }
+
+    /* ===== 行内数值：等宽 + 表格化数字，避免刷新时宽度跳动 ===== */
+    .mono {
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* ===== 日志条目（决策日志等） ===== */
+    .i4-log-item {
+        padding: var(--space-2) 0;
+        border-bottom: 1px solid var(--border-subtle);
+        font-size: var(--font-sm);
+    }
+    .i4-log-time {
+        float: right;
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: var(--font-xs);
+        color: var(--text-muted);
+    }
+
+    /* ===== 表格内分值分段色条（健康评分等按分值分级着色） ===== */
+    .score-bar {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: var(--space-2);
+    }
+    .score-bar__track {
+        position: relative;
+        width: 72px;
+        height: 6px;
+        border-radius: var(--radius-pill);
+        background: var(--bg-hover);
+        overflow: hidden;
+    }
+    .score-bar__fill {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        border-radius: var(--radius-pill);
+    }
+    .score-bar--excellent .score-bar__fill { background: var(--color-success); }
+    .score-bar--good .score-bar__fill      { background: var(--color-info); }
+    .score-bar--warning .score-bar__fill   { background: var(--color-warning); }
+    .score-bar--critical .score-bar__fill  { background: var(--color-danger); }
+    .score-bar__value {
+        min-width: 3ch;
+        text-align: right;
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* ===== 数值分级着色：放在样式表末尾，确保覆盖各组件默认文字色 ===== */
+    .metric-value--success,
+    .twin-metric-value.metric-value--success { color: var(--color-success); }
+    .metric-value--warning,
+    .twin-metric-value.metric-value--warning { color: var(--color-warning); }
+    .metric-value--danger,
+    .twin-metric-value.metric-value--danger  { color: var(--color-danger); }
 </style>
 {% endblock %}
 
@@ -377,7 +475,7 @@
 <div class="row mb-3">
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center">
-            <h4 class="text-white mb-0">
+            <h4 class="mb-0">
                 <i class="bi bi-cpu"></i> 工业4.0智能仪表盘
                 <span class="status-badge badge-active ms-2" id="system-badge">系统运行中</span>
             </h4>
@@ -428,6 +526,11 @@
     <li class="nav-item">
         <a class="nav-link" data-bs-toggle="tab" href="#tab-edge">
             <i class="bi bi-diagram-3"></i> 边缘决策
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link" data-bs-toggle="tab" href="#tab-vibration">
+            <i class="bi bi-activity"></i> 振动分析
         </a>
     </li>
     <li class="nav-item">
@@ -522,10 +625,10 @@
                                 <tr>
                                     <th>设备</th>
                                     <th>寄存器</th>
-                                    <th>健康评分</th>
+                                    <th class="num">健康评分</th>
                                     <th>趋势</th>
-                                    <th>异常数</th>
-                                    <th>故障预测</th>
+                                    <th class="num">异常数</th>
+                                    <th class="num">故障预测</th>
                                     <th>更新时间</th>
                                 </tr>
                             </thead>
@@ -564,9 +667,9 @@
                 <div class="i4-card">
                     <div class="i4-card-header">
                         <i class="bi bi-bar-chart"></i>
-                        <h5>各设备OEE对比</h5>
+                        <h5>各设备OEE对比（横向排序，含 85% 目标线）</h5>
                     </div>
-                    <div id="oee-compare-chart" style="height: 250px;"></div>
+                    <div id="oee-compare-chart" class="i4-chart"></div>
                 </div>
             </div>
         </div>
@@ -582,13 +685,13 @@
                             <thead>
                                 <tr>
                                     <th>设备</th>
-                                    <th>可用率(A)</th>
-                                    <th>性能率(P)</th>
-                                    <th>质量率(Q)</th>
-                                    <th>OEE</th>
+                                    <th class="num">可用率(A)</th>
+                                    <th class="num">性能率(P)</th>
+                                    <th class="num">质量率(Q)</th>
+                                    <th class="num">OEE</th>
                                     <th>等级</th>
-                                    <th>总产量</th>
-                                    <th>合格品</th>
+                                    <th class="num">总产量</th>
+                                    <th class="num">合格品</th>
                                 </tr>
                             </thead>
                             <tbody></tbody>
@@ -606,7 +709,7 @@
             <div class="col-12">
                 <div class="i4-card" style="padding: 12px 20px;">
                     <div class="d-flex align-items-center">
-                        <i class="bi bi-funnel me-2" style="color: #00d4ff;"></i>
+                        <i class="bi bi-funnel me-2" style="color: var(--color-info);"></i>
                         <label class="text-muted me-2">选择设备:</label>
                         <select class="device-select me-3" id="spc-device-select">
                             <option value="">请选择设备</option>
@@ -704,12 +807,24 @@
                 </div>
             </div>
         </div>
+        <!-- 峰/平/谷用电量：堆叠色条（三段构成 + 段内数值/占比标注） -->
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="i4-card">
+                    <div class="i4-card-header">
+                        <i class="bi bi-bar-chart-steps"></i>
+                        <h5>分时用电构成（峰 / 平 / 谷）</h5>
+                    </div>
+                    <div class="energy-chart" id="energy-tariff-chart"></div>
+                </div>
+            </div>
+        </div>
         <div class="row">
             <div class="col-md-6">
                 <div class="i4-card">
                     <div class="i4-card-header">
                         <i class="bi bi-pie-chart"></i>
-                        <h5>分时电价构成</h5>
+                        <h5>电费占比（环图）</h5>
                     </div>
                     <div class="energy-chart" id="energy-pie-chart"></div>
                 </div>
@@ -718,7 +833,7 @@
                 <div class="i4-card">
                     <div class="i4-card-header">
                         <i class="bi bi-lightning-charge"></i>
-                        <h5>实时功率分布</h5>
+                        <h5>实时功率分布（横向排序）</h5>
                     </div>
                     <div class="energy-chart" id="power-bar-chart"></div>
                 </div>
@@ -754,6 +869,18 @@
                 </div>
             </div>
         </div>
+        <!-- 规则触发次数：横向条形（按次数排序，比折线更容易比较） -->
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="i4-card">
+                    <div class="i4-card-header">
+                        <i class="bi bi-bar-chart"></i>
+                        <h5>规则 / 联锁触发次数（横向排序）</h5>
+                    </div>
+                    <div id="edge-trigger-chart" class="i4-chart"></div>
+                </div>
+            </div>
+        </div>
         <div class="row">
             <div class="col-md-6">
                 <div class="i4-card">
@@ -768,7 +895,7 @@
                                     <th>规则ID</th>
                                     <th>名称</th>
                                     <th>类型</th>
-                                    <th>触发次数</th>
+                                    <th class="num">触发次数</th>
                                     <th>状态</th>
                                 </tr>
                             </thead>
@@ -791,6 +918,65 @@
         </div>
     </div>
 
+    <!-- ==================== 振动分析Tab ==================== -->
+    <div class="tab-pane fade" id="tab-vibration">
+        <!-- 设备 / 转速选择 -->
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="i4-card" style="padding: var(--space-3) var(--space-5);">
+                    <div class="d-flex align-items-center flex-wrap gap-2">
+                        <i class="bi bi-activity" style="color: var(--color-info);"></i>
+                        <label class="text-muted mb-0" for="vib-device-select">选择设备:</label>
+                        <select class="device-select" id="vib-device-select">
+                            <option value="">请选择设备</option>
+                        </select>
+                        <label class="text-muted mb-0 ms-2" for="vib-rpm">转速 (RPM):</label>
+                        <input type="number" class="device-select" id="vib-rpm" value="1500" min="1" step="1" style="width: 110px;">
+                        <button class="btn btn-sm btn-outline-info ms-2" onclick="loadVibrationChart()">
+                            <i class="bi bi-graph-up"></i> 查看频谱
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row mb-3">
+            <div class="col-md-8">
+                <div class="i4-card">
+                    <div class="i4-card-header">
+                        <i class="bi bi-bar-chart-line"></i>
+                        <h5>振动频谱（FFT 幅频，竖向标注轴承特征频率）</h5>
+                    </div>
+                    <div class="i4-chart i4-chart--tall" id="vib-spectrum-chart"></div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="i4-card">
+                    <div class="i4-card-header">
+                        <i class="bi bi-record-circle"></i>
+                        <h5>轴承特征频率检测</h5>
+                    </div>
+                    <div id="vib-bearing-panel">
+                        <div class="i4-empty">
+                            <i class="bi bi-cursor"></i>
+                            <p class="mb-0">选择设备并查询后显示轴承特征频率</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-12">
+                <div class="i4-card">
+                    <div class="i4-card-header">
+                        <i class="bi bi-list-ol"></i>
+                        <h5>设备振动评分（横向排序）</h5>
+                    </div>
+                    <div id="vib-score-chart" class="i4-chart"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ==================== 数字孪生Tab ==================== -->
     <div class="tab-pane fade" id="tab-twin">
         <!-- 顶部指标卡片 -->
@@ -805,14 +991,14 @@
             <div class="col-md-3">
                 <div class="twin-metric-card">
                     <div class="twin-metric-icon">✅</div>
-                    <div class="twin-metric-value" id="twin-running" style="color:#00ff88;">--</div>
+                    <div class="twin-metric-value metric-value--success" id="twin-running">--</div>
                     <div class="twin-metric-label">运行中</div>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="twin-metric-card">
                     <div class="twin-metric-icon">⚠️</div>
-                    <div class="twin-metric-value" id="twin-faults" style="color:#ff4444;">--</div>
+                    <div class="twin-metric-value metric-value--danger" id="twin-faults">--</div>
                     <div class="twin-metric-label">故障设备</div>
                 </div>
             </div>
@@ -835,9 +1021,9 @@
                     </div>
                     <div style="overflow-x:auto;">
                         <div class="twin-floor" id="twin-floor">
-                            <div style="text-align:center; padding:120px 20px; color:#666;">
-                                <i class="bi bi-arrow-clockwise" style="font-size:2rem; animation:spin 1s linear infinite;"></i>
-                                <p class="mt-2">加载车间数据...</p>
+                            <div class="i4-loading">
+                                <i class="bi bi-arrow-clockwise"></i>
+                                <p class="mb-0">加载车间数据...</p>
                             </div>
                         </div>
                     </div>
@@ -873,12 +1059,12 @@
                                 <tr>
                                     <th>设备</th>
                                     <th>状态</th>
-                                    <th>温度 (°C)</th>
-                                    <th>压力 (MPa)</th>
-                                    <th>流量 (m³/h)</th>
-                                    <th>功率 (kW)</th>
-                                    <th>OEE</th>
-                                    <th>健康分</th>
+                                    <th class="num">温度 (°C)</th>
+                                    <th class="num">压力 (MPa)</th>
+                                    <th class="num">流量 (m³/h)</th>
+                                    <th class="num">功率 (kW)</th>
+                                    <th class="num">OEE</th>
+                                    <th class="num">健康分</th>
                                 </tr>
                             </thead>
                             <tbody></tbody>
@@ -917,6 +1103,133 @@
     var I40_CHARTS = {};  // 缓存echarts实例，避免重复初始化
     var I40_DEVICE_LIST = []; // 设备列表缓存
     var I40_DATA_CACHE = {}; // 数据缓存，用于导出
+
+    // ===== 设计令牌读取（图表颜色 / 字体统一来源，禁止写死色值）=====
+    var I40_OEE_TARGET = 85;  // OEE 目标线 = 后端 oee_calculator._oee_grade 的"世界级"阈值(0.85)，仅作目标刻度标注
+    var I40_FONT = 12;        // 图表文字下限（≥12px）
+    var I40_TOKENS = {};
+
+    function tk(name) {
+        if (!(name in I40_TOKENS)) {
+            I40_TOKENS[name] = getComputedStyle(document.documentElement)
+                .getPropertyValue(name).trim();
+        }
+        return I40_TOKENS[name];
+    }
+
+    function i40ResetTokens() { I40_TOKENS = {}; }
+
+    function i40Theme() {
+        return {
+            sans: tk('--font-sans'),
+            mono: tk('--font-mono'),
+            textPrimary: tk('--text-primary'),
+            textMuted: tk('--text-muted'),
+            surface: tk('--bg-surface'),
+            hover: tk('--bg-hover'),
+            grid: tk('--chart-grid'),
+            gridStrong: tk('--chart-grid-strong'),
+            axisText: tk('--chart-axis-text'),
+            labelText: tk('--chart-label-text'),
+            tooltipBg: tk('--chart-tooltip-bg'),
+            tooltipText: tk('--chart-tooltip-text'),
+            success: tk('--color-success'),
+            warning: tk('--color-warning'),
+            danger: tk('--color-danger'),
+            info: tk('--color-info'),
+            palette: [1, 2, 3, 4, 5, 6, 7, 8].map(function(i) { return tk('--chart-' + i); })
+        };
+    }
+
+    function i40Tooltip(t, extra) {
+        var o = {
+            backgroundColor: t.tooltipBg,
+            borderWidth: 0,
+            textStyle: { color: t.tooltipText, fontSize: I40_FONT, fontFamily: t.sans }
+        };
+        for (var k in (extra || {})) { o[k] = extra[k]; }
+        return o;
+    }
+
+    function i40Axis(t, extra) {
+        var o = {
+            axisLine: { lineStyle: { color: t.grid } },
+            axisTick: { show: false },
+            axisLabel: { color: t.axisText, fontSize: I40_FONT, fontFamily: t.sans }
+        };
+        for (var k in (extra || {})) { o[k] = extra[k]; }
+        return o;
+    }
+
+    /* 统一图表取用：隐藏 Tab 内的容器尺寸为 0，此时返回 null，
+     * 等切回该 Tab（shown.bs.tab → refreshCurrentTab）时再初始化，
+     * 避免得到 0×0 画布后永久错位。 */
+    function i40GetChart(domId) {
+        var dom = document.getElementById(domId);
+        if (!dom || dom.clientWidth === 0 || dom.clientHeight === 0) return null;
+        var chart = I40_CHARTS[domId];
+        if (!chart || chart.isDisposed()) {
+            chart = echarts.init(dom);
+            I40_CHARTS[domId] = chart;
+        } else if (chart.getWidth() !== dom.clientWidth || chart.getHeight() !== dom.clientHeight) {
+            chart.resize();
+        }
+        return chart;
+    }
+
+    /* 图表空态：清空后居中提示，避免只留一片空白图 */
+    function i40ChartEmpty(domId, msg) {
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        chart.clear();
+        chart.setOption({
+            graphic: [{
+                type: 'text',
+                left: 'center',
+                top: 'middle',
+                style: { text: msg, fill: tk('--text-muted'), fontSize: I40_FONT, fontFamily: tk('--font-sans') }
+            }]
+        });
+    }
+
+    // 列表 / 面板空态与加载态（全页面统一形态）
+    function i40EmptyHTML(msg) {
+        return '<div class="i4-empty"><i class="bi bi-inbox"></i><p class="mb-0">' + msg + '</p></div>';
+    }
+
+    function i40LoadingHTML(msg) {
+        return '<div class="i4-loading"><i class="bi bi-arrow-clockwise"></i><p class="mb-0">' + msg + '</p></div>';
+    }
+
+    // 健康分 → 分级（分段色条与文字色共用同一套阈值）
+    function i40HealthLevel(score) {
+        if (score >= 80) return 'excellent';
+        if (score >= 60) return 'good';
+        if (score >= 40) return 'warning';
+        return 'critical';
+    }
+
+    // OEE 分值配色（与 85% 目标线一致）
+    function i40OeeColor(t, v) {
+        return v >= I40_OEE_TARGET ? t.success : v >= 65 ? t.warning : t.danger;
+    }
+
+    // 表格内数值 + 分段色条（分值类单元格）
+    function i40ScoreBar(score) {
+        var level = i40HealthLevel(score);
+        var width = Math.max(0, Math.min(100, score));
+        return '<div class="score-bar score-bar--' + level + '">' +
+            '<span class="score-bar__track"><span class="score-bar__fill" style="width:' + width + '%;"></span></span>' +
+            '<span class="score-bar__value">' + score + '</span>' +
+            '</div>';
+    }
+
+    // 数值格式化：非数值统一显示 --
+    function i40Num(v, digits) {
+        var n = parseFloat(v);
+        if (isNaN(n)) return '--';
+        return digits === undefined ? String(n) : n.toFixed(digits);
+    }
 
     // ===== 数据导出 =====
     function exportI40Data(type) {
@@ -1220,6 +1533,7 @@
     function populateDeviceSelects() {
         var globalSelect = document.getElementById('global-device-select');
         var spcDevice = document.getElementById('spc-device-select');
+        var vibDevice = document.getElementById('vib-device-select');
 
         // 去重处理
         var seen = {};
@@ -1259,6 +1573,19 @@
             debugLog('未找到SPC设备选择器元素', 'warn');
         }
 
+        if (vibDevice) {
+            vibDevice.innerHTML = '<option value="">请选择设备</option>';
+            I40_DEVICE_LIST.forEach(function(d) {
+                var opt = document.createElement('option');
+                opt.value = d.id;
+                opt.textContent = d.name ? (d.name + ' (' + d.id + ')') : d.id;
+                vibDevice.appendChild(opt);
+            });
+            debugLog('振动设备选择器已填充: ' + I40_DEVICE_LIST.length + ' 个选项');
+        } else {
+            debugLog('未找到振动设备选择器元素', 'warn');
+        }
+
         debugLog('设备列表加载完成: ' + I40_DEVICE_LIST.length + ' 个设备');
     }
 
@@ -1295,13 +1622,34 @@
                 return;
             }
 
-            // 健康评分
+            // 健康评分（0~100 分值：数值 + 分级色，与表格分段色条同一套阈值）
             var score = data.predictive_maintenance && data.predictive_maintenance.avg_health_score;
-            safeText('ov-health', (score != null && score > 0) ? score : '--');
+            var scoreEl = document.getElementById('ov-health');
+            if (scoreEl) {
+                if (score != null && score > 0) {
+                    scoreEl.textContent = score;
+                    scoreEl.className = 'metric-value metric-value--' +
+                        (i40HealthLevel(score) === 'excellent' || i40HealthLevel(score) === 'good' ? 'success' :
+                         i40HealthLevel(score) === 'warning' ? 'warning' : 'danger');
+                } else {
+                    scoreEl.textContent = '--';
+                    scoreEl.className = 'metric-value';
+                }
+            }
 
-            // OEE
+            // OEE（与 85% 目标线对比着色）
             var oee = data.oee && data.oee.avg_oee_percent;
-            safeText('ov-oee', (oee != null && oee > 0) ? oee + '%' : '--%');
+            var oeeEl = document.getElementById('ov-oee');
+            if (oeeEl) {
+                if (oee != null && oee > 0) {
+                    oeeEl.textContent = oee + '%';
+                    oeeEl.className = 'metric-value metric-value--' +
+                        (oee >= I40_OEE_TARGET ? 'success' : oee >= 65 ? 'warning' : 'danger');
+                } else {
+                    oeeEl.textContent = '--%';
+                    oeeEl.className = 'metric-value';
+                }
+            }
 
             // 能源
             var power = data.energy && data.energy.total_power_kw;
@@ -1309,17 +1657,20 @@
             var carbon = data.energy && data.energy.carbon_emission_kg;
             safeText('ov-carbon', (carbon != null && carbon > 0) ? carbon : '--');
 
-            // 维护建议
+            // 维护建议：等级只用左侧色条表达
             var alerts = data.predictive_maintenance && data.predictive_maintenance.recent_alerts;
             if (alerts && alerts.length > 0) {
                 var html = alerts.map(function(a) {
-                    return '<div class="alert-item alert-' + (a.severity || 'info') + '">' +
+                    var lv = a.severity === 'critical' ? 'critical' : a.severity === 'info' ? 'info' : 'warning';
+                    return '<div class="alert-item alert-' + lv + '">' +
+                        '<span class="level-bar level-bar--' + lv + '"></span>' +
+                        '<div class="alert-body">' +
                         '<strong>' + (a.device_id || '未知') + '</strong>: ' + (a.message || '无详细信息') +
-                        '</div>';
+                        '</div></div>';
                 }).join('');
                 safeHTML('ov-alerts', html);
             } else {
-                safeHTML('ov-alerts', '<p class="text-muted">系统运行正常，暂无维护建议</p>');
+                safeHTML('ov-alerts', i40EmptyHTML('系统运行正常，暂无维护建议'));
             }
 
             // 工艺流程
@@ -1350,37 +1701,41 @@
                         if (!scores.hasOwnProperty(key)) continue;
                         var d = scores[key];
                         var sc = d.health_score || 0;
-                        var cls = sc >= 80 ? 'health-excellent' : sc >= 60 ? 'health-good' : sc >= 40 ? 'health-warning' : 'health-critical';
+                        var cls = 'health-' + i40HealthLevel(sc);
                         var trend = d.trend ? d.trend.direction : '-';
                         var trendIcon = trend === 'rising' ? '↑' : trend === 'falling' ? '↓' : '→';
                         var failure = d.failure_prediction ? d.failure_prediction.days_to_limit + '天' : '-';
 
                         var tr = document.createElement('tr');
+                        // 健康评分用「数值 + 分段色条」，比纯色数字更容易看出档位
                         tr.innerHTML =
                             '<td>' + (d.device_id || '-') + '</td>' +
                             '<td>' + (d.register_name || '-') + '</td>' +
-                            '<td class="' + cls + '"><strong>' + sc + '</strong></td>' +
+                            '<td class="num ' + cls + '">' + i40ScoreBar(sc) + '</td>' +
                             '<td>' + trendIcon + ' ' + trend + '</td>' +
-                            '<td>' + (d.anomaly_count || 0) + '</td>' +
-                            '<td>' + failure + '</td>' +
+                            '<td class="num">' + (d.anomaly_count || 0) + '</td>' +
+                            '<td class="num">' + failure + '</td>' +
                             '<td>' + (d.updated_at ? new Date(d.updated_at).toLocaleTimeString() : '-') + '</td>';
                         tbody.appendChild(tr);
                     }
                 }
             }
 
-            // 维护建议
+            // 维护建议：等级只用左侧色条表达
             var div = document.getElementById('maintenance-alerts');
             if (div) {
                 if (alerts && alerts.length > 0) {
                     div.innerHTML = alerts.map(function(a) {
-                        return '<div class="alert-item alert-' + (a.severity || 'info') + '">' +
+                        var lv = a.severity === 'critical' ? 'critical' : a.severity === 'info' ? 'info' : 'warning';
+                        return '<div class="alert-item alert-' + lv + '">' +
+                            '<span class="level-bar level-bar--' + lv + '"></span>' +
+                            '<div class="alert-body">' +
                             '<div><strong>' + (a.device_id || '未知') + '</strong> — ' + (a.register_name || '') + '</div>' +
-                            '<div style="font-size:0.85rem; margin-top:4px;">' + (a.message || '无详细信息') + '</div>' +
-                            '</div>';
+                            '<div class="mt-1">' + (a.message || '无详细信息') + '</div>' +
+                            '</div></div>';
                     }).join('');
                 } else {
-                    div.innerHTML = '<p class="text-muted">系统运行正常，暂无维护建议</p>';
+                    div.innerHTML = i40EmptyHTML('系统运行正常，暂无维护建议');
                 }
             }
 
@@ -1395,7 +1750,8 @@
             var devices = data ? Object.entries(data) : [];
 
             if (devices.length === 0) {
-                renderOEEGauge('oee-gauge-total', 0);
+                i40ChartEmpty('oee-gauge-total', '暂无OEE数据');
+                i40ChartEmpty('oee-compare-chart', '暂无OEE数据');
                 var tbody = document.querySelector('#oee-table tbody');
                 if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">等待设备数据...</td></tr>';
                 debugLog('OEE数据为空', 'warn');
@@ -1411,16 +1767,18 @@
                 tbody.innerHTML = '';
                 devices.forEach(function(pair) {
                     var id = pair[0], d = pair[1];
+                    var oeeVal = d.oee_percent || 0;
+                    // 等级用文字标签呈现（后端 grade 字段），不额外编造数据
                     var tr = document.createElement('tr');
                     tr.innerHTML =
                         '<td>' + id + '</td>' +
-                        '<td>' + ((d.availability || 0) * 100).toFixed(1) + '%</td>' +
-                        '<td>' + ((d.performance || 0) * 100).toFixed(1) + '%</td>' +
-                        '<td>' + ((d.quality || 0) * 100).toFixed(1) + '%</td>' +
-                        '<td><strong>' + (d.oee_percent || 0) + '%</strong></td>' +
+                        '<td class="num">' + ((d.availability || 0) * 100).toFixed(1) + '%</td>' +
+                        '<td class="num">' + ((d.performance || 0) * 100).toFixed(1) + '%</td>' +
+                        '<td class="num">' + ((d.quality || 0) * 100).toFixed(1) + '%</td>' +
+                        '<td class="num"><strong>' + oeeVal + '%</strong></td>' +
                         '<td>' + (d.grade || '-') + '</td>' +
-                        '<td>' + (d.total_count || 0) + '</td>' +
-                        '<td>' + (d.good_count || 0) + '</td>';
+                        '<td class="num">' + (d.total_count || 0) + '</td>' +
+                        '<td class="num">' + (d.good_count || 0) + '</td>';
                     tbody.appendChild(tr);
                 });
             }
@@ -1429,70 +1787,133 @@
         });
     }
 
+    /* 全厂 OEE：环形进度 + 中心 36px 数值 + 目标刻度
+     * 环的「已完成」弧按 OEE 分档着色，目标刻度用一窄弧标出 85% 位置 */
     function renderOEEGauge(domId, value) {
-        var dom = document.getElementById(domId);
-        if (!dom) return;
-        if (!I40_CHARTS[domId]) {
-            I40_CHARTS[domId] = echarts.init(dom);
-        }
-        var chart = I40_CHARTS[domId];
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        var t = i40Theme();
+        var v = (typeof value === 'number' && !isNaN(value)) ? Math.max(0, Math.min(100, value)) : 0;
+        var color = i40OeeColor(t, v);
+        var tick = 1.5;  // 目标刻度弧宽（百分点）
+        var center = ['50%', '50%'];
+
         chart.setOption({
-            series: [{
-                type: 'gauge',
-                startAngle: 200,
-                endAngle: -20,
-                min: 0,
-                max: 100,
-                axisLine: {
-                    lineStyle: {
-                        width: 20,
-                        color: [[0.5, '#ff4444'], [0.65, '#ffaa00'], [0.85, '#88ff00'], [1, '#00ff88']]
-                    }
+            tooltip: { show: false },
+            series: [
+                {
+                    type: 'pie',
+                    radius: ['64%', '82%'],
+                    center: center,
+                    startAngle: 90,
+                    clockwise: true,
+                    silent: true,
+                    itemStyle: { borderColor: t.surface, borderWidth: 2 },
+                    label: {
+                        show: true,
+                        position: 'center',
+                        formatter: v.toFixed(1) + '%',
+                        color: color,
+                        fontSize: 36,
+                        fontWeight: 600,
+                        fontFamily: t.mono
+                    },
+                    labelLine: { show: false },
+                    data: [
+                        { value: v, name: 'OEE', itemStyle: { color: color } },
+                        { value: 100 - v, name: '', itemStyle: { color: t.hover } }
+                    ]
                 },
-                pointer: { itemStyle: { color: '#00d4ff' } },
-                axisTick: { show: false },
-                splitLine: { show: false },
-                axisLabel: { color: '#8899aa', fontSize: 10 },
-                detail: {
-                    valueAnimation: true,
-                    formatter: '{value}%',
-                    color: '#00d4ff',
-                    fontSize: 28,
-                    offsetCenter: [0, '60%']
-                },
-                title: { show: false },
-                data: [{ value: typeof value === 'number' ? value.toFixed(1) : '0.0' }]
+                {
+                    // 目标刻度：85% 位置的一小段弧（不是测量值）
+                    type: 'pie',
+                    radius: ['86%', '92%'],
+                    center: center,
+                    startAngle: 90,
+                    clockwise: true,
+                    silent: true,
+                    tooltip: { show: false },
+                    label: { show: false },
+                    labelLine: { show: false },
+                    data: [
+                        { value: I40_OEE_TARGET - tick / 2, itemStyle: { color: 'transparent' } },
+                        { value: tick, itemStyle: { color: t.warning } },
+                        { value: 100 - I40_OEE_TARGET - tick / 2, itemStyle: { color: 'transparent' } }
+                    ]
+                }
+            ],
+            graphic: [{
+                type: 'text',
+                left: 'center',
+                top: '72%',
+                style: {
+                    text: '目标 ' + I40_OEE_TARGET + '%',
+                    fill: t.axisText,
+                    fontSize: I40_FONT,
+                    fontFamily: t.sans
+                }
             }]
-        });
+        }, true);
     }
 
+    /* 各设备 OEE 对比：横向条形 + 降序排序 + 目标线
+     * 横向条形比折线更易做设备间大小比较，排序后一眼看出短板 */
     function renderOEECompare(domId, devices) {
-        var dom = document.getElementById(domId);
-        if (!dom) return;
-        if (!I40_CHARTS[domId]) {
-            I40_CHARTS[domId] = echarts.init(dom);
-        }
-        var chart = I40_CHARTS[domId];
-        var names = devices.map(function(pair) { return pair[0].replace('_', '\n'); });
-        var values = devices.map(function(pair) { return pair[1].oee_percent || 0; });
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        var t = i40Theme();
+        var rows = devices
+            .map(function(pair) { return { name: pair[0], value: pair[1].oee_percent || 0 }; })
+            .sort(function(a, b) { return b.value - a.value; });
 
         chart.setOption({
-            tooltip: { trigger: 'axis' },
-            xAxis: { type: 'category', data: names, axisLabel: { color: '#8899aa', fontSize: 10 } },
-            yAxis: { type: 'value', max: 100, axisLabel: { color: '#8899aa' }, splitLine: { lineStyle: { color: '#0f3460' } } },
+            textStyle: { fontFamily: t.sans, fontSize: I40_FONT, color: t.labelText },
+            tooltip: i40Tooltip(t, { trigger: 'axis', axisPointer: { type: 'shadow' } }),
+            grid: { left: 8, right: 64, top: 8, bottom: 8, containLabel: true },
+            xAxis: i40Axis(t, {
+                type: 'value',
+                max: 100,
+                axisLine: { show: false },
+                splitLine: { lineStyle: { color: t.grid } },
+                axisLabel: { color: t.axisText, fontSize: I40_FONT, fontFamily: t.sans, formatter: '{value}%' }
+            }),
+            yAxis: i40Axis(t, {
+                type: 'category',
+                inverse: true,
+                data: rows.map(function(r) { return r.name.replace('_', ' '); }),
+                axisLine: { lineStyle: { color: t.grid } }
+            }),
             series: [{
                 type: 'bar',
-                data: values.map(function(v) {
-                    return {
-                        value: v,
-                        itemStyle: { color: v >= 85 ? '#00ff88' : v >= 65 ? '#ffaa00' : '#ff4444' }
-                    };
+                barWidth: 14,
+                data: rows.map(function(r) {
+                    return { value: r.value, itemStyle: { color: i40OeeColor(t, r.value), borderRadius: [0, 3, 3, 0] } };
                 }),
-                barWidth: '40%',
-                label: { show: true, position: 'top', color: '#e0e0e0', formatter: '{c}%' }
-            }],
-            grid: { left: 50, right: 20, bottom: 40, top: 20 }
-        });
+                label: {
+                    show: true,
+                    position: 'right',
+                    formatter: '{c}%',
+                    color: t.labelText,
+                    fontSize: I40_FONT,
+                    fontFamily: t.mono
+                },
+                markLine: {
+                    silent: true,
+                    symbol: 'none',
+                    data: [{
+                        xAxis: I40_OEE_TARGET,
+                        lineStyle: { color: t.warning, type: 'dashed' },
+                        label: {
+                            formatter: '目标 ' + I40_OEE_TARGET + '%',
+                            color: t.warning,
+                            fontSize: I40_FONT,
+                            fontFamily: t.sans,
+                            position: 'end'
+                        }
+                    }]
+                }
+            }]
+        }, true);
     }
 
     // ==================== SPC ====================
@@ -1508,8 +1929,12 @@
         }
 
         debugLog('加载SPC数据: ' + deviceId + '/' + registerName);
+        i40ChartEmpty('spc-xbar-chart', '加载中...');
+        i40ChartEmpty('spc-r-chart', '加载中...');
         i40Fetch('/spc/' + encodeURIComponent(deviceId) + '/' + encodeURIComponent(registerName)).then(function(data) {
             if (!data) {
+                i40ChartEmpty('spc-xbar-chart', '暂无控制图数据');
+                i40ChartEmpty('spc-r-chart', '暂无控制图数据');
                 debugLog('SPC数据为空', 'warn');
                 return;
             }
@@ -1517,90 +1942,143 @@
             // X-bar控制图
             if (data.control_chart && data.control_chart.xbar_chart) {
                 renderSPCChart('spc-xbar-chart', data.control_chart.xbar_chart);
+            } else {
+                i40ChartEmpty('spc-xbar-chart', '暂无控制图数据');
             }
 
             // R控制图
             if (data.control_chart && data.control_chart.r_chart) {
                 renderSPCChart('spc-r-chart', data.control_chart.r_chart);
+            } else {
+                i40ChartEmpty('spc-r-chart', '暂无控制图数据');
             }
 
-            // 过程能力指数
+            // 过程能力指数：数值 + 分级色标
             var capDiv = document.getElementById('spc-capability');
             if (capDiv && data.capability) {
                 var c = data.capability;
+                var cpk = parseFloat(c.cpk);
+                var hasCpk = !isNaN(cpk);
+                // 分级色标：Cpk≥1.33 良好 / ≥1.0 临界 / <1.0 不足（阈值与后端 _capability_grade 一致）
+                var lv = !hasCpk ? 'info' : (cpk >= 1.33 ? 'success' : cpk >= 1.0 ? 'warning' : 'danger');
+                var valLv = hasCpk ? ' metric-value--' + lv : '';
                 capDiv.innerHTML =
-                    '<div class="row">' +
-                    '<div class="col-3"><div class="metric-box"><div class="metric-value">' + (c.cp != null ? c.cp.toFixed(3) : '--') + '</div><div class="metric-label">Cp</div></div></div>' +
-                    '<div class="col-3"><div class="metric-box"><div class="metric-value">' + (c.cpk != null ? c.cpk.toFixed(3) : '--') + '</div><div class="metric-label">Cpk</div></div></div>' +
-                    '<div class="col-3"><div class="metric-box"><div class="metric-value">' + (c.pp != null ? c.pp.toFixed(3) : '--') + '</div><div class="metric-label">Pp</div></div></div>' +
-                    '<div class="col-3"><div class="metric-box"><div class="metric-value">' + (c.ppk != null ? c.ppk.toFixed(3) : '--') + '</div><div class="metric-label">Ppk</div></div></div>' +
+                    '<div class="row g-2">' +
+                    '<div class="col-3"><div class="metric-box"><div class="metric-value">' + i40Num(c.cp, 3) + '</div><div class="metric-label">Cp</div></div></div>' +
+                    '<div class="col-3"><div class="metric-box"><div class="metric-value' + valLv + '">' + i40Num(c.cpk, 3) + '</div><div class="metric-label">Cpk</div></div></div>' +
+                    '<div class="col-3"><div class="metric-box"><div class="metric-value">' + i40Num(c.pp, 3) + '</div><div class="metric-label">Pp</div></div></div>' +
+                    '<div class="col-3"><div class="metric-box"><div class="metric-value' + valLv + '">' + i40Num(c.ppk, 3) + '</div><div class="metric-label">Ppk</div></div></div>' +
                     '</div>' +
-                    '<div class="mt-2 text-muted" style="font-size:0.85rem;">' +
-                    '均值: ' + (c.mean != null ? c.mean.toFixed(4) : '--') + ' | ' +
-                    'USL: ' + (c.usl != null ? c.usl.toFixed(4) : '--') + ' | ' +
-                    'LSL: ' + (c.lsl != null ? c.lsl.toFixed(4) : '--') + ' | ' +
-                    '等级: ' + (c.capability_grade || '--') +
+                    '<div class="d-flex flex-wrap align-items-center gap-3 mt-3">' +
+                    '<span class="tag tag--' + lv + '">能力等级 ' + (c.capability_grade || '--') + '</span>' +
+                    '<span class="text-muted">均值 <span class="mono">' + i40Num(c.mean, 4) + '</span></span>' +
+                    '<span class="text-muted">USL <span class="mono">' + i40Num(c.usl, 4) + '</span></span>' +
+                    '<span class="text-muted">LSL <span class="mono">' + i40Num(c.lsl, 4) + '</span></span>' +
                     '</div>';
+            } else if (capDiv) {
+                capDiv.innerHTML = i40EmptyHTML('暂无过程能力数据');
             }
 
             debugLog('SPC数据加载完成');
         });
     };
 
+    /* 控制图：折线 + UCL/CL/LCL 参考线
+     * 参考线只用后端返回的 ucl/cl/lcl 字段；字段缺失时不绘制（禁止用常数假造控制限）。
+     * 越限点用危险色标出，等级表达不依赖整行闪烁。 */
     function renderSPCChart(domId, chartData) {
-        var dom = document.getElementById(domId);
-        if (!dom) return;
-        if (!I40_CHARTS[domId]) {
-            I40_CHARTS[domId] = echarts.init(dom);
-        }
-        var chart = I40_CHARTS[domId];
-
         var values = chartData.points || chartData.values || chartData.data || [];
+        if (!values || values.length === 0) {
+            i40ChartEmpty(domId, '暂无控制图数据');
+            return;
+        }
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        var t = i40Theme();
+
         var ucl = chartData.ucl;
         var lcl = chartData.lcl;
         var cl = chartData.cl;
 
-        var series = [{
+        var series = {
             name: '测量值',
             type: 'line',
             data: values,
-            lineStyle: { color: '#00d4ff' },
-            itemStyle: { color: '#00d4ff' }
-        }];
+            smooth: false,
+            symbol: 'circle',
+            symbolSize: 5,
+            lineStyle: { color: t.palette[0], width: 2 },
+            itemStyle: {
+                color: function(params) {
+                    if (ucl == null && lcl == null) return t.palette[0];
+                    var out = (ucl != null && params.value > ucl) || (lcl != null && params.value < lcl);
+                    return out ? t.danger : t.palette[0];
+                }
+            }
+        };
 
         var markLineData = [];
-        if (ucl != null) markLineData.push({ yAxis: ucl, name: 'UCL', lineStyle: { color: '#ff4444', type: 'dashed' } });
-        if (cl != null) markLineData.push({ yAxis: cl, name: 'CL', lineStyle: { color: '#00ff88', type: 'solid' } });
-        if (lcl != null) markLineData.push({ yAxis: lcl, name: 'LCL', lineStyle: { color: '#ff4444', type: 'dashed' } });
-
+        if (ucl != null) {
+            markLineData.push({
+                yAxis: ucl,
+                lineStyle: { color: t.danger, type: 'dashed' },
+                label: { formatter: 'UCL ' + ucl, color: t.danger, fontSize: I40_FONT, fontFamily: t.mono, position: 'insideEndTop' }
+            });
+        }
+        if (cl != null) {
+            markLineData.push({
+                yAxis: cl,
+                lineStyle: { color: t.textMuted, type: 'solid' },
+                label: { formatter: 'CL ' + cl, color: t.textMuted, fontSize: I40_FONT, fontFamily: t.mono, position: 'insideEndTop' }
+            });
+        }
+        if (lcl != null) {
+            markLineData.push({
+                yAxis: lcl,
+                lineStyle: { color: t.danger, type: 'dashed' },
+                label: { formatter: 'LCL ' + lcl, color: t.danger, fontSize: I40_FONT, fontFamily: t.mono, position: 'insideEndBottom' }
+            });
+        }
         if (markLineData.length > 0) {
-            series[0].markLine = { data: markLineData, label: { color: '#8899aa' } };
+            series.markLine = { silent: true, symbol: 'none', data: markLineData };
         }
 
         chart.setOption({
-            tooltip: { trigger: 'axis' },
-            xAxis: { type: 'category', data: values.map(function(_, i) { return i + 1; }), axisLabel: { color: '#8899aa' } },
-            yAxis: { type: 'value', axisLabel: { color: '#8899aa' }, splitLine: { lineStyle: { color: '#0f3460' } } },
-            series: series,
-            grid: { left: 50, right: 20, bottom: 30, top: 20 }
+            textStyle: { fontFamily: t.sans, fontSize: I40_FONT, color: t.labelText },
+            tooltip: i40Tooltip(t, { trigger: 'axis' }),
+            grid: { left: 8, right: 56, top: 16, bottom: 8, containLabel: true },
+            xAxis: i40Axis(t, {
+                type: 'category',
+                data: values.map(function(_, i) { return i + 1; })
+            }),
+            yAxis: i40Axis(t, {
+                type: 'value',
+                scale: true,
+                axisLine: { show: false },
+                splitLine: { lineStyle: { color: t.grid } }
+            }),
+            series: [series]
         }, true);
     }
 
-    // 加载SPC判异结果
+    // 加载SPC判异结果（等级只用左侧色条表达）
     function loadSPCViolations() {
         return i40Fetch('/spc/violations').then(function(violations) {
             var div = document.getElementById('spc-violations');
             if (!div) return;
             if (violations && violations.length > 0) {
                 div.innerHTML = violations.slice(0, 20).map(function(v) {
-                    return '<div style="padding:8px 12px; border-bottom:1px solid #0f3460; font-size:0.85rem;">' +
-                        '<span style="color:' + (v.severity === 'critical' ? '#ff4444' : '#ffaa00') + '">[规则' + v.rule + ']</span> ' +
-                        '<strong>' + (v.device_id || '') + '</strong>: ' + (v.description || '') +
-                        '<span style="color:#666; float:right">' + (v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : '') + '</span>' +
-                        '</div>';
+                    var lv = v.severity === 'critical' ? 'critical' : 'warning';
+                    return '<div class="alert-item alert-' + lv + '">' +
+                        '<span class="level-bar level-bar--' + lv + '"></span>' +
+                        '<div class="alert-body">' +
+                        '<span class="tag tag--' + (lv === 'critical' ? 'danger' : 'warning') + '">规则' + v.rule + '</span> ' +
+                        '<strong>' + (v.device_id || '') + '</strong> ' + (v.description || '') +
+                        '<span class="alert-time">' + (v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : '') + '</span>' +
+                        '</div></div>';
                 }).join('');
             } else {
-                div.innerHTML = '<p class="text-muted">暂无判异结果</p>';
+                div.innerHTML = i40EmptyHTML('暂无判异结果');
             }
         });
     }
@@ -1629,61 +2107,182 @@
             }
             if (cost) {
                 renderEnergyPie('energy-pie-chart', cost);
+                // 峰/平/谷用电量：堆叠色条（三段构成）
+                renderEnergyTariff('energy-tariff-chart', cost);
+            } else {
+                i40ChartEmpty('energy-pie-chart', '暂无电费数据');
+                i40ChartEmpty('energy-tariff-chart', '暂无分时用电数据');
             }
             if (power && power.devices) {
                 renderPowerBar('power-bar-chart', power.devices);
+            } else {
+                i40ChartEmpty('power-bar-chart', '暂无功率数据');
             }
 
             debugLog('能源数据加载完成');
         });
     }
 
-    function renderEnergyPie(domId, cost) {
-        var dom = document.getElementById(domId);
-        if (!dom) return;
-        if (!I40_CHARTS[domId]) {
-            I40_CHARTS[domId] = echarts.init(dom);
-        }
-        var chart = I40_CHARTS[domId];
-        chart.setOption({
-            tooltip: { trigger: 'item', formatter: '{b}: {c}元 ({d}%)' },
-            legend: { bottom: 0, textStyle: { color: '#8899aa' } },
-            series: [{
-                type: 'pie',
-                radius: ['40%', '70%'],
-                label: { color: '#e0e0e0' },
-                data: [
-                    { value: (cost.peak && cost.peak.cost) || 0, name: '峰时', itemStyle: { color: '#ff4444' } },
-                    { value: (cost.flat && cost.flat.cost) || 0, name: '平时', itemStyle: { color: '#ffaa00' } },
-                    { value: (cost.valley && cost.valley.cost) || 0, name: '谷时', itemStyle: { color: '#00ff88' } }
-                ]
-            }]
-        });
+    // 峰 / 平 / 谷 三档电价配色（取自 --chart-* 色板）
+    function energyTariffColors(t) {
+        return [t.palette[1], t.palette[0], t.palette[4]];
     }
 
-    function renderPowerBar(domId, devices) {
-        var dom = document.getElementById(domId);
-        if (!dom) return;
-        if (!I40_CHARTS[domId]) {
-            I40_CHARTS[domId] = echarts.init(dom);
+    /* 电费占比：环形图（占比用环图，比饼图更强调"构成"） */
+    function renderEnergyPie(domId, cost) {
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        var t = i40Theme();
+        var colors = energyTariffColors(t);
+        var peak = (cost.peak && cost.peak.cost) || 0;
+        var flat = (cost.flat && cost.flat.cost) || 0;
+        var valley = (cost.valley && cost.valley.cost) || 0;
+
+        if (peak + flat + valley === 0) {
+            i40ChartEmpty(domId, '暂无电费数据');
+            return;
         }
-        var chart = I40_CHARTS[domId];
-        var entries = Object.entries(devices).filter(function(pair) { return pair[1].power_kw !== undefined; });
-        var names = entries.map(function(pair) { return pair[0]; });
-        var values = entries.map(function(pair) { return pair[1].power_kw; });
 
         chart.setOption({
-            tooltip: { trigger: 'axis' },
-            xAxis: { type: 'category', data: names, axisLabel: { color: '#8899aa', rotate: 30, fontSize: 10 } },
-            yAxis: { type: 'value', axisLabel: { color: '#8899aa' }, splitLine: { lineStyle: { color: '#0f3460' } } },
+            textStyle: { fontFamily: t.sans, fontSize: I40_FONT, color: t.labelText },
+            tooltip: i40Tooltip(t, { trigger: 'item', formatter: '{b}: {c}元 ({d}%)' }),
+            legend: {
+                bottom: 0,
+                itemWidth: 12,
+                itemHeight: 12,
+                textStyle: { color: t.labelText, fontSize: I40_FONT, fontFamily: t.sans }
+            },
+            series: [{
+                type: 'pie',
+                radius: ['48%', '70%'],
+                center: ['50%', '46%'],
+                itemStyle: { borderColor: t.surface, borderWidth: 2 },
+                label: {
+                    color: t.labelText,
+                    fontSize: I40_FONT,
+                    fontFamily: t.mono,
+                    formatter: '{d}%'
+                },
+                data: [
+                    { value: peak, name: '峰时', itemStyle: { color: colors[0] } },
+                    { value: flat, name: '平时', itemStyle: { color: colors[1] } },
+                    { value: valley, name: '谷时', itemStyle: { color: colors[2] } }
+                ]
+            }]
+        }, true);
+    }
+
+    /* 分时用电量：单行堆叠色条，段内标注 名称 + 电量 + 占比
+     * （构成类数据用堆叠条，比三条独立柱更容易读出比例） */
+    function renderEnergyTariff(domId, cost) {
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        var t = i40Theme();
+        var colors = energyTariffColors(t);
+        var series = [
+            { name: '峰', key: 'peak', color: colors[0] },
+            { name: '平', key: 'flat', color: colors[1] },
+            { name: '谷', key: 'valley', color: colors[2] }
+        ];
+        var total = series.reduce(function(s, item) {
+            return s + ((cost[item.key] && cost[item.key].kwh) || 0);
+        }, 0);
+
+        if (total === 0) {
+            i40ChartEmpty(domId, '暂无分时用电数据');
+            return;
+        }
+
+        chart.setOption({
+            textStyle: { fontFamily: t.sans, fontSize: I40_FONT, color: t.labelText },
+            tooltip: i40Tooltip(t, { trigger: 'axis', axisPointer: { type: 'shadow' } }),
+            legend: {
+                top: 0,
+                itemWidth: 12,
+                itemHeight: 12,
+                textStyle: { color: t.labelText, fontSize: I40_FONT, fontFamily: t.sans }
+            },
+            grid: { left: 8, right: 8, top: 36, bottom: 8, containLabel: true },
+            xAxis: {
+                type: 'value',
+                axisLine: { show: false },
+                axisTick: { show: false },
+                splitLine: { show: false },
+                axisLabel: { show: false }
+            },
+            yAxis: i40Axis(t, {
+                type: 'category',
+                data: ['用电量 (kWh)'],
+                axisLine: { lineStyle: { color: t.grid } }
+            }),
+            series: series.map(function(item) {
+                var kwh = (cost[item.key] && cost[item.key].kwh) || 0;
+                return {
+                    name: item.name,
+                    type: 'bar',
+                    stack: 'tariff',
+                    barWidth: 34,
+                    itemStyle: { color: item.color },
+                    data: [kwh],
+                    label: {
+                        show: kwh > 0,
+                        position: 'inside',
+                        color: t.tooltipText,
+                        fontSize: I40_FONT,
+                        fontFamily: t.mono,
+                        formatter: item.name + ' ' + kwh.toFixed(1) + ' kWh (' + (kwh / total * 100).toFixed(1) + '%)'
+                    }
+                };
+            })
+        }, true);
+    }
+
+    /* 实时功率：横向条形 + 降序排序（设备对比用横条比折线/竖柱更易比较） */
+    function renderPowerBar(domId, devices) {
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        var t = i40Theme();
+        var rows = Object.entries(devices)
+            .filter(function(pair) { return pair[1].power_kw !== undefined; })
+            .map(function(pair) { return { name: pair[0], value: parseFloat(pair[1].power_kw) || 0 }; })
+            .sort(function(a, b) { return b.value - a.value; });
+
+        if (rows.length === 0) {
+            i40ChartEmpty(domId, '暂无功率数据');
+            return;
+        }
+
+        chart.setOption({
+            textStyle: { fontFamily: t.sans, fontSize: I40_FONT, color: t.labelText },
+            tooltip: i40Tooltip(t, { trigger: 'axis', axisPointer: { type: 'shadow' } }),
+            grid: { left: 8, right: 64, top: 8, bottom: 8, containLabel: true },
+            xAxis: i40Axis(t, {
+                type: 'value',
+                axisLine: { show: false },
+                splitLine: { lineStyle: { color: t.grid } }
+            }),
+            yAxis: i40Axis(t, {
+                type: 'category',
+                inverse: true,
+                data: rows.map(function(r) { return r.name; }),
+                axisLine: { lineStyle: { color: t.grid } }
+            }),
             series: [{
                 type: 'bar',
-                data: values,
-                itemStyle: { color: '#00d4ff' },
-                barWidth: '50%'
-            }],
-            grid: { left: 50, right: 20, bottom: 60, top: 20 }
-        });
+                barWidth: 14,
+                data: rows.map(function(r) {
+                    return { value: r.value, itemStyle: { color: t.palette[0], borderRadius: [0, 3, 3, 0] } };
+                }),
+                label: {
+                    show: true,
+                    position: 'right',
+                    formatter: '{c} kW',
+                    color: t.labelText,
+                    fontSize: I40_FONT,
+                    fontFamily: t.mono
+                }
+            }]
+        }, true);
     }
 
     // ==================== 边缘决策 ====================
@@ -1715,9 +2314,9 @@
                         tr.innerHTML =
                             '<td>' + id + '</td>' +
                             '<td>' + (r.name || '-') + '</td>' +
-                            '<td>规则</td>' +
-                            '<td>' + (r.trigger_count || 0) + '</td>' +
-                            '<td>' + (r.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>') + '</td>';
+                            '<td><span class="tag tag--info">规则</span></td>' +
+                            '<td class="num">' + (r.trigger_count || 0) + '</td>' +
+                            '<td>' + (r.enabled ? '<span class="tag tag--success">启用</span>' : '<span class="tag tag--offline">禁用</span>') + '</td>';
                         tbody.appendChild(tr);
                     }
                     for (var iid in (rules.interlocks || {})) {
@@ -1727,9 +2326,9 @@
                         itr.innerHTML =
                             '<td>' + iid + '</td>' +
                             '<td>' + (ir.name || '-') + '</td>' +
-                            '<td><span style="color:#ff4444">联锁</span></td>' +
-                            '<td>' + (ir.trigger_count || 0) + '</td>' +
-                            '<td>' + (ir.enabled ? '<span class="badge-active">启用</span>' : '<span class="badge-inactive">禁用</span>') + '</td>';
+                            '<td><span class="tag tag--danger">联锁</span></td>' +
+                            '<td class="num">' + (ir.trigger_count || 0) + '</td>' +
+                            '<td>' + (ir.enabled ? '<span class="tag tag--success">启用</span>' : '<span class="tag tag--offline">禁用</span>') + '</td>';
                         tbody.appendChild(itr);
                     }
                 } else {
@@ -1737,23 +2336,303 @@
                 }
             }
 
+            // 规则 / 联锁触发次数：横向条形排序
+            if (rules) {
+                renderEdgeTriggerChart('edge-trigger-chart', rules);
+            } else {
+                i40ChartEmpty('edge-trigger-chart', '暂无规则触发数据');
+            }
+
             var logDiv = document.getElementById('edge-log');
             if (logDiv) {
                 if (log && log.length > 0) {
                     logDiv.innerHTML = log.map(function(l) {
-                        return '<div style="padding:5px 10px; border-bottom:1px solid #0f3460; font-size:0.85rem;">' +
-                            '<span style="color:#00d4ff">[' + (l.rule_type || 'rule') + ']</span> ' +
+                        return '<div class="i4-log-item">' +
+                            '<span class="tag tag--info">' + (l.rule_type || 'rule') + '</span> ' +
                             '<strong>' + (l.rule_id || '-') + '</strong>: ' + (l.result || '') +
-                            '<span style="color:#666; float:right">' + (l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : '') + '</span>' +
+                            '<span class="i4-log-time">' + (l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : '') + '</span>' +
                             '</div>';
                     }).join('');
                 } else {
-                    logDiv.innerHTML = '<p class="text-muted">暂无决策日志</p>';
+                    logDiv.innerHTML = i40EmptyHTML('暂无决策日志');
                 }
             }
 
             debugLog('边缘决策数据加载完成');
         });
+    }
+
+    /* 规则 / 联锁触发次数：横向条形 + 降序排序
+     * 次数类数据用横条排序，比折线更直观地看出最活跃的规则 */
+    function renderEdgeTriggerChart(domId, rules) {
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        var t = i40Theme();
+        var rows = [];
+        var k;
+        for (k in (rules.rules || {})) {
+            if (!rules.rules.hasOwnProperty(k)) continue;
+            rows.push({ name: (rules.rules[k].name || k), value: rules.rules[k].trigger_count || 0, kind: 'rule' });
+        }
+        for (k in (rules.interlocks || {})) {
+            if (!rules.interlocks.hasOwnProperty(k)) continue;
+            rows.push({ name: (rules.interlocks[k].name || k), value: rules.interlocks[k].trigger_count || 0, kind: 'interlock' });
+        }
+        if (rows.length === 0) {
+            i40ChartEmpty(domId, '暂无规则触发数据');
+            return;
+        }
+        rows.sort(function(a, b) { return b.value - a.value; });
+
+        chart.setOption({
+            textStyle: { fontFamily: t.sans, fontSize: I40_FONT, color: t.labelText },
+            tooltip: i40Tooltip(t, { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: '{b}<br/>{c} 次' }),
+            grid: { left: 8, right: 64, top: 8, bottom: 8, containLabel: true },
+            xAxis: i40Axis(t, {
+                type: 'value',
+                minInterval: 1,
+                axisLine: { show: false },
+                splitLine: { lineStyle: { color: t.grid } }
+            }),
+            yAxis: i40Axis(t, {
+                type: 'category',
+                inverse: true,
+                data: rows.map(function(r) { return r.name; }),
+                axisLine: { lineStyle: { color: t.grid } }
+            }),
+            series: [{
+                type: 'bar',
+                barWidth: 14,
+                data: rows.map(function(r) {
+                    return {
+                        value: r.value,
+                        itemStyle: {
+                            color: r.kind === 'interlock' ? t.palette[1] : t.palette[0],
+                            borderRadius: [0, 3, 3, 0]
+                        }
+                    };
+                }),
+                label: {
+                    show: true,
+                    position: 'right',
+                    formatter: '{c}',
+                    color: t.labelText,
+                    fontSize: I40_FONT,
+                    fontFamily: t.mono
+                }
+            }]
+        }, true);
+    }
+
+    // ==================== 振动分析 ====================
+    var VIB_SELECTED_DEVICE = null;
+
+    // ISO 10816 振动区间 A/B/C/D → 令牌色（不用后端返回的颜色串，统一走色板）
+    function vibZoneColor(t, zone) {
+        var z = String(zone || '').toUpperCase().charAt(0);
+        if (z === 'A') return t.success;
+        if (z === 'B') return t.info;
+        if (z === 'C') return t.warning;
+        if (z === 'D') return t.danger;
+        return t.palette[7];
+    }
+
+    // 加载振动频谱 + 轴承特征频率 + 设备振动评分
+    window.loadVibrationChart = function() {
+        var sel = document.getElementById('vib-device-select');
+        var rpmEl = document.getElementById('vib-rpm');
+        var deviceId = sel ? sel.value : '';
+        var rpm = rpmEl ? parseFloat(rpmEl.value) : 1500;
+
+        if (!deviceId) { i40Toast('请先选择设备', 'warning'); return; }
+        if (isNaN(rpm) || rpm <= 0) { i40Toast('请输入有效转速(RPM)', 'warning'); return; }
+
+        VIB_SELECTED_DEVICE = deviceId;
+        i40ChartEmpty('vib-spectrum-chart', '加载中...');
+        var panel = document.getElementById('vib-bearing-panel');
+        if (panel) panel.innerHTML = i40LoadingHTML('加载中...');
+
+        Promise.all([
+            i40Fetch('/vibration/' + encodeURIComponent(deviceId) + '/spectrum'),
+            i40Fetch('/vibration/' + encodeURIComponent(deviceId) + '/bearing?rpm=' + encodeURIComponent(rpm)),
+            i40Fetch('/vibration')
+        ]).then(function(results) {
+            if (VIB_SELECTED_DEVICE !== deviceId) return;
+            renderVibrationSpectrum('vib-spectrum-chart', results[0], results[1]);
+            renderBearingPanel(results[1]);
+            renderVibrationScores('vib-score-chart', results[2]);
+        });
+    };
+
+    /* 频谱用「面积」呈现（FFT 频点可达上千个，柱状会糊成一片），
+     * 轴承特征频率用竖向虚线标注；只标注落在频率轴量程内的特征频率 */
+    function renderVibrationSpectrum(domId, spectrumData, bearingData) {
+        var spectrum = spectrumData && spectrumData.spectrum;
+        var freqs = (spectrum && spectrum.frequencies) || [];
+        var amps = (spectrum && spectrum.amplitudes) || [];
+        if (freqs.length === 0 || amps.length === 0) {
+            i40ChartEmpty(domId, '频谱数据不足（需要至少 64 个采样点）');
+            return;
+        }
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        var t = i40Theme();
+
+        var points = freqs.map(function(f, i) { return [f, amps[i]]; });
+        var maxFreq = freqs[freqs.length - 1];
+
+        var markLineData = [];
+        if (bearingData && bearingData.bearing_faults) {
+            for (var k in bearingData.bearing_faults) {
+                if (!bearingData.bearing_faults.hasOwnProperty(k)) continue;
+                var bf = bearingData.bearing_faults[k];
+                var freq = parseFloat(bf.expected_frequency_hz);
+                if (isNaN(freq) || freq < freqs[0] || freq > maxFreq) continue;
+                var hit = !!bf.has_fault_signature;
+                markLineData.push({
+                    xAxis: freq,
+                    lineStyle: { color: hit ? t.danger : t.gridStrong, type: 'dashed' },
+                    label: {
+                        formatter: (bf.name || k),
+                        color: hit ? t.danger : t.axisText,
+                        fontSize: I40_FONT,
+                        fontFamily: t.sans,
+                        position: 'insideEndTop'
+                    }
+                });
+            }
+        }
+
+        chart.setOption({
+            textStyle: { fontFamily: t.sans, fontSize: I40_FONT, color: t.labelText },
+            tooltip: i40Tooltip(t, { trigger: 'axis', formatter: function(ps) {
+                var p = ps[0];
+                return p.data[0].toFixed(2) + ' Hz<br/>幅值 ' + p.data[1].toFixed(4);
+            } }),
+            grid: { left: 8, right: 20, top: 28, bottom: 8, containLabel: true },
+            xAxis: i40Axis(t, {
+                type: 'value',
+                name: '频率 (Hz)',
+                nameTextStyle: { color: t.axisText, fontSize: I40_FONT, fontFamily: t.sans },
+                axisLine: { show: false },
+                splitLine: { show: false }
+            }),
+            yAxis: i40Axis(t, {
+                type: 'value',
+                name: '幅值',
+                nameTextStyle: { color: t.axisText, fontSize: I40_FONT, fontFamily: t.sans },
+                axisLine: { show: false },
+                splitLine: { lineStyle: { color: t.grid } }
+            }),
+            series: [{
+                name: '幅值',
+                type: 'line',
+                data: points,
+                symbol: 'none',
+                sampling: 'lttb',
+                lineStyle: { color: t.palette[2], width: 1.5 },
+                areaStyle: { color: t.palette[2], opacity: 0.22 },
+                markLine: markLineData.length > 0 ? { silent: true, symbol: 'none', data: markLineData } : undefined
+            }]
+        }, true);
+    }
+
+    /* 轴承特征频率检测结果：表格数值列右对齐 + 等宽字体 */
+    function renderBearingPanel(bearingData) {
+        var panel = document.getElementById('vib-bearing-panel');
+        if (!panel) return;
+        if (!bearingData || !bearingData.bearing_faults) {
+            panel.innerHTML = i40EmptyHTML('暂无轴承特征频率数据');
+            return;
+        }
+        var rows = '';
+        for (var k in bearingData.bearing_faults) {
+            if (!bearingData.bearing_faults.hasOwnProperty(k)) continue;
+            var bf = bearingData.bearing_faults[k];
+            var fault = !!bf.has_fault_signature;
+            rows += '<tr>' +
+                '<td>' + (bf.name || k) + '</td>' +
+                '<td class="num">' + i40Num(bf.expected_frequency_hz, 2) + '</td>' +
+                '<td class="num">' + i40Num(bf.detected_frequency_hz, 2) + '</td>' +
+                '<td class="num">' + i40Num(bf.amplitude, 4) + '</td>' +
+                '<td>' + (fault ? '<span class="tag tag--danger">有故障特征</span>' : '<span class="tag tag--success">正常</span>') + '</td>' +
+                '</tr>';
+        }
+        var level = (bearingData.fault_count >= 2) ? 'danger' : 'success';
+        panel.innerHTML =
+            '<div class="d-flex flex-wrap align-items-center gap-2 mb-2">' +
+            '<span class="tag tag--' + level + '">' + (bearingData.diagnosis || '--') + '</span>' +
+            '<span class="text-muted">转速 <span class="mono">' + i40Num(bearingData.rpm, 0) + '</span> RPM</span>' +
+            '<span class="text-muted">转频 <span class="mono">' + i40Num(bearingData.shaft_frequency_hz, 2) + '</span> Hz</span>' +
+            '</div>' +
+            '<div class="table-responsive"><table class="table data-table table-sm">' +
+            '<thead><tr><th>特征频率</th><th class="num">理论(Hz)</th><th class="num">实测(Hz)</th><th class="num">幅值</th><th>判定</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody></table></div>';
+    }
+
+    /* 设备振动评分：横向条形 + 降序（RMS 按 ISO 10816 区间分级着色） */
+    function renderVibrationScores(domId, scores) {
+        if (!scores || Object.keys(scores).length === 0) {
+            i40ChartEmpty(domId, '暂无振动评分数据');
+            return;
+        }
+        var chart = i40GetChart(domId);
+        if (!chart) return;
+        var t = i40Theme();
+        var rows = [];
+        for (var k in scores) {
+            if (!scores.hasOwnProperty(k)) continue;
+            var s = scores[k] || {};
+            var rms = parseFloat(s.rms);
+            if (isNaN(rms)) continue;
+            rows.push({ name: s.device_id || k, value: rms, zone: s.zone, health: s.health_score });
+        }
+        if (rows.length === 0) {
+            i40ChartEmpty(domId, '暂无振动评分数据');
+            return;
+        }
+        rows.sort(function(a, b) { return b.value - a.value; });
+
+        chart.setOption({
+            textStyle: { fontFamily: t.sans, fontSize: I40_FONT, color: t.labelText },
+            tooltip: i40Tooltip(t, {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                formatter: function(ps) {
+                    var p = ps[0];
+                    var row = rows[p.dataIndex];
+                    return p.name + '<br/>RMS ' + p.value + ' mm/s<br/>区间 ' + (row.zone || '--') +
+                        '<br/>健康分 ' + (row.health != null ? row.health : '--');
+                }
+            }),
+            grid: { left: 8, right: 64, top: 8, bottom: 8, containLabel: true },
+            xAxis: i40Axis(t, {
+                type: 'value',
+                axisLine: { show: false },
+                splitLine: { lineStyle: { color: t.grid } }
+            }),
+            yAxis: i40Axis(t, {
+                type: 'category',
+                inverse: true,
+                data: rows.map(function(r) { return r.name; }),
+                axisLine: { lineStyle: { color: t.grid } }
+            }),
+            series: [{
+                type: 'bar',
+                barWidth: 14,
+                data: rows.map(function(r) {
+                    return { value: r.value, itemStyle: { color: vibZoneColor(t, r.zone), borderRadius: [0, 3, 3, 0] } };
+                }),
+                label: {
+                    show: true,
+                    position: 'right',
+                    formatter: '{c} mm/s',
+                    color: t.labelText,
+                    fontSize: I40_FONT,
+                    fontFamily: t.mono
+                }
+            }]
+        }, true);
     }
 
     // ==================== 工艺流程数字孪生 ====================
@@ -1770,6 +2649,8 @@
     function renderProcessFlow(domId) {
         var container = document.getElementById(domId);
         if (!container) return;
+
+        container.innerHTML = i40LoadingHTML('加载设备状态...');
 
         Promise.all([
             i40Fetch('/devices/status'),
@@ -1812,9 +2693,9 @@
             nodes.forEach(function(n) {
                 var statusText = n.status === 'running' ? '运行' : n.status === 'fault' ? '故障' : n.status === 'idle' ? '空闲' : '停机';
                 html += '<div class="flow-node ' + n.status + '" style="left:' + n.x + 'px; top:' + n.y + 'px;" title="' + n.label + ' - ' + statusText + '">' +
-                    '<span style="font-size:1.5rem;">' + n.icon + '</span>' +
+                    '<span class="flow-node-icon">' + n.icon + '</span>' +
                     '<span>' + n.label + '</span>' +
-                    '<span style="font-size:0.65rem; opacity:0.8;">' + n.oee + '%</span>' +
+                    '<span class="flow-node-oee">' + n.oee + '%</span>' +
                     '</div>';
             });
 
@@ -1979,13 +2860,14 @@
         if (!container) return;
 
         if (!data || Object.keys(data).length === 0) {
-            container.innerHTML = '<div style="text-align:center; padding:100px 20px; color:#666;"><i class="bi bi-exclamation-circle" style="font-size:2rem;"></i><p class="mt-2">暂无设备数据</p></div>';
+            container.innerHTML = i40EmptyHTML('暂无设备数据');
             return;
         }
 
+        var t = i40Theme();
         var html = '';
 
-        // 渲染连接线和流动粒子
+        // 渲染连接线和流动粒子（颜色取令牌，无发光）
         TWIN_CONNECTIONS.forEach(function(conn, idx) {
             var from = data[conn.from];
             var to = data[conn.to];
@@ -2002,7 +2884,7 @@
             var angle = Math.atan2(dy, dx) * 180 / Math.PI;
 
             var isRunning = from.status === 'running' && to.status === 'running';
-            var pipeColor = isRunning ? '#00d4ff' : '#1a3a5c';
+            var pipeColor = isRunning ? t.info : t.gridStrong;
 
             html += '<div class="twin-link" style="left:' + x1 + 'px; top:' + y1 + 'px; width:' + length + 'px; height:6px; transform:rotate(' + angle + 'deg); transform-origin:0 50%;">';
             html += '<div style="width:100%; height:2px; background:' + pipeColor + '; position:absolute; top:50%; transform:translateY(-50%); opacity:0.6;"></div>';
@@ -2035,8 +2917,8 @@
         }
 
         // 入口/出口标识
-        html += '<div style="position:absolute; left:2px; top:85px; color:#00ff88; font-size:0.7rem; writing-mode:vertical-lr; letter-spacing:2px;">原料入口</div>';
-        html += '<div style="position:absolute; right:2px; top:85px; color:#ff6666; font-size:0.7rem; writing-mode:vertical-lr; letter-spacing:2px;">成品出口</div>';
+        html += '<div style="position:absolute; left:2px; top:85px; color:' + t.success + '; font-size:12px; writing-mode:vertical-lr; letter-spacing:2px;">原料入口</div>';
+        html += '<div style="position:absolute; right:2px; top:85px; color:' + t.danger + '; font-size:12px; writing-mode:vertical-lr; letter-spacing:2px;">成品出口</div>';
 
         container.innerHTML = html;
     }
@@ -2047,7 +2929,7 @@
 
         var container = document.getElementById('twin-detail');
         if (container) {
-            container.innerHTML = '<div style="text-align:center; padding:40px;"><i class="bi bi-arrow-clockwise" style="font-size:2rem; color:#00d4ff; animation:spin 1s linear infinite;"></i><p class="text-muted mt-2">加载中...</p></div>';
+            container.innerHTML = i40LoadingHTML('加载中...');
         }
 
         Promise.all([
@@ -2079,10 +2961,10 @@
 
         var html = '';
 
-        html += '<div style="text-align:center; padding:15px; border-bottom:1px solid #0f3460; margin-bottom:15px;">';
-        html += '<span style="font-size:2.5rem;">' + detail.icon + '</span>';
-        html += '<h5 style="color:#fff; margin:8px 0 0;">' + detail.label + '</h5>';
-        html += '<span class="text-muted" style="font-size:0.8rem;">' + detail.id + '</span>';
+        html += '<div style="text-align:center; padding: var(--space-3); border-bottom: 1px solid var(--border-base); margin-bottom: var(--space-3);">';
+        html += '<span style="font-size: var(--font-3xl);">' + detail.icon + '</span>';
+        html += '<h5 class="mt-2 mb-0">' + detail.label + '</h5>';
+        html += '<span class="text-muted" style="font-size: var(--font-xs); font-family: var(--font-mono);">' + detail.id + '</span>';
         html += '</div>';
 
         html += '<div class="twin-detail-row"><span class="twin-detail-label">工艺类型</span><span class="twin-detail-value">' + detail.process + '</span></div>';
@@ -2090,7 +2972,7 @@
         if (detail.health && typeof detail.health === 'object') {
             var h = detail.health;
             var score = h.health_score || 0;
-            var scoreClass = score >= 80 ? 'health-excellent' : score >= 60 ? 'health-good' : score >= 40 ? 'health-warning' : 'health-critical';
+            var scoreClass = 'health-' + i40HealthLevel(score);
             html += '<div class="twin-detail-row"><span class="twin-detail-label">健康评分</span><span class="twin-detail-value ' + scoreClass + '">' + score + '</span></div>';
             html += '<div class="twin-detail-row"><span class="twin-detail-label">异常次数</span><span class="twin-detail-value">' + (h.anomaly_count || 0) + '</span></div>';
             if (h.trend) {
@@ -2098,7 +2980,7 @@
                 html += '<div class="twin-detail-row"><span class="twin-detail-label">趋势</span><span class="twin-detail-value">' + trendIcon + ' ' + (h.trend.direction || '-') + '</span></div>';
             }
             if (h.failure_prediction) {
-                html += '<div class="twin-detail-row"><span class="twin-detail-label">预计故障</span><span class="twin-detail-value" style="color:#ffaa00;">' + h.failure_prediction.days_to_limit + ' 天后</span></div>';
+                html += '<div class="twin-detail-row"><span class="twin-detail-label">预计故障</span><span class="twin-detail-value metric-value--warning">' + h.failure_prediction.days_to_limit + ' 天后</span></div>';
             }
         } else {
             html += '<div class="twin-detail-row"><span class="twin-detail-label">健康评分</span><span class="twin-detail-value text-muted">暂无数据</span></div>';
@@ -2129,25 +3011,34 @@
         var tbody = document.querySelector('#twin-params-table tbody');
         if (!tbody) return;
 
+        if (!data || Object.keys(data).length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">暂无设备数据</td></tr>';
+            return;
+        }
+
         tbody.innerHTML = '';
         for (var deviceId in data) {
             if (!data.hasOwnProperty(deviceId)) continue;
             var d = data[deviceId];
 
             var statusText = d.status === 'running' ? '运行' : d.status === 'fault' ? '故障' : d.status === 'idle' ? '空闲' : '停机';
+            // 状态点复用 design-tokens 的 .status-dot--* 语义色
+            var dotClass = d.status === 'running' ? 'status-dot--success'
+                : d.status === 'fault' ? 'status-dot--danger'
+                : d.status === 'idle' ? 'status-dot--warning' : 'status-dot--offline';
 
             var tr = document.createElement('tr');
             tr.onclick = (function(id) { return function() { selectTwinDevice(id); }; })(deviceId);
 
             tr.innerHTML =
                 '<td><strong>' + d.icon + ' ' + d.label + '</strong></td>' +
-                '<td><span class="twin-status-dot ' + d.status + '"></span>' + statusText + '</td>' +
-                '<td>' + (d.params.temp || '--') + '</td>' +
-                '<td>' + (d.params.pressure || '--') + '</td>' +
-                '<td>' + (d.params.flow || '--') + '</td>' +
-                '<td>' + (d.power || '--') + '</td>' +
-                '<td>' + (d.oee !== '--' ? d.oee + '%' : '--') + '</td>' +
-                '<td>' + (d.health || '--') + '</td>';
+                '<td><span class="status-dot ' + dotClass + '"></span>' + statusText + '</td>' +
+                '<td class="num">' + (d.params.temp || '--') + '</td>' +
+                '<td class="num">' + (d.params.pressure || '--') + '</td>' +
+                '<td class="num">' + (d.params.flow || '--') + '</td>' +
+                '<td class="num">' + (d.power || '--') + '</td>' +
+                '<td class="num">' + (d.oee !== '--' ? d.oee + '%' : '--') + '</td>' +
+                '<td class="num">' + (d.health || '--') + '</td>';
             tbody.appendChild(tr);
         }
     }
@@ -2169,7 +3060,21 @@
                 break;
             case 'energy': loadEnergy(); break;
             case 'edge': loadEdge(); break;
+            case 'vibration': loadVibrationTab(); break;
             case 'twin': loadDigitalTwin(); break;
+        }
+    }
+
+    // 振动页：先给设备振动评分总览；已选设备则同步刷新频谱与轴承特征频率
+    function loadVibrationTab() {
+        i40Fetch('/vibration').then(function(scores) {
+            renderVibrationScores('vib-score-chart', scores);
+        });
+        var panel = document.getElementById('vib-bearing-panel');
+        if (VIB_SELECTED_DEVICE) {
+            window.loadVibrationChart();
+        } else if (panel) {
+            panel.innerHTML = i40EmptyHTML('选择设备并查询后显示轴承特征频率');
         }
     }
 
@@ -2185,6 +3090,8 @@
 
     // ==================== 窗口resize处理 ====================
     function handleResize() {
+        // 令牌缓存作废：窗口尺寸/主题变化后重新读取 CSS 变量
+        i40ResetTokens();
         for (var key in I40_CHARTS) {
             if (I40_CHARTS.hasOwnProperty(key) && I40_CHARTS[key]) {
                 try { I40_CHARTS[key].resize(); } catch(e) {}
@@ -2222,6 +3129,16 @@
 
         // 窗口resize
         window.addEventListener('resize', handleResize);
+
+        // 深浅色切换：作废令牌缓存并重绘当前Tab，保证图表颜色跟随主题
+        var mq = window.matchMedia('(prefers-color-scheme: dark)');
+        var onThemeChange = function() {
+            i40ResetTokens();
+            handleResize();
+            refreshCurrentTab();
+        };
+        if (mq.addEventListener) { mq.addEventListener('change', onThemeChange); }
+        else if (mq.addListener) { mq.addListener(onThemeChange); }
 
         debugLog('初始化完成');
     }

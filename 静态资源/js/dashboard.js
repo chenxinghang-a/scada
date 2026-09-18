@@ -16,6 +16,65 @@ const MAX_CHART_POINTS = 200;
 const PAGE_SIZE = 50;  // 100台设备以内不需要分页
 let currentPage = 1;
 let allDevices = [];            // 完整设备列表缓存
+let trendSelectBound = false;   // 设备下拉框只绑定一次，避免重复监听
+
+// ========== 主题色读取 ==========
+// 颜色一律来自 design-tokens.css，JS 里不写死色值（fallback 仅用于变量缺失时兜底）
+function cssVar(name, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback || '';
+}
+
+function cssVarPx(name, fallback) {
+    const n = parseFloat(cssVar(name, ''));
+    return isNaN(n) ? fallback : n;
+}
+
+// 图表色板：--chart-1..8 顺序固定（色盲可辨）
+function chartPalette() {
+    const list = [];
+    for (let i = 1; i <= 8; i++) list.push(cssVar(`--chart-${i}`, '#64748b'));
+    return list;
+}
+
+// KPI 迷你趋势：仅用轮询真实样本，样本不足时不出图
+const kpiHistory = { rate: [] };
+const KPI_HISTORY_MAX = 30;
+
+function setKpiBar(id, ratio) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const pct = Math.max(0, Math.min(1, isFinite(ratio) ? ratio : 0)) * 100;
+    el.style.width = pct.toFixed(1) + '%';
+    const track = el.parentElement;
+    if (track && track.hasAttribute('aria-valuenow')) {
+        track.setAttribute('aria-valuenow', String(Math.round(pct)));
+    }
+}
+
+function pushKpiSample(key, value) {
+    const arr = kpiHistory[key];
+    if (!arr || !isFinite(value)) return;
+    arr.push(value);
+    if (arr.length > KPI_HISTORY_MAX) arr.shift();
+    renderSparkline(document.getElementById('kpi-rate-spark'), arr);
+}
+
+function renderSparkline(el, values) {
+    if (!el) return;
+    if (!values || values.length < 2) { el.innerHTML = ''; return; }
+    const W = 100, H = 22, PAD = 2;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = (max - min) || 1;
+    const step = W / (values.length - 1);
+    const points = values.map((v, i) => {
+        const x = (i * step).toFixed(2);
+        const y = (H - PAD - ((v - min) / span) * (H - PAD * 2)).toFixed(2);
+        return x + ',' + y;
+    }).join(' ');
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${points}"></polyline></svg>`;
+}
 
 // ========== 初始化 ==========
 document.addEventListener('DOMContentLoaded', () => {
@@ -113,7 +172,7 @@ async function loadData() {
     } catch (e) {
         console.error('loadData:', e);
         const dot = document.getElementById('status-dot');
-        if (dot) dot.className = 'status-dot red';
+        if (dot) dot.className = 'status-dot status-dot--danger';
         setText('status-text', '连接异常');
     } finally {
         loadDataInProgress = false;
@@ -134,6 +193,8 @@ function updateKPI(stats) {
         if (el) {
             el.className = 'kpi' + (online < devs.length ? ' warn' : '');
         }
+        // 在线率进度条（由在线/总数算出）
+        setKpiBar('kpi-devices-bar', devs.length ? online / devs.length : 0);
     }
 
     // 报警
@@ -153,10 +214,14 @@ function updateKPI(stats) {
     // 采集
     if (stats.collector) {
         const c = stats.collector;
-        setText('kpi-rate', Math.floor((c.total_collections || 0) / Math.max((stats.uptime_seconds || 1) / 60, 1)));
+        const rate = Math.floor((c.total_collections || 0) / Math.max((stats.uptime_seconds || 1) / 60, 1));
+        setText('kpi-rate', rate);
+        pushKpiSample('rate', rate);   // 迷你趋势：滚动真实采样
         const total = (c.successful_collections || 0) + (c.failed_collections || 0);
         const q = total > 0 ? Math.round(c.successful_collections / total * 100) : 100;
         setText('kpi-quality-val', q + '%');
+        // 成功率进度条（0-100%）
+        setKpiBar('kpi-quality-bar', q / 100);
     }
 
     // 运行时间
@@ -169,14 +234,17 @@ function updateKPI(stats) {
     const badge = document.getElementById('sim-mode-badge');
     if (badge && stats.simulation_mode !== undefined) {
         badge.textContent = stats.simulation_mode ? '[ 模拟 ]' : '';
-        badge.style.color = '#eab308';
-        badge.style.fontSize = '11px';
+        badge.classList.toggle('sim-badge--on', !!stats.simulation_mode);
     }
 }
 
 // ========== 设备卡片网格（简化版：每次轮询全量重建） ==========
 function updateDeviceGrid(stats) {
-    if (!stats.devices) return;
+    if (!stats || !stats.devices) {
+        allDevices = [];
+        renderCurrentPage([]);   // 无设备时给出规范空提示，不滞留在"正在加载设备…"
+        return;
+    }
     let devs = Array.isArray(stats.devices) ? stats.devices : Object.values(stats.devices);
 
     // 缓存完整设备列表
@@ -191,18 +259,21 @@ function updateDeviceGrid(stats) {
     // 直接渲染，不做快照比较
     renderCurrentPage(devs);
 
-    // 填充设备选择下拉框
+    // 填充设备选择下拉框（只绑定一次，避免轮询重复挂监听）
     const select = document.getElementById('trend-device-select');
-    if (select && select.children.length <= 1) {
-        select.innerHTML = devs.map(d => {
-            const id = d.device_id || d.id;
-            return `<option value="${escapeHtml(id)}" ${id === selectedDeviceId ? 'selected' : ''}>${escapeHtml(d.name || id)}</option>`;
-        }).join('');
+    if (select && !trendSelectBound) {
+        select.innerHTML = devs.length
+            ? devs.map(d => {
+                const id = d.device_id || d.id;
+                return `<option value="${escapeHtml(id)}" ${id === selectedDeviceId ? 'selected' : ''}>${escapeHtml(d.name || id)}</option>`;
+            }).join('')
+            : '<option value="">暂无设备</option>';
         select.addEventListener('change', function() {
             selectedDeviceId = this.value;
             Object.keys(dataBuffers).forEach(k => delete dataBuffers[k]);
             if (trendChart) trendChart.clear();
         });
+        trendSelectBound = true;
         if (!selectedDeviceId && devs.length > 0) {
             selectedDeviceId = devs[0].device_id || devs[0].id;
         }
@@ -215,7 +286,7 @@ function getPageDevices() {
     return allDevices.slice(start, start + PAGE_SIZE);
 }
 
-// 构建单个设备卡片HTML
+// 构建设备卡片HTML（状态 = .tag--* + .status-dot--*，数值等宽字体）
 function buildDeviceCard(d) {
     const id = d.device_id || d.id;
     const name = d.name || id;
@@ -224,11 +295,12 @@ function buildDeviceCard(d) {
     const hasAlarm = d.status === 'fault' || d.status === 'warning';
     const category = d.device_category || 'sensor';
 
-    let statusClass = 'offline';
+    // 状态映射：success(运行中) / info(已停止) / warning(告警) / offline(离线)
+    let stateMod = 'offline';
     let statusText = '离线';
-    if (online && stopped) { statusClass = 'stopped'; statusText = '已停止'; }
-    else if (online && hasAlarm) { statusClass = 'warning'; statusText = '告警'; }
-    else if (online) { statusClass = 'online'; statusText = '运行中'; }
+    if (online && stopped) { stateMod = 'info'; statusText = '已停止'; }
+    else if (online && hasAlarm) { stateMod = 'warning'; statusText = '告警'; }
+    else if (online) { stateMod = 'success'; statusText = '运行中'; }
 
     const regs = d.registers || [];
     const valStr = regs.slice(0, 2).map(r => {
@@ -237,7 +309,7 @@ function buildDeviceCard(d) {
         const cached = lastDeviceValues[cacheKey] ?? '--';
         const quality = lastDeviceQuality[cacheKey];
         const qualityDot = quality != null
-            ? `<span class="quality-dot" style="background:${getQualityColor(quality)}" title="${getQualityLabel(quality)}"></span>`
+            ? `<span class="quality-dot" style="background:${getQualityColor(quality)}" title="数据质量: ${getQualityLabel(quality)} (${quality})"></span>`
             : '';
         return `<span class="dev-val"><span class="label">${escapeHtml(label)}</span> <span class="num" id="dv-${escapeHtml(id)}-${escapeHtml(r.name)}">${escapeHtml(cached)}</span>${qualityDot}</span>`;
     }).join('');
@@ -247,9 +319,13 @@ function buildDeviceCard(d) {
         : '';
 
     return `<div class="dev-card" data-device-id="${escapeHtml(id)}" onclick="selectDevice('${escapeHtml(id)}')" title="${escapeHtml(name)}">
-        <div class="dev-status ${statusClass}"></div>
+        <div class="dev-status dev-status--${stateMod}"></div>
         <div class="dev-info">
-            <div class="dev-name">${escapeHtml(name)} <span class="dev-state-tag ${statusClass}">${statusText}</span>${d.zone ? ` <span class="dev-zone-tag">${escapeHtml(d.zone)}</span>` : ''}</div>
+            <div class="dev-name">
+                <span class="dev-name__text">${escapeHtml(name)}</span>
+                <span class="tag tag--${stateMod}"><span class="status-dot status-dot--${stateMod}"></span>${statusText}</span>
+                ${d.zone ? `<span class="dev-zone-tag">${escapeHtml(d.zone)}</span>` : ''}
+            </div>
             <div class="dev-meta">${escapeHtml(d.protocol || 'modbus_tcp')} · <span class="dev-host">${escapeHtml(d.host || '--')}</span></div>
             <div class="dev-values">${valStr}</div>
         </div>
@@ -260,7 +336,16 @@ function buildDeviceCard(d) {
 // 渲染当前页设备卡片（全量替换，确保host等字段始终显示）
 function renderCurrentPage(devs) {
     if (!devs) devs = allDevices;
-    if (!devs || devs.length === 0) return;  // 防空数据清空grid
+
+    const grid = document.getElementById('device-grid');
+    if (!grid) return;
+
+    // 空数据 → 统一空提示
+    if (!devs || devs.length === 0) {
+        grid.innerHTML = `<div class="empty-state"><i class="bi bi-hdd-rack"></i><span>暂无设备（等待采集服务上报）</span></div>`;
+        renderPagination(0, 1);
+        return;
+    }
 
     const totalPages = Math.ceil(devs.length / PAGE_SIZE);
     if (currentPage > totalPages) currentPage = totalPages || 1;
@@ -268,14 +353,7 @@ function renderCurrentPage(devs) {
     const start = (currentPage - 1) * PAGE_SIZE;
     const pageDevs = devs.slice(start, start + PAGE_SIZE);
 
-    const grid = document.getElementById('device-grid');
-    if (!grid) return;
-
-    // 清除"正在加载设备..."占位符（首次加载时存在）
-    const loadingDiv = grid.querySelector(':scope > div[style*="grid-column"]');
-    if (loadingDiv) loadingDiv.remove();
-
-    // 全量替换当前页卡片
+    // 全量替换当前页卡片（同时清除首次加载占位符）
     grid.innerHTML = pageDevs.map(d => buildDeviceCard(d)).join('');
 
     // 渲染分页控件
@@ -350,12 +428,93 @@ async function toggleDevice(deviceId, stop) {
 }
 
 // ========== 报警面板 ==========
+// 等级映射：prio 用于等级文字标签，bar 用于左侧 .level-bar--* 色条
+function alarmMeta(alarmLevel) {
+    if (alarmLevel === 'critical') return { prio: 'critical', prioText: 'CRIT', bar: 'critical' };
+    if (alarmLevel === 'warning')  return { prio: 'warning',  prioText: 'HIGH', bar: 'warning' };
+    return { prio: 'low', prioText: 'LOW', bar: 'info' };
+}
+
+// 兼容 severity 字段（critical/high/medium/low/info）
+function alarmMetaBySeverity(sev) {
+    if (sev === 'critical') return { prio: 'critical', prioText: 'CRIT', bar: 'critical' };
+    if (sev === 'high' || sev === 'medium' || sev === 'warning') {
+        return { prio: 'high', prioText: 'HIGH', bar: 'warning' };
+    }
+    return { prio: 'low', prioText: 'LOW', bar: 'info' };
+}
+
+function formatClock(ts) {
+    const d = ts ? new Date(ts) : new Date();
+    if (isNaN(d.getTime())) return '--:--:--';
+    return d.toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+
+function alarmPvText(alarm) {
+    // 最新值（优先用last_value，其次actual_value）
+    const latestVal = alarm.last_value != null ? alarm.last_value : alarm.actual_value;
+    if (latestVal == null || latestVal === '') return '';
+    const num = parseFloat(latestVal);
+    return isNaN(num) ? `PV:${latestVal}` : `PV:${num.toFixed(1)}`;
+}
+
+function createSpan(cls, txt) {
+    const s = document.createElement('span');
+    s.className = cls;
+    s.textContent = txt;
+    return s;
+}
+
+// 单条报警行：左等级色条 + 两行（等级/消息；时间/设备/数值/确认）
+// 未确认只让色条呼吸（.level-bar--pulse-*），不做整行透明度闪烁
+function createAlarmRow(info) {
+    const row = document.createElement('div');
+    row.className = 'alarm-row' + (info.acked ? '' : ' unacked');
+
+    let barCls = 'level-bar level-bar--' + info.meta.bar;
+    if (!info.acked) {
+        if (info.meta.bar === 'critical') barCls += ' level-bar--pulse-critical';
+        else if (info.meta.bar === 'warning') barCls += ' level-bar--pulse-warning';
+    }
+    row.appendChild(createSpan(barCls, ''));
+
+    const main = document.createElement('div');
+    main.className = 'alarm-main';
+
+    const line1 = document.createElement('div');
+    line1.className = 'alarm-line1';
+    line1.appendChild(createSpan('alarm-prio ' + info.meta.prio, info.meta.prioText));
+    line1.appendChild(createSpan('alarm-msg', info.msg));
+
+    const line2 = document.createElement('div');
+    line2.className = 'alarm-line2';
+    line2.appendChild(createSpan('alarm-time', info.time));
+    line2.appendChild(createSpan('alarm-device', info.device));
+    if (info.pv) line2.appendChild(createSpan('alarm-pv', info.pv));
+    if (info.count > 1) line2.appendChild(createSpan('alarm-count', '×' + info.count));
+    if (!info.acked) {
+        const btn = document.createElement('button');
+        btn.className = 'alarm-ack-btn';
+        btn.dataset.alarmId = info.alarmId || '';
+        btn.dataset.deviceId = info.deviceId || '';
+        btn.dataset.register = info.registerName || '';
+        btn.textContent = '确认';
+        line2.appendChild(btn);
+    }
+
+    main.appendChild(line1);
+    main.appendChild(line2);
+    row.appendChild(main);
+    return row;
+}
+
 function updateAlarmPanel(alarms) {
     const list = document.getElementById('alarm-list');
     if (!list) return;
 
     if (!alarms || alarms.length === 0) {
         list.innerHTML = '<div class="alarm-empty">暂无活动报警</div>';
+        setText('kpi-unacked', 0);
         return;
     }
 
@@ -363,39 +522,20 @@ function updateAlarmPanel(alarms) {
     const unacked = alarms.filter(a => !a.acknowledged).length;
     setText('kpi-unacked', unacked);
 
-    list.innerHTML = alarms.slice(0, 20).map(a => {
-        const level = a.alarm_level === 'critical' ? 'critical'
-                    : a.alarm_level === 'warning' ? 'warning' : 'low';
-        const prioText = level === 'critical' ? 'CRIT' : level === 'warning' ? 'HIGH' : 'LOW';
-        const time = new Date(a.timestamp).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-        const device = (a.device_id || '').substring(0, 12);
-        const msg = a.alarm_message || a.alarm_id || '-';
+    const rows = alarms.slice(0, 20).map(a => createAlarmRow({
+        meta: alarmMeta(a.alarm_level),
+        time: formatClock(a.last_trigger_time || a.timestamp),
+        device: (a.device_id || '').substring(0, 12),
+        msg: a.alarm_message || a.alarm_id || '-',
+        pv: alarmPvText(a),
+        count: a.trigger_count || 1,
+        acked: !!a.acknowledged,
+        alarmId: a.alarm_id,
+        deviceId: a.device_id,
+        registerName: a.register_name || ''
+    }));
 
-        // 最新值（优先用last_value，其次actual_value）
-        const latestVal = a.last_value != null ? a.last_value : a.actual_value;
-        const pv = latestVal != null ? `PV:${parseFloat(latestVal).toFixed(1)}` : '';
-
-        // 触发次数
-        const count = a.trigger_count || 1;
-        const countStr = count > 1 ? `<span class="alarm-count">&times;${count}</span>` : '';
-
-        // 最后触发时间
-        const lastTime = a.last_trigger_time
-            ? new Date(a.last_trigger_time).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'})
-            : time;
-
-        const acked = a.acknowledged;
-
-        return `<div class="alarm-row ${acked ? '' : 'unacked'}">
-            <span class="alarm-prio ${level}">${escapeHtml(prioText)}</span>
-            <span class="alarm-time">${escapeHtml(lastTime)}</span>
-            <span class="alarm-device">${escapeHtml(device)}</span>
-            <span class="alarm-msg">${escapeHtml(msg)}</span>
-            <span class="alarm-pv">${escapeHtml(pv)}</span>
-            ${countStr}
-            ${acked ? '' : `<button class="alarm-ack-btn" data-alarm-id="${escapeHtml(a.alarm_id)}" data-device-id="${escapeHtml(a.device_id)}" data-register="${escapeHtml(a.register_name || '')}">确认</button>`}
-        </div>`;
-    }).join('');
+    list.replaceChildren(...rows);
 }
 
 async function ackAlarm(alarmId, deviceId, regName) {
@@ -427,7 +567,7 @@ function escapeHtml(str) {
     });
 }
 
-// 实时告警 DOM 插入
+// 实时告警 DOM 插入（结构与 updateAlarmPanel 保持一致，防 XSS 用 DOM API）
 function prependAlarmItem(alarm) {
     const alarmList = document.getElementById('alarm-list');
     if (!alarmList) return;
@@ -436,41 +576,18 @@ function prependAlarmItem(alarm) {
     const empty = alarmList.querySelector('.alarm-empty');
     if (empty) empty.remove();
 
-    const severityColors = {
-        critical: '#dc2626', high: '#ea580c',
-        medium: '#ca8a04', low: '#0891b2', info: '#4f46e5'
-    };
-    const color = severityColors[alarm.severity || alarm.alarm_level] || '#d9d9d9';
-    const prioText = (alarm.severity === 'critical' || alarm.alarm_level === 'critical') ? 'CRIT'
-        : (alarm.severity === 'high' || alarm.alarm_level === 'warning') ? 'HIGH' : 'LOW';
-    const time = alarm.timestamp
-        ? new Date(alarm.timestamp).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'})
-        : new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-    const device = (alarm.device_id || '').substring(0, 12);
-    const msg = alarm.alarm_message || alarm.message || alarm.alarm_id || '-';
-    const latestVal = alarm.last_value != null ? alarm.last_value : alarm.actual_value;
-    const pv = latestVal != null ? `PV:${parseFloat(latestVal).toFixed(1)}` : '';
-
-    const sevClass = ['critical','high','warning','medium','low','info'].includes(alarm.severity || alarm.alarm_level)
-        ? (alarm.severity || alarm.alarm_level) : 'low';
-
-    // 使用DOM API构建元素，避免insertAdjacentHTML的XSS风险
-    const row = document.createElement('div');
-    row.className = 'alarm-row unacked';
-    row.style.borderLeft = `3px solid ${color}`;
-    const addSpan = (cls, txt) => { const s = document.createElement('span'); s.className = cls; s.textContent = txt; row.appendChild(s); };
-    addSpan('alarm-prio ' + sevClass, prioText);
-    addSpan('alarm-time', time);
-    addSpan('alarm-device', device);
-    addSpan('alarm-msg', msg);
-    addSpan('alarm-pv', pv);
-    const ackBtn = document.createElement('button');
-    ackBtn.className = 'alarm-ack-btn';
-    ackBtn.dataset.alarmId = alarm.alarm_id || '';
-    ackBtn.dataset.deviceId = alarm.device_id || '';
-    ackBtn.dataset.register = alarm.register_name || '';
-    ackBtn.textContent = '确认';
-    row.appendChild(ackBtn);
+    const row = createAlarmRow({
+        meta: alarmMetaBySeverity(alarm.severity || alarm.alarm_level),
+        time: formatClock(alarm.timestamp),
+        device: (alarm.device_id || '').substring(0, 12),
+        msg: alarm.alarm_message || alarm.message || alarm.alarm_id || '-',
+        pv: alarmPvText(alarm),
+        count: 1,
+        acked: false,
+        alarmId: alarm.alarm_id,
+        deviceId: alarm.device_id,
+        registerName: alarm.register_name || ''
+    });
 
     alarmList.insertAdjacentElement('afterbegin', row);
 
@@ -491,32 +608,14 @@ function updateAlarmCountFromDOM() {
     setText('kpi-unacked', unacked);
 }
 
-// 告警闪烁横幅
-function flashAlarmBanner(alarm) {
-    const banner = document.getElementById('alarm-banner');
-    if (!banner) return;
-    const colors = {critical: '#dc2626', high: '#ea580c', medium: '#ca8a04', warning: '#ca8a04'};
-    const sev = alarm.severity || alarm.alarm_level || 'critical';
-    banner.style.backgroundColor = colors[sev] || '#dc2626';
-    banner.style.display = 'block';
-    banner.style.opacity = '1';
-    banner.textContent = `${sev.toUpperCase()}: ${alarm.alarm_message || alarm.message || 'New alarm'}`;
-    setTimeout(() => { banner.style.opacity = '0.7'; }, 5000);
-}
-
-// 设备值更新（带质量颜色）
+// 设备值更新（质量颜色取自设计令牌的质量阈值）
 function updateDeviceValue(deviceId, registerName, value, quality) {
     const el = document.getElementById(`dv-${deviceId}-${registerName}`);
     if (!el) return;
     el.textContent = typeof value === 'number' ? value.toFixed(2) : value;
-    if (quality !== undefined) {
-        if (quality >= 192) {
-            el.style.color = '#52c41a';  // Good - green
-        } else if (quality >= 64) {
-            el.style.color = '#faad14';  // Uncertain - yellow
-        } else {
-            el.style.color = '#ff4d4f';  // Bad - red
-        }
+    if (quality !== undefined && quality !== null) {
+        el.style.color = getQualityColor(quality);
+        el.title = `数据质量: ${getQualityLabel(quality)} (${quality})`;
     }
 }
 
@@ -560,8 +659,6 @@ function updateTrendChart(data) {
         matched++;
     });
 
-    if (matched === 0) return;
-
     // Prevent memory leak: limit total buffer keys
     const allKeys = Object.keys(dataBuffers);
     if (allKeys.length > 100) {
@@ -569,13 +666,27 @@ function updateTrendChart(data) {
     }
 
     const keys = Object.keys(dataBuffers);
+
+    // 空数据态：无曲线数据时给出规范空提示，不画空白坐标轴
+    const emptyEl = document.getElementById('trend-empty');
+    if (emptyEl) emptyEl.classList.toggle('is-hidden', keys.length > 0);
+    if (matched === 0 && keys.length === 0) return;
+
     const timeSet = new Set();
     keys.forEach(k => dataBuffers[k].forEach(d => timeSet.add(d.t)));
     const times = Array.from(timeSet).sort().slice(-MAX_CHART_POINTS);
 
-    // 12色循环，支持多寄存器显示
-    const colors = ['#6366f1', '#06b6d4', '#f59e0b', '#ef4444', '#22c55e', '#ec4899',
-                    '#8b5cf6', '#14b8a6', '#f97316', '#84cc16', '#e11d48', '#0ea5e9'];
+    // 统一色板：--chart-1..8 循环（顺序固定，色盲可辨）
+    const palette = chartPalette();
+
+    // 网格/坐标轴/文字颜色统一取自设计令牌，深浅色切换后下一次刷新自动生效
+    const axisText = cssVar('--chart-axis-text', '#64748b');
+    const labelText = cssVar('--chart-label-text', '#475569');
+    const gridColor = cssVar('--chart-grid', '#e2e8f0');
+    const gridStrong = cssVar('--chart-grid-strong', '#cbd5e1');
+    const tooltipBg = cssVar('--chart-tooltip-bg', 'rgba(15,23,42,0.92)');
+    const tooltipText = cssVar('--chart-tooltip-text', '#f8fafc');
+    const fontSize = cssVarPx('--font-xs', 12);
 
     const series = keys.map((key, i) => {
         const map = {};
@@ -585,40 +696,42 @@ function updateTrendChart(data) {
             type: 'line',
             smooth: true,
             symbol: 'none',
-            lineStyle: { width: 1.5, color: colors[i % colors.length] },
+            lineStyle: { width: 1.5, color: palette[i % palette.length] },
+            itemStyle: { color: palette[i % palette.length] },
             data: times.map(t => map[t] ?? null),
         };
     });
 
     trendChart.setOption({
         backgroundColor: 'transparent',
+        color: palette,
         tooltip: {
             trigger: 'axis',
-            backgroundColor: 'rgba(255,255,255,0.95)',
-            borderColor: '#e2e5ea',
-            textStyle: { color: '#1a1a2e', fontSize: 11 },
+            backgroundColor: tooltipBg,
+            borderColor: gridStrong,
+            textStyle: { color: tooltipText, fontSize: fontSize },
         },
         legend: {
             top: 0,
             right: 0,
-            textStyle: { color: '#666', fontSize: 11 },
+            textStyle: { color: labelText, fontSize: fontSize },
             itemWidth: 12,
             itemHeight: 2,
         },
-        grid: { left: 50, right: 10, top: 25, bottom: 20 },
+        grid: { left: 56, right: 12, top: 28, bottom: 24 },
         xAxis: {
             type: 'category',
             data: times,
             boundaryGap: false,
-            axisLine: { lineStyle: { color: '#e2e5ea' } },
-            axisLabel: { color: '#999', fontSize: 10 },
+            axisLine: { lineStyle: { color: gridStrong } },
+            axisLabel: { color: axisText, fontSize: fontSize },
             splitLine: { show: false },
         },
         yAxis: {
             type: 'value',
             axisLine: { show: false },
-            axisLabel: { color: '#999', fontSize: 10 },
-            splitLine: { lineStyle: { color: '#f0f0f0' } },
+            axisLabel: { color: axisText, fontSize: fontSize },
+            splitLine: { lineStyle: { color: gridColor } },
         },
         series,
     });
@@ -685,7 +798,7 @@ function updateStatusBar(stats) {
 
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
-    if (dot) dot.className = 'status-dot green';
+    if (dot) dot.className = 'status-dot status-dot--success';
     if (text) text.textContent = '系统运行中';
 
     if (stats.database) {
@@ -713,12 +826,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const el = document.getElementById(`dv-${devId}-${regName}`);
                 if (el) {
                     el.textContent = formatted;
-                    // OPC UA quality color indicator
+                    // OPC UA 数据质量指示（颜色取设计令牌）
                     const quality = info.quality;
                     if (quality != null) {
                         lastDeviceQuality[key] = quality;
                         el.style.color = getQualityColor(quality);
-                        el.title = `Quality: ${getQualityLabel(quality)} (${quality})`;
+                        el.title = `数据质量: ${getQualityLabel(quality)} (${quality})`;
                     }
                 }
             });
@@ -727,7 +840,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sk.on('alarm', (data) => {
             if (data && data.alarm_id) {
                 prependAlarmItem(data);
-                // flashAlarmBanner 已由 main.js handleAlarm -> updateAlarmBanner 统一处理，避免重复闪烁
+                // 顶部报警条由 main.js handleAlarm -> updateAlarmBanner 统一处理，避免重复提示
             } else {
                 loadData(); // fallback
             }
@@ -768,10 +881,11 @@ function formatUptime(s) {
 }
 
 // ========== OPC UA 数据质量标志 ==========
+// 质量分级沿用后端 OPC UA 约定（≥192 Good / ≥64 Uncertain / 其它 Bad），颜色取设计令牌
 function getQualityColor(quality) {
-    if (quality >= 192) return '#52c41a';  // Good - green
-    if (quality >= 64) return '#faad14';   // Uncertain - yellow
-    return '#ff4d4f';                       // Bad - red
+    if (quality >= 192) return cssVar('--color-success', '#16a34a');
+    if (quality >= 64) return cssVar('--color-warning', '#d97706');
+    return cssVar('--color-danger', '#dc2626');
 }
 
 function getQualityLabel(quality) {

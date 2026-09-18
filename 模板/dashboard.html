@@ -11,7 +11,7 @@
 <div class="topbar">
     <div class="topbar-title">工业数据采集与监控系统</div>
     <div class="topbar-right">
-        <span id="sim-mode-badge"></span>
+        <span class="sim-badge" id="sim-mode-badge"></span>
         <span class="topbar-time" id="topbar-time">--:--:--</span>
     </div>
 </div>
@@ -19,49 +19,56 @@
 <!-- 主内容 -->
 <div class="main">
 
-    <!-- KPI 卡片行 -->
+    <!-- KPI 卡片行：数值用 .metric-value（等宽数字，防刷新抖动），进度条/迷你趋势来自现有轮询数据 -->
     <div class="kpi-row">
-        <div class="kpi" id="kpi-oee">
+        <div class="kpi" id="kpi-oee" title="OEE 指标等待后端提供数据">
             <div class="kpi-label">OEE 综合效率</div>
-            <div class="kpi-value" id="kpi-oee-val">--%</div>
+            <div class="metric-value" id="kpi-oee-val">--%</div>
             <div class="kpi-sub">目标 ≥85%</div>
         </div>
         <div class="kpi" id="kpi-devices">
             <div class="kpi-label">设备状态</div>
-            <div class="kpi-value"><span id="kpi-online">0</span>/<span id="kpi-total">0</span></div>
+            <div class="metric-value"><span id="kpi-online">0</span>/<span id="kpi-total">0</span></div>
             <div class="kpi-sub">在线/总数</div>
+            <div class="kpi-bar" id="kpi-devices-bar-track" role="progressbar" aria-label="设备在线率"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="kpi-bar__fill" id="kpi-devices-bar"></div>
+            </div>
         </div>
         <div class="kpi" id="kpi-alarms">
             <div class="kpi-label">活动报警</div>
-            <div class="kpi-value" id="kpi-alarm-count">0</div>
+            <div class="metric-value" id="kpi-alarm-count">0</div>
             <div class="kpi-sub">未确认: <span id="kpi-unacked">0</span></div>
         </div>
         <div class="kpi" id="kpi-throughput">
             <div class="kpi-label">采集吞吐</div>
-            <div class="kpi-value" id="kpi-rate">0</div>
+            <div class="metric-value" id="kpi-rate">0</div>
             <div class="kpi-sub">条/分钟</div>
+            <div class="kpi-spark" id="kpi-rate-spark"></div>
         </div>
         <div class="kpi" id="kpi-quality">
             <div class="kpi-label">数据质量</div>
-            <div class="kpi-value" id="kpi-quality-val">--%</div>
+            <div class="metric-value" id="kpi-quality-val">--%</div>
             <div class="kpi-sub">成功率</div>
+            <div class="kpi-bar" id="kpi-quality-bar-track" role="progressbar" aria-label="采集成功率"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="kpi-bar__fill" id="kpi-quality-bar"></div>
+            </div>
         </div>
         <div class="kpi" id="kpi-uptime">
             <div class="kpi-label">运行时间</div>
-            <div class="kpi-value" id="kpi-uptime-val">-</div>
+            <div class="metric-value metric-value--sm" id="kpi-uptime-val">-</div>
             <div class="kpi-sub" id="kpi-mode">-</div>
         </div>
     </div>
 
     <!-- 设备卡片网格 -->
     <div class="device-grid" id="device-grid">
-        <div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px;">
-            正在加载设备...
+        <div class="empty-state">
+            <i class="bi bi-hdd-rack"></i>
+            <span>正在加载设备…</span>
         </div>
     </div>
-
-    <!-- 告警闪烁横幅 -->
-    <div id="alarm-banner" style="display:none;position:fixed;top:44px;left:0;right:0;z-index:1000;padding:8px 16px;color:#fff;font-size:13px;font-weight:600;text-align:center;transition:opacity 0.5s;"></div>
 
     <!-- 报警面板 -->
     <div class="alarm-panel">
@@ -82,27 +89,34 @@
     <div class="trend-area">
         <div class="trend-header">
             <span class="trend-title">实时趋势</span>
-            <div style="display:flex;gap:6px;align-items:center">
-                <select class="trend-select" id="trend-device-select">
-                    <option>加载中...</option>
+            <div class="trend-tools">
+                <select class="trend-select" id="trend-device-select" aria-label="选择设备">
+                    <option value="">加载中…</option>
                 </select>
-                <button class="trend-select" onclick="exportChartData()" title="导出当前图表数据" style="cursor:pointer;padding:2px 8px">📊 导出图表</button>
-                <button class="trend-select" onclick="exportAllDeviceData()" title="导出全部设备数据" style="cursor:pointer;padding:2px 8px">📥 导出全部</button>
+                <button class="trend-btn" onclick="exportChartData()" title="导出当前图表数据">
+                    <i class="bi bi-download"></i> 导出图表
+                </button>
+                <button class="trend-btn" onclick="exportAllDeviceData()" title="导出全部设备数据">
+                    <i class="bi bi-arrow-down-square"></i> 导出全部
+                </button>
             </div>
         </div>
-        <div id="trend-chart"></div>
+        <div class="trend-body">
+            <div id="trend-chart"></div>
+            <div class="chart-empty is-hidden" id="trend-empty">暂无趋势数据（等待设备上报）</div>
+        </div>
     </div>
 
     <!-- 底部状态栏 -->
     <div class="statusbar">
         <div>
-            <span class="status-dot green" id="status-dot"></span>
+            <span class="status-dot status-dot--success" id="status-dot"></span>
             <span id="status-text">系统运行中</span>
-            <span style="margin-left:12px" id="status-db">-</span>
+            <span class="statusbar-extra" id="status-db">-</span>
         </div>
         <div>
-            <a href="/users" id="status-user" style="color:var(--accent);text-decoration:none;cursor:pointer" title="用户管理">-</a>
-            <a href="/screen" style="color:var(--accent);margin-left:12px;text-decoration:none">大屏</a>
+            <a href="/users" id="status-user" class="statusbar-link" title="用户管理">-</a>
+            <a href="/screen" class="statusbar-link" title="大屏展示">大屏</a>
         </div>
     </div>
 

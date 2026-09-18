@@ -1,302 +1,267 @@
-/* 数据大屏样式 — iDataV 工业风格 */
+/* ============================================================================
+ * 数据大屏样式 —— 车间墙面展示
+ * ----------------------------------------------------------------------------
+ * 1. 颜色 / 字号 / 间距 / 圆角 / 阴影 全部取自 design-tokens.css，不写死色值
+ * 2. 深色底由 screen.html 的 <html data-theme="dark" data-bs-theme="dark"> 生效，
+ *    复用令牌的深色值（--bg-page / --bg-surface / --text-* 等）
+ * 3. 布局为三列 CSS Grid 栅格，面板高度由 grid-template-rows 决定，
+ *    图表容器用 .panel-chart 占满剩余空间（高度一定非 0，ECharts 才能正确测量）
+ * 4. 无渐变 / 无发光 / 无霓虹；报警等级只由左侧色条 .level-bar--* 表达，
+ *    禁止整行 opacity 闪烁
+ * ========================================================================== */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
-    width: 100%; height: 100%;
-    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
-    background: #0a0e27;
-    color: #c0c8d8;
+    width: 100%;
+    height: 100%;
     overflow: hidden;
+    font-family: var(--font-sans);
+    font-size: var(--font-base);
+    background: var(--bg-page);
+    color: var(--text-secondary);
 }
 
-/* ========== 顶部标题栏 ========== */
+/* ==================== 顶部标题栏 ==================== */
 .screen-header {
-    height: 60px;
-    background: linear-gradient(180deg, rgba(6,30,65,0.95) 0%, rgba(6,30,65,0.6) 100%);
-    border-bottom: 1px solid rgba(0,180,255,0.3);
+    height: 64px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 30px;
-    position: relative;
+    gap: var(--space-4);
+    padding: 0 var(--space-6);
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-base);
 }
 
-.screen-header::after {
-    content: '';
-    position: absolute;
-    bottom: -1px;
-    left: 10%;
-    right: 10%;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, #00b4ff, transparent);
-}
-
-.header-title {
-    font-size: 22px;
-    font-weight: 700;
-    color: #5dc2fe;
-    letter-spacing: 4px;
-    text-shadow: 0 0 20px rgba(93,194,254,0.5);
-}
-
-.header-left, .header-right {
+.header-left,
+.header-right {
     display: flex;
     align-items: center;
-    gap: 15px;
-    font-size: 13px;
+    gap: var(--space-4);
 }
 
-.header-time {
-    font-family: 'Consolas', monospace;
-    font-size: 18px;
-    color: #5dc2fe;
-}
+/* 等宽数字时钟：与 .metric-value--lg 一起使用（36px，远距离可读） */
+.header-time { color: var(--text-primary); }
 
-.header-date { color: #6b8aa8; }
+.header-date { font-size: var(--font-base); color: var(--text-muted); }
+
+.header-title {
+    font-size: var(--font-xl);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 1px;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
 
 .header-status {
     display: flex;
     align-items: center;
-    gap: 6px;
-    color: #2fb344;
+    gap: var(--space-2);
+    font-size: var(--font-sm);
+    color: var(--color-success);
 }
 
 .header-link {
-    color: #5dc2fe;
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    font-size: var(--font-sm);
+    color: var(--color-brand);
     text-decoration: none;
-    padding: 4px 12px;
-    border: 1px solid rgba(93,194,254,0.3);
-    border-radius: 4px;
-    font-size: 12px;
-    transition: all 0.2s;
+    transition: background var(--duration-fast) var(--ease-out);
 }
 
-.header-link:hover {
-    background: rgba(93,194,254,0.15);
-    color: #fff;
-}
+.header-link:hover { background: var(--bg-hover); }
 
-/* ========== 主内容区 ========== */
+/* ==================== 主内容区：三列栅格 ==================== */
 .screen-body {
     position: absolute;
-    top: 60px; bottom: 0; left: 0; right: 0;
-    display: flex;
-    padding: 10px;
-    gap: 10px;
+    top: 64px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: grid;
+    grid-template-columns: 1fr 2fr 1fr;
+    gap: var(--space-3);
+    padding: var(--space-3);
 }
 
 .screen-col {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    display: grid;
+    gap: var(--space-3);
+    min-height: 0;
 }
 
-.screen-col-left  { width: 25%; }
-.screen-col-center { width: 50%; }
-.screen-col-right { width: 25%; }
+/* 左右两列按信息重要度分配行高，中列 = 顶部 KPI 条 + 趋势图 */
+.screen-col--left   { grid-template-rows: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1.15fr); }
+.screen-col--center { grid-template-rows: auto minmax(0, 1fr); }
+.screen-col--right  { grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr); }
 
-/* ========== 面板 ========== */
+/* ==================== 面板 ====================
+ * 复用 design-tokens.css 的 .panel / .panel__header / .panel__body，
+ * 这里只补大屏需要的「标题更大 + 内容区纵向撑满」两条规则 */
 .xpanel {
-    background: rgba(6,30,65,0.7);
-    border: 1px solid rgba(0,180,255,0.2);
-    border-radius: 4px;
-    padding: 12px;
-    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     overflow: hidden;
 }
 
-.xpanel::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0;
-    width: 20px; height: 20px;
-    border-top: 2px solid #00b4ff;
-    border-left: 2px solid #00b4ff;
+.xpanel > .panel__header {
+    flex: none;
+    gap: var(--space-3);
+    font-size: var(--font-lg);
 }
 
-.xpanel::after {
-    content: '';
-    position: absolute;
-    top: 0; right: 0;
-    width: 20px; height: 20px;
-    border-top: 2px solid #00b4ff;
-    border-right: 2px solid #00b4ff;
-}
-
-.xpanel-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: #5dc2fe;
-    padding-bottom: 8px;
-    border-bottom: 1px solid rgba(0,180,255,0.15);
-    margin-bottom: 8px;
+.xpanel > .panel__body {
+    flex: 1 1 auto;
+    min-height: 0;
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
+    gap: var(--space-3);
 }
 
-/* ========== KPI 卡片 ========== */
+/* 图表容器：占满面板剩余高度，保证 ECharts 测量到非 0 尺寸 */
+.panel-chart {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+}
+
+/* ==================== 设备状态 KPI ==================== */
 .kpi-row {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 10px;
+    flex: none;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-2);
 }
 
 .kpi-item {
-    flex: 1;
+    padding: var(--space-2);
     text-align: center;
-    padding: 8px;
-    background: rgba(0,180,255,0.05);
-    border-radius: 4px;
-    border: 1px solid rgba(0,180,255,0.1);
-}
-
-.kpi-value {
-    font-family: 'Consolas', monospace;
-    font-size: 24px;
-    font-weight: 700;
-    line-height: 1;
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-md);
 }
 
 .kpi-label {
-    font-size: 11px;
-    color: #6b8aa8;
-    margin-top: 4px;
+    margin-top: var(--space-1);
+    font-size: var(--font-xs);
+    color: var(--text-muted);
 }
 
-.text-blue   { color: #5dc2fe; }
-.text-green  { color: #2fb344; }
-.text-red    { color: #d63939; }
-.text-yellow { color: #f59f00; }
+.kpi-value--total   { color: var(--color-brand); }
+.kpi-value--online  { color: var(--color-success); }
+.kpi-value--offline { color: var(--color-offline); }
+.kpi-value--alarm   { color: var(--color-danger); }
 
-/* 中列 KPI 卡片 */
+/* ==================== 中列 KPI 卡片 ==================== */
 .kpi-cards {
-    display: flex;
-    gap: 10px;
-    height: 100px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-3);
 }
 
 .kpi-card {
-    flex: 1;
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    background: linear-gradient(135deg, rgba(0,180,255,0.08) 0%, rgba(6,30,65,0.8) 100%);
-    border: 1px solid rgba(0,180,255,0.15);
-    border-radius: 4px;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
 }
 
 .kpi-card-icon {
-    width: 40px; height: 40px;
-    border-radius: 8px;
-    background: rgba(0,180,255,0.15);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    background: var(--bg-sunken);
+    font-size: 22px;
 }
 
-.kpi-card-value {
-    font-family: 'Consolas', monospace;
-    font-size: 22px;
-    font-weight: 700;
-    color: #5dc2fe;
-    line-height: 1;
-}
+.kpi-card-body { min-width: 0; }
 
 .kpi-card-label {
-    font-size: 11px;
-    color: #6b8aa8;
-    margin-top: 2px;
+    margin-top: var(--space-1);
+    font-size: var(--font-xs);
+    color: var(--text-muted);
 }
 
-/* ========== 报警列表 ========== */
+/* ==================== 实时报警 ==================== */
 .alarm-list {
-    height: calc(100% - 40px);
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
 }
 
-.alarm-list::-webkit-scrollbar { width: 4px; }
-.alarm-list::-webkit-scrollbar-thumb { background: rgba(0,180,255,0.3); border-radius: 2px; }
+.alarm-list::-webkit-scrollbar { width: 6px; }
+.alarm-list::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: var(--radius-pill);
+}
 
+/* 报警条目：等级命名与 style.css 完全一致（alarm-item + alarm-critical / -warning / -info），
+ * 颜色由左侧 .level-bar--* 色条承载，整行不做闪烁 */
 .alarm-item {
-    padding: 8px 10px;
-    margin-bottom: 6px;
-    border-left: 3px solid;
-    border-radius: 0 4px 4px 0;
-    background: rgba(0,0,0,0.2);
-    font-size: 12px;
-    animation: alarmIn 0.3s ease;
+    display: flex;
+    align-items: stretch;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-2);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-md);
+    font-size: var(--font-sm);
 }
 
-.alarm-item.critical { border-color: #d63939; }
-.alarm-item.warning  { border-color: #f59f00; }
-.alarm-item.info     { border-color: #4299e1; }
+.alarm-main { flex: 1 1 auto; min-width: 0; }
 
 .alarm-item .alarm-time {
-    font-family: 'Consolas', monospace;
-    color: #6b8aa8;
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--font-xs);
+    color: var(--text-muted);
 }
 
 .alarm-item .alarm-msg {
-    color: #e0e6ed;
-    margin-top: 2px;
+    margin-top: var(--space-1);
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
 }
 
 .alarm-empty {
-    text-align: center;
-    color: #3a5068;
-    padding: 40px 0;
-    font-size: 14px;
+    display: grid;
+    place-items: center;
+    flex: 1 1 auto;
+    padding: var(--space-8) 0;
+    font-size: var(--font-sm);
+    color: var(--text-muted);
 }
 
-.alarm-count {
-    background: #d63939;
-    color: #fff;
-    font-size: 11px;
-    padding: 1px 8px;
-    border-radius: 10px;
-    font-weight: 600;
-}
-
-@keyframes alarmIn {
-    from { opacity: 0; transform: translateX(20px); }
-    to   { opacity: 1; transform: translateX(0); }
-}
-
-/* ========== 下拉框 ========== */
+/* ==================== 下拉选择 ==================== */
 .screen-select {
-    background: rgba(0,180,255,0.1);
-    border: 1px solid rgba(0,180,255,0.3);
-    color: #c0c8d8;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 12px;
+    padding: 2px var(--space-2);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-sans);
+    font-size: var(--font-sm);
+    color: var(--text-primary);
     outline: none;
 }
 
-.screen-select option {
-    background: #0a0e27;
-    color: #c0c8d8;
-}
+.screen-select:focus-visible { box-shadow: var(--focus-ring); }
 
-/* ========== 状态点 ========== */
-.status-dot {
-    display: inline-block;
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    margin-right: 4px;
-}
-
-.status-dot.online  { background: #2fb344; box-shadow: 0 0 6px #2fb344; }
-.status-dot.offline { background: #d63939; box-shadow: 0 0 6px #d63939; }
-.status-dot.warning { background: #f59f00; box-shadow: 0 0 6px #f59f00; }
-
-/* ========== 图标占位 ========== */
-.icon-db::before     { content: '📊'; }
-.icon-speed::before  { content: '⚡'; }
-.icon-check::before  { content: '⏱'; }
+/* ==================== KPI 卡片图标（纯文本字形，无外部图标字体依赖） ==================== */
+.icon-db::before      { content: '📊'; }
+.icon-speed::before   { content: '⚡'; }
+.icon-check::before   { content: '⏱'; }
 .icon-quality::before { content: '✅'; }
