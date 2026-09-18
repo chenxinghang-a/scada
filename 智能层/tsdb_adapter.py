@@ -230,8 +230,17 @@ class TSDBAdapter:
             if isinstance(timestamp_str, str):
                 try:
                     timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                except Exception:
-                    timestamp = datetime.now()
+                except Exception as e:
+                    # 解析失败**不能**用 now() 顶替 —— 那等于把这条历史数据的
+                    # 时间改写成「现在」。这些时间戳是要喂给 SPC 控制图和预测性
+                    # 维护的：几天前的采样被当成刚发生，趋势判断、控制图基线、
+                    # 故障预测会全部失真，而且**不会报任何错**。
+                    # 宁可丢掉这一条（并留下日志），也不污染模型的时间轴。
+                    logger.warning(
+                        "tsdb_adapter: 时间戳无法解析，跳过该条 "
+                        "(device=%s, register=%s, ts=%r): %s",
+                        device_id, register_name, timestamp_str, e)
+                    continue
             else:
                 timestamp = datetime.now()
 
