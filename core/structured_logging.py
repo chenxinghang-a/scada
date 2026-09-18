@@ -151,7 +151,66 @@ def setup_logging(
     return logger
 
 
+class _CompatLogger:
+    """把 loguru 包装成兼容 stdlib logging 调用风格的 logger。
+
+    背景：`get_logger()` 原先直接返回 `loguru.logger.bind(...)`，而 loguru
+    只认 `{}` 风格占位符。本项目 1400+ 处日志调用全是 stdlib 的 %-风格：
+
+        logger.warning("读取 %s 失败: %s", device, err)
+        # loguru 实际输出：读取 %s 失败: %s     ← 参数被静默丢弃（实测确认）
+
+    结果是**所有带参数的日志都只剩字面 %s/%d** —— 排障时看不到任何变量值：
+    设备 ID、异常内容、配置项名称全部丢失，日志里只有一句没有上下文的空话。
+
+    这里做一层薄包装：有 args 时先做 %-格式化，再交给 loguru。
+    """
+
+    __slots__ = ('_logger',)
+
+    def __init__(self, logger):
+        self._logger = logger
+
+    @staticmethod
+    def _fmt(msg, args):
+        if not args:
+            return msg
+        try:
+            return msg % args
+        except Exception:
+            # 格式串与参数不匹配时，别把整条日志弄丢 —— 原样附在后面
+            return str(msg) + ' ' + ' '.join(repr(a) for a in args)
+
+    # 注意 `opt(depth=1)`：让 loguru 记**调用方**的文件与行号，而不是本包装器。
+    # 不加的话所有日志都会指向 structured_logging.py，日志里的 `{module}:{line}`
+    # 定位价值就全没了（实测踩到过）。
+
+    def debug(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).debug(self._fmt(msg, args), **kwargs)
+
+    def info(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).info(self._fmt(msg, args), **kwargs)
+
+    def warning(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).warning(self._fmt(msg, args), **kwargs)
+
+    def error(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).error(self._fmt(msg, args), **kwargs)
+
+    def critical(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).critical(self._fmt(msg, args), **kwargs)
+
+    def exception(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).exception(self._fmt(msg, args), **kwargs)
+
+    def log(self, level, msg, *args, **kwargs):
+        self._logger.opt(depth=1).log(level, self._fmt(msg, args), **kwargs)
+
+    def bind(self, **kwargs):
+        return _CompatLogger(self._logger.bind(**kwargs))
+
+
 def get_logger(name: str, audit: bool = False):
-    """获取带模块标识的logger"""
+    """获取带模块标识的logger（兼容 stdlib 的 %-格式化调用）"""
     from loguru import logger
-    return logger.bind(module=name, audit=audit)
+    return _CompatLogger(logger.bind(module=name, audit=audit))

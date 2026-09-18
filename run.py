@@ -65,6 +65,26 @@ def main():
             simulation_mode = False
             config_path = paths.get_config_path('devices_real.yaml')
             db_path = paths.get_db_path('real')
+            # devices_real.yaml 长期是空壳（内容只有 `devices: []`），而真正的
+            # 真实设备清单（25 台，含真实 IP / 型号 / 认证）在 devices.yaml 里 ——
+            # config_validator 一直把 devices.yaml 当 critical 配置校验，
+            # 但运行时**没有任何模式读它**。
+            # 后果：真实模式起来后 0 台设备，而且不报任何错，界面一片空白，
+            # 操作员只会以为"设备都没上线"（实测确认）。
+            # 这里在 devices_real.yaml 为空时回退到 devices.yaml。
+            try:
+                import yaml as _yaml
+                with open(config_path, encoding='utf-8') as _f:
+                    _cfg = _yaml.safe_load(_f) or {}
+                if not _cfg.get('devices'):
+                    _fallback = paths.get_config_path('devices.yaml')
+                    if os.path.exists(_fallback):
+                        logger.warning(
+                            "devices_real.yaml 中没有设备（devices: []），"
+                            "已回退到 devices.yaml")
+                        config_path = _fallback
+            except Exception as _e:
+                logger.warning("检查 devices_real.yaml 失败，按原路径继续: %s", _e)
             logger.info("真实设备模式：使用真实设备配置")
         else:
             simulation_mode = True
@@ -179,7 +199,11 @@ def main():
             from 智能层.tsdb_adapter import TSDBAdapter, RealtimeDataBridge
             from timeseries.tdengine_client import TDengineClient
 
-            import os
+            # 这里原有一行 `import os`。它是**函数内**的 import，会让 Python 把
+            # 整个 main() 里的 `os` 都当成局部变量 —— 于是本行**之前**任何使用
+            # os 的代码都会抛
+            #   UnboundLocalError: cannot access local variable 'os'
+            # 模块级第 6 行已有 import os，这里删掉即可。
             td_host = os.environ.get('TDENGINE_HOST', 'localhost')
             td_port = int(os.environ.get('TDENGINE_PORT', 6041))
             tdengine = TDengineClient(td_host, td_port)
@@ -281,7 +305,8 @@ def main():
 
         # 初始化高可用管理器
         logger.info("初始化高可用管理器...")
-        import os
+        # 同前：删掉函数内的 `import os`（模块级已有），
+        # 否则它会遮蔽模块级的 os，让 main() 里所有 os 用法变成局部变量。
         from core.ha_manager import HAManager, HARole
         ha_manager = HAManager(
             node_id=os.environ.get('HA_NODE_ID', f'node-{os.getpid()}'),
