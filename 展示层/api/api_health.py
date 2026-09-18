@@ -6,7 +6,7 @@
 import logging
 from flask import Blueprint, jsonify, current_app
 
-from core.health_checker import HealthChecker
+from core.health_checker import HealthChecker, HealthStatus
 from core.module_registry import ModuleRegistry
 from core.service_response import success_response, error_response
 from 用户层.auth import jwt_required
@@ -38,13 +38,38 @@ def get_health_status():
         # 获取健康检查状态
         health_status = HealthChecker.get_status()
 
-        # 计算整体状态
+        # 计算整体状态。
+        #
+        # 注意：此前只统计 ModuleRegistry（模块注册表的 error / disabled /
+        # unavailable），而 **健康检查的结果完全不参与** —— 磁盘写满、内存打爆、
+        # 数据库探测失败时各 check 已经是 unhealthy，顶层 `global_status`
+        # 却照样回 `healthy`。
+        #
+        # 而本接口的注释写明「供负载均衡器探活」，顶层字段就是**结论本身**：
+        # 探活方只看这个字段，不会去翻 checks 明细。所以「检查项挂了但结论健康」
+        # 等于这套健康检查对外不存在。
+        #
+        # 现在两条线合并：模块注册表 OR 健康检查，取更严重的那个。
         unhealthy_modules = [
             name for name, info in modules_status.items()
             if info.get('status') in ('error', 'disabled', 'unavailable')
         ]
 
-        if unhealthy_modules:
+        checks = health_status.get('checks', {}) if isinstance(health_status, dict) else {}
+        unhealthy_checks = [
+            name for name, info in checks.items()
+            if isinstance(info, dict) and info.get('status') == HealthStatus.UNHEALTHY
+        ]
+        degraded_checks = [
+            name for name, info in checks.items()
+            if isinstance(info, dict) and info.get('status') == HealthStatus.DEGRADED
+        ]
+        checks_global = health_status.get('global_status') if isinstance(health_status, dict) else None
+
+        if (unhealthy_modules or unhealthy_checks
+                or checks_global == HealthStatus.UNHEALTHY):
+            global_status = 'unhealthy'
+        elif degraded_checks or checks_global == HealthStatus.DEGRADED:
             global_status = 'degraded'
         else:
             global_status = 'healthy'
@@ -53,7 +78,8 @@ def get_health_status():
             'global_status': global_status,
             'modules': modules_status,
             'checks': health_status,
-            'unhealthy_modules': unhealthy_modules
+            'unhealthy_modules': unhealthy_modules,
+            'unhealthy_checks': unhealthy_checks
         })
     except Exception as e:
         logger.error(f"获取健康状态失败: {e}", exc_info=True)
