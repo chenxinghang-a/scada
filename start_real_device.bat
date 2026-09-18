@@ -1,16 +1,4 @@
 @echo off
 cd /d "%~dp0"
-
-echo ========================================
-echo   Industrial SCADA System v2.1
-echo   Real Device Mode
-echo ========================================
-echo.
-echo   URL: http://localhost:5001
-echo   Account: admin / admin123
-echo   Config: config/devices_real.yaml
-echo   Press Ctrl+C to stop
-echo.
-
-python run.py --real
-pause
+rem 与 start_real.bat 内容完全重复，保留此文件仅为兼容旧快捷方式。
+call start_real.bat

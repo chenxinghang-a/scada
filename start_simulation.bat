@@ -1,13 +1,21 @@
 @echo off
-chcp 65001 >nul
-echo ========================================
-echo å·¥ä¸šæ•°æ®é‡‡é›†ä¸ç›‘æ§ç³»ç»Ÿ - æ¨¡æ‹Ÿæ¨¡å¼
-echo ========================================
-echo.
-echo å¯åŠ¨ä¸­ï¼ˆä½¿ç”¨ä»¿çœŸæ•°æ®ï¼‰...
-echo.
-
 cd /d "%~dp0"
-python run.py
+title SCADA Ä£ÄâÄ£Ê½
 
+set "PY="
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
+if not defined PY set "PY=python"
+
+echo ============================================================
+echo    ¹¤ÒµÊı¾İ²É¼¯Óë¼à¿ØÏµÍ³ ¡ª¡ª Ä£ÄâÄ£Ê½
+echo ============================================================
+echo.
+echo   µØÖ·: http://localhost:5000
+echo   ÕËºÅ: admin / admin123
+echo   ÅäÖÃ: ÅäÖÃ\devices_simulated.yaml
+echo   Í£Ö¹: ÔÚ±¾´°¿Ú°´ Ctrl+C
+echo.
+echo   ÌáÊ¾: ÈÕ³£Ê¹ÓÃÇëÖ±½ÓË«»÷ Æô¶¯.bat£¨²Ëµ¥Ê½Èë¿Ú£©
+echo.
+"%PY%" run.py
 pause
