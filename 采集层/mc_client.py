@@ -25,7 +25,7 @@ import threading
 import time
 from typing import Any
 
-from .base_client import ModbusClientInterface
+from .base_client import ModbusClientInterface, ByteOrderCapableDecoder
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ SUBCMD_RANDOM_READ = 0x0006   # 随机读取
 SUBCMD_RANDOM_WRITE = 0x0007  # 随机写入
 
 
-class MCClient:
+class MCClient(ByteOrderCapableDecoder):
     """
     三菱MC协议客户端
 
@@ -74,7 +74,13 @@ class MCClient:
         'network': 0,       # 网络号
         'pc': 0xFF,         # PC号 (0xFF=访问目标PLC)
         'timer': 10,        # 通信超时(秒)
+        'byte_order': 'ABCD',  # 32/64位值字节序（默认ABCD）
+        'word_area': 'D',   # 字设备区（保持寄存器映射，默认D）
+        'bit_area': 'M',    # 位设备区（线圈映射，默认M）
     }
+
+    暴露 Modbus 兼容面（read_holding_registers / read_coils / decode_*），
+    使采集层 ``_collect_modbus`` 无需区分协议即可统一采集。
     """
 
     def __init__(self, config: dict[str, Any]):
@@ -409,6 +415,48 @@ class MCClient:
     def write_single_bit(self, device: str, address: int, value: bool) -> bool:
         """写入单个位"""
         return self.write_bits(device, address, [value])
+
+    # ============================================================
+    # Modbus 兼容面（供采集层 _collect_modbus 统一调用）
+    # ============================================================
+    def read_holding_registers(self, address: int, count: int,
+                               slave_id: int | None = None) -> list[int] | None:
+        """读取保持寄存器（映射到字设备区，默认 D）。
+
+        返回与 ``ModbusClient.read_holding_registers`` 一致的格式：
+        ``list[int]``，失败返回 None。
+        """
+        if not self.connected:
+            return None
+        word_area = self.config.get('word_area', 'D')
+        return self.read_words(word_area, address, count)
+
+    def read_input_registers(self, address: int, count: int,
+                             slave_id: int | None = None) -> list[int] | None:
+        """读取输入寄存器（仍映射到字设备区）。"""
+        if not self.connected:
+            return None
+        word_area = self.config.get('word_area', 'D')
+        return self.read_words(word_area, address, count)
+
+    def read_coils(self, address: int, count: int,
+                   slave_id: int | None = None) -> list[bool] | None:
+        """读取线圈状态（映射到位设备区，默认 M）。"""
+        if not self.connected:
+            return None
+        bit_area = self.config.get('bit_area', 'M')
+        return self.read_bits(bit_area, address, count)
+
+    def read_discrete_inputs(self, address: int, count: int,
+                             slave_id: int | None = None) -> list[bool] | None:
+        """读取离散输入（映射到位设备区）。"""
+        if not self.connected:
+            return None
+        bit_area = self.config.get('bit_area', 'M')
+        return self.read_bits(bit_area, address, count)
+
+    # decode_float32/uint16/int16/uint32/int32/float64 来自 ByteOrderCapableDecoder，
+    # 已按 self.config['byte_order'] 正确解码四种字节序。
 
     def read_float32(self, device: str, address: int) -> float | None:
         """读取32位浮点数（占用2个字，大端字序）"""

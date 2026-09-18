@@ -22,6 +22,8 @@ import threading
 import time
 from typing import Any
 
+from .base_client import ByteOrderCapableDecoder
+
 logger = logging.getLogger(__name__)
 
 # 内存区域代码
@@ -57,7 +59,7 @@ WORD_AREAS = {'D', 'E0', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E7',
               'E8', 'E9', 'EA', 'EB', 'EC', 'ED', 'EE', 'EF'}
 
 
-class FINSClient:
+class FINSClient(ByteOrderCapableDecoder):
     """
     欧姆龙FINS/TCP客户端
 
@@ -69,7 +71,13 @@ class FINSClient:
         'host': '192.168.1.60',
         'port': 9600,
         'timeout': 10,
+        'byte_order': 'ABCD',  # 32/64位值字节序（默认ABCD）
+        'word_area': 'D',      # 字区域（保持寄存器映射，默认D）
+        'bit_area': 'CIO',     # 位区域（线圈映射，默认CIO）
     }
+
+    暴露 Modbus 兼容面（read_holding_registers / read_coils / decode_*），
+    使采集层 ``_collect_modbus`` 无需区分协议即可统一采集。
     """
 
     def __init__(self, config: dict[str, Any]):
@@ -341,6 +349,51 @@ class FINSClient:
     def write_single_word(self, area: str, address: int, value: int) -> bool:
         """写入单个字"""
         return self.write_words(area, address, [value & 0xFFFF])
+
+    # ============================================================
+    # Modbus 兼容面（供采集层 _collect_modbus 统一调用）
+    # ============================================================
+    def read_holding_registers(self, address: int, count: int,
+                               slave_id: int | None = None) -> list[int] | None:
+        """读取保持寄存器（映射到字区域，默认 D）。
+
+        返回与 ``ModbusClient.read_holding_registers`` 一致的格式：
+        ``list[int]``，失败返回 None。
+        """
+        if not self.connected:
+            return None
+        word_area = self.config.get('word_area', 'D')
+        return self.read_words(word_area, address, count)
+
+    def read_input_registers(self, address: int, count: int,
+                             slave_id: int | None = None) -> list[int] | None:
+        """读取输入寄存器（仍映射到字区域）。"""
+        if not self.connected:
+            return None
+        word_area = self.config.get('word_area', 'D')
+        return self.read_words(word_area, address, count)
+
+    def read_coils(self, address: int, count: int,
+                   slave_id: int | None = None) -> list[bool] | None:
+        """读取线圈状态（映射到位区域，默认 CIO）。
+
+        FINS 位读取需要起始位参数，兼容面固定从 bit=0 开始。
+        """
+        if not self.connected:
+            return None
+        bit_area = self.config.get('bit_area', 'CIO')
+        return self.read_bits(bit_area, address, 0, count)
+
+    def read_discrete_inputs(self, address: int, count: int,
+                             slave_id: int | None = None) -> list[bool] | None:
+        """读取离散输入（映射到位区域）。"""
+        if not self.connected:
+            return None
+        bit_area = self.config.get('bit_area', 'CIO')
+        return self.read_bits(bit_area, address, 0, count)
+
+    # decode_float32/uint16/int16/uint32/int32/float64 来自 ByteOrderCapableDecoder，
+    # 已按 self.config['byte_order'] 正确解码四种字节序。
 
     def read_float32(self, area: str, address: int) -> float | None:
         """读取32位浮点数（2个字）"""

@@ -46,7 +46,11 @@ BATCH_MAX = 1000                    # 批处理最大条数（100设备场景下
 BATCH_TIMEOUT_S = 0.5               # 批处理超时
 CIRCUIT_BREAKER_THRESHOLD = 5       # 断路器：连续失败阈值（5次即可判定设备不可达）
 CIRCUIT_BREAKER_COOLDOWN_S = 30     # 断路器：冷却时间（30秒后试探恢复，满足99.97%可用性）
-FALLBACK_SIMULATION_ENABLED = True  # 故障降级：采集失败时生成模拟数据兜底
+# 故障降级：采集失败时是否生成模拟数据兜底。
+# 默认关闭 —— 审计要求「失效数据必须标记为非 GOOD，假成功 = 0」，
+# 伪造的随机数据绝不能被当作正常数据入库。需显式开启（如离线演示场景）
+# 才允许生成兜底数据，且即便开启，其质量码也会被标为 BAD 并明确告警。
+FALLBACK_SIMULATION_ENABLED = False
 
 
 def _has_keyword(register_name: str, keywords: tuple) -> bool:
@@ -644,19 +648,24 @@ class DataCollector:
             elapsed = time.time() - cb['opened_at']
 
             if elapsed < CIRCUIT_BREAKER_COOLDOWN_S:
-                # 冷却期内：生成模拟数据兜底
+                # 冷却期内：生成模拟数据兜底（默认关闭，见 FALLBACK_SIMULATION_ENABLED）
                 if FALLBACK_SIMULATION_ENABLED:
                     try:
                         fallback = self._generate_fallback_data(device_id, device_config)
+                        # 审计合规：兜底数据是「假数据」，质量码必须为 BAD，
+                        # 绝不能被下游当作 GOOD 正常数据使用。
+                        for item in fallback:
+                            item['quality'] = 'BAD'
                         accepted = 0
                         for item in fallback:
                             # 必须非阻塞：这里用阻塞式 put() 会让整条采集链
                             # 永久挂起（队列满时），该设备从此静默停止采集
                             if self._enqueue_drop_oldest(item):
                                 accepted += 1
-                        logger.debug(
-                            f"设备 {device_id} 故障降级: 生成 {len(fallback)} 条模拟数据"
-                            f"（入队 {accepted} 条）")
+                        logger.warning(
+                            f"设备 {device_id} 通信/解析失败，断路器冷却期内生成 {len(fallback)} 条"
+                            f" BAD 质量兜底数据（非真实采集，仅供界面不空白；"
+                            f"真实采集成功率不受影响，失败已计入统计）。入队 {accepted} 条")
                     except Exception as fe:
                         logger.debug(f"设备 {device_id} 降级数据生成失败: {fe}")
                 remaining = CIRCUIT_BREAKER_COOLDOWN_S - elapsed
