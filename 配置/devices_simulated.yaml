@@ -1,3 +1,9 @@
+# =============================================================================
+# 仿真设备清单
+# - 凭据字段一律使用 ${VAR} 环境变量占位，禁止明文入库（变量见 .env.example）。
+#   加载方需支持 ${VAR} 展开（core/config_manager.py 的 load_yaml 已支持）。
+# - 192.168.1.x 为内网示例地址（RFC1918），仅表达拓扑结构，由部署注入真实值。
+# =============================================================================
 devices:
 - collection_interval: 10
   description: 旋转设备振动监测 — 电机/泵/风机
@@ -6,7 +12,7 @@ devices:
   host: 192.168.1.200
   id: vibration_sensor_01
   name: MQTT振动监测节点
-  password: scada123
+  password: ${MQTT_SCADA_PASSWORD}
   port: 1883
   protocol: mqtt
   topics:
@@ -33,7 +39,7 @@ devices:
   username: scada
   vendor: 自研物联网节点
   zone: 监控区
-- auth_password: admin123
+- auth_password: ${DEVICE_REST_ADMIN_PASSWORD}
   auth_type: basic
   auth_username: admin
   base_url: http://192.168.1.52
@@ -68,7 +74,7 @@ devices:
   protocol: rest
   vendor: 西门子
   zone: 信息中心
-- auth_token: mes-api-token-xxx
+- auth_token: ${MES_API_TOKEN}
   auth_type: bearer
   base_url: http://192.168.1.250:8080
   collection_interval: 30
@@ -1877,7 +1883,7 @@ devices:
   host: 192.168.1.200
   id: water_quality_01
   name: MQTT水质监测终端
-  password: scada123
+  password: ${MQTT_SCADA_PASSWORD}
   port: 1883
   protocol: mqtt
   topics:

@@ -1,3 +1,12 @@
+# =============================================================================
+# 系统级配置（生产部署注意）
+# - 本文件中的 ${VAR} 为环境变量占位符。core/config_manager.py 的 load_yaml
+#   已支持 ${VAR} / ${VAR:-default} 展开；但仓库内仍有部分加载方直接使用
+#   yaml.safe_load（不经 ConfigManager），这些路径不会展开占位符。
+#   部署时必须通过环境变量注入真实值，且加载方需统一走 ConfigManager 或
+#   自行做等价展开，否则请直接在部署侧渲染本文件（禁止把真实密钥提交进仓库）。
+# - 所有变量清单见 .env.example。
+# =============================================================================
 alarm:
   check_interval: 10
   confirm_timeout: 300
@@ -65,10 +74,14 @@ mqtt:
 web:
   cors:
     enabled: true
+    # CORS 白名单：仅允许系统自身前端源。生产部署如需暴露给其他源，
+    # 请按实际域名收敛此列表，禁止使用 '*' 通配。
     origins:
     - 'http://localhost:5000'
     - 'http://127.0.0.1:5000'
-  debug: true
+  # 调试模式：生产环境必须为 false（开启会暴露堆栈/交互式调试器）
+  debug: false
   host: 127.0.0.1
   port: 5000
-  secret_key: industrial-scada-secret-key
+  # Web 会话密钥：禁止明文写入仓库，由环境变量 SCADA_SECRET_KEY 注入
+  secret_key: ${SCADA_SECRET_KEY}

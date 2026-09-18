@@ -1,6 +1,9 @@
 # ============================================================
 # 模拟设备预设配置
 # 用户可通过前端一键添加预设设备，也可自定义添加新设备
+# - 凭据字段一律使用 ${VAR} 环境变量占位，禁止明文入库（变量见 .env.example）。
+#   加载方需支持 ${VAR} 展开（core/config_manager.py 的 load_yaml 已支持）。
+# - 192.168.1.x 为内网示例地址（RFC1918），仅表达拓扑结构，由部署注入真实值。
 # ============================================================
 
 presets:
@@ -264,7 +267,7 @@ presets:
       host: 192.168.1.200
       port: 1883
       username: scada
-      password: scada123
+      password: ${MQTT_SCADA_PASSWORD}
       collection_interval: 10
       vendor: 自研物联网节点
       device_model: IoT-VIB-100 + LoRa GW
@@ -292,7 +295,7 @@ presets:
       host: 192.168.1.200
       port: 1883
       username: scada
-      password: scada123
+      password: ${MQTT_SCADA_PASSWORD}
       collection_interval: 15
       vendor: 自研物联网节点
       device_model: WQ-Multi-01
@@ -322,7 +325,7 @@ presets:
       base_url: http://192.168.1.52
       auth_type: basic
       auth_username: admin
-      auth_password: admin123
+      auth_password: ${DEVICE_REST_ADMIN_PASSWORD}
       poll_interval: 5
       collection_interval: 5
       vendor: 西门子
@@ -350,7 +353,7 @@ presets:
       protocol: rest
       base_url: http://192.168.1.250:8080
       auth_type: bearer
-      auth_token: mes-api-token-xxx
+      auth_token: ${MES_API_TOKEN}
       poll_interval: 30
       collection_interval: 30
       vendor: 自研MES系统
@@ -637,7 +640,7 @@ presets:
       host: 192.168.1.200
       port: 1883
       username: scada
-      password: scada123
+      password: ${MQTT_SCADA_PASSWORD}
       collection_interval: 30
       vendor: 自研物联网节点
       device_model: ENV-Multi-01
@@ -666,7 +669,7 @@ presets:
       host: 192.168.1.200
       port: 1883
       username: scada
-      password: scada123
+      password: ${MQTT_SCADA_PASSWORD}
       collection_interval: 60
       vendor: 自研物联网网关
       device_model: EM-3P-100
@@ -695,7 +698,7 @@ presets:
       host: 192.168.1.200
       port: 1883
       username: scada
-      password: scada123
+      password: ${MQTT_SCADA_PASSWORD}
       collection_interval: 60
       vendor: 自研LoRa网关
       device_model: LGW-8CH-01
@@ -723,7 +726,7 @@ presets:
       protocol: rest
       base_url: http://192.168.1.251:8080
       auth_type: bearer
-      auth_token: erp-api-token-xxx
+      auth_token: ${ERP_API_TOKEN}
       poll_interval: 60
       collection_interval: 60
       vendor: SAP
@@ -751,7 +754,7 @@ presets:
       base_url: http://192.168.1.252:9090
       auth_type: basic
       auth_username: wms_user
-      auth_password: wms_pass
+      auth_password: ${WMS_API_PASSWORD}
       poll_interval: 30
       collection_interval: 30
       vendor: 自研WMS

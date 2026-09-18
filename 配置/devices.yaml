@@ -1,5 +1,13 @@
+# =============================================================================
+# 设备清单（示例结构，含脱敏占位）
+# - 所有凭据字段一律使用 ${VAR} 环境变量占位，禁止明文密码/Token 入库。
+#   变量清单见 .env.example；加载方需支持 ${VAR} 展开
+#   （core/config_manager.py 的 load_yaml 已支持）。
+# - 192.168.1.x 为现场内网示例地址（RFC1918），仅表达拓扑结构；
+#   真实地址由部署时注入/以 devices_real.yaml 为准。
+# =============================================================================
 devices:
-- auth_password: admin123
+- auth_password: ${DEVICE_REST_ADMIN_PASSWORD}
   auth_type: basic
   auth_username: admin
   base_url: http://192.168.1.52
@@ -503,7 +511,7 @@ devices:
   host: 192.168.1.200
   id: vibration_sensor_01
   name: MQTT振动监测节点
-  password: scada123
+  password: ${MQTT_SCADA_PASSWORD}
   port: 1883
   protocol: mqtt
   topics:
@@ -536,7 +544,7 @@ devices:
   host: 192.168.1.200
   id: water_quality_01
   name: MQTT水质监测终端
-  password: scada123
+  password: ${MQTT_SCADA_PASSWORD}
   port: 1883
   protocol: mqtt
   topics:
@@ -567,7 +575,7 @@ devices:
     unit: °C
   username: scada
   vendor: 自研物联网节点
-- auth_token: mes-api-token-xxx
+- auth_token: ${MES_API_TOKEN}
   auth_type: bearer
   base_url: http://192.168.1.250:8080
   collection_interval: 30
@@ -605,7 +613,7 @@ devices:
   poll_interval: 30
   protocol: rest
   vendor: 自研MES系统
-- auth_password: ems123
+- auth_password: ${EMS_API_PASSWORD}
   auth_type: basic
   auth_username: scada
   base_url: http://192.168.1.251:8080

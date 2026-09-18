@@ -1,1 +1,75 @@
-devices: []
+# =============================================================================
+# 真实设备清单（生产/现场 SAT 用）
+#
+# 用途：真实模式（real）下接入现场设备的唯一清单。
+#
+# 审计与填写规则：
+# 1. 本文件在 SAT（现场验收测试）前由现场负责人批准填写，填写人与批准人
+#    需在变更记录中留痕。
+# 2. 禁止在此放空清单回退 —— 真实模式下若本文件为空，视为配置错误而非
+#    "无设备"，必须现场签字确认后方可留空。
+# 3. 禁止写入任何明文凭据：所有密码/Token 一律使用 ${VAR} 环境变量引用，
+#    变量在部署环境（.env / 密钥管理系统）中注入，清单见 .env.example。
+#    加载方需支持 ${VAR} 展开（core/config_manager.py 的 load_yaml 已支持）。
+# 4. host 等敏感网络信息同样建议使用 ${VAR} 引用，避免仓库暴露现场拓扑。
+#
+# 字段说明（每台设备）：
+#   id                设备唯一标识（英文/数字/下划线，全系统唯一）
+#   name              设备显示名称
+#   protocol          协议类型：modbus_tcp / modbus_rtu / opcua / mqtt / rest / iec104 / s7
+#   host              设备地址（建议 ${PLC_HOST_XX} 引用）
+#   port              端口（Modbus TCP 502 / OPC UA 4840 / MQTT 1883(8883 TLS) / IEC104 2404）
+#   slave_id          站号/单元号（Modbus 必填，1-247）
+#   collection_interval  采集间隔（秒）
+#   enabled           是否启用（true/false）
+#   description       用途说明
+#   zone              所属区域（用于报警分区，可选）
+#   vendor / device_model  厂商与型号（可选）
+#   username / password    凭据（必须 ${VAR} 引用，按协议需要）
+#   auth_type / auth_token / auth_username / auth_password  REST 类设备认证
+#   registers         点位表（按协议结构：address/name/data_type/unit/scale 等）
+# =============================================================================
+
+devices:
+  # ---- 脱敏示例 1：Modbus TCP PLC ----
+  - id: plc_line1_01
+    name: 1号产线主控PLC
+    protocol: modbus_tcp
+    host: ${PLC_HOST_01}        # 真实 IP 由部署注入
+    port: 502
+    slave_id: 1
+    collection_interval: 5
+    enabled: true
+    description: 产线主控，采集运行状态与工艺参数
+    zone: 车间A
+    vendor: 示例厂商
+    device_model: 示例型号
+    # 无凭据（Modbus TCP 通常无认证；如设备启用认证，使用 ${PLC_01_PASSWORD} 引用）
+    registers:
+      - address: 0
+        name: run_status
+        data_type: uint16
+        description: 运行状态字
+      - address: 1
+        name: line_speed
+        data_type: float32
+        unit: m/min
+        scale: 0.1
+        description: 产线速度
+
+  # ---- 脱敏示例 2：MQTT 监测节点（带凭据引用） ----
+  - id: mqtt_env_01
+    name: 环境监测MQTT节点
+    protocol: mqtt
+    host: ${MQTT_BROKER}        # Broker 地址由部署注入
+    port: 1883                  # 生产建议 8883 + TLS
+    username: ${MQTT_SCADA_USER}
+    password: ${MQTT_SCADA_PASSWORD}
+    collection_interval: 10
+    enabled: true
+    description: 温湿度/环境量监测
+    zone: 仓库
+    topics:
+      - env/warehouse/temperature
+      - env/warehouse/humidity
+    registers: []

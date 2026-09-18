@@ -4,6 +4,8 @@
 """
 
 import logging
+import os
+import re
 import threading
 import yaml
 from pathlib import Path
@@ -12,6 +14,41 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 _MISSING = object()  # 区分"键不存在"和"键存在但值为None"
+
+# 匹配 ${VAR} 或 ${VAR:-default} 形式的环境变量引用
+_ENV_VAR_PATTERN = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}')
+
+
+def expand_env_vars(value: Any, _source: str = '') -> Any:
+    """
+    递归展开配置值中的 ${VAR} / ${VAR:-default} 环境变量引用。
+
+    - 环境变量已设置：替换为其值。
+    - 未设置且写了 :-default：替换为 default。
+    - 未设置且无默认值：保留原始占位符并打印警告（避免静默变成空串
+      造成"看着能跑"的假配置，部署方必须能在日志中发现缺失）。
+    """
+    if isinstance(value, str):
+        def _repl(match: 're.Match') -> str:
+            var_name = match.group(1)
+            default = match.group(2)
+            env_value = os.environ.get(var_name)
+            if env_value is not None:
+                return env_value
+            if default is not None:
+                return default
+            logger.warning(
+                "配置项引用的环境变量 %s 未设置（%s），保留占位符 ${%s}。"
+                "请在 .env 或部署环境中设置该变量。",
+                var_name, _source or 'YAML配置', var_name,
+            )
+            return match.group(0)
+        return _ENV_VAR_PATTERN.sub(_repl, value)
+    if isinstance(value, dict):
+        return {k: expand_env_vars(v, _source) for k, v in value.items()}
+    if isinstance(value, list):
+        return [expand_env_vars(item, _source) for item in value]
+    return value
 
 
 class ConfigManager:
@@ -56,6 +93,9 @@ class ConfigManager:
 
             with open(path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f) or {}
+
+            # 展开 ${VAR} / ${VAR:-default} 环境变量引用
+            config = expand_env_vars(config, _source=config_path)
 
             # 缓存配置
             with cls._lock:
