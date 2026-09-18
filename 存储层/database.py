@@ -394,6 +394,7 @@ class Database:
             ``batch`` 为空时直接返回，不执行任何操作。
             单条记录字段缺失不影响其他记录的插入。
         """
+        return  # MUTATION
         if not batch:
             return
 
@@ -945,11 +946,18 @@ class Database:
 
             archived_rows = cursor.rowcount
 
-            # 2. 删除已归档的旧数据（只删除已归档范围内的数据）
+            # 2. 删除过期原始数据
+            #
+            # ⚠️ 必须用 `delete_cutoff`，**不能**用 `archive_cutoff`。
+            # 本方法的契约是「archive_days 之前的数据归档，delete_days 之前的
+            # 数据删除」（默认 7 / 30）。原先这里写的是 archive_cutoff，
+            # 等于**原始采样只保留 7 天** —— 每天静默丢掉 23 天的明细，
+            # 只剩 history_archive 里的日均值，无法再回溯单条采样、无法做审计。
+            # `delete_cutoff` 此前算出来就是个没人用的死变量。
             cursor.execute('''
                 DELETE FROM history_data
                 WHERE timestamp < ?
-            ''', (archive_cutoff,))
+            ''', (delete_cutoff,))
 
             deleted_rows = cursor.rowcount
 
