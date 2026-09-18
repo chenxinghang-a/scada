@@ -312,6 +312,12 @@ class DataCollector:
             'queue_size': 0,
             # 队列满时被丢弃的数据项数（含"丢最旧"与被拒两种）
             'dropped_items': 0,
+            # 写库失败后的重试相关计数。
+            # 这几个键让「数据有没有丢」在监控侧可查 ——
+            # 光靠日志不足以做告警，而 `dropped_db_retry` 是**真实的数据丢失量**。
+            'requeued_db_retry': 0,      # 写库失败后成功重新入队、等待重试的条数
+            'dropped_db_retry': 0,       # 重试后仍失败、被丢弃的条数（= 数据丢失）
+            'requeue_full_db_retry': 0,  # 队列满导致没能重新入队的条数
             'protocols_active': {}
         }
 
@@ -404,15 +410,34 @@ class DataCollector:
                 remaining.append(self.data_queue.get_nowait())
             except queue.Empty:
                 break
+
+        # 只有**确认入库成功**才允许清除磁盘持久化文件。
+        #
+        # 原先这里无条件 `clear_persistence()`：一旦上面的写库失败
+        # （DB 被锁 / 磁盘满 / 进程正在退出），内存里的 remaining 已经从队列取走
+        # （丢了），磁盘上的持久化副本又被删掉 —— **两处同时消失，数据彻底丢**。
+        # 而 `DiskBackedQueue` 存在的意义正是防这种丢数据：
+        # `put()` 是「先落盘再入队」，所以只要保留持久化文件，
+        # 下次启动 `_recover_from_disk()` 就能把这批数据捞回来。
+        flushed = True
         if remaining:
             try:
                 self.database.insert_data_batch(remaining)
                 logger.info(f"关闭前写入 {len(remaining)} 条剩余数据")
             except Exception as e:
-                logger.error(f"关闭前写入剩余数据失败: {e}")
+                flushed = False
+                logger.error(
+                    f"关闭前写入剩余数据失败: {e} —— 保留磁盘持久化文件，"
+                    f"下次启动将恢复这 {len(remaining)} 条数据（不丢弃）"
+                )
 
-        # 正常关闭，清除磁盘持久化文件
-        self.data_queue.clear_persistence()
+        if flushed:
+            self.data_queue.clear_persistence()
+        else:
+            logger.warning(
+                "存在未能入库的数据，已保留持久化文件供下次启动恢复: "
+                f"{getattr(self.data_queue, '_persist_file', '(未知路径)')}"
+            )
 
         self.device_manager.disconnect_all()
         logger.info("数据采集器已停止")
@@ -1126,26 +1151,51 @@ class DataCollector:
                             self._last_times[key] = time.time()
 
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
+                db_write_ok = True
                 try:
                     self.database.insert_data_batch(batch)
                 except Exception as e:
+                    db_write_ok = False
                     logger.warning(f"批量写入数据库失败 ({len(batch)} 条): {e}")
                     # 失败数据重新入队（标记 _db_retry 防止无限重试）
                     retried = 0
+                    dropped = 0
+                    requeue_full = 0
                     for item in batch:
                         if item.get('_db_retry'):
-                            continue  # 已重试过一次，丢弃
+                            # 已重试过一次仍失败 → 丢弃。
+                            # **必须计数并报出来** —— 这是真正的数据丢失点，
+                            # 原实现直接 continue，运维完全看不到丢了什么、丢了多少。
+                            dropped += 1
+                            continue
                         item['_db_retry'] = True
                         try:
                             if not self.data_queue.full():
                                 self.data_queue.put_nowait(item)
                                 retried += 1
                             else:
+                                requeue_full += 1
                                 break
                         except queue.Full:
+                            requeue_full += 1
                             break
                     if retried:
+                        self._inc_stat('requeued_db_retry', retried)
                         logger.info(f"已重新入队 {retried} 条数据等待重试")
+                    if dropped:
+                        # 计数落进 stats，让「丢了多少」在 /api/metrics 之类
+                        # 的地方可查 —— 光有日志不足以做监控告警。
+                        self._inc_stat('dropped_db_retry', dropped)
+                        logger.error(
+                            f"丢弃 {dropped} 条重试后仍写库失败的数据"
+                            f"（device/reg 见上一条告警；这是数据丢失，请检查数据库状态）"
+                        )
+                    if requeue_full:
+                        self._inc_stat('requeue_full_db_retry', requeue_full)
+                        logger.error(
+                            f"队列已满，{requeue_full} 条数据未能重新入队 —— "
+                            f"已保留磁盘持久化文件，下次启动可恢复"
+                        )
 
                 # === 报警检查（每条都要检查） ===
                 if self.alarm_manager:
@@ -1187,7 +1237,11 @@ class DataCollector:
                         logger.error(f"智能分发异常: {e}")
 
                 # === 所有处理完成后，清除持久化文件防崩溃恢复重复 ===
-                if hasattr(self.data_queue, 'clear_persistence'):
+                #
+                # 但**只有这批真的写库成功**才能清：写失败时数据刚被重新入队，
+                # 此刻它们**只存在于内存队列**里，磁盘上的副本是唯一的崩溃保护。
+                # 无条件清除 = 把它们的保护也一起抹掉（崩溃就真丢了）。
+                if db_write_ok and hasattr(self.data_queue, 'clear_persistence'):
                     self.data_queue.clear_persistence()
 
                 with self._stats_lock:
