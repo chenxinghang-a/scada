@@ -8,6 +8,14 @@ __pycache__/
 dist/
 build/
 
+# 构建产物与备份目录
+# 本机规避"批量删除保护"时用「改名代替删除」产生（mv dist dist.prev-xxx），
+# 以及 PyInstaller 的历史产物目录。都不该进版本库。
+# 通配形如 build.prev / dist.prev-local / scada-backend.prev-0918 等。
+build.prev*/
+dist.prev*/
+*.prev*/
+
 # Virtual environments
 .venv/
 venv/
