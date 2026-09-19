@@ -1,0 +1,95 @@
+{
+  "version": "1.3.1031",
+  "commit_sha": "41102048c7141f2f98c76d5c88e5c4bb9d108a35",
+  "build_time": "2026-09-19T10:15:13.248365+00:00",
+  "environment": {
+    "os": "Windows 11 (AMD64)",
+    "python_version": "3.13.14",
+    "node_version": "v22.22.2"
+  },
+  "command": "tools/collect_evidence.py --version 1.3.1031",
+  "started_at": "2026-09-19T10:15:13.229019+00:00",
+  "finished_at": "2026-09-19T10:15:13.400044+00:00",
+  "config_summary": {
+    "version_source": "VERSION 文件（core/version.py）",
+    "tests_executed": false,
+    "output_dir": "evidence\\1.3.1031"
+  },
+  "artifacts": [
+    {
+      "name": "backend_windows_onedir",
+      "path": "dist\\scada-backend\\scada-backend.exe",
+      "sha256": "e6cb80a1288b652ab70538e450ff9347743088e826d19072968d7490c9f472d7",
+      "size_bytes": 18871396,
+      "companion_dir": {
+        "path": "dist\\scada-backend\\_internal",
+        "files": 2052,
+        "bytes": 100718067
+      }
+    }
+  ],
+  "result": "partial",
+  "failures": [],
+  "evidence_status": {
+    "coverage.xml": {
+      "status": "copied",
+      "reason": "从仓库根目录 coverage.xml 复制"
+    },
+    "pytest-report.xml": {
+      "status": "skipped",
+      "reason": "未指定 --run-tests，跳过 pytest 执行（避免慢）；占位模板已生成"
+    },
+    "frontend-test-report.xml": {
+      "status": "skipped",
+      "reason": "未找到前端 scada-app 测试报告（候选: scada-app\\test-results\\junit.xml, scada-app\\reports\\junit.xml, scada-app\\coverage\\junit.xml, scada-app\\frontend-test-report.xml）；占位模板已生成"
+    },
+    "sbom.spdx.json": {
+      "status": "generated",
+      "reason": "简化 SBOM，19 个依赖，来源 requirements.txt"
+    },
+    "scope-matrix.md": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    },
+    "requirements-traceability.csv": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    },
+    "risk-register.md": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    },
+    "api-contract-report.json": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    },
+    "protocol-e2e-report.md": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    },
+    "soak-metrics.csv": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    },
+    "security-scan.json": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    },
+    "install-smoke-report.md": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    },
+    "backup-restore-report.md": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    },
+    "sat-record.md": {
+      "status": "template",
+      "reason": "已存在，保留原内容（未覆盖）"
+    }
+  },
+  "witness": {
+    "name": "<待人工见证人签字>",
+    "date": "<YYYY-MM-DD>"
+  }
+}

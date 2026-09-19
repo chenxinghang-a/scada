@@ -302,17 +302,93 @@ class Collector:
             self._copy_template(name)
 
     # ------------------------------------------------------------- manifest
+    # 备份目录（上一世代产物）的判定：路径任一段含 ".prev" 即视为历史遗留。
+    # 为规避批量删除保护，旧构建常被改名保留，如 dist/scada-backend.prev-0918/。
+    _BACKUP_MARKER = ".prev"
+
+    @staticmethod
+    def _is_backup_entry(path: Path, dist: Path) -> bool:
+        """判断 dist 下的候选产物是否属于上一世代备份目录。"""
+        try:
+            parts = path.relative_to(dist).parts
+        except ValueError:
+            return False
+        return any(Collector._BACKUP_MARKER in part for part in parts)
+
+    @classmethod
+    def _iter_candidates(cls, dist: Path) -> list[Path]:
+        """列出 ``dist/`` 下所有**可能是主产物**的路径（未过滤）。
+
+        这里刻意采用"先扫描、后过滤"的结构，而不是直接写死
+        ``dist/scada-backend/scada-backend.exe``：
+
+        写死的话，``dist/scada-backend.prev-0918/`` 这类备份目录根本进不了
+        候选集，后面的排除逻辑就成了永远不执行的死代码 —— 测试断言"清单里
+        没有 .prev 路径"也会因为候选集为空而**永远通过**（实测踩到该假绿）。
+
+        扫描后再由调用方过滤，才能让排除逻辑处于必经路径上，被真实检验。
+        """
+        if not dist.is_dir():
+            return []
+        cands: list[Path] = []
+        # 顶层 .exe（onefile 布局）
+        cands.extend(p for p in dist.glob("*.exe") if p.is_file())
+        # 一级子目录里的 .exe（onedir 布局，含备份目录，交由过滤处理）
+        for sub in dist.iterdir():
+            if sub.is_dir():
+                cands.extend(p for p in sub.glob("*.exe") if p.is_file())
+        return sorted(cands)
+
+    def _collect_artifacts(self) -> list[dict]:
+        """收集本次交付的产物哈希。
+
+        **只收 dist/，不收 build/**：``build/`` 是 PyInstaller 的中间工作目录，
+        里面的 ``scada-backend.exe`` 与 ``dist/`` 下的同名文件字节一致（同一个
+        文件被复制过去），把它列进交付清单会让人误以为有两个交付物。
+
+        **排除 ``*.prev*`` 备份目录**：它们属于上一世代，列进清单会污染交付物
+        集合，也让 ``stale`` 判断失去意义。
+
+        **只记主产物，不把 ``_internal/`` 内文件当顶层条目**：onedir 的
+        ``_internal/`` 有上千个文件，逐个记录既冗余又无意义；改用
+        ``companion_dir`` 目录级指纹表达，使得"只改 _internal 未改 exe"
+        这类变更仍可被察觉。
+        """
+        artifacts: list[dict] = []
+        dist = _ROOT / "dist"
+        if not dist.is_dir():
+            return artifacts
+
+        for p in self._iter_candidates(dist):
+            if self._is_backup_entry(p, dist):
+                continue
+            # 只认主产物：onedir 是 dist/scada-backend/scada-backend.exe
+            # （子目录内），onefile 是 dist/*.exe（顶层）。
+            # 子目录里名字不匹配的 exe（如 launcher.exe）不视为主产物。
+            if p.parent != dist and p.stem not in ("scada-backend", "SCADA"):
+                continue
+
+            is_onedir = p.parent == dist / "scada-backend"
+            entry = {
+                "name": "backend_windows_onedir" if is_onedir else "backend_windows_onefile",
+                "path": str(p.relative_to(_ROOT)),
+                "sha256": self._sha256(p),
+                "size_bytes": p.stat().st_size,
+            }
+            companion = p.parent / "_internal"
+            if companion.is_dir():
+                files = [f for f in companion.rglob("*") if f.is_file()]
+                total = sum(f.stat().st_size for f in files)
+                entry["companion_dir"] = {
+                    "path": str(companion.relative_to(_ROOT)),
+                    "files": len(files),
+                    "bytes": total,
+                }
+            artifacts.append(entry)
+        return artifacts
+
     def write_manifest(self) -> None:
-        artifacts = []
-        for d in (_ROOT / "dist", _ROOT / "build"):
-            if d.is_dir():
-                for p in sorted(d.rglob("*")):
-                    if p.is_file() and p.suffix.lower() in {".exe", ".zip", ".msi", ".tar", ".gz", ".whl"}:
-                        artifacts.append({
-                            "path": str(p.relative_to(_ROOT)),
-                            "sha256": self._sha256(p),
-                            "size_bytes": p.stat().st_size,
-                        })
+        artifacts = self._collect_artifacts()
         manifest = {
             "version": self.version,
             "commit_sha": self.build_info.get("commit_sha", "unknown"),
