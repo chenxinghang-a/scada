@@ -172,6 +172,36 @@ class TestDirectoryDigest:
         assert first["files"] == 2
         assert first["bytes"] == 6
 
+    def test_digest_is_order_independent(self, manifest_module, tmp_path):
+        """内容相同、创建顺序不同的两个目录，指纹必须一致。
+
+        为什么必须这么测：只在同一个目录上算两次是**测不出顺序问题的** ——
+        `rglob` 在一次进程内对同一棵树通常返回稳定顺序，所以去掉排序也照样
+        通过（实测：变异掉 `sorted()` 时这条断言仍是绿的，属假绿）。
+        真正的风险在跨文件系统 / 跨平台（NTFS 与 ext4 的目录项顺序不同），
+        故这里构造两棵内容相同、写入顺序相反的树来暴露它。
+        """
+        names = ["z.pyc", "m.pyc", "a.pyc", "k.pyc", "b.pyc"]
+
+        d1 = tmp_path / "forward"
+        d1.mkdir()
+        for n in names:
+            (d1 / n).write_bytes(b"same")
+
+        d2 = tmp_path / "reverse"
+        d2.mkdir()
+        for n in reversed(names):
+            (d2 / n).write_bytes(b"same")
+
+        g1 = manifest_module._dir_digest(d1)
+        g2 = manifest_module._dir_digest(d2)
+
+        assert g1["files"] == g2["files"] == len(names)
+        assert g1["sha256"] == g2["sha256"], (
+            "内容相同的目录因创建顺序不同得出不同指纹 —— "
+            "说明遍历顺序泄漏进了摘要，跨文件系统会误报产物变化"
+        )
+
     def test_digest_detects_content_change(self, manifest_module, tmp_path):
         d = tmp_path / "bundle"
         d.mkdir()
