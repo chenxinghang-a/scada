@@ -20,10 +20,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # 仓库根（本脚本位于 tools/，上两级为后端根）。
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -74,13 +77,63 @@ def _lock_digest(rel_path: Path) -> str | None:
     return _sha256_of_file(rel_path)
 
 
+def _git_head_commit_time() -> float | None:
+    """返回 HEAD 提交的 Unix 时间戳；非 git 仓库/命令失败返回 None。
+
+    用途：判断构建产物是否早于当前源码——否则清单会记录一个
+    "属于本版本、实际来自旧世代" 的产物，属于虚假证据。
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "log", "-1", "--format=%ct"],
+            cwd=str(BACKEND_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return float(proc.stdout.strip())
+    except Exception as e:  # noqa: BLE001 - 需覆盖所有异常以保证清单仍能生成
+        logger.debug("读取 HEAD 提交时间失败: %s", e, exc_info=True)
+    return None
+
+
+def _stale_note(path: Path, head_ts: float | None) -> str | None:
+    """产物是否早于 HEAD 提交。
+
+    返回 None 表示新鲜（或无法判断）；否则返回可读的陈旧说明。
+    **宁可不判断也不误报**：取不到 HEAD 时间时一律视为无法判断。
+    """
+    if head_ts is None:
+        return None
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    if mtime < head_ts:
+        import datetime as _dt
+
+        return (
+            "STALE: artifact mtime "
+            f"({_dt.datetime.fromtimestamp(mtime).isoformat()}) "
+            "predates HEAD commit "
+            f"({_dt.datetime.fromtimestamp(head_ts).isoformat()}); "
+            "must rebuild from current source before release"
+        )
+    return None
+
+
 def _collect_artifacts(version: str) -> list[dict]:
     """收集交付产物。
 
     列出"期望存在"的产物路径；存在则给 sha256，缺失则 sha256=null 并注明原因。
     产物缺失是构建前/构建中的正常状态，不应导致脚本失败。
+
+    额外做**陈旧性校验**：产物 mtime 早于 HEAD 提交时间时附加 ``stale`` 说明。
+    否则清单会把旧世代的包记录成当前版本的产物——这是最危险的
+    "证据撒谎"：字段齐全、sha256 真实，但内容与源码不对应。
     """
-    # (展示名, 相对后端根或前端根的路径, 归属根)
+    # (展示名, 相对后端根或前端根的路径, 归属根, 期望文件名的版本无关前缀)
     candidates = [
         ("backend_windows_exe", BACKEND_ROOT / "dist" / "SCADA.exe", "backend"),
         (
@@ -95,6 +148,7 @@ def _collect_artifacts(version: str) -> list[dict]:
         ),
     ]
 
+    head_ts = _git_head_commit_time()
     artifacts: list[dict] = []
     for name, path, owner in candidates:
         digest = _sha256_of_file(path)
@@ -108,15 +162,30 @@ def _collect_artifacts(version: str) -> list[dict]:
                     "note": "artifact not built yet / not found",
                 }
             )
-        else:
-            artifacts.append(
-                {
-                    "name": name,
-                    "owner": owner,
-                    "path": str(path),
-                    "sha256": digest,
-                }
+            continue
+
+        entry = {
+            "name": name,
+            "owner": owner,
+            "path": str(path),
+            "sha256": digest,
+        }
+        # 文件名里写死版本号的产物：若版本与当前清单不符，同样属陈旧。
+        stale = _stale_note(path, head_ts)
+        version_tokens = [
+            t for t in path.name.replace("-", " ").replace("_", " ").split()
+            if t.count(".") == 2
+        ]
+        if any(t != version for t in version_tokens):
+            stale = (
+                stale
+                or f"STALE: artifact filename version {version_tokens} "
+                f"!= manifest version {version}"
             )
+        if stale:
+            entry["stale"] = True
+            entry["note"] = stale
+        artifacts.append(entry)
     return artifacts
 
 
