@@ -123,6 +123,45 @@ def _stale_note(path: Path, head_ts: float | None) -> str | None:
     return None
 
 
+def _dir_digest(path: Path, max_files: int = 20000) -> dict | None:
+    """计算目录的确定性指纹。
+
+    为什么需要：PyInstaller onedir 产物 = ``scada-backend.exe`` + ``_internal/``。
+    只记 exe 的 sha256 会严重低估交付内容 —— 依赖代码全在 ``_internal/`` 里，
+    而那部分才是"装错版本"最容易出问题的地方。
+
+    算法：把「相对路径 + 文件大小 + 文件 sha256」按相对路径排序后拼接，
+    整体再取一次 sha256。**排序保证与文件系统遍历顺序无关**（确定性）。
+    单个文件内容参与哈希，所以文件被替换会在摘要上体现。
+
+    返回 ``{"files": n, "bytes": total, "sha256": digest}``；目录不存在返回 None。
+    """
+    if not path.is_dir():
+        return None
+    entries: list[tuple[str, int, str]] = []
+    total = 0
+    try:
+        for f in sorted(path.rglob("*")):
+            if not f.is_file():
+                continue
+            rel = f.relative_to(path).as_posix()
+            size = f.stat().st_size
+            total += size
+            entries.append((rel, size, _sha256_of_file(f) or ""))
+            if len(entries) >= max_files:
+                # 超出上限：明确标记，避免摘要看起来"完整"实则截断
+                entries.append(("__TRUNCATED__", 0, ""))
+                break
+    except OSError as e:
+        logger.debug("目录指纹计算失败 %s: %s", path, e, exc_info=True)
+        return None
+
+    h = hashlib.sha256()
+    for rel, size, digest in entries:
+        h.update(f"{rel}\0{size}\0{digest}\n".encode("utf-8"))
+    return {"files": len(entries), "bytes": total, "sha256": h.hexdigest()}
+
+
 def _collect_artifacts(version: str) -> list[dict]:
     """收集交付产物。
 
@@ -133,24 +172,40 @@ def _collect_artifacts(version: str) -> list[dict]:
     否则清单会把旧世代的包记录成当前版本的产物——这是最危险的
     "证据撒谎"：字段齐全、sha256 真实，但内容与源码不对应。
     """
-    # (展示名, 相对后端根或前端根的路径, 归属根, 期望文件名的版本无关前缀)
+    # (展示名, 路径, 归属, 伴随目录)
+    #
+    # 主后端产物是 **onedir 布局的 dist/scada-backend/scada-backend.exe**，
+    # 而不是 dist/SCADA.exe：
+    #   - scada-backend.spec 是 CI 与前端共同依赖的配方（onedir，入口 run.py）；
+    #   - 前端 Electron 的 extraResources 期望 <resources>/backend/scada-backend.exe；
+    #   - dist/SCADA.exe 来自 SCADA.spec（launcher.py onefile），是"双击即用"的
+    #     历史产物，不参与安装包组装，因此不列入交付物清单。
+    # 早期版本这里记的是 dist/SCADA.exe，且只记 exe 单文件，
+    # 导致清单既夸大了交付内容、又漏掉了真正的依赖代码（_internal/）。
     candidates = [
-        ("backend_windows_exe", BACKEND_ROOT / "dist" / "SCADA.exe", "backend"),
+        (
+            "backend_windows_onedir",
+            BACKEND_ROOT / "dist" / "scada-backend" / "scada-backend.exe",
+            "backend",
+            BACKEND_ROOT / "dist" / "scada-backend" / "_internal",
+        ),
         (
             "frontend_installer",
             FRONTEND_ROOT / "release" / f"SmartSCADA Setup {version}.exe",
             "frontend",
+            None,
         ),
         (
             "frontend_archive",
             FRONTEND_ROOT / "release" / f"smartscada-{version}-x64.nsis.7z",
             "frontend",
+            None,
         ),
     ]
 
     head_ts = _git_head_commit_time()
     artifacts: list[dict] = []
-    for name, path, owner in candidates:
+    for name, path, owner, companion_dir in candidates:
         digest = _sha256_of_file(path)
         if digest is None:
             artifacts.append(
@@ -170,6 +225,24 @@ def _collect_artifacts(version: str) -> list[dict]:
             "path": str(path),
             "sha256": digest,
         }
+
+        # onedir 产物：附带 _internal/ 的目录级指纹
+        if companion_dir is not None:
+            d = _dir_digest(companion_dir)
+            if d is not None:
+                entry["companion_dir"] = {
+                    "path": str(companion_dir),
+                    "files": d["files"],
+                    "bytes": d["bytes"],
+                    "sha256": d["sha256"],
+                }
+            else:
+                entry["companion_dir"] = {
+                    "path": str(companion_dir),
+                    "sha256": None,
+                    "note": "companion dir not found —— onedir 产物不完整",
+                }
+
         # 文件名里写死版本号的产物：若版本与当前清单不符，同样属陈旧。
         stale = _stale_note(path, head_ts)
         version_tokens = [

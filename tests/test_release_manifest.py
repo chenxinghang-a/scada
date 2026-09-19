@@ -152,6 +152,89 @@ class TestStaleArtifactDetection:
         )
 
 
+class TestDirectoryDigest:
+    """onedir 产物必须带目录级指纹。
+
+    为什么这条重要：PyInstaller onedir 交付物 = exe + ``_internal/``，
+    依赖代码全在 ``_internal/`` 里。只记 exe 的 sha256 会漏掉 95% 的内容 ——
+    装错版本、文件被替换、打包不完整都不会在清单上体现。
+    """
+
+    def test_digest_is_deterministic(self, manifest_module, tmp_path):
+        d = tmp_path / "bundle"
+        (d / "sub").mkdir(parents=True)
+        (d / "a.pyc").write_bytes(b"aaa")
+        (d / "sub" / "b.pyc").write_bytes(b"bbb")
+
+        first = manifest_module._dir_digest(d)
+        second = manifest_module._dir_digest(d)
+        assert first == second, "同一目录两次计算必须得到相同指纹（确定性）"
+        assert first["files"] == 2
+        assert first["bytes"] == 6
+
+    def test_digest_detects_content_change(self, manifest_module, tmp_path):
+        d = tmp_path / "bundle"
+        d.mkdir()
+        (d / "mod.pyc").write_bytes(b"original")
+        before = manifest_module._dir_digest(d)
+
+        (d / "mod.pyc").write_bytes(b"tampered")
+        after = manifest_module._dir_digest(d)
+
+        assert before["sha256"] != after["sha256"], (
+            "文件内容被替换后目录指纹必须变化，否则清单无法发现产物被篡改"
+        )
+
+    def test_digest_detects_extra_file(self, manifest_module, tmp_path):
+        """多出一个文件（如上一世代残留）也必须体现在指纹上。"""
+        d = tmp_path / "bundle"
+        d.mkdir()
+        (d / "mod.pyc").write_bytes(b"x")
+        before = manifest_module._dir_digest(d)
+
+        (d / "stale_leftover.pyc").write_bytes(b"old")
+        after = manifest_module._dir_digest(d)
+
+        assert before["sha256"] != after["sha256"], (
+            "目录里混入上一世代残留文件时指纹必须变化 —— "
+            "这正是 Stage 步骤要防止的产物污染"
+        )
+
+    def test_missing_dir_returns_none(self, manifest_module, tmp_path):
+        assert manifest_module._dir_digest(tmp_path / "nope") is None
+
+
+class TestOnedirArtifactRecorded:
+    """清单必须记录 onedir 主产物（含 _internal/），而不是历史 onefile。"""
+
+    def test_main_backend_artifact_is_onedir(self, manifest_module):
+        manifest = manifest_module.generate_manifest()
+        names = [a["name"] for a in manifest["artifacts"]]
+        assert "backend_windows_onedir" in names, (
+            "主后端产物必须记为 onedir 布局（dist/scada-backend/scada-backend.exe）："
+            "它才是 CI 与前端 extraResources 实际消费的产物。"
+        )
+        assert "backend_windows_exe" not in names, (
+            "不应再记录 dist/SCADA.exe（launcher.py onefile 历史配方）："
+            "它不参与安装包组装，记录它会让清单夸大实际交付内容。"
+        )
+
+    def test_onedir_artifact_carries_companion_dir(self, manifest_module):
+        manifest = manifest_module.generate_manifest()
+        onedir = next(
+            (a for a in manifest["artifacts"] if a["name"] == "backend_windows_onedir"),
+            None,
+        )
+        assert onedir is not None
+        assert "companion_dir" in onedir, (
+            "onedir 产物必须带 companion_dir（_internal/ 的目录级指纹）"
+        )
+        cd = onedir["companion_dir"]
+        assert "sha256" in cd and "files" in cd and "bytes" in cd, (
+            f"companion_dir 结构不完整: {cd}"
+        )
+
+
 class TestManifestFileOnDisk:
     """仓库内已提交的清单文件本身必须是可解析且自洽的。"""
 
