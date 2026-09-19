@@ -123,6 +123,23 @@ def _stale_note(path: Path, head_ts: float | None) -> str | None:
     return None
 
 
+def _digest_entries(entries: list[tuple[str, int, str]]) -> str:
+    """把 (相对路径, 大小, 文件sha256) 列表汇总成单个 sha256。
+
+    **排序在这里做，而不是依赖调用方**：摘要必须与遍历顺序无关，
+    否则同一个目录在 NTFS 与 ext4 上会得出不同指纹（两者目录项顺序不同），
+    清单会在换机器后误报"产物变了"。
+
+    抽成独立函数是为了可测：直接传乱序列表进来断言结果不变，
+    比"在同一目录上算两次"可靠得多（后者在同一进程内 rglob 顺序稳定，
+    根本测不出顺序泄漏 —— 实测过，是假绿）。
+    """
+    h = hashlib.sha256()
+    for rel, size, digest in sorted(entries, key=lambda x: x[0]):
+        h.update(f"{rel}\0{size}\0{digest}\n".encode("utf-8"))
+    return h.hexdigest()
+
+
 def _dir_digest(path: Path, max_files: int = 20000) -> dict | None:
     """计算目录的确定性指纹。
 
@@ -131,7 +148,7 @@ def _dir_digest(path: Path, max_files: int = 20000) -> dict | None:
     而那部分才是"装错版本"最容易出问题的地方。
 
     算法：把「相对路径 + 文件大小 + 文件 sha256」按相对路径排序后拼接，
-    整体再取一次 sha256。**排序保证与文件系统遍历顺序无关**（确定性）。
+    整体再取一次 sha256（排序在 ``_digest_entries`` 内完成）。
     单个文件内容参与哈希，所以文件被替换会在摘要上体现。
 
     返回 ``{"files": n, "bytes": total, "sha256": digest}``；目录不存在返回 None。
@@ -140,8 +157,9 @@ def _dir_digest(path: Path, max_files: int = 20000) -> dict | None:
         return None
     entries: list[tuple[str, int, str]] = []
     total = 0
+    truncated = False
     try:
-        for f in sorted(path.rglob("*")):
+        for f in path.rglob("*"):
             if not f.is_file():
                 continue
             rel = f.relative_to(path).as_posix()
@@ -150,16 +168,22 @@ def _dir_digest(path: Path, max_files: int = 20000) -> dict | None:
             entries.append((rel, size, _sha256_of_file(f) or ""))
             if len(entries) >= max_files:
                 # 超出上限：明确标记，避免摘要看起来"完整"实则截断
-                entries.append(("__TRUNCATED__", 0, ""))
+                truncated = True
                 break
     except OSError as e:
         logger.debug("目录指纹计算失败 %s: %s", path, e, exc_info=True)
         return None
 
-    h = hashlib.sha256()
-    for rel, size, digest in entries:
-        h.update(f"{rel}\0{size}\0{digest}\n".encode("utf-8"))
-    return {"files": len(entries), "bytes": total, "sha256": h.hexdigest()}
+    result = {
+        "files": len(entries),
+        "bytes": total,
+        "sha256": _digest_entries(entries),
+    }
+    if truncated:
+        # 截断时必须显式暴露，否则清单会声称"完整覆盖"一个只算了一半的目录
+        result["truncated"] = True
+        result["note"] = f"目录文件数超过上限 {max_files}，指纹仅覆盖前 {max_files} 个"
+    return result
 
 
 def _collect_artifacts(version: str) -> list[dict]:

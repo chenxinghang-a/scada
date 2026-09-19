@@ -173,34 +173,47 @@ class TestDirectoryDigest:
         assert first["bytes"] == 6
 
     def test_digest_is_order_independent(self, manifest_module, tmp_path):
-        """内容相同、创建顺序不同的两个目录，指纹必须一致。
+        """摘要计算必须与输入顺序无关。
 
-        为什么必须这么测：只在同一个目录上算两次是**测不出顺序问题的** ——
-        `rglob` 在一次进程内对同一棵树通常返回稳定顺序，所以去掉排序也照样
-        通过（实测：变异掉 `sorted()` 时这条断言仍是绿的，属假绿）。
-        真正的风险在跨文件系统 / 跨平台（NTFS 与 ext4 的目录项顺序不同），
-        故这里构造两棵内容相同、写入顺序相反的树来暴露它。
+        为什么直接测 ``_digest_entries`` 而不是"两棵不同创建顺序的目录"：
+        后者**测不出顺序泄漏** —— `rglob` 在同一进程内对目录树返回的顺序
+        相当稳定，构造正序/逆序两棵树得到的遍历顺序仍可能一样。
+        实测：移除 `_digest_entries` 里的 sorted()，那种写法依然全绿（假绿）。
+
+        真正的风险场景是跨文件系统（NTFS 与 ext4 的目录项顺序不同），
+        而在本机无法构造。直接喂乱序列表是唯一可靠的验证方式。
         """
-        names = ["z.pyc", "m.pyc", "a.pyc", "k.pyc", "b.pyc"]
-
-        d1 = tmp_path / "forward"
-        d1.mkdir()
-        for n in names:
-            (d1 / n).write_bytes(b"same")
-
-        d2 = tmp_path / "reverse"
-        d2.mkdir()
-        for n in reversed(names):
-            (d2 / n).write_bytes(b"same")
-
-        g1 = manifest_module._dir_digest(d1)
-        g2 = manifest_module._dir_digest(d2)
-
-        assert g1["files"] == g2["files"] == len(names)
-        assert g1["sha256"] == g2["sha256"], (
-            "内容相同的目录因创建顺序不同得出不同指纹 —— "
-            "说明遍历顺序泄漏进了摘要，跨文件系统会误报产物变化"
+        base = [
+            ("a/mod.pyc", 100, "aa" * 32),
+            ("b/mod.pyc", 200, "bb" * 32),
+            ("c/mod.pyc", 300, "cc" * 32),
+        ]
+        forward = manifest_module._digest_entries(list(base))
+        reversed_ = manifest_module._digest_entries(list(reversed(base)))
+        shuffled = manifest_module._digest_entries(
+            [base[1], base[2], base[0]]
         )
+
+        assert forward == reversed_ == shuffled, (
+            "同样的文件集合因传入顺序不同得出不同摘要 —— "
+            "说明排序没生效，换文件系统后会误报产物变化"
+        )
+
+    def test_digest_entries_detects_content_change(self, manifest_module):
+        """单文件摘要（或大小）变化必须体现在结果上。"""
+        a = manifest_module._digest_entries([("x.pyc", 10, "aa" * 32)])
+        b = manifest_module._digest_entries([("x.pyc", 10, "bb" * 32)])
+        c = manifest_module._digest_entries([("x.pyc", 11, "aa" * 32)])
+        assert a != b, "文件内容变化未体现在摘要上"
+        assert a != c, "文件大小变化未体现在摘要上"
+
+    def test_digest_entries_detects_added_file(self, manifest_module):
+        """集合里多一个文件（上一世代残留）必须改变摘要。"""
+        base = [("x.pyc", 10, "aa" * 32)]
+        with_extra = base + [("stale_leftover.pyc", 5, "cc" * 32)]
+        assert manifest_module._digest_entries(base) != manifest_module._digest_entries(
+            with_extra
+        ), "混入额外文件（如上一世代残留）时摘要必须变化"
 
     def test_digest_detects_content_change(self, manifest_module, tmp_path):
         d = tmp_path / "bundle"
