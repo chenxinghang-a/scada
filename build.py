@@ -1,5 +1,19 @@
 """
 打包脚本：SCADA 系统 → 单个 exe（自动开浏览器）
+
+零删除设计（勿改）：
+    本机环境注入了批量删除保护，`shutil.rmtree('dist')` 之类的清理会被
+    弹窗拦截（SAFE_DELETE_BULK_CONFIRM_REQUIRED → SystemExit 1）。
+    因此本脚本**从不删除任何目录**，改为每次构建输出到带版本号的独立目录：
+
+        构建产物   dist-scada-<VERSION>/SCADA.exe
+        工作目录   build-scada-<VERSION>/
+
+    版本变了就换个目录，天然隔离；同版本重复构建时用
+    PyInstaller 自带的 ``--noconfirm`` 让它自己覆盖同名文件
+    （PyInstaller 覆盖不触发环境的批量删除保护，它走的是单文件写路径）。
+
+    不再需要"先 mv 成 .prev 再删"这种打补丁手法。
 """
 
 import subprocess
@@ -10,17 +24,30 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent
 
 
+def _read_version() -> str:
+    """读取 VERSION 文件（与后端运行时同一真源）。"""
+    vf = PROJECT_ROOT / 'VERSION'
+    try:
+        return vf.read_text(encoding='utf-8').strip() or 'dev'
+    except OSError:
+        return 'dev'
+
+
 def build():
+    version = _read_version()
+    tag = f'scada-{version}'
+    # 带版本的独立目录：换版本即换目录，不需要删除任何东西
+    dist_dir = PROJECT_ROOT / f'dist-{tag}'
+    work_dir = PROJECT_ROOT / f'build-{tag}'
+    spec_dir = work_dir  # 每次构建生成 spec 也放工作目录，不污染仓库根
+
     print("=" * 50)
     print("  SCADA 系统打包")
+    print(f"  版本: {version}")
+    print(f"  输出: {dist_dir.relative_to(PROJECT_ROOT)}")
     print("=" * 50)
 
     subprocess.run([sys.executable, '-m', 'pip', 'install', 'pyinstaller', '-q'])
-
-    for d in ['dist', 'build']:
-        p = PROJECT_ROOT / d
-        if p.exists():
-            shutil.rmtree(p)
 
     print("\n打包中...")
 
@@ -32,6 +59,10 @@ def build():
     cmd = [
         sys.executable, '-m', 'PyInstaller',
         '--onefile', '--name', 'SCADA', '--console', '--noconfirm',
+        # 关键：显式指定输出/工作/配置目录，避免落到默认的 dist/ 与 build/
+        '--distpath', str(dist_dir),
+        '--workpath', str(work_dir),
+        '--specpath', str(spec_dir),
     ]
 
     for d in data_dirs:
@@ -56,14 +87,13 @@ def build():
     cmd.append('launcher.py')
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
 
-    exe = PROJECT_ROOT / 'dist' / 'SCADA.exe'
+    exe = dist_dir / 'SCADA.exe'
     if result.returncode == 0 and exe.exists():
         size_mb = exe.stat().st_size / (1024 * 1024)
-        dist = PROJECT_ROOT / 'dist'
         for d in ['data', 'logs', 'exports']:
-            (dist / d).mkdir(exist_ok=True)
-        if not (dist / '.env').exists() and (PROJECT_ROOT / '.env.example').exists():
-            shutil.copy2(PROJECT_ROOT / '.env.example', dist / '.env')
+            (dist_dir / d).mkdir(exist_ok=True)
+        if not (dist_dir / '.env').exists() and (PROJECT_ROOT / '.env.example').exists():
+            shutil.copy2(PROJECT_ROOT / '.env.example', dist_dir / '.env')
 
         print(f"\n{'=' * 50}")
         print(f"  打包成功: {exe}")

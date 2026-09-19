@@ -16,6 +16,16 @@ build.prev*/
 dist.prev*/
 *.prev*/
 
+# 零删除构建/测试产物（build.py 输出到 dist-scada-<版本>/、build-scada-<版本>/；
+# pytest 用 .pytest_tmp-<pid>，见 tests/conftest.py 的 pytest_configure）。
+# 这些都是可再生成的中间物，不进版本库。
+# 保留 dist/ 与 build/ 的忽略是因为 CI 与 electron 打包仍在用这两个固定路径。
+dist-scada-*/
+build-scada-*/
+dist-iso/
+build-iso/
+.pytest_tmp*/
+
 # Virtual environments
 .venv/
 venv/

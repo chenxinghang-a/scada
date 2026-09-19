@@ -16,6 +16,36 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
+def pytest_configure(config):
+    """把 pytest 临时根指向**每次运行都不同**的目录，实现"零删除"。
+
+    背景（本机环境特有，CI 上无此问题）：
+        WorkBuddy 注入了批量删除保护 shim。pytest 默认行为有两次删除会踩中：
+        1. 会话开始时清理 `basetemp`（决定性地：如果 basetemp 已存在，pytest 会
+           先删掉它再重建）。走 shim 的"移回收站"路径时，对 `\\\\?\\` 前缀路径
+           报 `OSError [Errno 53] 找不到网络路径` → `SAFE_DELETE_FAIL_CLOSED`
+           拒绝 → 所有用例在 setup 阶段 ERROR。
+        2. 默认 basetemp 在系统 TEMP 下做"保留最近 3 个 run"的滚动清理，
+           量可达上万文件 → 触发 `SAFE_DELETE_BULK_CONFIRM_REQUIRED` 弹窗。
+
+    解法：目录名带 **PID**，保证每次进程启动时 basetemp 都是全新的、不存在的
+    路径 —— pytest 无需清任何东西，两个坑同时消失。
+
+    目录位置选**仓库内**（而不是系统 TEMP）有两个原因：
+    - 便于事后排查（临时文件就在眼皮底下）
+    - 避免污染系统 TEMP，也不会和用户其他项目的 pytest 临时目录混在一起
+
+    这些目录已加进 .gitignore（`.pytest_tmp-*`）。**不清理是刻意的** ——
+    清理就是删除，就会再次踩保护。它们只是临时文件，磁盘占用很小
+    （单次全量测试约几十 MB），需要时可手工清（按 ≤50 个/批）。
+    """
+    # 用户显式传了 --basetemp 就尊重用户选择，不覆盖
+    if config.option.basetemp:
+        return
+    tmp_root = Path(PROJECT_ROOT) / f'.pytest_tmp-{os.getpid()}'
+    config.option.basetemp = str(tmp_root)
+
+
 def _quarantine_smoke_test_dbs(data_dir: Path):
     """将冒烟测试数据库移出工作目录，避免测试清理触发批量删除保护。"""
     if not data_dir.exists():

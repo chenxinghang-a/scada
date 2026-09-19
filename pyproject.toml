@@ -50,10 +50,31 @@ version = {file = "VERSION"}
 # 等于永远不会失败。结果就是裸跑 `pytest` 得到"13 个全绿"的假信号。
 # 遗留目录待清理，先用 norecursedirs 排除，避免误收集。
 testpaths = ["tests"]
-norecursedirs = ["测试", "dist", "build", ".venv", "node_modules", "managed_components"]
+norecursedirs = ["测试", "dist", "build", ".venv", "node_modules", "managed_components", ".pytest_tmp*", "dist-*", "build-*"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+# --- 零删除测试配置（不要改动，见下） ---------------------------------------
+# WorkBuddy 环境注入了批量删除保护，pytest 默认的临时目录策略有两处会踩中：
+#   1. 临时根放系统 TEMP（%LOCALAPPDATA%\Temp\pytest-of-<user>），
+#      并在**每次运行开始时**滚动清理旧 run（默认保留最近 3 个），
+#      一次删掉上万文件 → 必弹窗。
+#   2. `-p cacheprovider` 写 .pytest_cache/v/cache/*，清理时同样走删除路径。
+# 因此这里关掉 cacheprovider。
+#
+# ⚠️ basetemp **不能**写死成固定路径（如 .pytest_tmp）：
+#    pytest 每次运行开始时会**清空 basetemp**，走 shim 的"移回收站"路径，
+#    而 shim 对 `\\?\` 前缀路径报 `OSError [Errno 53] 找不到网络路径`
+#    → `SAFE_DELETE_FAIL_CLOSED` 直接拒绝，整套测试在 setup 阶段全 ERROR。
+#    （本机实测踩到，报错原文：
+#     [safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "...\\.pytest_tmp",
+#      "reason": "trash-failed"}）
+#
+# 正解：把 basetemp 做成**每次运行都不同**的目录 —— 目录名带进程号，
+# pytest 每次都遇到"全新的、不存在的" basetemp，因此**不需要清任何东西**。
+# 具体路径在 tests/conftest.py 的 `pytest_configure` 里设置（可做插值）。
+# 这里只保留：关 cacheprovider + 把 .pytest_tmp-* 排除出收集范围。
+addopts = "-p no:cacheprovider"
 
 [tool.coverage.run]
 # 显式列出源码包。不写 `source = ["."]` 是因为仓库根下还有：

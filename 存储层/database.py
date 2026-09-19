@@ -189,6 +189,7 @@ class Database:
                     unit TEXT,
                     timestamp DATETIME NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    quality INTEGER DEFAULT 192,
                     UNIQUE(device_id, register_name)
                 )
             ''')
@@ -313,6 +314,7 @@ class Database:
 
             # 迁移：给旧表添加新列（如果不存在）
             self._migrate_alarm_table(cursor)
+            self._migrate_realtime_quality(cursor)
 
             logger.info("数据库初始化完成")
 
@@ -336,6 +338,29 @@ class Database:
                     f"迁移列 alarm_records.{col_name} 未执行"
                     f"（通常为列已存在，需排查时看此错误原文）: {e}"
                 )
+
+    def _migrate_realtime_quality(self, cursor):
+        """给 realtime_data 表补 ``quality`` 列（兼容旧数据库）。
+
+        **为什么需要这个迁移**：采集层早在 ``data_collector._handle_normal_collection``
+        里就算出了 OPC UA 质量码（192/104/0/4/6/8/80/64），但 ``insert_data_batch``
+        的 ``valid_rows`` 只取 5 个字段，把它丢掉了 → 前端 Dashboard 那套
+        「质量圆点 + Good/Uncertain/Bad 三档」UI 永远拿不到数据，恒定走降级分支。
+
+        旧库（建表时没有 quality 列）需要补列；补完默认值 192(GOOD)，
+        因为**已存在的行确实无法追溯真实质量**，给 GOOD 是保守选择 ——
+        宁可显示"好"也不要凭空报"坏"（后者会引发无谓的运维告警）。
+        下一轮采集覆盖后即为真实值。
+        """
+        try:
+            cursor.execute('ALTER TABLE realtime_data ADD COLUMN quality INTEGER DEFAULT 192')
+            logger.info("数据库迁移: 添加列 realtime_data.quality")
+        except Exception as e:
+            # 列已存在属预期；其他错误原文保留以便排查
+            logger.debug(
+                f"迁移列 realtime_data.quality 未执行"
+                f"（通常为列已存在，需排查时看此错误原文）: {e}"
+            )
 
     def insert_data(self, device_id: str, register_name: str,
                     value: float, timestamp: datetime, unit: str = ''):
@@ -401,7 +426,22 @@ class Database:
         valid_rows = []
         for d in batch:
             try:
-                valid_rows.append((d['device_id'], d['register_name'], d['value'], d.get('unit', ''), d['timestamp']))
+                # quality 为 OPC UA 质量码（int）。采集层算出的值经此落库，
+                # 前端实时数据的质量圆点才有数据源。
+                # 缺省 192 = GOOD：仅当调用方没给质量码（如老代码路径、
+                # 手工灌数）时才用它；**不要**在这里做"值不合理就降级"的猜测，
+                # 质量判定属采集层 DataQualityAssessor 的职责。
+                q = d.get('quality', 192)
+                # 兜底：允许字符串形式的数字，但显式拒掉 'BAD'/'good' 这类
+                # 非数值标记 —— 存进去只会让前端比较逻辑静默判错。
+                try:
+                    q = int(q)
+                except (TypeError, ValueError):
+                    q = 192
+                valid_rows.append((
+                    d['device_id'], d['register_name'], d['value'],
+                    d.get('unit', ''), d['timestamp'], q,
+                ))
             except (KeyError, TypeError) as e:
                 logger.warning(f"跳过无效记录: {e}")
 
@@ -413,17 +453,18 @@ class Database:
 
             # realtime_data: 批量UPSERT（保留稳定id）
             cursor.executemany('''
-                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp, quality)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(device_id, register_name) DO UPDATE SET
-                    value = excluded.value, unit = excluded.unit, timestamp = excluded.timestamp
+                    value = excluded.value, unit = excluded.unit,
+                    timestamp = excluded.timestamp, quality = excluded.quality
             ''', valid_rows)
 
             # history_data: 批量INSERT
             cursor.executemany('''
                 INSERT INTO history_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
-            ''', valid_rows)
+            ''', [row[:5] for row in valid_rows])
 
     def delete_device_data(self, device_id: str):
         """
