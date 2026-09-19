@@ -8,11 +8,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # 本文件位于 core/version.py，上两级即为项目根目录（VERSION 所在）。
 _ROOT = Path(__file__).resolve().parent.parent
@@ -66,8 +69,15 @@ def _git_commit_sha() -> str:
         if proc.returncode == 0:
             sha = proc.stdout.strip()
             return sha or UNKNOWN_VERSION
-    except Exception:
-        pass
+        logger.debug(
+            "git rev-parse HEAD 返回非零退出码 %s，stderr=%s",
+            proc.returncode,
+            proc.stderr.strip(),
+        )
+    except Exception as e:
+        # git 不可用 / 超时 / 非仓库目录：属可接受的降级路径，
+        # 但必须留痕，避免 commit_sha 静默变 unknown 而无人察觉。
+        logger.debug("读取 git commit sha 失败，降级为 unknown: %s", e, exc_info=True)
     return "unknown"
 
 
@@ -82,8 +92,14 @@ def _node_version() -> str:
         )
         if proc.returncode == 0:
             return proc.stdout.strip() or "unknown"
-    except Exception:
-        pass
+        logger.debug(
+            "node --version 返回非零退出码 %s，stderr=%s",
+            proc.returncode,
+            proc.stderr.strip(),
+        )
+    except Exception as e:
+        # node 未安装属正常场景（后端可独立运行），但同样需要留痕。
+        logger.debug("读取 node 版本失败，降级为 unknown: %s", e, exc_info=True)
     return "unknown"
 
 

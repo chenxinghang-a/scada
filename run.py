@@ -416,9 +416,13 @@ def main():
                         'type': type(_bg_err).__name__,
                         'timestamp': datetime.now().isoformat(),
                     }
-                except Exception:
-                    # 写状态失败也不应掩盖原始异常
-                    pass
+                except Exception as _state_err:
+                    # 写失败状态本身失败：绝不能掩盖原始异常，但必须留痕，
+                    # 否则运维只能看到"启动失败"却不知失败原因也丢了。
+                    logger.error(
+                        "记录后台启动失败状态时再次异常（原始异常仍为: %s）: %s",
+                        _bg_err, _state_err, exc_info=True,
+                    )
 
         bg_thread = threading.Thread(target=_background_start, daemon=True, name="bg_device_connect")
         bg_thread.start()
@@ -512,8 +516,11 @@ def main():
         if 'device_manager' in locals():
             try:
                 device_manager.stop_reconnect_loop()
-            except Exception:
-                pass
+            except Exception as _stop_err:
+                # 关停阶段异常：程序即将退出，但必须留痕以定位"退出时挂住"类问题。
+                logger.warning(
+                    "停止设备重连循环失败: %s", _stop_err, exc_info=True,
+                )
             device_manager.disconnect_all()
         if 'alarm_manager' in locals():
             # 停止升级/洪水定时器 + 配置热重载线程（stop() 幂等）

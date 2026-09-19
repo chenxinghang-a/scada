@@ -5,7 +5,7 @@
 使用方式:
     from core.masking_rule_engine import MaskingRuleEngine
     engine = MaskingRuleEngine()
-    engine.add_rule('credit_card', pattern=r'\d{4}[\s-]?\d{4}', strategy='mask_middle')
+    engine.add_rule('credit_card', pattern=r'\\d{4}[\\s-]?\\d{4}', strategy='mask_middle')
     masked = engine.mask_text('我的卡号是 1234 5678 9012 3456')
 """
 

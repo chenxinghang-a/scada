@@ -23,13 +23,35 @@ def _find_free_port():
         return s.getsockname()[1]
 
 
-def _post_login(base_url, username='admin', password='admin123'):
+# 首次登录后会被强制改成的口令（见 auth_token 夹具）。
+_CHANGED_ADMIN_PW = 'Admin123!'
+
+
+def _initial_admin_password():
+    """返回 admin 账户的初始口令。
+
+    取自 ``用户层.auth.DEFAULT_ADMIN_PASSWORD``（其源头是
+    ``SCADA_ADMIN_PASSWORD`` 环境变量，``config.py`` 顶层已 ``load_dotenv()``）。
+    **禁止写死明文口令** —— ``.env`` 会把默认值改成 ``CHANGE_ME`` 等占位值，
+    写死会让测试与真实部署行为脱节。
+    """
+    try:
+        from 用户层.auth import DEFAULT_ADMIN_PASSWORD
+
+        return DEFAULT_ADMIN_PASSWORD
+    except Exception:
+        return 'admin123'
+
+
+def _post_login(base_url, username='admin', password=None):
     """调用登录接口并返回响应。
 
     请求体带唯一 nonce：core/request_dedup.py 的指纹缓存是进程级全局的
     （方法+路径+Authorization+body 哈希，2秒窗口），完全相同的登录请求
     在窗口内会被判为重复提交并返回 409，测试就拿不到真实的登录响应了。
     """
+    if password is None:
+        password = _initial_admin_password()
     return requests.post(f'{base_url}/api/auth/login', json={
         'username': username,
         'password': password,
@@ -91,9 +113,25 @@ def app_server():
 
 
 @pytest.fixture(scope='module')
+def admin_password(app_server):
+    """返回当前 admin 账户的有效口令。
+
+    正常情况下等于 ``_initial_admin_password()``。但 admin 可能已被
+    ``auth_token`` 夹具强制改密（首次登录场景），此时会返回改密后的口令，
+    避免用例之间产生执行顺序依赖。
+    """
+    candidates = [_initial_admin_password(), _CHANGED_ADMIN_PW]
+    for pw in candidates:
+        if pw and _post_login(app_server, password=pw).status_code in (200, 403):
+            return pw
+    # 全部失败：返回配置值，让断言给出可诊断的失败信息
+    return _initial_admin_password()
+
+
+@pytest.fixture(scope='module')
 def auth_token(app_server):
     """获取认证token（处理首次登录改密场景）"""
-    r = _post_login(app_server)
+    r = _post_login(app_server, password=_initial_admin_password())
     if r.status_code == 200:
         data = r.json()
         token = data.get('token', '')
@@ -125,11 +163,14 @@ class TestSmokeStartup:
         r = requests.get(f'{app_server}/login')
         assert r.status_code == 200
 
-    def test_login_returns_token(self, app_server):
+    def test_login_returns_token(self, app_server, admin_password):
         r = requests.post(f'{app_server}/api/auth/login', json={
-            'username': 'admin', 'password': 'admin123'
+            'username': 'admin', 'password': admin_password,
+            'client_nonce': uuid.uuid4().hex,
         })
-        # 可能是200（成功）或403（首次登录需改密）或429（限流）
+        # 200=登录成功；403=首次登录需改密；429=限流。
+        # 401 说明口令不对——本用例必须用 admin_password 夹具探测出的当前口令，
+        # 否则会与 auth_token 夹具的强制改密产生执行顺序依赖。
         assert r.status_code in (200, 403, 429), f"登录异常: {r.status_code} {r.text}"
         if r.status_code == 200:
             data = r.json()
