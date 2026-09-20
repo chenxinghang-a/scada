@@ -95,3 +95,6 @@ stdout*.txt
 # 运行期产物：审计日志由服务端与测试追加写入（每跑一次测试就多几十条），
 # 不是源码，不进 git。此前被跟踪导致每轮提交都夹带测试垃圾。
 data/audit_log.jsonl
+
+# 线程栈诊断产物（tools/diag_run.py 生成）
+data/diag_traceback_*.txt
