@@ -400,6 +400,16 @@ class HealthChecker:
         if data_collector:
             cls.register('collector', lambda: _check_collector(data_collector), interval=10)
 
+        # 数据新鲜度 —— 补上「采集在跑、数据库能连，但数据就是进不了库」这类静默故障。
+        # 原有的 database 检查只做 SELECT 1、collector 检查只看内存队列长度，
+        # 二者在 2026-09-20 的落库停滞故障中全部返回 healthy（详见 _check_data_freshness）。
+        if database:
+            cls.register(
+                'data_freshness',
+                lambda: _check_data_freshness(database, data_collector),
+                interval=30,
+            )
+
         cls.register('disk', _check_disk_space, interval=60)
         cls.register('memory', _check_memory, interval=30)
 
@@ -439,6 +449,107 @@ def _check_devices(dm):
         return {'status': HealthStatus.HEALTHY, 'message': f'{connected}/{total}设备在线'}
     except Exception as e:
         return {'status': HealthStatus.UNHEALTHY, 'message': f'设备检查失败: {e}'}
+
+
+# 数据新鲜度阈值（秒）：超过 STALE_UNHEALTHY 说明落库链路已经断了
+STALE_DEGRADED_SECONDS = 30
+STALE_UNHEALTHY_SECONDS = 120
+# 磁盘队列积压阈值
+QUEUE_DEGRADED_BYTES = 10 * 1024 * 1024
+QUEUE_UNHEALTHY_BYTES = 50 * 1024 * 1024
+
+
+def _check_data_freshness(db, data_collector=None):
+    """检查数据新鲜度与磁盘队列积压。
+
+    为什么需要这一项（2026-09-20 实机故障）：
+      采集器 running=True、`/api/health/status` 的 database 检查（只做 SELECT 1）
+      通过、collector 检查只看**内存**队列长度（当时为 0）—— 于是 5 项检查全绿，
+      而实际上落库已停滞数小时、磁盘队列涨到 160MB。
+      纯连接性检查无法发现「链路活着但不干活」。
+
+    本检查观察两个互补信号：
+      1. 数据新鲜度：最新历史记录距今多久（直接反映数据是否真的入库）
+      2. 磁盘队列积压：pending_data.jsonl 体积（消费停摆时会无界增长）
+      外加一个交叉信号：磁盘有积压而内存队列为空 → 消费链路停摆。
+    """
+    from datetime import datetime as _dt
+
+    problems = []
+    status = HealthStatus.HEALTHY
+    details = {}
+
+    # --- 1) 数据新鲜度 ---
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute('SELECT MAX(timestamp) FROM history_data').fetchone()
+        latest = row[0] if row else None
+        if latest is None:
+            # 空库不算故障（刚部署/刚清库），但也不能报 healthy 掩盖数据是否存在
+            details['latest_data_age_seconds'] = None
+            problems.append('历史表中没有任何数据')
+            if status == HealthStatus.HEALTHY:
+                status = HealthStatus.UNKNOWN
+        else:
+            if isinstance(latest, str):
+                latest_dt = _dt.fromisoformat(latest.replace('Z', '+00:00').split('+')[0])
+            else:
+                latest_dt = latest
+            age = (_dt.now() - latest_dt).total_seconds()
+            details['latest_data_age_seconds'] = round(age, 1)
+            details['latest_data_time'] = str(latest)
+            if age > STALE_UNHEALTHY_SECONDS:
+                status = HealthStatus.UNHEALTHY
+                problems.append(
+                    f'落库停滞：最新数据距今 {age:.0f}s（阈值 {STALE_UNHEALTHY_SECONDS}s）'
+                )
+            elif age > STALE_DEGRADED_SECONDS and status == HealthStatus.HEALTHY:
+                status = HealthStatus.DEGRADED
+                problems.append(f'数据新鲜度下降：最新数据距今 {age:.0f}s')
+    except Exception as e:
+        # 查不了库本身就是问题，不能当作正常
+        status = HealthStatus.UNHEALTHY
+        problems.append(f'数据新鲜度检查失败: {e}')
+
+    # --- 2) 磁盘队列积压 ---
+    persist_file = None
+    try:
+        persist_file = getattr(getattr(data_collector, 'data_queue', None), '_persist_file', None)
+    except Exception:
+        persist_file = None
+
+    if persist_file is not None:
+        try:
+            from pathlib import Path as _Path
+
+            pf = _Path(persist_file)
+            if pf.exists():
+                size = pf.stat().st_size
+                details['queue_persist_bytes'] = size
+                if size > QUEUE_UNHEALTHY_BYTES:
+                    status = HealthStatus.UNHEALTHY
+                    problems.append(f'磁盘队列积压严重: {size / 1048576:.1f}MB')
+                elif size > QUEUE_DEGRADED_BYTES and status != HealthStatus.UNHEALTHY:
+                    status = HealthStatus.DEGRADED
+                    problems.append(f'磁盘队列积压: {size / 1048576:.1f}MB')
+            else:
+                details['queue_persist_bytes'] = 0
+        except Exception as e:
+            problems.append(f'队列积压检查失败: {e}')
+
+    # --- 3) 交叉信号：磁盘有积压但内存队列为空 → 消费链路停摆 ---
+    try:
+        in_mem = data_collector.data_queue.qsize() if data_collector is not None else None
+        details['queue_in_memory'] = in_mem
+        if in_mem == 0 and details.get('queue_persist_bytes', 0) > QUEUE_DEGRADED_BYTES:
+            problems.append('内存队列为空但磁盘队列有积压 —— 消费链路可能已停摆')
+            if status == HealthStatus.HEALTHY:
+                status = HealthStatus.DEGRADED
+    except Exception:
+        pass
+
+    message = '; '.join(problems) if problems else '数据新鲜度与队列正常'
+    return {'status': status, 'message': message, 'details': details}
 
 
 def _check_collector(dc):
