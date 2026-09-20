@@ -455,6 +455,13 @@ class TestDatabaseMaintenance:
         assert 'alarm_records' in stats
         assert 'total_records' in stats
         assert stats['realtime_records'] >= 1
+        # 缺陷 7：膨胀指标必须从这里暴露出来（否则"库文件 3.3GB、数据 67MB"
+        # 这类问题只能靠人肉发现）。空闲页占比是判据，文件大小 vs 实际数据量是佐证。
+        assert 'free_page_ratio' in stats, 'get_database_stats 必须暴露 free_page_ratio'
+        assert 0.0 <= stats['free_page_ratio'] <= 1.0
+        assert stats['database_size_mb'] >= 0
+        assert stats['total_size_mb'] >= stats['database_size_mb']
+        assert stats['is_bloated'] is False
         database.close()
 
     def test_get_device_summary(self, db):
@@ -510,17 +517,29 @@ class TestDatabaseMaintenance:
         database.close()
 
     def test_enforce_retention_policy(self, db):
-        """数据保留策略"""
+        """数据保留策略：只按时间清理 history/alarm，**不碰 realtime_data**
+
+        2026-09 定稿：realtime_data 是"最新值缓存"（UNIQUE(device_id,
+        register_name) + UPSERT），行数上界是点位总数、不会随时间膨胀，
+        按时间删只会把设备列表的当前值一起抹掉。故签名去掉了 realtime_hours，
+        返回值也不再含恒为 0 的 realtime_deleted。
+        """
         from 存储层.database import Database
         database = Database(db)
         now = datetime.now()
-        database.insert_data('dev1', 'temp', 25.0, now, 'C')
-        database.insert_alarm('a1', 'dev1', 'temp', 'warning', 'msg', 80.0, 85.0, now)
+        # 48 小时没更新的点位：按旧的 realtime_hours=24 会被删掉
+        database.insert_data('dev1', 'temp', 25.0, now - timedelta(hours=48), 'C')
+        database.insert_alarm('a1', 'dev1', 'temp', 'warning', 'msg', 80.0, 85.0,
+                              now - timedelta(days=200))
 
-        result = database.enforce_retention_policy(realtime_hours=24, history_days=30, alarm_days=90)
-        assert 'realtime_deleted' in result
-        assert 'history_deleted' in result
-        assert 'alarm_deleted' in result
+        result = database.enforce_retention_policy(history_days=30, alarm_days=90)
+
+        assert result == {'history_deleted': 0, 'alarm_deleted': 1}
+        assert 'realtime_deleted' not in result
+        with database.get_connection(readonly=True) as conn:
+            rt = conn.execute("SELECT COUNT(*) FROM realtime_data").fetchone()[0]
+        assert rt == 1, 'realtime_data 被保留策略清空了 —— 设备列表当前值会集体消失'
+        assert database.get_latest_data('dev1', 'temp')['value'] == 25.0
         database.close()
 
     def test_vacuum_database(self, db):

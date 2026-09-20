@@ -234,8 +234,15 @@ class TestCrashRecovery:
         q = DiskBackedQueue(maxsize=1000, persist_dir=persist_dir)
         assert q.qsize() == 1
 
-    def test_clear_persistence_removes_file(self, tmp_path):
-        """clear_persistence removes the persistence file."""
+    def test_clear_persistence_empties_file_without_deleting(self, tmp_path):
+        """clear_persistence 清空文件内容，但**故意不删除文件**。
+
+        2026-09-20 实机排查后改的契约（提交 8ac23b4「队列持久化文件改截断而非删除」）：
+        消费线程每落库一批就调用本方法一次，unlink 会被运行环境的批量删除保护
+        拦截并挂起消费线程（表现：采集在跑但不再落库）。因此改为 truncate。
+        本用例原先断言 ``not persist_file.exists()``，与实现的新契约相反、
+        且与 tests/test_queue_persist_no_unlink.py 的守卫冲突，属于过期断言。
+        """
         from 采集层.data_collector import DiskBackedQueue
 
         persist_dir = str(tmp_path / 'queue')
@@ -247,10 +254,11 @@ class TestCrashRecovery:
             f.write(json.dumps({'value': 1}) + '\n')
 
         q = DiskBackedQueue(maxsize=1000, persist_dir=persist_dir)
-        assert persist_file.exists() or q.qsize() == 1  # recovered and deleted
+        assert persist_file.exists() or q.qsize() == 1  # recovered and kept
 
         q.clear_persistence()
-        assert not persist_file.exists()
+        assert persist_file.exists(), '持久化文件不得被删除（删除会触发批量删除保护）'
+        assert persist_file.stat().st_size == 0, 'clear_persistence 应清空文件内容'
 
 
 # ============================================================

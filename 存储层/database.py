@@ -6,6 +6,7 @@
 import sqlite3
 import logging
 import threading
+import time
 from typing import Any, Dict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,37 @@ from contextlib import contextmanager
 import paths
 
 logger = logging.getLogger(__name__)
+
+
+#: 全局唯一的归档表名（**真源**）。
+#:
+#: 2026-09 审计发现同一份归档散落在三处、三个名字：
+#:   - ``database.archive_old_data``      -> ``history_archive``
+#:   - ``data_archive.archive_data``      -> ``history_data_archive``
+#:   - ``data_lifecycle._process_table``  -> ``{table}_archive``
+#: 结果是同一批数据被写进不同表，``get_archive_data`` / ``get_database_stats`` /
+#: ``tools/vacuum_db.py`` / 归档测试都只认 ``history_archive``，
+#: 另两张表成了查不到、删不掉的孤儿。现在只保留这一个常量，
+#: 所有模块（含 ``data_archive`` / ``data_lifecycle``）都必须引用它。
+#:
+#: 表结构是**按天聚合**（avg/min/max/sample_count + archive_date），
+#: 不是原始采样副本 —— 别再给它建 ``_raw`` 之类的第二张表。
+ARCHIVE_TABLE = 'history_archive'
+
+#: 空闲页占比告警阈值。
+#:
+#: 2026-09 实测：库文件膨胀到 3.3GB 而实际数据仅 67MB 时，
+#: ``freelist_count / page_count`` = 0.98 —— 即 98% 的页是已删除数据的空洞。
+#: 膨胀会让 SQLite 写入变慢甚至失败（表现为"采集在跑但数据进不了库"），
+#: 所以超过这个比例就要告警，提示执行 VACUUM。
+BLOAT_FREE_PAGE_RATIO_THRESHOLD = 0.30
+
+#: 同一库的膨胀告警最小间隔（秒）。
+#: ``get_database_stats`` 会被健康检查接口和 WebSocket 状态推送周期性调用
+#: （最频繁 10 秒一次），没有节流的话膨胀库会每 10 秒刷一条同样的 warning，
+#: 反而淹没真正的新告警 —— 而"日志噪声盖住信号"正是当初 3.3GB 膨胀
+#: 迟迟没被发现的场景之一。
+BLOAT_WARN_INTERVAL_SECONDS = 3600
 
 
 def adapt_datetime(dt: datetime) -> str:
@@ -37,6 +69,9 @@ class Database:
     使用线程本地连接池，避免每次操作都 open/close
     """
 
+    #: 归档表名（类属性形式，便于调用方按实例引用；值与模块常量同源）
+    ARCHIVE_TABLE = ARCHIVE_TABLE
+
     def __init__(self, db_path: str = 'data/scada.db'):
         # 解析为绝对路径：库文件必须落在项目根下，而不是「当前工作目录」
         # （从服务/计划任务/冻结产物启动时 CWD 并非项目根，会导致开错库或新建空库）。
@@ -46,6 +81,9 @@ class Database:
 
         # 线程本地存储：每个线程复用一个连接
         self._local = threading.local()
+
+        # 上次膨胀告警时间（单调时钟），用于告警节流
+        self._last_bloat_warn_at = 0.0
 
         # 清理残留锁（崩溃后可能遗留的 stale WAL 锁）
         self._cleanup_stale_locks()
@@ -279,8 +317,9 @@ class Database:
             ''')
 
             # 创建数据归档表（用于长期存储）
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS history_archive (
+            # 表名必须用 ARCHIVE_TABLE 常量：仓储/清理/统计/tools 都按这一个名字找表
+            cursor.execute(f'''
+                CREATE TABLE IF NOT EXISTS {ARCHIVE_TABLE} (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     device_id TEXT NOT NULL,
                     register_name TEXT NOT NULL,
@@ -293,9 +332,9 @@ class Database:
                 )
             ''')
 
-            cursor.execute('''
+            cursor.execute(f'''
                 CREATE INDEX IF NOT EXISTS idx_archive_device_date
-                ON history_archive(device_id, archive_date)
+                ON {ARCHIVE_TABLE}(device_id, archive_date)
             ''')
 
             # 复合索引优化常见查询模式
@@ -853,18 +892,31 @@ class Database:
 
             return [dict(row) for row in cursor.fetchall()]
 
-    def cleanup_old_data(self, retention_days: int = 30):
-        """清理超过保留期限的历史数据。
+    def cleanup_old_data(self, retention_days: int = 30) -> int:
+        """清理超过保留期限的历史数据（**只删不归档**）。
 
         删除 ``history_data`` 表中时间戳早于 ``retention_days`` 天前的记录。
-        ``realtime_data`` 作为最新值缓存不按时间清理（仅在
-        ``delete_device_data`` 时清理）。
+
+        **realtime_data 不按时间清理** —— 理由（2026-09 定稿，别再改回去）：
+        ``realtime_data`` 上有 ``UNIQUE(device_id, register_name)`` 且写入走
+        UPSERT，每个「设备×寄存器」恒占一行，行的**数量上界 = 点位总数**，
+        根本不会随时间无界增长。它存的是"当前值"而不是历史样本，
+        时间戳只表示"这个值多久没更新了"。按时间戳清理等于把设备列表上
+        所有当前值一起抹掉 —— 前端会集体显示空白，而磁盘一个字节都省不下来。
+        确实要清某台设备的当前值，走 ``delete_device_data``（按设备清）。
+
+        职责边界（三者不要互相重叠）：
+            - ``archive_old_data``：归档聚合 + 按更宽的窗口删原始数据（维护任务入口）
+            - ``cleanup_old_data``：纯删除历史数据，不产生归档（本方法）
+            - ``enforce_retention_policy``：history + alarm 的表级保留策略，同样不碰 realtime_data
 
         Args:
             retention_days: 数据保留天数，默认 30 天。
 
         Returns:
-            None
+            int: 本次删除的 ``history_data`` 行数。
+                （原来没有 return，调用方 ``data_archive.archive_data`` 拿到的
+                ``deleted_from_main`` 恒为 None，等于对外报告了一条假数据。）
 
         Side Effects:
             - 删除 ``history_data`` 表中的过期记录。
@@ -877,23 +929,31 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # realtime_data 是"最新值"缓存，不按时间清理（仅在delete_device_data时清理）
+            # realtime_data 是"最新值"缓存，不按时间清理（理由见 docstring）
             realtime_deleted = 0
 
-            # 清理历史数据
+            # 清理历史数据。cutoff 必须用 isoformat(sep=' ') —— 与 adapt_datetime
+            # 的写入格式一致，否则 'T' 分隔会让文本比较多删近一天数据。
             history_cutoff = datetime.now() - timedelta(days=retention_days)
             cursor.execute('''
                 DELETE FROM history_data 
                 WHERE timestamp < ?
-            ''', (history_cutoff,))
+            ''', (history_cutoff.isoformat(sep=' '),))
 
             history_deleted = cursor.rowcount
 
             logger.info(f"清理旧数据: 实时数据 {realtime_deleted} 条, 历史数据 {history_deleted} 条")
 
+            return history_deleted
+
     def get_database_stats(self) -> dict[str, Any]:
         """
         获取数据库统计信息
+
+        除各表行数外，还带上磁盘膨胀指标（``free_page_ratio`` 等，见
+        ``get_fragmentation_stats``）。空闲页占比过高时会打 warning 日志 ——
+        这是"文件 3.3GB、实际数据 67MB"那类膨胀的**自动发现**入口
+        （原先只能靠人发现写入变慢后手工跑 ``tools/vacuum_db.py``）。
 
         Returns:
             dict[str, Any]: 统计信息
@@ -919,27 +979,149 @@ class Database:
 
             # 归档数据统计
             try:
-                cursor.execute('SELECT COUNT(*) FROM history_archive')
+                cursor.execute(f'SELECT COUNT(*) FROM {ARCHIVE_TABLE}')
                 archive_count = cursor.fetchone()[0]
             except Exception as e:
                 logger.debug(f"查询归档数据统计失败（可能表不存在）: {e}")
                 archive_count = 0
 
-            # 数据库文件大小
-            db_size = Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0
-
             # 总记录数（所有表合计）
             total_records = realtime_count + history_count + alarm_count + archive_count
 
-            return {
-                'realtime_records': realtime_count,
-                'history_records': history_count,
-                'alarm_records': alarm_count,
-                'unacknowledged_alarms': unacknowledged_count,
-                'archive_records': archive_count,
-                'total_records': total_records,
-                'database_size_mb': round(db_size / (1024 * 1024), 2)
-            }
+        # 膨胀指标（不占着只读连接跑 dbstat）
+        fragmentation = self.check_bloat()
+
+        stats = {
+            'realtime_records': realtime_count,
+            'history_records': history_count,
+            'alarm_records': alarm_count,
+            'unacknowledged_alarms': unacknowledged_count,
+            'archive_records': archive_count,
+            'total_records': total_records,
+        }
+        stats.update(fragmentation)
+        return stats
+
+    def get_fragmentation_stats(self, include_dbstats: bool = True) -> dict[str, Any]:
+        """统计库文件的膨胀程度（只读，不触发告警）。
+
+        膨胀的根因是「删了数据但不回收页」：SQLite 的 DELETE 只把页挂到
+        freelist，文件本身不会变小。所以判断膨胀看的是
+        ``freelist_count / page_count``，而不是行数。
+
+        Args:
+            include_dbstats: 是否额外用 ``dbstat`` 虚表算出"真实数据字节"。
+                仅在检测到疑似膨胀时建议开启（正常库没必要扫全库）；
+                该虚表需要 SQLite 编译时开启 ``SQLITE_ENABLE_DBSTAT_VTAB``，
+                不可用时相关字段为 None，不影响其余指标。
+
+        Returns:
+            dict[str, Any]:
+                - ``database_size_mb``: 主库文件大小（不含 WAL）。
+                - ``wal_size_mb``: WAL 文件大小（未 checkpoint 的增量）。
+                - ``total_size_mb``: 主库 + WAL = 真实磁盘占用。
+                - ``page_size`` / ``page_count`` / ``free_page_count``。
+                - ``free_page_ratio``: 空闲页占比 0~1（核心膨胀指标，与 WAL 无关）。
+                - ``free_bytes_mb``: 空闲页对应的字节数（= 可回收空间）。
+                - ``data_bytes_mb``: dbstat 实测的数据字节；不可用为 None。
+                - ``size_to_data_ratio``: 磁盘占用 / 实际数据字节（1 表示没有空洞，
+                  越大越膨胀；3.3GB/67MB 那次约 50）。数据量取不到时为 None。
+                - ``is_bloated``: 是否超过 ``BLOAT_FREE_PAGE_RATIO_THRESHOLD``。
+
+        Side Effects:
+            无（只读 PRAGMA，不改库）。
+            dbstat 需扫描整库页，大库上耗时与库大小成正比。
+        """
+        file_size = Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0
+        wal_path = Path(self.db_path + '-wal')
+        wal_size = wal_path.stat().st_size if wal_path.exists() else 0
+
+        page_size = 0
+        page_count = 0
+        free_pages = 0
+        with self.get_connection(readonly=True) as conn:
+            page_size = conn.execute('PRAGMA page_size').fetchone()[0] or 0
+            page_count = conn.execute('PRAGMA page_count').fetchone()[0] or 0
+            free_pages = conn.execute('PRAGMA freelist_count').fetchone()[0] or 0
+
+            data_bytes = None
+            if include_dbstats:
+                try:
+                    data_bytes = conn.execute('SELECT SUM(pgsize) FROM dbstat').fetchone()[0]
+                except sqlite3.Error as e:
+                    # dbstat 是编译期可选项；拿不到只是少一个更精确的口径，
+                    # PRAGMA 口径（freelist 占比）仍然可用，所以降级而非报错。
+                    logger.debug(f"dbstat 不可用，跳过真实数据量统计: {e}")
+
+        # 空闲页占比：膨胀的**唯一判据**。
+        # 不能用"文件大小 / 数据量"当判据 —— WAL 未 checkpoint 时主库文件
+        # 可能远小于真实数据量（甚至为 0 字节），比值会 < 1 甚至为负。
+        free_ratio = (free_pages / page_count) if page_count else 0.0
+        total_size = file_size + wal_size
+        size_to_data = (total_size / data_bytes) if (data_bytes and total_size) else None
+
+        return {
+            'database_size_mb': round(file_size / (1024 * 1024), 2),
+            'wal_size_mb': round(wal_size / (1024 * 1024), 2),
+            'total_size_mb': round(total_size / (1024 * 1024), 2),
+            'page_size': page_size,
+            'page_count': page_count,
+            'free_page_count': free_pages,
+            'free_page_ratio': round(free_ratio, 4),
+            'free_bytes_mb': round(free_pages * page_size / (1024 * 1024), 2),
+            'data_bytes_mb': (round(data_bytes / (1024 * 1024), 2)
+                              if data_bytes is not None else None),
+            'size_to_data_ratio': round(size_to_data, 2) if size_to_data else None,
+            'is_bloated': free_ratio >= BLOAT_FREE_PAGE_RATIO_THRESHOLD,
+        }
+
+    def check_bloat(self, threshold: float = BLOAT_FREE_PAGE_RATIO_THRESHOLD) -> dict[str, Any]:
+        """检测库文件膨胀，超过阈值时打 warning 日志。
+
+        只做"发现 + 告警"，不自动 VACUUM：VACUUM 需要独占重写整个库文件、
+        期间文件体积翻倍（3.3GB 库就是再要 3.3GB 空闲磁盘），无人值守时
+        静默执行的风险远大于收益。压缩留给运维/工具显式执行，
+        本方法只保证"不再悄无声息"。
+
+        Args:
+            threshold: 空闲页占比告警阈值，默认 ``BLOAT_FREE_PAGE_RATIO_THRESHOLD``。
+
+        Returns:
+            dict[str, Any]: ``get_fragmentation_stats()`` 的结果。
+                （疑似膨胀时才额外跑 dbstat，正常库只花 3 次 O(1) PRAGMA。）
+
+        Side Effects:
+            空闲页占比超阈值时打一条 warning（同一实例 1 小时内最多一条，
+            见 ``BLOAT_WARN_INTERVAL_SECONDS``）。**不会**自动 VACUUM。
+        """
+        # 先用 PRAGMA 口径探一下（O(1)）；确认异常再上 dbstat 量化
+        quick = self.get_fragmentation_stats(include_dbstats=False)
+        if not quick['page_count']:
+            # 库文件还没建成/读不到页统计，没必要继续
+            return quick
+
+        stats = quick
+        if quick['free_page_ratio'] >= threshold:
+            stats = self.get_fragmentation_stats(include_dbstats=True)
+            now = time.monotonic()
+            if now - self._last_bloat_warn_at >= BLOAT_WARN_INTERVAL_SECONDS:
+                self._last_bloat_warn_at = now
+                logger.warning(
+                    "数据库文件膨胀: %s 中 %.1f%% 的页是空闲页"
+                    "（文件 %.1fMB，其中可回收 %.1fMB，空闲页 %d/%d）"
+                    "；实际数据约 %sMB。膨胀会导致写入变慢甚至失败（表现为"
+                    "'采集在跑但数据进不了库'）。请执行 VACUUM 回收空间："
+                    "Database.vacuum_database() 或 tools/vacuum_db.py（后者用 "
+                    "VACUUM INTO 生成紧凑副本，更安全）。",
+                    self.db_path,
+                    stats['free_page_ratio'] * 100,
+                    stats['database_size_mb'],
+                    stats['free_bytes_mb'],
+                    stats['free_page_count'],
+                    stats['page_count'],
+                    stats['data_bytes_mb'] if stats['data_bytes_mb'] is not None else '?',
+                )
+        return stats
 
     def wal_checkpoint(self):
         """手动执行WAL checkpoint（将WAL数据合并到主数据库文件）"""
@@ -957,6 +1139,9 @@ class Database:
         将超过archive_days天的历史数据按天聚合后存入归档表，
         然后删除已归档的原始数据。
 
+        归档表是 ``ARCHIVE_TABLE``（``history_archive``，按天聚合结构），
+        全项目只有这一张归档表 —— 见模块顶部 ``ARCHIVE_TABLE`` 的说明。
+
         Args:
             archive_days: 归档天数（默认7天前的数据归档）
             delete_days: 删除天数（默认30天前的数据删除）
@@ -968,8 +1153,8 @@ class Database:
             cursor = conn.cursor()
 
             # 1. 归档：对archive_days之前的所有数据按天聚合存入归档表（INSERT OR IGNORE 防止重复归档）
-            cursor.execute('''
-                INSERT OR IGNORE INTO history_archive
+            cursor.execute(f'''
+                INSERT OR IGNORE INTO {ARCHIVE_TABLE}
                     (device_id, register_name, avg_value, min_value, max_value, sample_count, archive_date)
                 SELECT
                     device_id,
@@ -1028,8 +1213,8 @@ class Database:
         """
         with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM history_archive
+            cursor.execute(f'''
+                SELECT * FROM {ARCHIVE_TABLE}
                 WHERE device_id = ? AND register_name = ?
                     AND archive_date BETWEEN ? AND ?
                 ORDER BY archive_date
@@ -1052,36 +1237,53 @@ class Database:
             logger.error(f"数据库压缩失败: {e}")
             return False
 
-    def enforce_retention_policy(self, realtime_hours: int = 24,
-                                  history_days: int = 30,
-                                  alarm_days: int = 90):
-        """
-        执行数据保留策略
+    def enforce_retention_policy(self, history_days: int = 30,
+                                  alarm_days: int = 90) -> dict[str, int]:
+        """执行按表的时间保留策略（history + alarm）。
+
+        **本方法不清理 realtime_data** —— 这是 2026-09 定稿的统一结论，
+        与 ``cleanup_old_data`` / ``archive_old_data`` 保持一致，理由：
+
+        1. ``realtime_data`` 是"最新值缓存"（``UNIQUE(device_id, register_name)``
+           + UPSERT），行数上界是点位总数，本来就不会随时间膨胀；
+        2. 它没有备份、没有归档，按时间删就是**直接丢数据**：设备列表上
+           所有当前值会集体消失，直到下一次采集才恢复。巡检凌晨跑一次清理，
+           白天的看板就可能整片空白；
+        3. 原先 ``enforce_retention_policy(realtime_hours=24)`` 会删掉
+           "24 小时没更新"的点位 —— 而对于停机设备/慢采样点位，这正是
+           最需要看到"最后值 + 最后更新时间"的场景。
+
+        需要清理某台设备的当前值时走 ``delete_device_data``（按设备，不按时间）。
 
         Args:
-            realtime_hours: 实时数据保留小时数（默认24小时）
-            history_days: 历史数据保留天数（默认30天）
-            alarm_days: 报警记录保留天数（默认90天）
+            history_days: 历史数据保留天数（默认 30 天）。
+            alarm_days: 报警记录保留天数（默认 90 天）。
+
+        Returns:
+            dict[str, int]: ``{'history_deleted': n, 'alarm_deleted': m}``。
+                （不再返回 ``realtime_deleted``：本方法已不再删除 realtime 数据，
+                留一个恒为 0 的字段只会让人以为"确实清理过"。）
+
+        Side Effects:
+            删除 ``history_data`` / ``alarm_records`` 中的过期记录并提交事务。
+            删除量为 0 时不打日志。
         """
         now = datetime.now()
-        results = {}
+        results: dict[str, int] = {}
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 清理过期实时数据
-            realtime_cutoff = now - timedelta(hours=realtime_hours)
-            cursor.execute('DELETE FROM realtime_data WHERE timestamp < ?', (realtime_cutoff,))
-            results['realtime_deleted'] = cursor.rowcount
-
-            # 清理过期历史数据
+            # 清理过期历史数据（cutoff 用空格分隔格式，与写入格式一致）
             history_cutoff = now - timedelta(days=history_days)
-            cursor.execute('DELETE FROM history_data WHERE timestamp < ?', (history_cutoff,))
+            cursor.execute('DELETE FROM history_data WHERE timestamp < ?',
+                           (history_cutoff.isoformat(sep=' '),))
             results['history_deleted'] = cursor.rowcount
 
             # 清理过期报警记录
             alarm_cutoff = now - timedelta(days=alarm_days)
-            cursor.execute('DELETE FROM alarm_records WHERE timestamp < ?', (alarm_cutoff,))
+            cursor.execute('DELETE FROM alarm_records WHERE timestamp < ?',
+                           (alarm_cutoff.isoformat(sep=' '),))
             results['alarm_deleted'] = cursor.rowcount
 
         total_deleted = sum(results.values())
@@ -1152,7 +1354,7 @@ class Database:
         'realtime_data': 'SELECT COUNT(*) FROM realtime_data',
         'history_data': 'SELECT COUNT(*) FROM history_data',
         'alarm_records': 'SELECT COUNT(*) FROM alarm_records',
-        'history_archive': 'SELECT COUNT(*) FROM history_archive',
+        ARCHIVE_TABLE: f'SELECT COUNT(*) FROM {ARCHIVE_TABLE}',
         'users': 'SELECT COUNT(*) FROM users',
         'operation_logs': 'SELECT COUNT(*) FROM operation_logs',
     }

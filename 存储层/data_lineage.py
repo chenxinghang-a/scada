@@ -7,6 +7,13 @@
 - 转换记录
 - 影响分析
 - 血缘报告
+
+**接线状态：未接线（unwired）** —— 见 ``WIRED``。
+2026-09 审计确认本模块在生产链路里零引用，没有任何采集/写入路径调用
+``track_data_flow``，所以 ``generate_report()`` 永远只会显示初始化时
+预置的那几个节点。它也**不是**在磁盘上持久化的血缘（纯内存），
+真要接入得先想清楚"谁在什么时候记录边"，否则就是个内存里的摆设。
+行为由 ``tests/test_storage_regressions.py`` 固化。
 """
 
 import time
@@ -18,6 +25,10 @@ from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+
+#: 是否已接入生产链路。False = 当前无人调用（仅有测试覆盖）。
+#: 接入后请改成 True，并同步更新模块 docstring 与 tests/test_storage_regressions.py。
+WIRED = False
 
 
 class LineageNode:
@@ -126,8 +137,22 @@ class DataLineageTracker:
             }
         ))
 
+    def _edge_snapshot(self) -> List[LineageEdge]:
+        """取一份边列表快照（复制），供不在锁内遍历的场景使用。"""
+        with self._lock:
+            return list(self.edges)
+
     def get_upstream(self, node_id: str, depth: int = 3) -> List[str]:
-        """获取上游节点"""
+        """获取上游节点
+
+        注意（2026-09 修复）：DFS 必须在**锁外**做。
+        原先 ``dfs`` 里是 ``with self._lock:`` 包住整个 for 循环再递归，
+        而 ``self._lock`` 是 ``threading.Lock``（不可重入）——
+        同一个线程递归进第二层时再取锁就永久阻塞。只要图里有一条边，
+        本方法就会**死锁**（表现为调用方卡死、无异常无日志）。
+        现在改成先取边快照、再在锁外递归。
+        """
+        edges = self._edge_snapshot()
         visited = set()
         result = []
 
@@ -137,16 +162,16 @@ class DataLineageTracker:
             visited.add(current_id)
             result.append(current_id)
 
-            with self._lock:
-                for edge in self.edges:
-                    if edge.target_id == current_id:
-                        dfs(edge.source_id, current_depth + 1)
+            for edge in edges:
+                if edge.target_id == current_id:
+                    dfs(edge.source_id, current_depth + 1)
 
         dfs(node_id, 0)
         return result
 
     def get_downstream(self, node_id: str, depth: int = 3) -> List[str]:
-        """获取下游节点"""
+        """获取下游节点（DFS 在锁外做，理由同 ``get_upstream``）"""
+        edges = self._edge_snapshot()
         visited = set()
         result = []
 
@@ -156,10 +181,9 @@ class DataLineageTracker:
             visited.add(current_id)
             result.append(current_id)
 
-            with self._lock:
-                for edge in self.edges:
-                    if edge.source_id == current_id:
-                        dfs(edge.target_id, current_depth + 1)
+            for edge in edges:
+                if edge.source_id == current_id:
+                    dfs(edge.target_id, current_depth + 1)
 
         dfs(node_id, 0)
         return result

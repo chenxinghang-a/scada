@@ -6,10 +6,11 @@
 
 import logging
 import math
-import re
 from datetime import datetime, timedelta
 from typing import Any, List, Dict, Tuple
 from collections import defaultdict
+
+from .database import ARCHIVE_TABLE
 
 logger = logging.getLogger(__name__)
 
@@ -45,90 +46,64 @@ class DataArchive:
             'statistical': self._compress_statistical,
         }
 
-    @staticmethod
-    def _validate_table_name(name: str) -> str:
-        """防SQL注入：表名只允许字母数字下划线"""
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', str(name)):
-            raise ValueError(f"Invalid table name: {name}")
-        return str(name)
+    def archive_data(self, retention_days: int = 30) -> Dict[str, Any]:
+        """归档旧数据（委托给 ``Database.archive_old_data``）。
 
-    def archive_data(self, retention_days: int = 30, archive_table: str = 'history_data_archive'):
-        """
-        归档旧数据
-        
-        将超过保留天数的数据移动到归档表，然后删除原表数据
+        2026-09 审计：本方法原先自己建了一张 ``history_data_archive``（原始行副本）
+        并自己写 INSERT/DELETE，而 ``Database.archive_old_data`` 写的是
+        ``history_archive``（按天聚合）、``DataLifecycleManager`` 又写
+        ``{table}_archive`` —— 同一份归档散落三处，只有 ``history_archive``
+        被 ``get_archive_data`` / 统计 / tools 认账，另两张表成了孤儿。
+
+        现在**归档实现全项目只有一份**：``Database.archive_old_data``，
+        归档表名只有一个真源：``存储层.database.ARCHIVE_TABLE``。
+        本方法退化成薄适配层，只负责把「保留天数」翻译成归档/删除两个窗口。
 
         Args:
-            retention_days: 数据保留天数
-            archive_table: 归档表名
+            retention_days: 数据保留天数。早于该天数的原始数据会被按天聚合
+                进归档表，随后从 ``history_data`` 删除（归档窗口 = 删除窗口）。
+
+        Returns:
+            dict[str, Any]:
+                - ``moved_to_archive``: 本次新增的归档聚合行数。
+                - ``deleted_from_main``: 本次从 ``history_data`` 删除的原始行数。
+                - ``archive_table``: 归档表名（恒为 ``ARCHIVE_TABLE``）。
+                - ``cutoff_date``: 归档/删除的时间分界。
+
+        Side Effects:
+            写入 ``history_archive``，删除 ``history_data`` 中的过期行。
         """
         logger.info(f"开始归档 {retention_days} 天前的数据...")
-        
+
         cutoff_date = datetime.now() - timedelta(days=retention_days)
-        
-        # 创建归档表（如果不存在）
-        self._create_archive_table(archive_table)
-        
-        # 移动数据到归档表
-        moved_count = self._move_to_archive(cutoff_date, archive_table)
-        
-        # 删除原表中的旧数据
-        deleted_count = self.database.cleanup_old_data(retention_days)
-        
-        logger.info(f"数据归档完成: 移动 {moved_count} 条到归档表，删除 {deleted_count} 条旧数据")
-        
+
+        # 归档窗口与删除窗口取同一个值：本方法的契约就是"超过 retention_days
+        # 的数据先归档再删除"。需要"归档 7 天前、只删 30 天前"时请直接调
+        # Database.archive_old_data(archive_days=7, delete_days=30)。
+        result = self.database.archive_old_data(
+            archive_days=retention_days, delete_days=retention_days
+        )
+
+        moved_count = result.get('archived', 0)
+        deleted_count = result.get('deleted_history', 0)
+
+        logger.info(f"数据归档完成: 归档 {moved_count} 条聚合行到 {ARCHIVE_TABLE}，"
+                    f"删除 {deleted_count} 条旧数据")
+
         return {
             'moved_to_archive': moved_count,
             'deleted_from_main': deleted_count,
-            'cutoff_date': cutoff_date.isoformat()
+            'archive_table': ARCHIVE_TABLE,
+            'cutoff_date': cutoff_date.isoformat(),
         }
-
-    def _create_archive_table(self, archive_table: str):
-        """创建归档表"""
-        archive_table = self._validate_table_name(archive_table)
-        with self.database.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(f'''
-                CREATE TABLE IF NOT EXISTS {archive_table} (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    device_id TEXT NOT NULL,
-                    register_name TEXT NOT NULL,
-                    value REAL,
-                    unit TEXT,
-                    timestamp DATETIME NOT NULL,
-                    archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            # 创建索引
-            cursor.execute(f'''
-                CREATE INDEX IF NOT EXISTS idx_{archive_table}_device_time 
-                ON {archive_table}(device_id, register_name, timestamp)
-            ''')
-
-    def _move_to_archive(self, cutoff_date: datetime, archive_table: str) -> int:
-        """移动数据到归档表"""
-        archive_table = self._validate_table_name(archive_table)
-        with self.database.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 插入到归档表
-            cursor.execute(f'''
-                INSERT INTO {archive_table} (device_id, register_name, value, unit, timestamp)
-                SELECT device_id, register_name, value, unit, timestamp
-                FROM history_data
-                WHERE timestamp < ?
-            ''', (cutoff_date.isoformat(sep=' '),))
-            
-            moved_count = cursor.rowcount
-            
-            return moved_count
 
     def compress_data(self, device_id: str, register_name: str,
                       start_time: datetime, end_time: datetime,
                       interval: str = '1hour', algorithm: str = 'statistical') -> Dict[str, Any]:
         """
         压缩数据
+
+        取 1 分钟粒度的历史数据后，按 ``interval`` 重新分桶并套用压缩算法。
 
         Args:
             device_id: 设备ID
@@ -142,14 +117,25 @@ class DataArchive:
             压缩结果
         """
         # 获取原始数据
-        raw_data = self.database.get_history_data(
+        #
+        # 注意 get_history_data() 返回的是**聚合桶**，字段名是
+        #   {'time_bucket', 'avg_value', 'min_value', 'max_value', 'sample_count'}
+        # 而不是原始采样行的 {'timestamp', 'value'}。
+        # 2026-09 审计：这里原先直接 `item['timestamp']` / `item['value']`，
+        # 取到的是 None，随后 `None.timestamp()` 必抛
+        # AttributeError: 'NoneType' object has no attribute 'timestamp' ——
+        # 也就是说 compress_data 从来没成功返回过一帧压缩结果。
+        raw_rows = self.database.get_history_data(
             device_id=device_id,
             register_name=register_name,
             start_time=start_time,
             end_time=end_time,
             interval='1min'  # 获取1分钟粒度的原始数据
         )
-        
+
+        # 归一化：把聚合桶映射成压缩算法认识的 {timestamp, value, unit, count}
+        raw_data = self._normalize_history_rows(raw_rows)
+
         if not raw_data:
             return {
                 'device_id': device_id,
@@ -192,6 +178,61 @@ class DataArchive:
             'algorithm': algorithm,
             'data': compressed_data
         }
+
+    @staticmethod
+    def _normalize_history_rows(rows: List[Dict]) -> List[Dict]:
+        """把 ``get_history_data`` 的行统一成压缩算法输入格式。
+
+        兼容两种来源（顺序即优先级）：
+        1. **聚合桶**（``get_history_data`` 实际返回的）：
+           用 ``time_bucket`` 当时间、``avg_value`` 当代表值，``sample_count`` 当计数；
+        2. **原始采样行**：``timestamp`` / ``value`` / ``unit``。
+
+        Args:
+            rows: ``get_history_data`` 返回的原始行列表。
+
+        Returns:
+            list[dict]: 每项形如 ``{'timestamp': datetime, 'value': float,
+            'unit': str, 'count': int}``。时间无法解析或值缺失的行会被丢弃
+            （宁可少一条，也不要让压缩结果里出现 None）。
+        """
+        normalized: List[Dict] = []
+        for item in rows or []:
+            raw_ts = item.get('time_bucket', item.get('timestamp'))
+            raw_value = item.get('avg_value', item.get('value'))
+
+            if raw_ts is None or raw_value is None:
+                logger.debug(f"跳过分桶数据（缺时间或值）: {item!r}")
+                continue
+
+            if isinstance(raw_ts, str):
+                try:
+                    raw_ts = datetime.fromisoformat(raw_ts.replace('Z', '+00:00'))
+                except ValueError:
+                    logger.debug(f"跳过分桶数据（时间格式无法解析）: {raw_ts!r}")
+                    continue
+
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                logger.debug(f"跳过分桶数据（值不是数字）: {raw_value!r}")
+                continue
+
+            sample_count = item.get('sample_count')
+            try:
+                count = int(sample_count) if sample_count is not None else 1
+            except (TypeError, ValueError):
+                count = 1
+
+            normalized.append({
+                'timestamp': raw_ts,
+                'value': value,
+                # 单位不在聚合结果里（get_history_data 未聚合 unit），留空
+                'unit': item.get('unit', '') or '',
+                'count': max(count, 1),
+            })
+
+        return normalized
 
     def _parse_interval(self, interval: str) -> int:
         """

@@ -7,6 +7,14 @@
 - 数据格式验证
 - 重复数据检测
 - 一致性报告
+
+**接线状态：未接线（unwired）** —— 见 ``WIRED``。
+2026-09 审计确认本模块在生产链路里零引用：没有任何 API/维护任务调用它，
+``run.py`` 启动流程也不跑一致性检查。保留它的价值是"事后排查工具"
+（人工拿库文件跑一遍就能定位缺表/重复/孤立记录），因此：
+- 不接进启动路径：全量检查要扫 history_data，大库上是分钟级开销，
+  放进启动/定时任务会把服务拖慢；
+- 行为由 ``tests/test_storage_regressions.py`` 固化，防止它悄悄腐坏。
 """
 
 import time
@@ -17,6 +25,10 @@ from typing import Dict, List, Any, Optional
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+
+#: 是否已接入生产链路。False = 当前无人调用（仅有测试覆盖）。
+#: 接入后请改成 True，并同步更新模块 docstring 与 tests/test_storage_regressions.py。
+WIRED = False
 
 
 class ConsistencyChecker:

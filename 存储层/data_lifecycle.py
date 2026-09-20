@@ -7,6 +7,12 @@
 - 自动归档
 - 数据清理
 - 生命周期报告
+
+**接线状态：未接线（unwired）** —— 见 ``WIRED``。
+2026-09 审计确认本模块在生产链路里**没有任何调用方**（只有测试引用），
+实际的保留/归档由 ``Database.archive_old_data`` 经 ``core/maintenance.py``
+的 ``data_archive`` 任务执行。因此这里只保证"行为正确且被测试固化"，
+不声称已被使用；真要接入，请把 ``WIRED`` 改为 True 并补上调用方与监控。
 """
 
 import time
@@ -17,19 +23,29 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
+from .database import ARCHIVE_TABLE
+
 logger = logging.getLogger(__name__)
+
+#: 是否已接入生产链路。False = 当前无人调用（仅有测试覆盖）。
+#: 接入后请改成 True，并同步更新模块 docstring 与 tests/test_storage_regressions.py。
+WIRED = False
 
 
 class RetentionPolicy:
     """数据保留策略"""
 
     def __init__(self, name: str, table: str, retention_days: int,
-                 archive_enabled: bool = True, archive_days: int = 7):
+                 archive_enabled: bool = True, archive_days: int = 7,
+                 archive_table: Optional[str] = None):
         self.name = name
         self.table = table
         self.retention_days = retention_days
         self.archive_enabled = archive_enabled
         self.archive_days = archive_days
+        #: 归档去向表名。None 表示由管理器推导（``{table}_archive``，
+        #: ``history_data`` 例外，映射到全局唯一的 ``ARCHIVE_TABLE``）。
+        self.archive_table = archive_table
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -38,6 +54,7 @@ class RetentionPolicy:
             'retention_days': self.retention_days,
             'archive_enabled': self.archive_enabled,
             'archive_days': self.archive_days,
+            'archive_table': self.archive_table,
         }
 
 
@@ -53,7 +70,9 @@ class DataLifecycleManager:
         self.policies: Dict[str, RetentionPolicy] = {
             'history_data': RetentionPolicy(
                 '历史数据', 'history_data',
-                retention_days=90, archive_enabled=True, archive_days=7
+                retention_days=90, archive_enabled=True, archive_days=7,
+                # 归档表必须是全局唯一那张（聚合结构），不能是 {table}_archive
+                archive_table=ARCHIVE_TABLE,
             ),
             'alarm_records': RetentionPolicy(
                 '报警记录', 'alarm_records',
@@ -118,6 +137,28 @@ class DataLifecycleManager:
 
         return results
 
+    def resolve_archive_table(self, table: str) -> str:
+        """推导某张表的归档去向表名。
+
+        规则（顺序即优先级）：
+        1. 策略里显式配置的 ``archive_table``；
+        2. ``history_data`` -> ``ARCHIVE_TABLE``（全局唯一归档表，按天聚合结构）；
+        3. 其余表沿用 ``{table}_archive``（这些表当前都没有归档表，不会命中）。
+
+        2026-09 审计前这里无条件用 ``f"{table}_archive"``，于是
+        ``history_data`` 的归档落在 ``history_data_archive``，
+        和 ``Database.archive_old_data`` 写的 ``history_archive`` 不是一张表
+        （而且它 ``SELECT *`` 的整行复制跟聚合结构也不兼容，
+        真执行必报列数不符）—— 同一份归档散落三处。现在统一到唯一真源。
+        """
+        policy = self.policies.get(table)
+        explicit = getattr(policy, 'archive_table', None)
+        if explicit:
+            return explicit
+        if table == 'history_data':
+            return ARCHIVE_TABLE
+        return f"{table}_archive"
+
     def _process_table(self, conn: sqlite3.Connection, table: str,
                       policy: RetentionPolicy) -> Dict[str, Any]:
         """处理单个表的生命周期"""
@@ -136,23 +177,40 @@ class DataLifecycleManager:
         # 2. 归档旧数据
         if policy.archive_enabled:
             archive_cutoff = datetime.now() - timedelta(days=policy.archive_days)
-            archive_table = f"{table}_archive"
+            archive_table = self.resolve_archive_table(table)
+            result['archive_table'] = archive_table
 
             # 检查归档表是否存在
-            cursor.execute(f"""
+            cursor.execute("""
                 SELECT name FROM sqlite_master
-                WHERE type='table' AND name='{archive_table}'
-            """)
+                WHERE type='table' AND name=?
+            """, (archive_table,))
             archive_exists = cursor.fetchone() is not None
 
             if archive_exists:
-                # 归档数据
-                cursor.execute(f"""
-                    INSERT INTO {archive_table}
-                    SELECT * FROM {table}
-                    WHERE timestamp < ?
-                    AND id NOT IN (SELECT id FROM {archive_table})
-                """, (archive_cutoff.isoformat(sep=' '),))
+                if archive_table == ARCHIVE_TABLE:
+                    # 规范归档表存的是**按天聚合**值（与 Database.archive_old_data
+                    # 同结构），不能整行复制，必须聚合后写入。
+                    cursor.execute(f"""
+                        INSERT OR IGNORE INTO {ARCHIVE_TABLE}
+                            (device_id, register_name, avg_value, min_value,
+                             max_value, sample_count, archive_date)
+                        SELECT
+                            device_id, register_name,
+                            AVG(value), MIN(value), MAX(value), COUNT(*),
+                            DATE(timestamp)
+                        FROM {table}
+                        WHERE timestamp < ?
+                        GROUP BY device_id, register_name, DATE(timestamp)
+                    """, (archive_cutoff.isoformat(sep=' '),))
+                else:
+                    # 通用表：整行复制，靠 id 去重（要求归档表与源表结构一致）
+                    cursor.execute(f"""
+                        INSERT INTO {archive_table}
+                        SELECT * FROM {table}
+                        WHERE timestamp < ?
+                        AND id NOT IN (SELECT id FROM {archive_table})
+                    """, (archive_cutoff.isoformat(sep=' '),))
                 archived_count = cursor.rowcount
                 result['archived_count'] = archived_count
 

@@ -49,17 +49,31 @@ class TestDataArchiveInit:
 
 
 class TestArchiveData:
-    def test_archive_data(self, archive):
-        cursor = archive.database.get_connection().cursor()
-        cursor.rowcount = 5
-        cursor.fetchall.return_value = []
+    def test_archive_data(self, tmp_path):
+        """archive_data 现在是 ``Database.archive_old_data`` 的薄适配层。
 
-        result = archive.archive_data(retention_days=30)
+        2026-09 审计前它自己建 ``history_data_archive`` 并整行复制，
+        ``deleted_from_main`` 还取自没有 return 的 ``cleanup_old_data``（恒 None），
+        用 MagicMock 断言"调用过 cleanup_old_data"完全测不出这些问题，
+        所以这里改成真库验证真实返回值与归档去向。
+        """
+        from 存储层.database import ARCHIVE_TABLE, Database
 
-        assert 'moved_to_archive' in result
-        assert 'deleted_from_main' in result
+        db = Database(str(tmp_path / 'archive.db'))
+        db.insert_data('dev1', 'temp', 25.0, datetime.now() - timedelta(days=40), 'C')
+
+        result = DataArchive(db).archive_data(retention_days=30)
+
+        assert result['archive_table'] == ARCHIVE_TABLE
+        assert result['moved_to_archive'] == 1, '过期数据没有按天聚合进归档表'
+        assert result['deleted_from_main'] == 1, 'deleted_from_main 必须是真实删除条数'
+        assert isinstance(result['deleted_from_main'], int)
         assert 'cutoff_date' in result
-        archive.database.cleanup_old_data.assert_called_once_with(30)
+        with db.get_connection(readonly=True) as conn:
+            names = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%archive%'")]
+        assert names == [ARCHIVE_TABLE], f'归档散落到多张表: {names}'
+        db.close()
 
 
 class TestParseInterval:

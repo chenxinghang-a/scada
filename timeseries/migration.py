@@ -13,6 +13,21 @@ SQLite到TDengine数据迁移工具
 - 迁移前请备份SQLite数据库
 - 迁移过程中不要写入新数据
 - 迁移完成后验证数据一致性
+
+表名与列映射（2026-09 修正）
+---------------------------
+原先这里读的是 ``telemetry`` / ``alarms`` 两张**根本不存在的表**
+（``存储层/database.py`` 建的是 ``history_data`` / ``alarm_records``），
+查询直接抛 ``no such table`` 被 catch 掉、统计里只剩 0 ——
+即"迁移必然 0 行"的伪实现。现在表名收敛到下面两个常量，
+列也不再假设 SQLite 侧有 ``quality`` / ``alarm_type``：
+
+| TDengine 列 | SQLite 来源 |
+|---|---|
+| ``device_telemetry.value`` | ``history_data.value`` |
+| ``device_telemetry.quality`` | 无来源，恒 192(GOOD)（质量码只存在 ``realtime_data.quality``，且只保留最新值，无法回填历史） |
+| ``device_telemetry.unit`` | ``history_data.unit`` |
+| ``alarm_records.alarm_type`` | 无来源，恒空串（SQLite 侧没有该列） |
 """
 
 import sqlite3
@@ -25,6 +40,34 @@ from .tdengine_client import TDengineClient
 from .data_models import (
     TelemetryRecord, AlarmRecord, OEERecord, EnergyRecord
 )
+
+
+#: SQLite 侧的遥测源表（= 存储层的历史数据表，不要把名字改回 'telemetry'）
+TELEMETRY_TABLE = 'history_data'
+
+#: SQLite 侧的报警源表（不要把名字改回 'alarms'）
+ALARM_TABLE = 'alarm_records'
+
+#: SQLite 侧没有质量码列（质量码只存于 realtime_data 的最新值），
+#: 历史行回填不了，统一按 GOOD 处理。
+DEFAULT_QUALITY = 192
+
+#: TDengine 侧的超级表名（与 ``data_models.STABLE_DEFINITIONS`` 保持一致）
+TD_TELEMETRY_TABLE = 'device_telemetry'
+TD_ALARM_TABLE = 'alarm_records'
+
+
+def _parse_timestamp(raw: Any) -> datetime:
+    """解析 SQLite 里的时间戳文本。
+
+    ``存储层.database.adapt_datetime`` 写入的是空格分隔的
+    ``'YYYY-MM-DD HH:MM:SS.ffffff'``（``datetime.isoformat(sep=' ')``），
+    这里用 ``fromisoformat`` 解析；老数据/手工灌数可能是 ``'T'`` 分隔，
+    ``fromisoformat`` 同样接受，无需分支。
+    """
+    if isinstance(raw, datetime):
+        return raw
+    return datetime.fromisoformat(str(raw))
 
 
 class SQLiteToTDengineMigrator:
@@ -123,17 +166,28 @@ class SQLiteToTDengineMigrator:
         finally:
             self.disconnect_sqlite()
 
+    def _table_exists(self, cursor: sqlite3.Cursor, table: str) -> bool:
+        """判断源库里是否存在某张表（迁移器可指向任意库文件，缺表要跳过而不是报错）"""
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        return cursor.fetchone() is not None
+
     def _migrate_telemetry(self, batch_size: int):
-        """迁移遥测数据"""
+        """迁移遥测数据（源表：``history_data``）"""
         self.logger.info("开始迁移遥测数据...")
 
         try:
             cursor = self._sqlite_conn.cursor()
 
+            if not self._table_exists(cursor, TELEMETRY_TABLE):
+                self.logger.info(f"遥测源表 {TELEMETRY_TABLE} 不存在，跳过迁移")
+                return
+
             # 查询SQLite中的遥测数据
-            cursor.execute("""
-                SELECT device_id, register_name, timestamp, value, quality
-                FROM telemetry
+            # 列固定为 5 个真实存在的列：history_data 没有 quality 列，
+            # 质量码统一用 DEFAULT_QUALITY 回填（见模块 docstring 的映射表）。
+            cursor.execute(f"""
+                SELECT device_id, register_name, timestamp, value, unit
+                FROM {TELEMETRY_TABLE}
                 ORDER BY timestamp
             """)
 
@@ -143,9 +197,10 @@ class SQLiteToTDengineMigrator:
                     record = TelemetryRecord(
                         device_id=row['device_id'],
                         register_name=row['register_name'],
-                        timestamp=datetime.fromisoformat(row['timestamp']),
+                        timestamp=_parse_timestamp(row['timestamp']),
                         value=row['value'],
-                        quality=row['quality'] if row['quality'] else 192
+                        quality=DEFAULT_QUALITY,
+                        unit=row['unit'] or ''
                     )
                     batch.append(record)
 
@@ -171,17 +226,23 @@ class SQLiteToTDengineMigrator:
             self.stats['errors'] += 1
 
     def _migrate_alarms(self, batch_size: int):
-        """迁移报警数据"""
+        """迁移报警数据（源表：``alarm_records``）"""
         self.logger.info("开始迁移报警数据...")
 
         try:
             cursor = self._sqlite_conn.cursor()
 
+            if not self._table_exists(cursor, ALARM_TABLE):
+                self.logger.info(f"报警源表 {ALARM_TABLE} 不存在，跳过迁移")
+                return
+
             # 查询SQLite中的报警数据
-            cursor.execute("""
-                SELECT alarm_id, device_id, timestamp, alarm_level, alarm_type,
+            # alarm_records 没有 alarm_type 列（TDengine 超级表有）→ 传空串；
+            # 也没有 register_name 对应字段，故不映射。
+            cursor.execute(f"""
+                SELECT alarm_id, device_id, timestamp, alarm_level,
                        alarm_message, threshold, actual_value
-                FROM alarms
+                FROM {ALARM_TABLE}
                 ORDER BY timestamp
             """)
 
@@ -191,10 +252,10 @@ class SQLiteToTDengineMigrator:
                     record = AlarmRecord(
                         alarm_id=row['alarm_id'],
                         device_id=row['device_id'],
-                        timestamp=datetime.fromisoformat(row['timestamp']),
+                        timestamp=_parse_timestamp(row['timestamp']),
                         level=row['alarm_level'],
-                        alarm_type=row['alarm_type'],
-                        message=row['alarm_message'],
+                        alarm_type='',
+                        message=row['alarm_message'] or '',
                         value=row['actual_value'] if row['actual_value'] else 0,
                         threshold=row['threshold'] if row['threshold'] else 0
                     )
@@ -338,51 +399,88 @@ class SQLiteToTDengineMigrator:
         self.logger.info(f"耗时: {duration:.2f} 秒")
         self.logger.info("=" * 50)
 
+    @staticmethod
+    def _extract_scalar(result: Any) -> Any:
+        """从 TDengine 查询结果里取出第一个标量值。
+
+        兼容两种返回形态（客户端 REST/原生两条路径的包装不同）：
+        - REST: ``{'code': 0, 'data': [{'column_meta': [...], 'data': [[3]]}]}``
+        - 原生: ``{'data': [[3]]}``
+
+        识别不出来时返回 None（表示"没查到/不可用"，而不是 0）。
+        """
+        if not result:
+            return None
+        data = result.get('data')
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            data = data[0].get('data')
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, (list, tuple)):
+                return first[0] if first else None
+            return first
+        return None
+
+    def _count_tdengine(self, table: str) -> int | None:
+        """向 TDengine 求证某超级表的行数；无法求证时返回 None。"""
+        executor = getattr(self.tdengine, '_execute_sql', None)
+        if executor is None:
+            return None
+        try:
+            count = self._extract_scalar(executor(f'SELECT COUNT(*) FROM {table}'))
+            return int(count) if count is not None else None
+        except Exception as e:
+            self.logger.debug(f"TDengine 行数查询失败({table}): {e}")
+            return None
+
     def verify_migration(self, sample_size: int = 100) -> dict[str, Any]:
         """
         验证迁移结果
 
+        两侧都取到行数时才判 ``match``；TDengine 侧查不到（未连接/无查询能力）
+        时 ``tdengine_count`` 与 ``match`` 为 None，表示"**未校验**" ——
+        以前这里恒为 ``(0, False)``，会因为"没查"而报"不一致"，
+        属于会误导运维的假信号。
+
         Args:
-            sample_size: 抽样检查数量
+            sample_size: 抽样检查数量（当前仅做行数核对，保留参数以兼容调用方）
 
         Returns:
-            dict[str, Any]: 验证结果
+            dict[str, Any]: 各表 ``{sqlite_count, tdengine_count, match}``
         """
         self.logger.info("开始验证迁移结果...")
 
         results = {
-            'telemetry': {'sqlite_count': 0, 'tdengine_count': 0, 'match': False},
-            'alarms': {'sqlite_count': 0, 'tdengine_count': 0, 'match': False},
-            'oee': {'sqlite_count': 0, 'tdengine_count': 0, 'match': False},
-            'energy': {'sqlite_count': 0, 'tdengine_count': 0, 'match': False}
+            'telemetry': {'sqlite_count': 0, 'tdengine_count': None, 'match': None},
+            'alarms': {'sqlite_count': 0, 'tdengine_count': None, 'match': None},
+            'oee': {'sqlite_count': 0, 'tdengine_count': None, 'match': None},
+            'energy': {'sqlite_count': 0, 'tdengine_count': None, 'match': None}
+        }
+
+        # SQLite 源表 -> TDengine 超级表；None 表示可选表（源库可能没有）
+        tables = {
+            'telemetry': (TELEMETRY_TABLE, TD_TELEMETRY_TABLE),
+            'alarms': (ALARM_TABLE, TD_ALARM_TABLE),
+            'oee': ('oee_records', 'oee_records'),
+            'energy': ('energy_records', 'energy_records'),
         }
 
         try:
             cursor = self._sqlite_conn.cursor()
 
-            # 验证遥测数据
-            cursor.execute("SELECT COUNT(*) FROM telemetry")
-            results['telemetry']['sqlite_count'] = cursor.fetchone()[0]
+            for key, (sqlite_table, td_table) in tables.items():
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {sqlite_table}")
+                    results[key]['sqlite_count'] = cursor.fetchone()[0]
+                except Exception as e:
+                    # 可选表（oee/energy）在旧库里可能不存在；计数保持 0，match 保持"未校验"
+                    self.logger.debug(f"验证 {sqlite_table} 跳过（表不存在或查询失败）: {e}")
+                    continue
 
-            # 验证报警数据
-            cursor.execute("SELECT COUNT(*) FROM alarms")
-            results['alarms']['sqlite_count'] = cursor.fetchone()[0]
-
-            # 验证OEE数据
-            try:
-                cursor.execute("SELECT COUNT(*) FROM oee_records")
-                results['oee']['sqlite_count'] = cursor.fetchone()[0]
-            except Exception as e:
-                # oee_records 为可选表，旧库可能不存在；计数保持 0，match 仍为 False
-                self.logger.debug(f"验证 oee_records 跳过（表不存在或查询失败）: {e}")
-
-            # 验证能源数据
-            try:
-                cursor.execute("SELECT COUNT(*) FROM energy_records")
-                results['energy']['sqlite_count'] = cursor.fetchone()[0]
-            except Exception as e:
-                # energy_records 为可选表，旧库可能不存在；计数保持 0，match 仍为 False
-                self.logger.debug(f"验证 energy_records 跳过（表不存在或查询失败）: {e}")
+                td_count = self._count_tdengine(td_table)
+                results[key]['tdengine_count'] = td_count
+                if td_count is not None:
+                    results[key]['match'] = (td_count == results[key]['sqlite_count'])
 
             self.logger.info("验证完成")
             return results
