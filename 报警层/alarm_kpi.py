@@ -188,23 +188,41 @@ class AlarmKPI:
             logger.error(f"获取常驻报警数失败: {e}")
             return 0
 
+    # ISA-18.2 优先级分档表：把现网三级命名（critical/warning/info）与
+    # 五级命名（critical/high/medium/low/info）归一到 low/medium/high/critical 四档。
+    # 旧实现只统计 low/medium/high/critical 四个字面量，而规则实际产出的是
+    # warning → 四档恒为 0，优先级分布永远是空的（KPI 形同虚设）。
+    LEVEL_BUCKETS = {
+        'critical': 'critical',
+        'high': 'high',
+        'warning': 'medium',
+        'medium': 'medium',
+        'low': 'low',
+        'info': 'low',
+    }
+
     def _calculate_priority_distribution(self, alarms: List[Dict]) -> Dict[str, float]:
-        """计算报警优先级分布"""
+        """计算报警优先级分布（按 ISA-18.2 四档归一）"""
         if not alarms:
             return {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
-        
-        priority_count = Counter()
+
+        counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+        unmapped = 0
         for alarm in alarms:
-            level = alarm.get('alarm_level', 'low').lower()
-            priority_count[level] += 1
-        
+            level = str(alarm.get('alarm_level') or '').strip().lower()
+            bucket = self.LEVEL_BUCKETS.get(level)
+            if bucket is None:
+                # 未知级别归入 low 档（保持旧行为：不把未知级别抬成高优先级），
+                # 但必须留痕 —— 静默归并会让分布失真却无从察觉
+                unmapped += 1
+                bucket = 'low'
+            counts[bucket] += 1
+
+        if unmapped:
+            logger.warning("优先级分布遇到 %d 条未知 alarm_level，已归入 low 档", unmapped)
+
         total = len(alarms)
-        return {
-            'low': priority_count.get('low', 0) / total,
-            'medium': priority_count.get('medium', 0) / total,
-            'high': priority_count.get('high', 0) / total,
-            'critical': priority_count.get('critical', 0) / total
-        }
+        return {key: value / total for key, value in counts.items()}
 
     def _get_top_10_alarms(self, alarms: List[Dict]) -> List[Dict]:
         """获取Top 10最频繁报警"""

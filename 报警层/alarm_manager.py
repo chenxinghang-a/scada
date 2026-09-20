@@ -100,7 +100,22 @@ class AlarmFloodDetector:
     防止操作员被大量告警淹没（工业安全关键）
     """
 
-    SEVERITY_ORDER = {'critical': 5, 'high': 4, 'medium': 3, 'low': 2, 'info': 1}
+    # 严重度分级表。规则配置实际使用三级命名（critical/warning/info），
+    # 历史/第三方配置可能使用五级命名（critical/high/medium/low/info），
+    # 两套命名必须归一到同一量纲。旧表只有五级命名且用 .get(severity, 0)
+    # 兜底 —— `warning` 落到 0，被当成最低优先级，洪水期静默抑制 = 漏报。
+    SEVERITY_ORDER = {
+        'critical': 5,
+        'high': 4,
+        'warning': 4,   # ≡ high：告警级，洪水期不抑制
+        'medium': 3,
+        'low': 2,
+        'info': 1,
+    }
+
+    # 未知严重度的兜底档：取最高档（fail-open）。
+    # 抑制是"漏报"方向，遇到无法识别的级别宁可多报一次，也不能静默吞掉。
+    UNKNOWN_SEVERITY_VALUE = 5
 
     def __init__(self,
                  window_seconds: int = 60,
@@ -110,7 +125,8 @@ class AlarmFloodDetector:
         Args:
             window_seconds: 滑动窗口时长（秒）
             threshold: 窗口内告警数达到此值即触发洪水抑制
-            suppress_below: 抑制此严重度以下的告警（critical > high > medium > low > info）
+            suppress_below: 抑制此严重度以下的告警
+                （critical ≥ high ≡ warning > medium > low > info）
         """
         self.window = window_seconds
         self.threshold = threshold
@@ -141,8 +157,10 @@ class AlarmFloodDetector:
 
             # 洪水状态下的抑制逻辑
             if self._flood_active:
-                sev_val = self.SEVERITY_ORDER.get(severity, 0)
-                suppress_val = self.SEVERITY_ORDER.get(self.suppress_below, 3)
+                sev_val = self._severity_value(severity)
+                suppress_val = self.SEVERITY_ORDER.get(
+                    str(self.suppress_below).strip().lower(),
+                    self.SEVERITY_ORDER['high'])
 
                 if sev_val >= suppress_val:
                     return True, "flood_active_but_critical"
@@ -151,6 +169,21 @@ class AlarmFloodDetector:
                     return False, "suppressed_by_flood_detector"
 
             return True, "normal"
+
+    @classmethod
+    def _severity_value(cls, severity: Any) -> int:
+        """把任意严重度写法归一到分级值。
+
+        无法识别的严重度：留 WARNING 日志痕迹并按最高档处理（不抑制），
+        绝不沿用旧实现的"默认 0 = 最低档 → 静默抑制"。
+        """
+        key = str(severity).strip().lower() if severity is not None else ''
+        value = cls.SEVERITY_ORDER.get(key)
+        if value is None:
+            logger.warning("未知报警严重度 %r，洪水抑制按最高档处理（不抑制，避免漏报）",
+                           severity)
+            return cls.UNKNOWN_SEVERITY_VALUE
+        return value
 
     def check_flood_end(self):
         """检查洪水是否结束（由后台定时器调用）"""
@@ -233,6 +266,11 @@ class AlarmManager:
     - 前端可通过 dismissed 列表告知后端跳过推送
     """
 
+    # 去重表容量上限。报警 key = (rule_id, device_id, register_name)，长期运行
+    # 数量可无限增长——两张表若无上限就是内存泄漏。超过上限时先按 TTL 清掉
+    # 已失效项（早于窗口的记录不可能再抑制任何推送），仍超限则淘汰最旧记录。
+    _DEDUP_MAX_ENTRIES = 10000
+
     def __init__(self, database, config_path: str = '配置/alarms.yaml',
                  alarm_output=None, broadcast_system=None):
         """
@@ -285,6 +323,13 @@ class AlarmManager:
 
         # 线程锁（保护去重状态的并发访问）
         self._dedup_lock = Lock()
+
+        # 输出通道失败计数（声光/广播/前端）。
+        # 声光与广播是安全关键输出，"调用不通"绝不能静默 —— 每次失败都记账，
+        # 并通过 get_alarm_statistics()['output']['errors'] / 日志暴露。
+        self._output_errors: dict[str, int] = {
+            'alarm_output': 0, 'broadcast': 0, 'websocket': 0}
+        self._output_error_lock = Lock()
 
         # 状态锁（保护 alarm_states, rules, _shelved_alarms, _deadbands）
         self._state_lock = Lock()
@@ -524,11 +569,20 @@ class AlarmManager:
 
     def check_escalation(self):
         """
-        检查报警升级
+        检查报警升级（单一权威入口）
 
-        遍历所有活动报警，如果超过escalation_timeout仍未确认，
-        触发升级动作（通知上级/发送短信/触发广播）。
+        升级策略只有一套：装配了 AlarmEscalationManager（多级规则，见
+        alarm_escalation.py）时，以它的规则为唯一权威，由本方法所在的
+        报警升级定时器驱动；未装配时才退化为单级超时（_escalation_timeout）。
+
+        旧实现是"两套各跑一套、互不知情"：本方法按 _escalation_timeout 升级，
+        管理器又按自己的 300/900/1800 秒规则升级，同一条报警被两套逻辑
+        各自判定，谁先命中取决于定时器时序。
         """
+        if self._escalation_manager is not None:
+            self._escalation_manager.check_escalations()
+            return
+
         now = datetime.now()
         escalation_timeout = self._escalation_timeout
 
@@ -578,12 +632,60 @@ class AlarmManager:
                 logger.warning(f"报警升级: {rule_id} ({device_id}/{register_name}) "
                               f"已超时{elapsed:.0f}秒未确认")
 
-                # 调用升级回调
-                for callback in self._escalation_callbacks:
-                    try:
-                        callback(alarm_info)
-                    except Exception as e:
-                        logger.error(f"报警升级回调异常: {e}")
+                self._notify_escalation_callbacks(alarm_info)
+
+    def _notify_escalation_callbacks(self, alarm_info: Dict[str, Any]):
+        """按既有契约通知 add_escalation_callback() 注册的外部回调"""
+        for callback in self._escalation_callbacks:
+            try:
+                callback(alarm_info)
+            except Exception as e:
+                logger.error(f"报警升级回调异常: {e}")
+
+    def _on_manager_escalation(self, escalation_info: Dict[str, Any]):
+        """把升级管理器的多级升级结果桥接给外部回调（统一升级出口）
+
+        管理器通知的是"多级规则命中了第 N 级"；这里补齐规则信息、把报警状态
+        标记为已升级（前端/API 读 alarm_states['escalated']），再按既有契约
+        通知外部回调，保证 add_escalation_callback() 的调用方不受升级机制
+        切换影响。
+        """
+        device_id = escalation_info.get('device_id')
+        register_name = escalation_info.get('register_name')
+        rule_id = escalation_info.get('alarm_id')
+        rule_config = self.rules.get(rule_id, {})
+        elapsed = escalation_info.get('elapsed_seconds', 0)
+        level = escalation_info.get('level')
+        now = datetime.now()
+
+        with self._state_lock:
+            state = self.alarm_states.get((device_id, register_name))
+            if state is not None:
+                state['escalated'] = True
+                state['escalation_time'] = now.isoformat()
+
+        first_trigger = state.get('first_trigger_time') if state else None
+        if hasattr(first_trigger, 'isoformat'):
+            first_trigger = first_trigger.isoformat()
+        elif first_trigger is not None:
+            first_trigger = str(first_trigger)
+
+        alarm_info = {
+            'alarm_id': rule_id,
+            'device_id': device_id,
+            'register_name': register_name,
+            'alarm_level': rule_config.get('level', 'warning'),
+            'alarm_message': rule_config.get('name', '未知报警'),
+            'first_trigger_time': first_trigger,
+            'elapsed_seconds': elapsed,
+            'escalation_level': level,
+            'escalation_reason': f'报警超过{int(elapsed)}秒未确认（升级到级别{level}）',
+        }
+
+        logger.warning("报警升级: %s (%s/%s) 已超时%.0f秒未确认，升级到级别%s",
+                       rule_id, device_id, register_name, elapsed, level)
+
+        self._notify_escalation_callbacks(alarm_info)
 
     def _on_escalation(self, escalation_info: Dict[str, Any]):
         """升级回调：触发广播通知"""
@@ -595,14 +697,13 @@ class AlarmManager:
                     alarm_message=escalation_info.get('alarm_id', '未知')
                 ) if rule else f"告警升级: {escalation_info.get('alarm_id')}"
 
-                self.broadcast_system.speak_alarm(
-                    level='critical' if level >= 3 else 'warning',
-                    message=message,
-                    device_id=escalation_info.get('device_id'),
-                    area='all'
-                )
+                self._invoke_broadcast(
+                    'critical' if level >= 3 else 'warning',
+                    message,
+                    escalation_info.get('device_id'),
+                    'all')
         except Exception as e:
-            logger.error(f"升级广播异常: {e}")
+            self._record_output_failure('broadcast', f"升级广播异常: {e}")
 
     def set_alarm_statistics(self, alarm_statistics):
         """注入报警统计分析器"""
@@ -653,10 +754,31 @@ class AlarmManager:
                 if self._escalation_manager is None:
                     try:
                         from 报警层.alarm_escalation import AlarmEscalationManager
-                        self._escalation_manager = AlarmEscalationManager(escalation_cfg)
+                        # 单套升级：管理器规则是策略的唯一来源。配置只给了
+                        # timeout_seconds 时补一条同超时的单级规则，否则会出现
+                        # "配置写 600s、管理器仍按默认 300/900/1800 升级"的隐性分歧。
+                        manager_cfg = dict(escalation_cfg)
+                        if not manager_cfg.get('rules'):
+                            manager_cfg['rules'] = [{
+                                'level': 1,
+                                'timeout_seconds': self._escalation_timeout,
+                                'actions': ['notify', 'broadcast'],
+                                'notify_roles': ['operator'],
+                                'message_template': '报警超时未确认: {alarm_message}',
+                            }]
+                        self._escalation_manager = AlarmEscalationManager(manager_cfg)
                         self._escalation_manager.add_callback(self._on_escalation)
-                        self._escalation_manager.start()
-                        logger.info("告警升级管理器初始化成功")
+                        # 多级升级结果桥接给外部回调（见 _on_manager_escalation）
+                        self._escalation_manager.add_callback(self._on_manager_escalation)
+                        # 不启动管理器自带线程：升级由报警升级定时器统一驱动，
+                        # 否则又是"两套调度各跑一套"
+                        rules = self._escalation_manager.get_rules()
+                        if rules:
+                            self._escalation_timeout = min(
+                                r['timeout_seconds'] for r in rules)
+                        logger.info(
+                            "告警升级管理器初始化成功（多级规则，统一由报警升级定时器驱动，"
+                            "首级超时%d秒）", self._escalation_timeout)
                     except Exception as e:
                         logger.warning(f"告警升级管理器初始化失败: {e}")
                         self._escalation_manager = None
@@ -770,6 +892,23 @@ class AlarmManager:
             return False
 
     @staticmethod
+    def _normalize_delay(raw: Any, rule_id: str = '') -> float:
+        """把规则的 delay 配置归一为秒数（float，非负）。
+
+        配置里写成字符串（`delay: "30"`）时，旧实现的 `delay > 0` 会直接抛
+        TypeError，把整条报警检查路径打断（调用方 except 吞掉 → 报警丢失）。
+        """
+        if raw is None:
+            return 0.0
+        try:
+            delay = float(raw)
+        except (TypeError, ValueError):
+            logger.warning("报警规则 %s 的 delay 配置非法(%r)，按 0（不延迟）处理",
+                           rule_id, raw)
+            return 0.0
+        return max(0.0, delay)
+
+    @staticmethod
     def _elapsed_seconds(start, end) -> float | None:
         """计算两个时间戳之间的秒数（容忍 str/datetime 混用），无法计算返回 None"""
         def _norm(ts):
@@ -818,7 +957,7 @@ class AlarmManager:
             current_state = self.alarm_states.get(state_key, {})
 
         # 获取延迟时间
-        delay = rule_config.get('delay', 0)
+        delay = self._normalize_delay(rule_config.get('delay', 0), rule_id)
 
         if triggered:
             # C1修复: 整个 read-modify-write 在同一锁块内，消除 TOCTOU 竞态
@@ -828,8 +967,18 @@ class AlarmManager:
                 if live_state and live_state.get('alarm_id') == rule_id:
                     if live_state.get('pending'):
                         # 延迟确认中：只有条件持续成立满 delay 秒才真正产生报警
-                        elapsed = self._elapsed_seconds(live_state.get('confirm_time'), timestamp)
-                        if elapsed is not None and elapsed >= delay:
+                        anchor = live_state.get('confirm_time') or live_state.get('first_trigger_time')
+                        elapsed = self._elapsed_seconds(anchor, timestamp)
+                        if elapsed is None:
+                            # 时间戳缺失/类型或时区不一致导致无法计时：旧实现会让
+                            # 报警永远停在 pending —— 即"配置了 delay 的规则永不报警"。
+                            # 计时不可用属数据问题，但必须报警（fail-open）且留痕。
+                            logger.warning(
+                                "延迟报警无法计算持续时间，按到期处理以规避静默漏报: "
+                                "%s - %s/%s (anchor=%r timestamp=%r)",
+                                rule_id, device_id, register_name, anchor, timestamp)
+                            elapsed = delay
+                        if elapsed >= delay:
                             live_state['pending'] = False
                             live_state['confirmed'] = True
                             live_state['first_trigger_time'] = timestamp
@@ -871,15 +1020,24 @@ class AlarmManager:
 
             # 锁外触发（避免回调死锁）
             if fire:
+                # 去重记账只在 _trigger_alarm 内、且**确实推送成功后**发生。
+                # 这里再记一次会把"被洪水/冷却抑制、根本没推送"的报警也记成已推送，
+                # 于是冷却窗口内真正该推送的报警被压掉 —— 静默漏报。
                 self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
-                self._record_emit(rule_id, device_id, register_name)
         else:
             # 未触发，检查是否需要清除报警（只清除自己规则的状态）
+            cleared = False
             with self._state_lock:
                 live_state = self.alarm_states.get(state_key)
                 if live_state and live_state.get('alarm_id') == rule_id:
                     del self.alarm_states[state_key]
-                    logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
+                    cleared = True
+            if cleared:
+                logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
+                # 同步撤销升级跟踪：否则已恢复正常的报警仍会被升级管理器
+                # 按超时升级（且其 _states 会无界增长）
+                if self._escalation_manager:
+                    self._escalation_manager.remove_alarm(rule_id, device_id, register_name)
 
     def _should_emit(self, rule_id: str, device_id: str, register_name: str) -> bool:
         """
@@ -919,16 +1077,43 @@ class AlarmManager:
         return True
 
     def _record_emit(self, rule_id: str, device_id: str, register_name: str):
-        """记录报警推送时间"""
+        """记录报警推送时间（仅在确实推送成功后调用）"""
         alarm_key = (rule_id, device_id, register_name)
         with self._dedup_lock:
-            self._emit_history[alarm_key] = time.time()
+            now = time.time()
+            self._emit_history[alarm_key] = now
+            self._prune_dedup_history(
+                self._emit_history, self.dedup_config.emit_cooldown_seconds, now)
 
     def _record_acknowledge(self, rule_id: str, device_id: str, register_name: str):
         """记录报警确认时间"""
         alarm_key = (rule_id, device_id, register_name)
         with self._dedup_lock:
-            self._acknowledge_history[alarm_key] = time.time()
+            now = time.time()
+            self._acknowledge_history[alarm_key] = now
+            self._prune_dedup_history(
+                self._acknowledge_history,
+                self.dedup_config.acknowledge_suppress_seconds, now)
+
+    def _prune_dedup_history(self, history: dict, ttl: float, now: float) -> None:
+        """把去重表压回有界（调用方须持有 _dedup_lock）。
+
+        先清掉早于 TTL 的记录（已不可能再抑制任何推送，纯属占位），
+        若仍超过容量上限，再按时间淘汰最旧记录。容量上限保证内存有界，
+        不会随报警 key 的种类数无限增长。
+        """
+        if len(history) <= self._DEDUP_MAX_ENTRIES:
+            return
+
+        for key in [k for k, ts in history.items() if now - ts > ttl]:
+            history.pop(key, None)
+
+        overflow = len(history) - self._DEDUP_MAX_ENTRIES
+        if overflow > 0:
+            for key, _ in sorted(history.items(), key=lambda kv: kv[1])[:overflow]:
+                history.pop(key, None)
+            logger.warning("去重记录超出上限，已淘汰 %d 条最旧记录（表容量=%d）",
+                           overflow, self._DEDUP_MAX_ENTRIES)
 
     def _trigger_alarm(self, rule_config: dict[str, Any], device_id: str,
                        register_name: str, value: float, timestamp: datetime):
@@ -984,26 +1169,14 @@ class AlarmManager:
 
         # 2. 声光报警器输出（Modbus DO -> 灯塔+蜂鸣器）
         if self.alarm_output and self.alarm_output.enabled:
-            try:
-                self.alarm_output.trigger_alarm(
-                    level=alarm_level,
-                    message=alarm_message,
-                    device_id=device_id
-                )
-            except Exception as e:
-                logger.error(f"声光报警输出异常: {e}")
+            self._invoke_alarm_output(alarm_level, alarm_message, device_id)
 
         # 3. 语音广播系统（MQTT -> IP网络广播/现场音柱）
         if self.broadcast_system and self.broadcast_system.enabled:
-            try:
-                self.broadcast_system.speak_alarm(
-                    level=alarm_level,
-                    message=f"{alarm_message}，当前值{value}，阈值{threshold}",
-                    device_id=device_id,
-                    area=alarm_area
-                )
-            except Exception as e:
-                logger.error(f"语音广播异常: {e}")
+            self._invoke_broadcast(
+                alarm_level,
+                f"{alarm_message}，当前值{value}，阈值{threshold}",
+                device_id, alarm_area)
 
         # 4. 前端WebSocket推送（含去重标记 + 冷却/确认抑制检查）
         if not self._should_emit(rule_id, device_id, register_name):
@@ -1023,13 +1196,98 @@ class AlarmManager:
             'dedup_key': f"{rule_id}:{device_id}:{register_name}",
         })
 
+    def _record_output_failure(self, channel: str, detail: str) -> None:
+        """输出通道失败必须可见：ERROR 日志 + 计数（绝不静默吞掉）"""
+        with self._output_error_lock:
+            self._output_errors[channel] = self._output_errors.get(channel, 0) + 1
+        logger.error("报警输出失败[%s]（第%d次）: %s",
+                     channel, self._output_errors.get(channel, 0), detail)
+
+    def _get_output_error_counts(self) -> dict[str, int]:
+        """获取各输出通道累计失败次数"""
+        with self._output_error_lock:
+            return dict(self._output_errors)
+
+    def _call_output_method(self, channel: str, target, method_name: str, **kwargs) -> bool:
+        """调用输出实现上的方法，失败（缺方法/抛异常/显式返回失败）一律留痕。
+
+        Returns:
+            bool: 是否成功调用且实现未报告失败。
+        """
+        method = getattr(target, method_name, None)
+        if not callable(method):
+            self._record_output_failure(
+                channel, f"{type(target).__name__} 缺少 {method_name}()，该通道输出丢失")
+            return False
+        try:
+            result = method(**kwargs)
+        except Exception as e:
+            self._record_output_failure(channel, f"{method_name}() 调用异常: {e}")
+            return False
+
+        # 仅显式失败信号（False / {'success': False}）算失败；
+        # 返回 None 多为实现内部的"同级不重复触发"等正常分支，不算失败。
+        if result is False or (isinstance(result, dict) and result.get('success') is False):
+            self._record_output_failure(channel, f"{method_name}() 报告失败: {result!r}")
+            return False
+        return True
+
+    def _invoke_alarm_output(self, level: str, message: str, device_id: str) -> bool:
+        """触发声光报警输出（兼容两套实现命名）
+
+        装配的是 `AlarmOutput`（trigger_alarm）/ 还是 `interfaces.IAlarmOutput`
+        实现（activate_alarm）都要能工作。旧实现只调 trigger_alarm，遇到
+        RealAlarmOutput/SimulatedAlarmOutput 直接 AttributeError 并被 except 吞掉
+        —— 声光全线静默漏报。
+        """
+        target = self.alarm_output
+        if target is None:
+            return False
+        if callable(getattr(target, 'trigger_alarm', None)):
+            return self._call_output_method(
+                'alarm_output', target, 'trigger_alarm',
+                level=level, message=message, device_id=device_id)
+        if callable(getattr(target, 'activate_alarm', None)):
+            return self._call_output_method(
+                'alarm_output', target, 'activate_alarm',
+                level=level, message=message)
+        self._record_output_failure(
+            'alarm_output',
+            f"{type(target).__name__} 既不提供 trigger_alarm 也不提供 activate_alarm，"
+            f"声光输出无法触发")
+        return False
+
+    def _invoke_broadcast(self, level: str, text: str, device_id: str, area: str) -> bool:
+        """触发语音广播（兼容两套实现命名）
+
+        `BroadcastSystem` 有 speak_alarm（报警话术模板），而 interfaces.IBroadcastSystem
+        实现（RealBroadcastSystem/SimulatedBroadcastSystem）只有 speak。
+        旧实现硬调 speak_alarm → AttributeError 被吞 → 广播全线静默漏报。
+        """
+        target = self.broadcast_system
+        if target is None:
+            return False
+        if callable(getattr(target, 'speak_alarm', None)):
+            return self._call_output_method(
+                'broadcast', target, 'speak_alarm',
+                level=level, message=text, device_id=device_id, area=area)
+        if callable(getattr(target, 'speak', None)):
+            return self._call_output_method(
+                'broadcast', target, 'speak',
+                text=text, level=level, area=area, source='alarm')
+        self._record_output_failure(
+            'broadcast',
+            f"{type(target).__name__} 既不提供 speak_alarm 也不提供 speak，广播无法发出")
+        return False
+
     def _emit_websocket_alarm(self, alarm_data: dict[str, Any]):
         """通过WebSocket向前端推送报警"""
+        if not self._websocket_emit:
+            return
         try:
-            if self._websocket_emit:
-                self._websocket_emit(alarm_data)
+            self._websocket_emit(alarm_data)
         except Exception as e:
-            logger.error(f"WebSocket报警推送异常: {e}")
+            self._record_output_failure('websocket', f"前端推送异常: {e}")
 
     def _send_notification(self, rule_config: dict[str, Any], device_id: str,
                            register_name: str, value: float, timestamp: datetime):
@@ -1115,10 +1373,7 @@ class AlarmManager:
 
             # 声光消音（关蜂鸣器，灯保持）
             if self.alarm_output and self.alarm_output.enabled:
-                try:
-                    self.alarm_output.acknowledge()
-                except Exception as e:
-                    logger.error(f"声光消音失败: {e}")
+                self._call_output_method('alarm_output', self.alarm_output, 'acknowledge')
         return success
 
     def reset_alarm(self, device_id: str | None = None) -> bool:
@@ -1131,10 +1386,20 @@ class AlarmManager:
         with self._state_lock:
             if device_id:
                 keys_to_remove = [k for k in self.alarm_states if k[0] == device_id]
+                cleared_rules = [(self.alarm_states[k].get('alarm_id'), k[0], k[1])
+                                 for k in keys_to_remove]
                 for key in keys_to_remove:
                     del self.alarm_states[key]
             else:
+                cleared_rules = [(state.get('alarm_id'), key[0], key[1])
+                                 for key, state in self.alarm_states.items()]
                 self.alarm_states.clear()
+
+        # 复位即报警生命周期结束，撤销升级跟踪（避免已复位的报警继续升级）
+        if self._escalation_manager:
+            for rid, dev, reg in cleared_rules:
+                if rid:
+                    self._escalation_manager.remove_alarm(rid, dev, reg)
 
         # 清除去重历史（复位后允许重新推送）
         with self._dedup_lock:
@@ -1151,10 +1416,7 @@ class AlarmManager:
 
         # 声光复位（全部清零，绿灯恢复）
         if self.alarm_output and self.alarm_output.enabled:
-            try:
-                self.alarm_output.reset()
-            except Exception as e:
-                logger.error(f"声光复位失败: {e}")
+            self._call_output_method('alarm_output', self.alarm_output, 'reset')
 
         logger.info(f"报警已复位: {'全部' if not device_id else device_id}")
         return True
@@ -1192,7 +1454,9 @@ class AlarmManager:
         # 输出总线状态
         stats['output'] = {
             'alarm_output': self.alarm_output.get_status() if self.alarm_output else None,
-            'broadcast': self.broadcast_system.get_status() if self.broadcast_system else None
+            'broadcast': self.broadcast_system.get_status() if self.broadcast_system else None,
+            # 各通道累计调用失败次数（>0 即存在声光/广播/前端漏报，必须可观测）
+            'errors': self._get_output_error_counts(),
         }
 
         # 去重统计
