@@ -1085,11 +1085,22 @@ function bindSwitchStates() {
 
 // ==================== 系统配置加载 & 保存 ====================
 
+// /api/config 加载到的 CORS 白名单。保存 web 段时必须原样回传：
+// system.yaml 里明确收敛过 origins，写死 ['*'] 会把白名单覆盖成通配。
+let loadedCorsOrigins = [];
+
 async function loadConfig() {
     try {
         const response = await fetch('/api/config', { headers: getAuthHeaders() });
+        if (!response.ok) {
+            showAlert('加载系统配置失败 (HTTP ' + response.status + ')', 'danger');
+            return;
+        }
         const data = await response.json();
-        if (!data.config) return;
+        if (!data.config) {
+            showAlert('加载系统配置失败: ' + (data.error || data.message || '接口未返回配置'), 'danger');
+            return;
+        }
 
         const c = data.config;
 
@@ -1101,6 +1112,7 @@ async function loadConfig() {
         setVal('cfg-web-host', c.web?.host);
         setVal('cfg-web-debug', c.web?.debug === true ? 'true' : 'false');
         setVal('cfg-cors-enabled', c.web?.cors?.enabled === true ? 'true' : 'false');
+        loadedCorsOrigins = Array.isArray(c.web?.cors?.origins) ? c.web.cors.origins.slice() : [];
 
         // 采集设置
         setVal('cfg-col-interval', c.collection?.default_interval);
@@ -1127,6 +1139,7 @@ async function loadConfig() {
 
     } catch (error) {
         console.error('加载配置失败:', error);
+        showAlert('加载系统配置失败: ' + error.message, 'danger');
     }
 }
 
@@ -1156,15 +1169,24 @@ async function saveSection(section) {
                 debug: document.getElementById('cfg-web-debug').value === 'true',
                 cors: {
                     enabled: document.getElementById('cfg-cors-enabled').value === 'true',
-                    origins: ['*']
+                    // 回传已加载的白名单，避免把收敛过的 origins 覆盖成通配 ['*']
+                    origins: loadedCorsOrigins.length ? loadedCorsOrigins : [window.location.origin]
                 }
             }
         };
-        await fetch('/api/config', {
+        // web 段的保存结果必须单独判定：此前未取值，失败也会提示"保存成功"
+        const webResp = await fetch('/api/config', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify(webData)
         });
+        const webResult = await webResp.json().catch(() => null);
+        if (!webResult || !webResult.success) {
+            const reason = (webResult && (webResult.error || webResult.message)) || ('HTTP ' + webResp.status);
+            showAlert('Web 配置保存失败: ' + reason, 'danger');
+            markSectionFailed('system');
+            return;
+        }
     } else if (section === 'collection') {
         data = {
             section: 'collection',
@@ -1217,10 +1239,11 @@ async function saveSection(section) {
         });
         const result = await response.json();
         if (result.success) {
-            showAlert(result.message, 'success');
+            showAlert(result.message || '配置已保存', 'success');
             markSectionSaved(section);
         } else {
-            showAlert(result.message || '保存失败', 'danger');
+            // api_error 用 error 字段，业务失败用 message 字段
+            showAlert(result.error || result.message || '保存失败', 'danger');
             markSectionFailed(section);
         }
     } catch (error) {
@@ -1317,15 +1340,24 @@ function populateDeviceSelect() {
     select.onchange = function() {
         const device = devicesCache.find(d => d.device_id === this.value);
         const regSelect = document.getElementById('rule-register-name');
-        let vars = [];
-        if (device) {
-            if (device.registers) vars = device.registers.map(r => r.name);
-            else if (device.nodes) vars = device.nodes.map(n => n.name);
-            else if (device.topics) vars = device.topics.map(t => t.name);
-            else if (device.endpoints) vars = device.endpoints.map(e => e.name);
-        }
+        // 点位分布在 registers / nodes / topics / endpoints 四类。
+        // 不能用 `if (device.registers) ... else if`：状态接口对非 Modbus 设备
+        // 也会返回 registers: []（空数组为真值），会把后三类直接短路掉。
+        const points = device ? [].concat(
+            device.registers || [], device.nodes || [],
+            device.topics || [], device.endpoints || []
+        ) : [];
+        const seen = {};
+        const vars = [];
+        points.forEach(p => {
+            if (!p || typeof p !== 'object') return;
+            const name = p.name || p.topic || p.node_id || p.path;
+            if (!name || seen[name]) return;
+            seen[name] = true;
+            vars.push({ value: name, label: p.description ? `${p.description} (${name})` : name });
+        });
         regSelect.innerHTML = '<option value="">选择变量</option>' +
-            vars.map(v => `<option value="${v}">${v}</option>`).join('');
+            vars.map(v => `<option value="${escapeHtml(v.value)}">${escapeHtml(v.label)}</option>`).join('');
     };
 }
 

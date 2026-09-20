@@ -1236,7 +1236,7 @@
         var token = localStorage.getItem('auth_token');
         var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
         var url = type === 'oee' ? '/api/industry40/oee' :
-                  type === 'spc' ? '/api/industry40/spc' :
+                  type === 'spc' ? '/api/industry40/spc/violations' :
                   type === 'energy' ? '/api/industry40/energy' :
                   '/api/data/realtime?limit=10000';
 

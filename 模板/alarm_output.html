@@ -747,9 +747,15 @@ async function acknowledgeOutput() {
             method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
         });
         const data = await r.json();
-        alert(data.message);
+        // 后端失败时（未启用等）会返回 success:false，必须以 success 判定，
+        // 不能只把 message 弹出来就算反馈（message 可能为空 → alert(undefined)）
+        if (data.success) {
+            alert(data.message || '已消音，指示灯保持');
+        } else {
+            alert('消音失败: ' + (data.error || data.message || 'HTTP ' + r.status));
+        }
         loadAlarmOutputStatus();
-    } catch(e) { alert('操作失败'); }
+    } catch(e) { alert('消音操作失败: ' + e.message); }
     finally { if (btn) btn.disabled = false; }
 }
 
@@ -762,9 +768,13 @@ async function resetOutput() {
             method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
         });
         const data = await r.json();
-        alert(data.message);
+        if (data.success) {
+            alert(data.message || '报警输出已复位');
+        } else {
+            alert('复位失败: ' + (data.error || data.message || 'HTTP ' + r.status));
+        }
         loadAlarmOutputStatus();
-    } catch(e) { alert('操作失败'); }
+    } catch(e) { alert('复位操作失败: ' + e.message); }
     finally { if (btn) btn.disabled = false; }
 }
 
@@ -927,13 +937,18 @@ async function speakPreset(key, defaultMessage) {
     setBtnLoading(btn, true, originalLabel);
 
     try {
-        await fetch('/api/broadcast/speak', {
+        const r = await fetch('/api/broadcast/speak', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({ text: text, level: 'warning', area: area, source: 'preset' })
         });
+        // 预设广播同样要判成功：失败静默会让操作员误以为广播已发出
+        const result = await r.json().catch(() => null);
+        if (!result || !result.success) {
+            alert('广播发送失败: ' + ((result && (result.error || result.message)) || 'HTTP ' + r.status));
+        }
         loadBroadcastHistory();
-    } catch(e) { alert('广播发送失败'); }
+    } catch(e) { alert('广播发送失败: ' + e.message); }
     finally { setBtnLoading(btn, false, originalLabel); }
 }
 
@@ -965,7 +980,17 @@ async function loadBroadcastHistory() {
                 <div class="broadcast-item__text">${h.text}</div>
             </div>
         `).join('');
-    } catch(e) {}
+    } catch(e) {
+        // 广播历史加载失败给可见提示，避免面板停留在"加载中"
+        const c = document.getElementById('broadcast-history');
+        if (c) {
+            c.innerHTML = `
+                <div class="state-box state-box--inline">
+                    <i class="bi bi-exclamation-triangle state-box__icon"></i>
+                    <div class="state-box__title">广播历史加载失败</div>
+                </div>`;
+        }
+    }
 }
 
 // ==================== 报警触发规则 ====================
@@ -975,14 +1000,21 @@ async function loadDevicesForSelect() {
     try {
         const r = await fetch('/api/devices', { headers: getAuthHeaders() });
         const data = await r.json();
-        const devices = data.devices || [];
+        const devices = Array.isArray(data.devices) ? data.devices : Object.values(data.devices || {});
+        if (devices.length === 0) {
+            const cnt = document.getElementById('broadcast-zone-count');
+            return;
+        }
 
         // 用于规则编辑的设备下拉
         const sel = document.getElementById('rule-device');
         sel.innerHTML = '<option value="">选择设备</option>';
         devices.forEach(d => {
-            allDevices[d.id] = d;
-            sel.innerHTML += `<option value="${d.id}">${d.name} (${d.protocol})</option>`;
+            // /api/devices 返回的设备只有 device_id 字段（无 id），取不到会把
+            // 选项值和缓存键都写成 "undefined"，规则编辑就无法选择设备
+            const devId = d.device_id || d.id;
+            allDevices[devId] = d;
+            sel.innerHTML += `<option value="${escapeHtml(devId)}">${escapeHtml(d.name || devId)} (${escapeHtml(d.protocol || '')})</option>`;
         });
 
         sel.onchange = function() {
@@ -998,11 +1030,21 @@ function loadRegistersForDevice(deviceId) {
     const device = allDevices[deviceId];
     if (!device) return;
 
-    const regs = device.registers || device.nodes || device.endpoints || device.topics || [];
-    regs.forEach(r => {
-        const name = r.name || r.topic || r.node_id;
-        const label = r.description ? `${r.description} (${name})` : name;
-        sel.innerHTML += `<option value="${name}">${label}</option>`;
+    // 点位分布在 registers / nodes / topics / endpoints 四类。
+    // 不能用 `registers || nodes || ...` 短路：非 Modbus 设备 registers 是空数组
+    // （真值），会把后三类直接短路掉，参数下拉恒为空。
+    const points = [].concat(
+        device.registers || [], device.nodes || [],
+        device.topics || [], device.endpoints || []
+    );
+    const seen = {};
+    points.forEach(p => {
+        if (!p || typeof p !== 'object') return;
+        const name = p.name || p.topic || p.node_id || p.path;
+        if (!name || seen[name]) return;
+        seen[name] = true;
+        const label = p.description ? `${p.description} (${name})` : name;
+        sel.innerHTML += `<option value="${escapeHtml(name)}">${escapeHtml(label)}</option>`;
     });
 }
 

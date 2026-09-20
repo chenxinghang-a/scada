@@ -639,6 +639,10 @@ let pendingAction = null;
 // 最近一次回读的寄存器原始数值（仅用于量程位置呈现）
 let lastRegisterRaw = null;
 
+// 当前选中设备的寄存器配置（来自设备状态接口），用于把写入地址映射到寄存器名：
+// 实时数据表只存 device_id/register_name，没有 address 字段
+let deviceRegistersCache = [];
+
 // 页面加载
 document.addEventListener('DOMContentLoaded', function() {
     // 检查权限
@@ -787,15 +791,21 @@ async function loadDevices() {
         });
         const data = await response.json();
         
+        const devices = Array.isArray(data.devices) ? data.devices : Object.values(data.devices || {});
+        if (devices.length === 0) {
+            showAlert('未获取到设备列表，无法执行控制操作', 'warning');
+            return;
+        }
         const select = document.getElementById('device-select');
-        data.devices.forEach(d => {
+        devices.forEach(d => {
             const opt = document.createElement('option');
-            opt.value = d.device_id;
-            opt.textContent = `${d.name} (${d.device_id})`;
+            opt.value = d.device_id || d.id;
+            opt.textContent = `${d.name} (${opt.value})`;
             select.appendChild(opt);
         });
     } catch (error) {
         console.error('加载设备列表失败:', error);
+        showAlert('加载设备列表失败: ' + error.message, 'danger');
     }
 }
 
@@ -803,6 +813,7 @@ async function loadDevices() {
 async function loadDeviceInfo(deviceId) {
     if (!deviceId) {
         document.getElementById('device-info').style.display = 'none';
+        deviceRegistersCache = [];
         return;
     }
 
@@ -810,21 +821,34 @@ async function loadDeviceInfo(deviceId) {
         const response = await fetch(`/api/devices/${deviceId}`, {
             headers: getAuthHeaders()
         });
-        const data = await response.json();
+        const payload = await response.json();
+        // /api/devices/<id> 返回 {device: {...}} 包装，直接按顶层取字段会全是 undefined
+        const data = payload.device || payload;
+        if (payload.error || data.error) {
+            showAlert(payload.error || data.error, 'danger');
+            document.getElementById('device-info').style.display = 'none';
+            return;
+        }
 
-        document.getElementById('info-device-id').textContent = data.device_id;
-        document.getElementById('info-device-name').textContent = data.name;
+        document.getElementById('info-device-id').textContent = data.device_id || deviceId;
+        document.getElementById('info-device-name').textContent = data.name || '-';
         document.getElementById('info-connection').innerHTML = data.connected ?
             '<span class="tag tag--success"><span class="status-dot status-dot--success"></span>已连接</span>' :
             '<span class="tag tag--danger"><span class="status-dot status-dot--danger"></span>未连接</span>';
-        document.getElementById('info-host').textContent = `${data.host}:${data.port}`;
+        // REST/OPC UA 无 host:port（状态接口把 endpoint 放在 host，REST 只有 base_url）
+        const addrText = data.host
+            ? `${data.host}${data.port ? ':' + data.port : ''}`
+            : (data.base_url || data.endpoint || '—');
+        document.getElementById('info-host').textContent = addrText;
         document.getElementById('device-info').style.display = 'block';
 
-        // 动态加载寄存器预设
-        updateRegisterPresets(data.registers || []);
+        // 动态加载寄存器预设（写入接口是 Modbus 寄存器/线圈，只取 registers/coils）
+        deviceRegistersCache = Array.isArray(data.registers) ? data.registers : [];
+        updateRegisterPresets(deviceRegistersCache);
         updateCoilPresets(data.coils || []);
     } catch (error) {
         console.error('加载设备信息失败:', error);
+        showAlert('加载设备信息失败: ' + error.message, 'danger');
     }
 }
 
@@ -832,6 +856,18 @@ async function loadDeviceInfo(deviceId) {
 function updateRegisterPresets(registers) {
     const select = document.getElementById('register-preset');
     select.innerHTML = '<option value="">自定义</option>';
+
+    if (!registers.length) {
+        // 非 Modbus 设备（点位在 nodes/topics/endpoints）没有可写的寄存器地址，
+        // 明确告知，避免看起来像"加载中"
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.disabled = true;
+        opt.textContent = '该设备无寄存器点位（非 Modbus 协议不支持寄存器写入）';
+        select.appendChild(opt);
+        updateRegisterMeta();
+        return;
+    }
 
     registers.forEach(reg => {
         const addr = reg.address;
@@ -947,50 +983,40 @@ async function readRegisterValue(deviceId, address) {
 
     try {
         valueSpan.textContent = '读取中...';
-        rawSpan.textContent = '原始: --';
+        rawSpan.textContent = '读取中...';
         box.style.display = 'grid';
         lastRegisterRaw = null;
         updateRegisterRangeText();
         updateRegisterTarget();
         updateRegisterCurrentMarker();
 
+        // /api/data/latest/<id> 返回 {data: {寄存器名: {value, unit, timestamp}}}
+        // —— 是按寄存器名为键的字典（不是数组），且行内没有 address / raw_value 字段
         const response = await fetch(`/api/data/latest/${deviceId}`, {
             headers: getAuthHeaders()
         });
-        const data = await response.json();
+        const payload = await response.json();
+        const latest = (payload && payload.data) ? payload.data : {};
+        const numbers = Object.values(latest).filter(item => item && typeof item === 'object');
 
-        if (data && data.registers) {
-            // 查找匹配地址的寄存器
-            const addr = parseInt(address);
-            const reg = data.registers.find(r => r.address === addr);
-            if (reg) {
-                valueSpan.textContent = reg.value != null ? reg.value : '--';
-                rawSpan.textContent = `原始: ${reg.raw_value != null ? reg.raw_value : '--'}`;
-                lastRegisterRaw = reg.raw_value != null ? parseFloat(reg.raw_value) : parseFloat(reg.value);
-            } else {
-                // 尝试通过名称匹配（预设选择时）
-                const presetSelect = document.getElementById('register-preset');
-                const selectedOption = presetSelect.options[presetSelect.selectedIndex];
-                if (selectedOption && selectedOption.dataset.address) {
-                    const presetAddr = parseInt(selectedOption.dataset.address);
-                    const presetReg = data.registers.find(r => r.address === presetAddr);
-                    if (presetReg) {
-                        valueSpan.textContent = presetReg.value != null ? presetReg.value : '--';
-                        rawSpan.textContent = `原始: ${presetReg.raw_value != null ? presetReg.raw_value : '--'}`;
-                        lastRegisterRaw = presetReg.raw_value != null ? parseFloat(presetReg.raw_value) : parseFloat(presetReg.value);
-                        updateRegisterRangeText();
-                        updateRegisterTarget();
-                        updateRegisterCurrentMarker();
-                        return;
-                    }
-                }
-                valueSpan.textContent = '未找到';
-                rawSpan.textContent = '原始: --';
-                lastRegisterRaw = null;
-            }
-        } else {
+        const addr = parseInt(address);
+        // 地址 → 寄存器名：由设备配置的 registers 映射（实时数据里没有地址字段）
+        const cfg = deviceRegistersCache.find(r => parseInt(r.address) === addr);
+        const reg = (cfg && cfg.name && latest[cfg.name]) ? latest[cfg.name] : null;
+
+        if (reg) {
+            const unit = reg.unit || (cfg && cfg.unit) || '';
+            valueSpan.textContent = (reg.value != null ? reg.value : '--') + (unit ? ' ' + unit : '');
+            rawSpan.textContent = (reg.register_name || (cfg && cfg.name) || '') +
+                (reg.timestamp ? ' · ' + new Date(reg.timestamp).toLocaleTimeString('zh-CN') : '');
+            lastRegisterRaw = reg.value != null ? parseFloat(reg.value) : null;
+        } else if (numbers.length === 0) {
             valueSpan.textContent = '无数据';
-            rawSpan.textContent = '原始: --';
+            rawSpan.textContent = '该设备暂无采集数据';
+            lastRegisterRaw = null;
+        } else {
+            valueSpan.textContent = '未找到';
+            rawSpan.textContent = '实时数据中无地址 ' + addr + ' 对应的点位';
             lastRegisterRaw = null;
         }
         updateRegisterRangeText();
@@ -999,7 +1025,7 @@ async function readRegisterValue(deviceId, address) {
     } catch (error) {
         console.error('读取寄存器失败:', error);
         valueSpan.textContent = '读取失败';
-        rawSpan.textContent = '原始: --';
+        rawSpan.textContent = '无法获取实时数据';
         lastRegisterRaw = null;
         updateRegisterCurrentMarker();
     }
@@ -1028,7 +1054,8 @@ async function writeRegister(deviceId, address, value) {
             // 写入成功后自动回读
             setTimeout(() => readRegisterValue(deviceId, address), 500);
         } else {
-            showAlert(result.message || '写入失败', 'danger');
+            // api_error() 用 error 字段，业务失败用 message 字段，两者都要读
+            showAlert(result.error || result.message || '写入失败', 'danger');
         }
     } catch (error) {
         showAlert('写入失败: ' + error.message, 'danger');
@@ -1056,7 +1083,7 @@ async function writeCoil(deviceId, address, value) {
             showAlert(result.message, 'success');
             loadControlLogs();
         } else {
-            showAlert(result.message || '写入失败', 'danger');
+            showAlert(result.error || result.message || '写入失败', 'danger');
         }
     } catch (error) {
         showAlert('写入失败: ' + error.message, 'danger');
@@ -1187,10 +1214,11 @@ async function loadDeviceGroups() {
         });
         const data = await response.json();
 
-        if (!data || !data.devices) return;
+        const devices = Array.isArray(data.devices) ? data.devices : Object.values(data.devices || {});
+        if (devices.length === 0) return;
 
         const groups = {};
-        data.devices.forEach(d => {
+        devices.forEach(d => {
             // 从描述中提取分组（取"—"前面的部分）
             const desc = d.description || '';
             const match = desc.match(/^(.+?)(?:\s*—|$)/);
@@ -1199,7 +1227,7 @@ async function loadDeviceGroups() {
             if (!groups[group]) {
                 groups[group] = [];
             }
-            groups[group].push(d.device_id);
+            groups[group].push(d.device_id || d.id);
         });
 
         window._deviceGroups = groups;
@@ -1244,9 +1272,9 @@ async function loadControlLogs() {
         tbody.innerHTML = data.logs.map(log => `
             <tr>
                 <td class="mono">${escapeHtml(log.timestamp || '-')}</td>
-                <td>${escapeHtml(log.username || '-')}</td>
+                <td>${escapeHtml(log.operator || log.username || '-')}</td>
                 <td><span class="tag tag--info">${escapeHtml(log.action || '-')}</span></td>
-                <td>${escapeHtml(log.details || '-')}</td>
+                <td>${escapeHtml(log.detail || log.details || '-')}</td>
             </tr>
         `).join('');
     } catch (error) {
@@ -1341,7 +1369,11 @@ async function triggerEStop() {
                     body: JSON.stringify({ reason })
                 });
                 const data = await r.json();
-                showAlert(data.message || '紧急停机已触发', 'danger');
+                if (data.success) {
+                    showAlert(data.message || '紧急停机已触发', 'danger');
+                } else {
+                    showAlert(data.error || data.message || '紧急停机触发失败', 'danger');
+                }
                 loadControlSafetyStatus();
             } catch(e) { showAlert('紧急停机触发失败', 'danger'); }
         },
@@ -1380,22 +1412,38 @@ async function loadInterlocks() {
         const r = await fetch('/api/control/interlocks', { headers: getAuthHeaders() });
         const data = await r.json();
         renderInterlocks(data);
-    } catch(e) {}
+    } catch(e) {
+        // 联锁状态加载失败不能静默：面板会保持上一次内容或空态，必须让操作员看见
+        const container = document.getElementById('interlock-list');
+        if (container) {
+            container.innerHTML = `
+                <div class="state-box state-box--inline">
+                    <i class="bi bi-exclamation-triangle state-box__icon"></i>
+                    <div class="state-box__title">联锁状态加载失败</div>
+                    <div class="state-box__hint">请刷新页面重试，未知联锁状态时请勿执行写操作</div>
+                </div>`;
+        }
+    }
 }
 
 function renderInterlocks(rules) {
     const container = document.getElementById('interlock-list');
-    const entries = Object.entries(rules);
+    // /api/control/interlocks 直接返回 {规则ID: {...}}；异常入参（null/非对象）不能抛异常
+    const map = (rules && typeof rules === 'object' && !Array.isArray(rules)) ? rules : {};
+    const entries = Object.entries(map);
     if (entries.length === 0) {
         container.innerHTML = `
             <div class="state-box state-box--inline">
                 <i class="bi bi-shield-check state-box__icon"></i>
                 <div class="state-box__title">无联锁规则</div>
             </div>`;
+        const countEl = document.getElementById('interlock-count');
+        if (countEl) countEl.textContent = '0触发 / 0旁路 / 0总数';
         return;
     }
     let triggered = 0, bypassed = 0;
     container.innerHTML = entries.map(([id, r]) => {
+        r = r || {};
         if (r.triggered) triggered++;
         if (r.bypassed) bypassed++;
         const status = r.bypassed ? 'bypassed' : r.triggered ? 'triggered' : 'normal';
@@ -1425,31 +1473,45 @@ function renderInterlocks(rules) {
             </div>
         `;
     }).join('');
-    document.getElementById('interlock-count').textContent = `${triggered}触发 / ${bypassed}旁路 / ${entries.length}总数`;
+    const countEl = document.getElementById('interlock-count');
+    if (countEl) countEl.textContent = `${triggered}触发 / ${bypassed}旁路 / ${entries.length}总数`;
 }
 
 async function bypassInterlock(ruleId) {
     const reason = prompt('旁路将暂时失效该安全联锁，请输入旁路原因（维护等）:');
     if (!reason) return;
     try {
-        await fetch(`/api/control/interlocks/${ruleId}/bypass`, {
+        const r = await fetch(`/api/control/interlocks/${ruleId}/bypass`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({ reason })
         });
-        loadInterlocks();
-    } catch(e) { showAlert('旁路失败', 'danger'); }
+        const data = await r.json();
+        // 旁路是安全相关操作：失败必须明示（后端 200 + success:false 也要拦住）
+        if (data.success) {
+            showAlert(data.message || '联锁已旁路', 'warning');
+            loadInterlocks();
+        } else {
+            showAlert(data.error || data.message || '旁路失败', 'danger');
+        }
+    } catch(e) { showAlert('旁路失败: ' + e.message, 'danger'); }
 }
 
 async function restoreInterlock(ruleId) {
     if (!confirm('确认恢复联锁？\n\n恢复后该安全联锁将重新生效。')) return;
     try {
-        await fetch(`/api/control/interlocks/${ruleId}/restore`, {
+        const r = await fetch(`/api/control/interlocks/${ruleId}/restore`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
         });
-        loadInterlocks();
-    } catch(e) { showAlert('恢复失败', 'danger'); }
+        const data = await r.json();
+        if (data.success) {
+            showAlert(data.message || '联锁已恢复', 'success');
+            loadInterlocks();
+        } else {
+            showAlert(data.error || data.message || '恢复失败', 'danger');
+        }
+    } catch(e) { showAlert('恢复失败: ' + e.message, 'danger'); }
 }
 
 // ==================== 设备健康 ====================
@@ -1458,12 +1520,24 @@ async function loadDeviceHealth() {
         const r = await fetch('/api/control/health', { headers: getAuthHeaders() });
         const data = await r.json();
         renderDeviceHealth(data);
-    } catch(e) {}
+    } catch(e) {
+        const container = document.getElementById('health-list');
+        if (container) {
+            container.innerHTML = `
+                <div class="state-box state-box--inline">
+                    <i class="bi bi-exclamation-triangle state-box__icon"></i>
+                    <div class="state-box__title">设备健康数据加载失败</div>
+                </div>`;
+        }
+    }
 }
 
 function renderDeviceHealth(data) {
     const container = document.getElementById('health-list');
-    const devices = data.devices || {};
+    if (!container) return;
+    // /api/control/health 返回 {total, connected, disconnected, unknown, devices:{...}}
+    const devices = (data && typeof data === 'object' && data.devices && typeof data.devices === 'object')
+        ? data.devices : {};
     const entries = Object.entries(devices);
     if (entries.length === 0) {
         container.innerHTML = `
@@ -1475,6 +1549,7 @@ function renderDeviceHealth(data) {
     }
     let connected = 0, disconnected = 0;
     container.innerHTML = entries.map(([id, h]) => {
+        h = h || {};
         const status = h.status || 'unknown';
         if (status === 'connected') connected++;
         if (status === 'disconnected') disconnected++;
@@ -1495,7 +1570,8 @@ function renderDeviceHealth(data) {
             </div>
         `;
     }).join('');
-    document.getElementById('health-count').textContent = `${connected}在线 / ${disconnected}离线 / ${entries.length}总数`;
+    const countEl = document.getElementById('health-count');
+    if (countEl) countEl.textContent = `${connected}在线 / ${disconnected}离线 / ${entries.length}总数`;
 }
 
 // ==================== 综合状态加载 ====================
@@ -1503,7 +1579,15 @@ async function loadControlSafetyStatus() {
     try {
         const r = await fetch('/api/control/status', { headers: getAuthHeaders() });
         const data = await r.json();
-        if (!data.enabled) return;
+        if (!data.enabled) {
+            // 安全模块未启用/不可用（503 模块不可用响应）→ 明确告知，不能留着"系统正常"
+            const st = document.getElementById('estop-status-text');
+            if (st) {
+                st.textContent = '设备控制安全模块未启用';
+                st.className = 'estop-hint estop-hint--danger';
+            }
+            return;
+        }
 
         // E-Stop状态
         const estop = data.estop || {};
@@ -1529,7 +1613,14 @@ async function loadControlSafetyStatus() {
         // 联锁和健康
         if (data.interlocks) renderInterlocks(data.interlocks.rules || {});
         if (data.device_health) renderDeviceHealth(data.device_health);
-    } catch(e) {}
+    } catch(e) {
+        // 拉取失败时页面不能继续显示"系统正常"（会误导操作员）
+        const st = document.getElementById('estop-status-text');
+        if (st) {
+            st.textContent = '安全状态获取失败 — 请刷新重试';
+            st.className = 'estop-hint estop-hint--danger';
+        }
+    }
 }
 
 // 页面加载时初始化安全状态

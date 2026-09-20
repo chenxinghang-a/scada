@@ -583,6 +583,10 @@
 <script>
 // 设备列表缓存
 let devicesList = [];
+// 编辑态下采集周期的初始显示值。设备状态接口不返回 collection_interval，
+// 表单里显示的是兜底值 5；保存时若用户没动过这一栏就不回传，避免把真实周期
+// 悄悄改成 5（null 表示新增设备，正常回传）。
+let editIntervalDisplayed = null;
 
 // 页面加载时获取设备列表
 document.addEventListener('DOMContentLoaded', function() {
@@ -831,6 +835,7 @@ function showAddDeviceModal() {
     document.getElementById('device-enabled').value = 'true';
     document.getElementById('mqtt-port').value = '1883';
     document.getElementById('rest-poll-interval').value = '10';
+    editIntervalDisplayed = null;   // 新增设备：采集周期按输入框实际值回传
     
     resetAllProtocolFields();
     onProtocolChange();
@@ -851,6 +856,7 @@ function editDevice(deviceId) {
     document.getElementById('device-description').value = device.description || '';
     document.getElementById('device-protocol').value = device.protocol || 'modbus_tcp';
     document.getElementById('device-interval').value = device.collection_interval || 5;
+    editIntervalDisplayed = document.getElementById('device-interval').value;
     document.getElementById('device-enabled').value = device.enabled !== false ? 'true' : 'false';
     
     resetAllProtocolFields();
@@ -1158,14 +1164,18 @@ async function saveDevice() {
     const protocol = document.getElementById('device-protocol').value;
     
     // 根据协议构建配置
+    const intervalInput = document.getElementById('device-interval').value;
     const deviceConfig = {
         id: deviceId,
         name: name,
         description: document.getElementById('device-description').value.trim(),
         protocol: protocol,
-        collection_interval: parseInt(document.getElementById('device-interval').value) || 5,
         enabled: document.getElementById('device-enabled').value === 'true'
     };
+    // 编辑态且用户未改动采集周期 → 不回传该字段，保留设备原有周期
+    if (!isEdit || intervalInput !== editIntervalDisplayed) {
+        deviceConfig.collection_interval = parseInt(intervalInput) || 5;
+    }
     
     if (protocol === 'modbus_tcp' || protocol === 'modbus_rtu') {
         const host = document.getElementById('device-host').value.trim();
@@ -1258,8 +1268,8 @@ async function saveDevice() {
 // ==================== 查看数据 & 删除 & 测试 ====================
 
 function viewDeviceData(deviceId) {
-    // 跳转到图表分析页面，并预选设备
-    window.location.href = `/charts?device=${deviceId}`;
+    // 跳转到历史数据页面并预选设备（/charts 路由已下线，跳过去会 404）
+    window.location.href = `/history?device=${encodeURIComponent(deviceId)}`;
 }
 
 async function deleteDevice(deviceId) {
@@ -1299,8 +1309,14 @@ async function stopDevice(deviceId) {
     try {
         const r = await fetch(`/api/devices/${deviceId}/stop`, { method: 'POST', headers: getAuthHeaders() });
         const d = await r.json();
-        showAlert(d.message || '已停止', 'warning');
-        loadDevices();
+        // 后端停启接口固定返回 message="设备 X 已停止/已启动"（即使 success=false 也如此），
+        // 只看 message 会把失败提示成成功，必须以 success 判定
+        if (d.success) {
+            showAlert(d.message || '已停止', 'warning');
+            loadDevices();
+        } else {
+            showAlert(d.error || d.message || '停止失败', 'danger');
+        }
     } catch(e) { showAlert('停止失败: ' + e.message, 'danger'); }
 }
 
@@ -1308,8 +1324,12 @@ async function startDevice(deviceId) {
     try {
         const r = await fetch(`/api/devices/${deviceId}/start`, { method: 'POST', headers: getAuthHeaders() });
         const d = await r.json();
-        showAlert(d.message || '已启动', 'success');
-        loadDevices();
+        if (d.success) {
+            showAlert(d.message || '已启动', 'success');
+            loadDevices();
+        } else {
+            showAlert(d.error || d.message || '启动失败', 'danger');
+        }
     } catch(e) { showAlert('启动失败: ' + e.message, 'danger'); }
 }
 

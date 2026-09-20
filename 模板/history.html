@@ -214,13 +214,28 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(r => r.json())
         .then(data => {
             const select = document.getElementById('device-select');
-            data.devices.forEach(d => {
+            const devices = Array.isArray(data.devices) ? data.devices : Object.values(data.devices || {});
+            devices.forEach(d => {
                 const opt = document.createElement('option');
-                opt.value = d.device_id;
-                opt.textContent = d.name || d.device_id;
+                opt.value = d.device_id || d.id;
+                opt.textContent = d.name || opt.value;
                 select.appendChild(opt);
             });
-        });
+            if (!devices.length) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.disabled = true;
+                opt.textContent = '未加载到设备';
+                select.appendChild(opt);
+            }
+            // 支持从其它页面带 ?device=<id> 跳转过来预选设备（如设备管理页"查看数据"）
+            const preset = new URLSearchParams(window.location.search).get('device');
+            if (preset && devices.some(d => (d.device_id || d.id) === preset)) {
+                select.value = preset;
+                select.dispatchEvent(new Event('change'));
+            }
+        })
+        .catch(e => { console.error('加载设备列表失败:', e); alert('加载设备列表失败: ' + e.message); });
 
     // 设备选择变化时更新参数列表
     document.getElementById('device-select').addEventListener('change', function() {
@@ -231,15 +246,41 @@ document.addEventListener('DOMContentLoaded', function() {
         if (deviceId) {
             fetch(`/api/devices/${deviceId}`, { headers: getAuthHeaders() })
                 .then(r => r.json())
-                .then(data => {
-                    if (data.registers) {
-                        data.registers.forEach(r => {
-                            const opt = document.createElement('option');
-                            opt.value = r.name;
-                            opt.textContent = r.description || r.name;
-                            registerSelect.appendChild(opt);
-                        });
+                .then(payload => {
+                    // /api/devices/<id> 返回 {device: {...}} 包装，直接读顶层会拿到空数组
+                    const dev = (payload && payload.device) ? payload.device : (payload || {});
+                    // 点位分布在 registers / nodes / topics / endpoints 四类，
+                    // 只读 registers 会让 MQTT/OPC UA/REST 设备的参数下拉恒为空
+                    const points = [].concat(
+                        dev.registers || [], dev.nodes || [],
+                        dev.topics || [], dev.endpoints || []
+                    );
+                    const seen = {};
+                    points.forEach(p => {
+                        if (!p || typeof p !== 'object') return;
+                        const name = p.name || p.topic || p.node_id || p.path;
+                        if (!name || seen[name]) return;
+                        seen[name] = true;
+                        const opt = document.createElement('option');
+                        opt.value = name;
+                        opt.textContent = p.description ? `${p.description} (${name})` : name;
+                        registerSelect.appendChild(opt);
+                    });
+                    if (points.length === 0) {
+                        const opt = document.createElement('option');
+                        opt.value = '';
+                        opt.disabled = true;
+                        opt.textContent = '该设备无点位配置';
+                        registerSelect.appendChild(opt);
                     }
+                })
+                .catch(e => {
+                    console.error('加载设备参数失败:', e);
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.disabled = true;
+                    opt.textContent = '参数加载失败，可先用「全部参数」查询';
+                    registerSelect.appendChild(opt);
                 });
         }
     });
@@ -453,12 +494,30 @@ async function exportData() {
             })
         });
 
-        const result = await response.json();
-        if (result.success) {
-            alert('导出成功: ' + result.filepath);
-        } else {
-            alert('导出失败: ' + (result.message || '未知错误'));
+        const contentType = response.headers.get('Content-Type') || '';
+        // 失败路径：后端以 JSON 说明原因（api_error 的 error / 业务失败 message）
+        if (contentType.includes('application/json')) {
+            const result = await response.json();
+            alert('导出失败: ' + (result.error || result.message || `HTTP ${response.status}`));
+            return;
         }
+        if (!response.ok) {
+            alert('导出失败: HTTP ' + response.status);
+            return;
+        }
+
+        // 成功路径：后端 send_file 直接返回文件流，按 JSON 解析必然抛错
+        const blob = await response.blob();
+        const disposition = response.headers.get('Content-Disposition') || '';
+        const matched = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+        const filename = matched ? decodeURIComponent(matched[1]) : `device_${deviceId}.${format}`;
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
     } catch (error) {
         alert('导出失败: ' + error.message);
     }
