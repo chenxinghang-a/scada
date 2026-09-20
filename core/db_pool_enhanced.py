@@ -7,6 +7,26 @@
     pool = EnhancedConnectionPool(db_path, max_connections=20)
 """
 
+# ============================================================================
+# 接线状态：未接线（WIRED = False）
+# ============================================================================
+# 本模块在生产代码（run.py / 各业务层 / 其它 core 模块）中**没有任何 import 引用**。
+# 模块本身可用，但当前没有调用方 —— 也就是说它宣称的这项能力**当前并未生效**。
+#
+# 为什么保留而不删除：删掉即丢能力，模块本身有测试价值；这里只把「没接线」显式化、
+# 可追踪，避免「代码在库里」被误读成「功能在跑」。
+#
+# 自动化复核（防止本标注过期）：
+#   tests/test_core_regressions.py::test_unwired_marker_matches_reality
+#   —— 该用例用 AST 扫描全仓库 import。一旦有人把本模块接进生产代码，
+#      而这里仍写着 WIRED = False，用例即失败，强制文档与事实同步。
+#
+# 接线建议（需改 run.py / 各层，core 内部无权自行接线）：
+#     把 存储层/database.py 的连接获取改为 `with get_connection_pool().acquire() as conn:`。
+# ============================================================================
+WIRED = False
+
+
 import time
 import sqlite3
 import logging
@@ -56,7 +76,10 @@ class PooledConnection:
         try:
             self.conn.execute("SELECT 1")
             return True
-        except Exception:
+        except Exception as e:
+            # 探活失败返回 False 是安全侧，但原因要留痕：SQLITE_BUSY（只是忙）与
+            # SQLITE_CORRUPT（真坏了）都会走到这里，处置方式完全不同。
+            logger.debug("连接 %s 存活探测失败: %s", self.conn_id, e)
             return False
 
 
@@ -86,7 +109,10 @@ class EnhancedConnectionPool:
         self.liveness_probe_interval = liveness_probe_interval
 
         self._pool: List[PooledConnection] = []
-        self._lock = threading.Lock()
+        # RLock + Condition：池满时需要**真的等待**其它线程释放连接，
+        # 而 Condition.wait() 依赖锁支持 _release_save/_acquire_restore（RLock 具备）。
+        self._lock = threading.RLock()
+        self._cond = threading.Condition(self._lock)
         self._conn_counter = 0
 
         # 统计
@@ -99,6 +125,10 @@ class EnhancedConnectionPool:
             'liveness_failures': 0,
             'peak_size': 0,
             'warmup_created': 0,
+            # 池满必须可见：旧实现在此静默 `pass`，随后抛 RuntimeError，
+            # 调用方看到的是一个没有任何上下文的"池已满"。
+            'pool_full_waits': 0,
+            'pool_full_timeouts': 0,
         }
 
         # 泄漏检测
@@ -146,42 +176,76 @@ class EnhancedConnectionPool:
         return pooled
 
     @contextmanager
-    def acquire(self):
-        """获取连接"""
-        conn = None
-        with self._lock:
-            # 尝试复用空闲连接
-            for pooled in self._pool:
-                if not pooled.in_use:
-                    pooled.acquire()
-                    conn = pooled
-                    break
+    def acquire(self, timeout: float = 5.0):
+        """获取连接
 
-            # 创建新连接
-            if conn is None:
-                if len(self._pool) < self.max_connections:
+        池满时**真正等待**空闲连接释放（最多 `timeout` 秒），而不是像旧实现那样
+        注释写着"等待连接释放"、实际 `pass` 掉直接抛 RuntimeError —— 那种写法
+        在注释与行为之间撒了谎，调用方（正确性取决于能否拿到连接）会莫名其妙失败。
+
+        Args:
+            timeout: 池满时等待空闲连接的最长时间（秒）
+
+        Raises:
+            RuntimeError: 等待超时仍无可用连接。
+        """
+        conn = None
+        deadline = time.monotonic() + timeout
+        full_logged = False
+
+        while True:
+            with self._cond:
+                # 尝试复用空闲连接
+                for pooled in self._pool:
+                    if not pooled.in_use:
+                        pooled.acquire()
+                        conn = pooled
+                        break
+
+                # 创建新连接
+                if conn is None and len(self._pool) < self.max_connections:
                     conn = self._create_connection()
                     conn.acquire()
                     self._pool.append(conn)
-                else:
-                    # 等待连接释放
-                    pass
 
-            if conn:
-                self._active_connections[conn.conn_id] = time.time()
-                self._stats['acquired'] += 1
-                self._stats['peak_size'] = max(self._stats['peak_size'], len(self._pool))
+                if conn is not None:
+                    self._active_connections[conn.conn_id] = time.time()
+                    self._stats['acquired'] += 1
+                    self._stats['peak_size'] = max(self._stats['peak_size'], len(self._pool))
+                    break
+
+                # 池满：等待 release() 唤醒（首次进入打一条 WARNING，避免刷屏）
+                self._stats['pool_full_waits'] += 1
+                if not full_logged:
+                    logger.warning(
+                        "连接池已满 (%d/%d)，等待空闲连接释放（最多 %.1fs，累计等待 %d 次）",
+                        len(self._pool), self.max_connections, timeout,
+                        self._stats['pool_full_waits'])
+                    full_logged = True
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._stats['pool_full_timeouts'] += 1
+                    logger.error(
+                        "连接池已满且等待超时 (%.1fs)：%d/%d 个连接全部占用中",
+                        timeout, len(self._pool), self.max_connections)
+                    break
+                self._cond.wait(remaining)
 
         if conn is None:
-            raise RuntimeError("连接池已满，无法获取连接")
+            raise RuntimeError(
+                f"连接池已满，等待 {timeout:.1f}s 仍无法获取连接"
+                f"（{len(self._pool)}/{self.max_connections} 全部占用）")
 
         try:
             yield conn.conn
         finally:
             conn.release()
-            with self._lock:
+            with self._cond:
                 self._active_connections.pop(conn.conn_id, None)
                 self._stats['released'] += 1
+                # 唤醒正在等空闲连接的线程
+                self._cond.notify()
 
     def _health_check_loop(self):
         """健康检查循环"""

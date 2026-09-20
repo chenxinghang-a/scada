@@ -8,6 +8,27 @@
     compressed = compressor.compress(data, content_type='application/json')
 """
 
+# ============================================================================
+# 接线状态：未接线（WIRED = False）
+# ============================================================================
+# 本模块在生产代码（run.py / 各业务层 / 其它 core 模块）中**没有任何 import 引用**。
+# 模块本身可用，但当前没有调用方 —— 也就是说它宣称的这项能力**当前并未生效**。
+#
+# 为什么保留而不删除：删掉即丢能力，模块本身有测试价值；这里只把「没接线」显式化、
+# 可追踪，避免「代码在库里」被误读成「功能在跑」。
+#
+# 自动化复核（防止本标注过期）：
+#   tests/test_core_regressions.py::test_unwired_marker_matches_reality
+#   —— 该用例用 AST 扫描全仓库 import。一旦有人把本模块接进生产代码，
+#      而这里仍写着 WIRED = False，用例即失败，强制文档与事实同步。
+#
+# 接线建议（需改 run.py / 各层，core 内部无权自行接线）：
+#     在 展示层/api 的 app 工厂里按响应体大小自适应压缩，
+#     例如 `app.after_request(AdaptiveCompressor().apply)`。
+# ============================================================================
+WIRED = False
+
+
 import gzip
 import logging
 from typing import Any, Dict, Optional, Tuple

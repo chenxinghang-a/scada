@@ -8,6 +8,27 @@
     result = verifier.verify_backup('backup.db')
 """
 
+# ============================================================================
+# 接线状态：未接线（WIRED = False）
+# ============================================================================
+# 本模块在生产代码（run.py / 各业务层 / 其它 core 模块）中**没有任何 import 引用**。
+# 模块本身可用，但当前没有调用方 —— 也就是说它宣称的这项能力**当前并未生效**。
+#
+# 为什么保留而不删除：删掉即丢能力，模块本身有测试价值；这里只把「没接线」显式化、
+# 可追踪，避免「代码在库里」被误读成「功能在跑」。
+#
+# 自动化复核（防止本标注过期）：
+#   tests/test_core_regressions.py::test_unwired_marker_matches_reality
+#   —— 该用例用 AST 扫描全仓库 import。一旦有人把本模块接进生产代码，
+#      而这里仍写着 WIRED = False，用例即失败，强制文档与事实同步。
+#
+# 接线建议（需改 run.py / 各层，core 内部无权自行接线）：
+#     在备份流程（core/maintenance.py 的备份任务或 tools/backup）里，每次产出备份后调用
+#     `BackupVerifier(db_path, backup_dir).verify_backup(path)`，把结论写入运维接口。
+# ============================================================================
+WIRED = False
+
+
 import os
 import time
 import shutil
@@ -190,6 +211,11 @@ class BackupVerifier:
             'status': 'unknown',
         }
 
+        # 必须在 try 之前绑定：旧实现只在 try 内部赋值，一旦 tempfile/shutil 阶段
+        # 就抛异常，except 分支里的 `if os.path.exists(tmp_path)` 会先抛 NameError，
+        # 把真实错误（磁盘满 / 权限不足 / 源文件不可读）完全掩盖掉。
+        tmp_path: Optional[str] = None
+
         try:
             # 复制到临时文件
             with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
@@ -214,8 +240,12 @@ class BackupVerifier:
                     # SECURITY: 表名来自sqlite_master系统表（可信源），非用户输入
                     count = self._count_table_rows(conn, table)
                     table_stats[table] = count
-                except Exception:
+                except Exception as e:
+                    # -1 是"该表统计失败"的哨兵值，必须带日志与原因，否则恢复测试
+                    # 报告里出现 -1 却无从知道为什么。
                     table_stats[table] = -1
+                    result.setdefault('table_errors', {})[table] = str(e)
+                    logger.warning("恢复测试: 表 %s 行数统计失败: %s", table, e)
 
             conn.close()
 
@@ -228,10 +258,16 @@ class BackupVerifier:
 
         except Exception as e:
             result['status'] = 'fail'
-            result['error'] = str(e)
-            # 清理
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+            result['error'] = f"{type(e).__name__}: {e}"
+            logger.error("备份恢复测试失败: %s (temp=%s)", e, tmp_path)
+            # 清理：tmp_path 可能仍为 None（尚未创建临时文件就已失败）
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError as cleanup_err:
+                    # 临时文件清理失败不改变恢复测试结论，但必须留痕（否则泄漏无人知）
+                    logger.warning("恢复测试: 临时文件清理失败 %s: %s",
+                                   tmp_path, cleanup_err)
 
         return result
 

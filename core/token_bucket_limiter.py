@@ -9,6 +9,26 @@
         # 处理请求
 """
 
+# ============================================================================
+# 接线状态：未接线（WIRED = False）
+# ============================================================================
+# 本模块在生产代码（run.py / 各业务层 / 其它 core 模块）中**没有任何 import 引用**。
+# 模块本身可用，但当前没有调用方 —— 也就是说它宣称的这项能力**当前并未生效**。
+#
+# 为什么保留而不删除：删掉即丢能力，模块本身有测试价值；这里只把「没接线」显式化、
+# 可追踪，避免「代码在库里」被误读成「功能在跑」。
+#
+# 自动化复核（防止本标注过期）：
+#   tests/test_core_regressions.py::test_unwired_marker_matches_reality
+#   —— 该用例用 AST 扫描全仓库 import。一旦有人把本模块接进生产代码，
+#      而这里仍写着 WIRED = False，用例即失败，强制文档与事实同步。
+#
+# 接线建议（需改 run.py / 各层，core 内部无权自行接线）：
+#     对写接口加 `@token_bucket_required()`，用令牌桶平滑突发流量。
+# ============================================================================
+WIRED = False
+
+
 import time
 import threading
 import logging
@@ -31,24 +51,30 @@ class TokenBucket:
         self.refill_rate = refill_rate
         self.tokens = float(capacity)
         self.last_refill = time.time()
+        # 每个桶自带锁：TokenBucketLimiter 的锁只保护"桶字典"，
+        # 不保护桶内 tokens 的读-改-写；并发调用 allow() 会各自读到同一个
+        # tokens 值再各自扣减 → 实际放行量超过限额（限流静默失效）。
+        self._lock = threading.Lock()
 
     def allow(self, tokens: int = 1) -> bool:
         """检查是否允许请求"""
-        now = time.time()
-        elapsed = now - self.last_refill
-        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
-        self.last_refill = now
+        with self._lock:
+            now = time.time()
+            elapsed = now - self.last_refill
+            self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
+            self.last_refill = now
 
-        if self.tokens >= tokens:
-            self.tokens -= tokens
-            return True
-        return False
+            if self.tokens >= tokens:
+                self.tokens -= tokens
+                return True
+            return False
 
     def get_available(self) -> float:
-        """获取可用令牌数"""
-        now = time.time()
-        elapsed = now - self.last_refill
-        return min(self.capacity, self.tokens + elapsed * self.refill_rate)
+        """获取可用令牌数（只读，不改状态）"""
+        with self._lock:
+            now = time.time()
+            elapsed = now - self.last_refill
+            return min(self.capacity, self.tokens + elapsed * self.refill_rate)
 
 
 class TokenBucketLimiter:
@@ -184,8 +210,11 @@ def token_bucket_required(tokens: int = 1, key_func=None):
                 key = request.remote_addr or 'unknown'
 
             if not token_bucket_limiter.allow(key, tokens):
-                from core.service_response import api_error
-                return api_error('请求过于频繁', 429)
+                # NOTE: core.service_response 只有 error_response()，没有 api_error()。
+                # 旧实现在这里 import api_error → 装饰器一旦被启用就 ImportError，
+                # 即"限流装饰器根本没接线"和"接线即崩"两种状态二选一。
+                from core.service_response import error_response
+                return error_response('请求过于频繁', 429)
 
             return f(*args, **kwargs)
         return decorated

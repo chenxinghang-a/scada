@@ -223,7 +223,12 @@ class ChaosEngine:
         return False
 
     def _check_api_responsive(self) -> bool:
-        """检查API响应（仅检测本地端口可达性，不发起HTTP请求）"""
+        """检查API响应（仅检测本地端口可达性，不发起HTTP请求）
+
+        异常时返回 False（fail-safe，判定为未通过），但必须留痕 ——
+        否则"端口不通"与"socket 探测本身坏了"在结果里完全同形，
+        会让人误以为是服务没起来。同文件其它检查（如 collector_running）都记了日志。
+        """
         try:
             import socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -231,7 +236,8 @@ class ChaosEngine:
             result = sock.connect_ex(('127.0.0.1', 5000))
             sock.close()
             return result == 0
-        except Exception:
+        except Exception as e:
+            logger.warning("稳态检查 api_responsive 执行失败(将判定为未通过): %s", e)
             return False
 
     def _check_no_critical_alarms(self) -> bool:

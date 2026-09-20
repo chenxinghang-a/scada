@@ -366,10 +366,20 @@ class DatabaseMaintainer:
                         sql = 'SELECT COUNT(*) FROM ' + safe_name
                         count = conn.execute(sql).fetchone()[0]
                         stats.append({'table': table, 'row_count': count})
-                    except Exception:
-                        stats.append({'table': table, 'row_count': -1})
+                    except Exception as e:
+                        # -1 是"统计失败"的哨兵值。旧实现不带原因也不记日志，
+                        # 运维只看到一个 -1，不知道是表被锁、损坏还是权限问题。
+                        # 注意：这里**不能**塞 'error' 键 —— 展示层
+                        # `_result_error_detail()` 会把列表里任何带 error 的项
+                        # 判定为"整体失败"，那会让"单表失败"升级成整个接口 500。
+                        stats.append({'table': table, 'row_count': -1,
+                                      'error_detail': f'{type(e).__name__}: {e}'})
+                        logger.warning("表 %s 行数统计失败: %s", table, e)
                 return stats
         except Exception as e:
+            # 失败形态是 [{'error': ...}]，展示层已按此契约解析成错误响应；
+            # 但日志里必须留一条，否则"接口报错"却查不到任何服务端线索。
+            logger.error("获取表统计失败: %s", e, exc_info=True)
             return [{'error': str(e)}]
 
 

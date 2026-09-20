@@ -67,38 +67,83 @@ class SystemLoadMonitor:
         # 可注入的外部指标源
         self._queue_size_func: Optional[Callable[[], int]] = None
 
+        # 信号采集故障计数：旧实现里采集失败一律 return 0/0.0，等于向负载评估
+        # 注入"系统很闲"的假信号 —— 高负载时反而放宽限流。现在失败即"该信号不可用"，
+        # 从评估中剔除并留痕/计数，绝不伪装成 0。
+        self._probe_errors = {'cpu': 0, 'memory': 0, 'queue': 0}
+        self._missing_psutil_logged = False
+        self._last_unavailable: list = []
+
     def set_queue_size_func(self, func: Callable[[], int]):
         """注入队列深度获取函数"""
         self._queue_size_func = func
 
-    def _get_cpu_percent(self) -> float:
-        """获取CPU使用率"""
+    def _note_psutil_missing(self) -> None:
+        """psutil 缺失只告警一次，避免监控线程每 10 秒刷屏"""
+        if not self._missing_psutil_logged:
+            self._missing_psutil_logged = True
+            logger.warning(
+                "psutil 未安装：CPU/内存信号不可用，动态限流将只依据队列深度评估"
+                "（负载等级可能长期停留在 LOW）")
+
+    def _get_cpu_percent(self) -> Optional[float]:
+        """获取CPU使用率；采集失败返回 None（不可用），绝不返回 0"""
         try:
             import psutil
+        except ImportError:
+            self._note_psutil_missing()
+            self._probe_errors['cpu'] += 1
+            return None
+        try:
             return psutil.cpu_percent(interval=0)
-        except ImportError:
-            return 0.0
+        except Exception as e:
+            self._probe_errors['cpu'] += 1
+            logger.warning("CPU使用率采集失败(该信号已从负载评估中剔除)(累计 %d 次): %s",
+                           self._probe_errors['cpu'], e)
+            return None
 
-    def _get_memory_percent(self) -> float:
-        """获取内存使用率"""
+    def _get_memory_percent(self) -> Optional[float]:
+        """获取内存使用率；采集失败返回 None（不可用），绝不返回 0"""
         try:
             import psutil
-            return psutil.virtual_memory().percent
         except ImportError:
-            return 0.0
+            self._note_psutil_missing()
+            self._probe_errors['memory'] += 1
+            return None
+        try:
+            return psutil.virtual_memory().percent
+        except Exception as e:
+            self._probe_errors['memory'] += 1
+            logger.warning("内存使用率采集失败(该信号已从负载评估中剔除)(累计 %d 次): %s",
+                           self._probe_errors['memory'], e)
+            return None
 
-    def _get_queue_size(self) -> int:
-        """获取队列深度"""
-        if self._queue_size_func:
-            try:
-                return self._queue_size_func()
-            except Exception:
-                return 0
-        return 0
+    def _get_queue_size(self) -> Optional[int]:
+        """获取队列深度；采集失败返回 None（不可用），绝不返回 0
+
+        旧实现 `except Exception: return 0` 会把"队列深度读不出来"伪装成
+        "队列是空的"，直接把负载评估往下拉一档 —— 恰恰在最需要收紧限流的时候
+        放开了限流。
+        """
+        if not self._queue_size_func:
+            return None
+        try:
+            return self._queue_size_func()
+        except Exception as e:
+            self._probe_errors['queue'] += 1
+            logger.warning("队列深度采集失败(该信号已从负载评估中剔除)(累计 %d 次): %s",
+                           self._probe_errors['queue'], e)
+            return None
 
     def evaluate(self) -> str:
         """
         评估当前负载等级
+
+        采集失败（返回 None）的信号会被**剔除**而不是当成 0 参与评估 ——
+        把"读不到队列深度"当成"队列是空的"会让负载等级被高估的前提下反向下调，
+        直接后果是高负载时限流不收紧。
+        具体是哪一路信号缺失，记录在 `get_metrics_snapshot()` 的
+        `unavailable_signals` 中；各路采集失败均已在其采集点打 WARNING。
 
         Returns:
             LoadLevel 值
@@ -108,53 +153,63 @@ class SystemLoadMonitor:
         queue = self._get_queue_size()
         t = self._thresholds
 
+        unavailable = [
+            name for name, val in (('cpu', cpu), ('memory', mem), ('queue', queue))
+            if val is None
+        ]
+
         # 按最高等级确定（木桶原理）
         level = LoadLevel.LOW
 
         # CPU评估（带降档滞后）
-        if self._last_level in (LoadLevel.HIGH, LoadLevel.CRITICAL):
-            cpu_high_threshold = t["cpu_high"] - t["hysteresis"]
-        else:
-            cpu_high_threshold = t["cpu_high"]
+        if cpu is not None:
+            if self._last_level in (LoadLevel.HIGH, LoadLevel.CRITICAL):
+                cpu_high_threshold = t["cpu_high"] - t["hysteresis"]
+            else:
+                cpu_high_threshold = t["cpu_high"]
 
-        if cpu >= t["cpu_critical"]:
-            level = LoadLevel.CRITICAL
-        elif cpu >= cpu_high_threshold:
-            level = max_level(level, LoadLevel.HIGH)
-        elif cpu >= t["cpu_medium"]:
-            level = max_level(level, LoadLevel.MEDIUM)
+            if cpu >= t["cpu_critical"]:
+                level = LoadLevel.CRITICAL
+            elif cpu >= cpu_high_threshold:
+                level = max_level(level, LoadLevel.HIGH)
+            elif cpu >= t["cpu_medium"]:
+                level = max_level(level, LoadLevel.MEDIUM)
 
         # 内存评估
-        if self._last_level in (LoadLevel.HIGH, LoadLevel.CRITICAL):
-            mem_high_threshold = t["mem_high"] - t["hysteresis"]
-        else:
-            mem_high_threshold = t["mem_high"]
+        if mem is not None:
+            if self._last_level in (LoadLevel.HIGH, LoadLevel.CRITICAL):
+                mem_high_threshold = t["mem_high"] - t["hysteresis"]
+            else:
+                mem_high_threshold = t["mem_high"]
 
-        if mem >= t["mem_critical"]:
-            level = LoadLevel.CRITICAL
-        elif mem >= mem_high_threshold:
-            level = max_level(level, LoadLevel.HIGH)
-        elif mem >= t["mem_medium"]:
-            level = max_level(level, LoadLevel.MEDIUM)
+            if mem >= t["mem_critical"]:
+                level = LoadLevel.CRITICAL
+            elif mem >= mem_high_threshold:
+                level = max_level(level, LoadLevel.HIGH)
+            elif mem >= t["mem_medium"]:
+                level = max_level(level, LoadLevel.MEDIUM)
 
         # 队列评估
-        if queue >= t["queue_critical"]:
-            level = LoadLevel.CRITICAL
-        elif queue >= t["queue_high"]:
-            level = max_level(level, LoadLevel.HIGH)
-        elif queue >= t["queue_medium"]:
-            level = max_level(level, LoadLevel.MEDIUM)
+        if queue is not None:
+            if queue >= t["queue_critical"]:
+                level = LoadLevel.CRITICAL
+            elif queue >= t["queue_high"]:
+                level = max_level(level, LoadLevel.HIGH)
+            elif queue >= t["queue_medium"]:
+                level = max_level(level, LoadLevel.MEDIUM)
 
         # 记录指标
         with self._lock:
             self._last_level = level
             self._last_check = time.time()
+            self._last_unavailable = unavailable
             self._metrics_history.append({
                 'time': self._last_check,
                 'cpu': cpu,
                 'mem': mem,
                 'queue': queue,
                 'level': level,
+                'unavailable_signals': unavailable,
             })
             if len(self._metrics_history) > self._max_history:
                 self._metrics_history = self._metrics_history[-self._max_history:]
@@ -166,27 +221,41 @@ class SystemLoadMonitor:
         with self._lock:
             return self._last_level
 
+    def get_probe_errors(self) -> Dict[str, int]:
+        """获取各路信号采集失败计数（非零即说明负载评估依据不完整）"""
+        return dict(self._probe_errors)
+
     def get_metrics_snapshot(self) -> Dict[str, Any]:
-        """获取最新指标快照"""
+        """获取最新指标快照
+
+        注意 `cpu_percent`/`memory_percent`/`queue_size` 可能为 **None**，
+        表示该信号采集失败（不是 0）。调用方不得把 None 当作 0 展示或计算。
+        """
         with self._lock:
+            base = {
+                'probe_errors': dict(self._probe_errors),
+                'unavailable_signals': list(getattr(self, '_last_unavailable', [])),
+            }
             if self._metrics_history:
                 latest = self._metrics_history[-1]
-                return {
+                base.update({
                     'cpu_percent': latest['cpu'],
                     'memory_percent': latest['mem'],
                     'queue_size': latest['queue'],
                     'load_level': latest['level'],
                     'last_check': self._last_check,
                     'history_count': len(self._metrics_history),
-                }
-            return {
-                'cpu_percent': 0,
-                'memory_percent': 0,
-                'queue_size': 0,
+                })
+                return base
+            base.update({
+                'cpu_percent': None,
+                'memory_percent': None,
+                'queue_size': None,
                 'load_level': LoadLevel.LOW,
                 'last_check': 0,
                 'history_count': 0,
-            }
+            })
+            return base
 
 
 def max_level(a: str, b: str) -> str:
@@ -360,6 +429,7 @@ class DynamicRateLimiter:
                 'total_adjustments': self._total_adjustments,
                 'recent_changes': self._level_changes[-5:],
                 'monitor_metrics': self._monitor.get_metrics_snapshot(),
+                'probe_errors': self._monitor.get_probe_errors(),
                 'check_interval': self._check_interval,
                 'running': self._monitor_thread is not None and self._monitor_thread.is_alive(),
             }

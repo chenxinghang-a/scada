@@ -7,6 +7,26 @@
     stats = memory_monitor.get_stats()
 """
 
+# ============================================================================
+# 接线状态：未接线（WIRED = False）
+# ============================================================================
+# 本模块在生产代码（run.py / 各业务层 / 其它 core 模块）中**没有任何 import 引用**。
+# 模块本身可用，但当前没有调用方 —— 也就是说它宣称的这项能力**当前并未生效**。
+#
+# 为什么保留而不删除：删掉即丢能力，模块本身有测试价值；这里只把「没接线」显式化、
+# 可追踪，避免「代码在库里」被误读成「功能在跑」。
+#
+# 自动化复核（防止本标注过期）：
+#   tests/test_core_regressions.py::test_unwired_marker_matches_reality
+#   —— 该用例用 AST 扫描全仓库 import。一旦有人把本模块接进生产代码，
+#      而这里仍写着 WIRED = False，用例即失败，强制文档与事实同步。
+#
+# 接线建议（需改 run.py / 各层，core 内部无权自行接线）：
+#     在 run.py 健康检查/看板里暴露 `MemoryUsageMonitor.get_stats()`。
+# ============================================================================
+WIRED = False
+
+
 import os
 import time
 import logging
@@ -32,6 +52,8 @@ class MemoryUsageMonitor:
         self._lock = threading.Lock()
         self._process: Optional[psutil.Process] = None
         self._baseline: Optional[Dict[str, float]] = None
+        # 采样失败计数：空样本与"采集失败"必须可区分，计数暴露在 get_stats()
+        self._sample_errors = 0
 
         if HAS_PSUTIL:
             try:
@@ -42,7 +64,12 @@ class MemoryUsageMonitor:
                 logger.warning(f"内存监控初始化失败(将无法采集内存指标): pid={os.getpid()}: {e}")
 
     def _take_sample(self) -> Dict[str, float]:
-        """采集内存样本"""
+        """采集内存样本
+
+        采集失败返回 `{}`，但**必须留痕**：`{}` 与"没有进程对象"返回的空 dict
+        完全同形，旧实现只 `return {}`，监控侧只会看到"采样为空"，
+        无法区分"还没初始化"和"读内存指标一直失败"。
+        """
         if not self._process:
             return {}
 
@@ -53,7 +80,9 @@ class MemoryUsageMonitor:
                 'vms_mb': mem.vms / 1024 / 1024,
                 'timestamp': time.time(),
             }
-        except Exception:
+        except Exception as e:
+            self._sample_errors += 1
+            logger.warning("内存样本采集失败(累计 %d 次): %s", self._sample_errors, e)
             return {}
 
     def sample(self):
@@ -68,11 +97,15 @@ class MemoryUsageMonitor:
     def get_stats(self) -> Dict[str, Any]:
         """获取内存统计"""
         if not HAS_PSUTIL:
-            return {'available': False, 'reason': 'psutil not installed'}
+            return {'available': False, 'reason': 'psutil not installed',
+                    'sample_errors': self._sample_errors}
 
         current = self._take_sample()
         if not current:
-            return {'available': False, 'reason': 'process not found'}
+            # 区分"尚未初始化出进程对象"与"采样一直失败"，不要一律报 process not found
+            reason = 'process not found' if not self._process else 'sample failed'
+            return {'available': False, 'reason': reason,
+                    'sample_errors': self._sample_errors}
 
         with self._lock:
             history = list(self._history)
@@ -84,6 +117,7 @@ class MemoryUsageMonitor:
                 'vms_mb': round(current['vms_mb'], 2),
             },
             'samples': len(history),
+            'sample_errors': self._sample_errors,
         }
 
         if self._baseline:

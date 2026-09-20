@@ -75,6 +75,9 @@ class ConnectionPool:
             'misses': 0,
             'active': 0,
             'idle': 0,
+            # 漂移/误用计数：非零即说明调用方有 bug，属于必须可见的信号
+            'release_mismatch': 0,
+            'stats_drift': 0,
         }
 
         # 后台清理线程
@@ -187,11 +190,24 @@ class ConnectionPool:
         with self._lock:
             if key in self._pool:
                 conn = self._pool[key]
+                # 幂等保护：只有"确实处于占用态"的连接才做 active→idle 迁移。
+                # 旧实现无条件 active-=1 / idle+=1，重复 release、或对
+                # get_or_create() 拿到的空闲连接调用 release() 时，都会多减一次，
+                # 长时间运行后 active/idle 会漂移成负数。
+                was_in_use = conn.in_use
                 conn.in_use = False
                 conn.healthy = healthy
                 conn.last_used = time.time()
-                self._stats['active'] -= 1
-                self._stats['idle'] += 1
+
+                if was_in_use:
+                    self._stats['active'] -= 1
+                    self._stats['idle'] += 1
+                else:
+                    # 未占用却调用了 release：属于调用方误用，必须可见
+                    self._stats['release_mismatch'] += 1
+                    logger.warning(
+                        f"连接池 {self._name}: 连接 {key} 未处于占用态却收到 release()，"
+                        f"已忽略计数变更(累计 {self._stats['release_mismatch']} 次)")
 
                 if not healthy:
                     logger.warning(f"连接池 {self._name}: 连接 {key} 标记为不健康")
@@ -334,8 +350,25 @@ class ConnectionPool:
     # ------------------------------------------------------------------
 
     def get_stats(self) -> dict:
-        """获取池统计"""
+        """获取池统计
+
+        `active`/`idle` 以**池内真实连接状态**为准（单一事实来源），而不是累加
+        计数器 —— 累加计数一旦漏加/多加（历史 bug）就会长期漂移成负数。
+        同时把累加值与真实值的偏差记到 `stats_drift`，任何非零都说明
+        增减路径又不对称了，便于当场发现而不是靠事后对账。
+        """
         with self._lock:
+            active = sum(1 for c in self._pool.values() if c.in_use)
+            idle = len(self._pool) - active
+            if self._stats['active'] != active or self._stats['idle'] != idle:
+                self._stats['stats_drift'] += 1
+                logger.warning(
+                    "连接池 %s: 计数漂移 detected (计数 active/idle=%d/%d，"
+                    "真实 active/idle=%d/%d)，已按真实值修正",
+                    self._name, self._stats['active'], self._stats['idle'],
+                    active, idle)
+                self._stats['active'] = active
+                self._stats['idle'] = idle
             return {**self._stats, 'total': len(self._pool)}
 
     def contains(self, key: str) -> bool:

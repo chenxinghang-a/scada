@@ -21,8 +21,14 @@ from flask import request, jsonify
 
 logger = logging.getLogger(__name__)
 
-# 缓存存储: key → (expire_time, response_data, status_code)
-_cache: dict[str, tuple[float, Any, int]] = {}
+# 缓存存储: key → (expire_time, response_data, status_code, prefix)
+#
+# 第 4 项 prefix 是**原始端点前缀**（`_make_cache_key` 的输入），必须随条目一起存：
+# 缓存键是 sha256 摘要，无法从键反推端点名，旧实现用
+# `k.startswith(prefix)` 拿原始端点名去比对 sha256 键 —— 永远不成立，
+# 按端点失效（invalidate_cache('devices')）实际上什么都没删，
+# 修改数据后接口继续返回陈旧缓存，且日志显示"已失效 0 条"，看起来很正常。
+_cache: dict[str, tuple[float, Any, int, str]] = {}
 _cache_lock = threading.Lock()
 
 # 默认 TTL（秒）
@@ -33,6 +39,10 @@ _stats = {
     'hits': 0,
     'misses': 0,
     'evictions': 0,
+    # 按前缀失效的命中/落空次数：落空次数长期增长而命中为 0，
+    # 说明调用方用的前缀和 @cached_response(prefix=...) 对不上。
+    'invalidations': 0,
+    'invalidate_misses': 0,
 }
 
 
@@ -65,7 +75,8 @@ def cached_response(ttl: int = DEFAULT_TTL, prefix: str = ''):
             if request.method != 'GET':
                 return f(*args, **kwargs)
 
-            cache_key = _make_cache_key(prefix or f.__name__)
+            endpoint = prefix or f.__name__
+            cache_key = _make_cache_key(endpoint)
             now = time.time()
 
             # 尝试命中缓存
@@ -90,7 +101,12 @@ def cached_response(ttl: int = DEFAULT_TTL, prefix: str = ''):
                 try:
                     data = result.get_json()
                     status_code = result.status_code
-                except Exception:
+                except Exception as e:
+                    # 解析不出 JSON → 直接返回原响应（不缓存）。必须留痕：
+                    # 否则"这个端点一直不缓存"看起来只是缓存策略，实际是解析失败。
+                    logger.warning(
+                        "响应体解析失败，本次不缓存(将原样返回): %s: %s",
+                        getattr(f, '__name__', '?'), e)
                     return result
             elif isinstance(result, tuple):
                 data, status_code = result[0], result[1] if len(result) > 1 else 200
@@ -99,10 +115,10 @@ def cached_response(ttl: int = DEFAULT_TTL, prefix: str = ''):
             else:
                 return result
 
-            # 存入缓存
+            # 存入缓存（连同端点前缀一起存，供 invalidate_cache 按前缀匹配）
             if status_code == 200 and data is not None:
                 with _cache_lock:
-                    _cache[cache_key] = (now + ttl, data, status_code)
+                    _cache[cache_key] = (now + ttl, data, status_code, endpoint)
 
             resp = jsonify(data) if isinstance(data, (dict, list)) else data
             if hasattr(resp, 'headers'):
@@ -113,23 +129,46 @@ def cached_response(ttl: int = DEFAULT_TTL, prefix: str = ''):
     return decorator
 
 
-def invalidate_cache(prefix: str = None):
+def invalidate_cache(prefix: str = None) -> int:
     """
     失效缓存
 
     Args:
-        prefix: 要失效的前缀（None 则清空全部）
+        prefix: 要失效的端点前缀（None 则清空全部）。匹配规则：条目的
+            `@cached_response(prefix=...)`（未显式指定时为函数名）等于 prefix
+            或以 `prefix` 开头。
+
+    Returns:
+        实际删除的条目数。
+
+    说明：缓存键是 sha256 摘要，必须靠条目内保存的端点名做前缀匹配，
+    不能对键本身做 startswith。
     """
+    removed = 0
     with _cache_lock:
         if prefix is None:
-            count = len(_cache)
+            removed = len(_cache)
             _cache.clear()
-            logger.debug("缓存已全部清空 (%d 条)", count)
+            logger.debug("缓存已全部清空 (%d 条)", removed)
         else:
-            keys_to_remove = [k for k in _cache if k.startswith(prefix)]
+            keys_to_remove = [
+                k for k, v in _cache.items()
+                if len(v) > 3 and isinstance(v[3], str) and v[3].startswith(prefix)
+            ]
             for k in keys_to_remove:
                 del _cache[k]
-            logger.debug("缓存已失效: prefix=%s (%d 条)", prefix, len(keys_to_remove))
+            removed = len(keys_to_remove)
+            _stats['invalidations'] += removed
+            if removed == 0:
+                # 落空要留痕：否则"改了数据但接口还是旧值"会被归因到别处
+                _stats['invalidate_misses'] += 1
+                logger.warning(
+                    "按前缀失效未命中任何缓存条目: prefix=%r (当前 %d 条缓存，"
+                    "请确认与 @cached_response(prefix=...) 一致)",
+                    prefix, len(_cache))
+            else:
+                logger.debug("缓存已失效: prefix=%s (%d 条)", prefix, removed)
+    return removed
 
 
 def cleanup_expired():
@@ -140,6 +179,8 @@ def cleanup_expired():
         for k in expired:
             del _cache[k]
         _stats['evictions'] += len(expired)
+    if expired:
+        logger.debug("清理过期缓存条目: %d 条", len(expired))
     return len(expired)
 
 
@@ -154,4 +195,8 @@ def get_cache_stats() -> dict:
             'misses': _stats['misses'],
             'evictions': _stats['evictions'],
             'hit_rate': round(hit_rate, 1),
+            # 按前缀失效的有效性：invalidate_misses 持续增长说明调用方
+            # 传的 prefix 跟缓存条目上的 endpoint 名对不上（失效没生效）
+            'invalidated': _stats['invalidations'],
+            'invalidate_misses': _stats['invalidate_misses'],
         }

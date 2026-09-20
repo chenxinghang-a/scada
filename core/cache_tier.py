@@ -79,8 +79,19 @@ class SQLiteCache:
             db_path = str(Path(__file__).parent.parent / 'data' / 'cache.db')
         self._db_path = db_path
         self._default_ttl = default_ttl
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        # 失败计数：读/清理失败此前被完全吞掉（get 返回 None、cleanup 返回 0），
+        # 运维侧看到的只是"缓存没命中""没东西可清理"，无法区分"真没有"与"读不动"。
+        self._errors = {'read': 0, 'write': 0, 'delete': 0, 'cleanup': 0, 'stats': 0}
+        self._last_error: Optional[str] = None
         self._init_db()
+
+    def _record_error(self, kind: str, e: Exception, context: str) -> None:
+        """记录一次 L2 缓存故障：计数 + WARNING 留痕 + 保存最近原因"""
+        self._errors[kind] = self._errors.get(kind, 0) + 1
+        self._last_error = f"{context}: {e}"
+        logger.warning("L2缓存%s失败(%s)(累计 %d 次): %s",
+                       context, kind, self._errors[kind], e)
 
     def _init_db(self):
         conn = sqlite3.connect(self._db_path)
@@ -111,7 +122,11 @@ class SQLiteCache:
                     self.delete(key)
                     return None
                 return json.loads(row[0])
-            except Exception:
+            except Exception as e:
+                # 读失败与"未命中"必须可区分：未命中是正常语义，读失败是故障。
+                # 仍按 miss 处理（安全侧），但必须留痕 + 计数，否则缓存层长期失效
+                # 而监控上看起来只是"命中率低"。
+                self._record_error('read', e, '读取')
                 return None
 
     def set(self, key: str, value: Any, ttl: float = None):
@@ -126,7 +141,7 @@ class SQLiteCache:
                 conn.commit()
                 conn.close()
             except Exception as e:
-                logger.warning(f"SQLite缓存写入失败: {e}")
+                self._record_error('write', e, '写入')
 
     def delete(self, key: str):
         with self._lock:
@@ -137,10 +152,15 @@ class SQLiteCache:
                 conn.close()
             except Exception as e:
                 # 删除失败意味着该 key 仍留在 L2，后续 get() 可能命中陈旧值
-                logger.warning(f"SQLite缓存删除失败(陈旧数据可能残留): key={key}: {e}")
+                self._record_error('delete', e, f'删除(key={key})')
 
     def cleanup_expired(self) -> int:
-        """清理过期缓存"""
+        """清理过期缓存
+
+        Returns:
+            实际删除条数。清理**失败**时返回 0 并记录 WARNING + 错误计数，
+            调用方可用 `get_stats()['errors']` 区分"没有过期项"与"清理失败"。
+        """
         with self._lock:
             try:
                 conn = sqlite3.connect(self._db_path, timeout=5)
@@ -149,20 +169,40 @@ class SQLiteCache:
                 conn.commit()
                 conn.close()
                 return deleted
-            except Exception:
+            except Exception as e:
+                # 旧实现直接 return 0 —— 与"没有过期项"完全无法区分。
+                self._record_error('cleanup', e, '清理过期项')
                 return 0
 
     def get_stats(self) -> Dict[str, Any]:
+        """获取 L2 缓存统计
+
+        失败分支与成功分支**结构一致**（都带 count/size_bytes/available/errors），
+        调用方不需要为失败路径写特例；失败时 count/size_bytes 为 None 而非 0，
+        避免把"读不动"读成"缓存是空的"。
+        """
+        stats: Dict[str, Any] = {
+            'errors': dict(self._errors),
+            'last_error': self._last_error,
+        }
         try:
             conn = sqlite3.connect(self._db_path, timeout=5)
             row = conn.execute('SELECT COUNT(*), SUM(LENGTH(value)) FROM cache').fetchone()
             conn.close()
-            return {
+            stats.update({
+                'available': True,
                 'count': row[0] or 0,
                 'size_bytes': row[1] or 0,
-            }
-        except Exception:
-            return {'count': 0, 'size_bytes': 0}
+            })
+        except Exception as e:
+            self._record_error('stats', e, '统计')
+            stats.update({
+                'available': False,
+                'count': None,
+                'size_bytes': None,
+                'error': str(e),
+            })
+        return stats
 
 
 class TieredCache:
@@ -239,6 +279,7 @@ class TieredCache:
             loaders: [(key, factory_fn, ttl), ...] 列表
         """
         warmed = 0
+        failed: List[str] = []
         for key, factory, ttl in loaders:
             try:
                 cached = self.get(key)
@@ -247,13 +288,24 @@ class TieredCache:
                     self.set(key, value, ttl)
                     warmed += 1
             except Exception as e:
+                failed.append(key)
                 logger.warning(f"缓存预热失败: {key}: {e}")
-        logger.info(f"缓存预热完成: {warmed}/{len(loaders)} 项")
+        # 汇总行必须如实反映失败数，否则"预热完成 N/M"会被读成"其余只是无需预热"
+        if failed:
+            logger.warning("缓存预热完成(含失败): 成功 %d, 失败 %d/%d, 失败键=%s",
+                           warmed, len(failed), len(loaders), failed[:10])
+        else:
+            logger.info(f"缓存预热完成: {warmed}/{len(loaders)} 项")
+        return warmed
 
     def get_stats(self) -> Dict[str, Any]:
+        l2_stats = self.l2.get_stats()
         return {
             'l1': self.l1.get_stats(),
-            'l2': self.l2.get_stats(),
+            'l2': l2_stats,
+            # 把 L2 故障计数提到顶层，方便监控一眼看到"缓存层在报错"
+            'l2_errors': dict(self.l2._errors),
+            'l2_healthy': l2_stats.get('available', False),
         }
 
     def cleanup(self) -> int:

@@ -90,8 +90,24 @@ BARE_RULE_SKIP = ALWAYS_SKIP
 BROAD_EXCEPTIONS = {"Exception", "BaseException"}
 
 #: 允许的例外：(相对路径, 行号) -> 理由
-#: 目前为空。若确需豁免，必须写明理由，且理由要能说服 reviewer。
-ALLOWED_SILENT_BROAD: dict[tuple[str, int], str] = {}
+#: 豁免必须写明理由，且理由要能说服 reviewer。**豁免集只应收缩，不应增长** ——
+#: `tests/test_core_regressions.py::test_silent_broad_allowlist_does_not_grow`
+#: 会盯着这里，防止有人图省事把新违规加进白名单。
+ALLOWED_SILENT_BROAD: dict[tuple[str, int], str] = {
+    ("core/health_checker.py", 548): (
+        "已登记的存量负债（未修复）。"
+        "`_check_data_freshness()` 里 `data_collector.data_queue.qsize()` 的 "
+        "`except Exception: pass`：队列深度读不出来时会静默跳过"
+        "「内存队列为空但磁盘队列有积压 → 消费链路停摆」这条交叉信号，"
+        "健康检查于是可能报 HEALTHY。"
+        "修法：改绑 `as e` 并 `logger.warning('数据新鲜度检查: 队列深度读取失败，"
+        "该交叉信号已跳过: %s', e)`，同时把 `queue_in_memory` 置为 None 而非 0，"
+        "避免被当成「内存队列是空的」。"
+        "本轮（core 静默失败专项）文件边界明确排除 core/health_checker.py"
+        "（该文件刚被其它改动触碰），故仅登记、不修改；"
+        "请在后续针对 health_checker 的变更中一并修掉并删除本豁免。"
+    ),
+}
 
 
 def _iter_py(skip_dirs: set[str]):

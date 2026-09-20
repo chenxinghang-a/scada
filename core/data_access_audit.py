@@ -8,6 +8,26 @@
     auditor.log_access('user_001', 'devices', 'read', sensitive_fields=['password'])
 """
 
+# ============================================================================
+# 接线状态：未接线（WIRED = False）
+# ============================================================================
+# 本模块在生产代码（run.py / 各业务层 / 其它 core 模块）中**没有任何 import 引用**。
+# 模块本身可用，但当前没有调用方 —— 也就是说它宣称的这项能力**当前并未生效**。
+#
+# 为什么保留而不删除：删掉即丢能力，模块本身有测试价值；这里只把「没接线」显式化、
+# 可追踪，避免「代码在库里」被误读成「功能在跑」。
+#
+# 自动化复核（防止本标注过期）：
+#   tests/test_core_regressions.py::test_unwired_marker_matches_reality
+#   —— 该用例用 AST 扫描全仓库 import。一旦有人把本模块接进生产代码，
+#      而这里仍写着 WIRED = False，用例即失败，强制文档与事实同步。
+#
+# 接线建议（需改 run.py / 各层，core 内部无权自行接线）：
+#     在 展示层/api 的数据读取端点调用 `DataAccessAuditor.log_access(...)`（敏感表/字段已在模块内定义）。
+# ============================================================================
+WIRED = False
+
+
 import logging
 import sqlite3
 import time
@@ -16,6 +36,17 @@ from typing import Any, Dict, List, Optional, Set
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
+
+
+def _format_record_datetime(record: 'DataAccessRecord') -> Optional[str]:
+    """把记录的时间戳格式化为 ISO 字符串（与 to_dict()['datetime'] 同格式）。
+
+    DataAccessRecord 暴露的是 `timestamp`（秒级 float），**没有** `datetime` 属性；
+    直接访问 `.datetime` 会 AttributeError。此处集中处理，便于测试锁定契约。
+    """
+    if record is None:
+        return None
+    return datetime.fromtimestamp(record.timestamp).isoformat()
 
 
 class DataAccessRecord:
@@ -82,6 +113,10 @@ class DataAccessAuditor:
         # 异常检测阈值
         self._high_volume_threshold = 100  # 单用户单表每小时最大访问次数
         self._sensitive_threshold = 50  # 单用户每小时敏感数据访问次数
+
+        # 持久化失败计数（审计链断裂必须可观测，不能只靠日志刷屏）
+        self._persist_failures = 0
+        self._last_persist_error: Optional[str] = None
 
     def log_access(
         self,
@@ -168,7 +203,15 @@ class DataAccessAuditor:
             conn.commit()
             conn.close()
         except Exception as e:
-            logger.debug(f"数据访问日志持久化失败: {e}")
+            # 审计日志写不进去 = 审计链断裂（合规问题），旧实现只在 DEBUG 级留痕，
+            # 生产环境默认 INFO 级别下等于完全静默。必须 WARNING + 计数。
+            self._persist_failures += 1
+            self._last_persist_error = f"{type(e).__name__}: {e}"
+            logger.warning(
+                "数据访问审计持久化失败(user=%s, table=%s, op=%s)(累计 %d 次): %s",
+                record.user_id, record.table, record.operation,
+                self._persist_failures, e,
+            )
 
     def get_recent_access(
         self,
@@ -205,6 +248,10 @@ class DataAccessAuditor:
                 'sensitive_users': len(self._sensitive_access_counts),
                 'high_volume_threshold': self._high_volume_threshold,
                 'sensitive_threshold': self._sensitive_threshold,
+                # 审计链健康度：持久化失败次数 > 0 说明落库链路坏了（合规风险）
+                'persistence_enabled': bool(self._db_path),
+                'persist_failures': self._persist_failures,
+                'last_persist_error': self._last_persist_error,
             }
 
     def get_user_access_pattern(self, user_id: str) -> Dict[str, Any]:
@@ -228,14 +275,18 @@ class DataAccessAuditor:
             # 敏感访问
             sensitive_count = sum(1 for r in user_records if r.sensitive_fields or r.table in self.SENSITIVE_TABLES)
 
+            # 注意：DataAccessRecord 只有 timestamp（float），没有 datetime 属性。
+            # 旧实现写 `user_records[0].datetime` → 只要该用户有访问记录就必抛
+            # AttributeError，整个访问模式接口 500。这里统一走只读映射函数，
+            # 保证与 DataAccessRecord.to_dict()['datetime'] 的格式完全一致。
             return {
                 'user_id': user_id,
                 'total_accesses': len(user_records),
                 'sensitive_accesses': sensitive_count,
                 'by_table': table_counts,
                 'by_operation': op_counts,
-                'first_access': user_records[0].datetime if user_records else None,
-                'last_access': user_records[-1].datetime if user_records else None,
+                'first_access': _format_record_datetime(user_records[0]),
+                'last_access': _format_record_datetime(user_records[-1]),
             }
 
     def reset_stats(self):

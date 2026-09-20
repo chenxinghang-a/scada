@@ -3,6 +3,26 @@
 确保系统启动前所有依赖和配置就绪
 """
 
+# ============================================================================
+# 接线状态：未接线（WIRED = False）
+# ============================================================================
+# 本模块在生产代码（run.py / 各业务层 / 其它 core 模块）中**没有任何 import 引用**。
+# 模块本身可用，但当前没有调用方 —— 也就是说它宣称的这项能力**当前并未生效**。
+#
+# 为什么保留而不删除：删掉即丢能力，模块本身有测试价值；这里只把「没接线」显式化、
+# 可追踪，避免「代码在库里」被误读成「功能在跑」。
+#
+# 自动化复核（防止本标注过期）：
+#   tests/test_core_regressions.py::test_unwired_marker_matches_reality
+#   —— 该用例用 AST 扫描全仓库 import。一旦有人把本模块接进生产代码，
+#      而这里仍写着 WIRED = False，用例即失败，强制文档与事实同步。
+#
+# 接线建议（需改 run.py / 各层，core 内部无权自行接线）：
+#     在 launcher.py / run.py 的启动入口调用 `run_startup_checks()`，失败即拒绝启动。
+# ============================================================================
+WIRED = False
+
+
 import os
 import sys
 import logging
@@ -143,7 +163,10 @@ class StartupChecker:
             result = cursor.fetchone()[0]
             conn.close()
             return result == 'ok'
-        except Exception:
+        except Exception as e:
+            # 返回 False 是 fail-safe，但**必须留痕**：否则"数据库打不开"和
+            # "integrity_check 不通过"在日志里长得一模一样，排障时无从下手。
+            logger.warning("启动检查 database_file 执行失败(判定为未通过): %s", e)
             return False
 
     def _check_config_files(self) -> bool:
@@ -155,24 +178,35 @@ class StartupChecker:
         return (config_dir / 'devices.yaml').exists()
 
     def _check_disk_space(self, min_mb: int) -> bool:
-        """检查磁盘空间"""
+        """检查磁盘空间
+
+        旧实现在异常时 `return True  # 无法检查时假设通过` —— 典型的 fail-open：
+        检查器坏掉了，却报告"磁盘空间充足"，等于把风险藏起来。
+        该项是 non-critical，返回 False 只会产生一条启动 WARNING，不会阻止启动。
+        """
         try:
             import shutil
             total, used, free = shutil.disk_usage('.')
             return free > min_mb * 1024 * 1024
-        except Exception:
-            return True  # 无法检查时假设通过
+        except Exception as e:
+            logger.warning("启动检查 disk_space 无法执行，判定为未通过（不再假装通过）: %s", e)
+            return False
 
     def _check_port_available(self, port: int) -> bool:
-        """检查端口可用性"""
+        """检查端口可用性
+
+        与 _check_disk_space 同理：探测不了就**不能**声称端口空闲。
+        该项是 non-critical，返回 False 只产生启动 WARNING。
+        """
         import socket
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             result = sock.connect_ex(('127.0.0.1', port))
             sock.close()
             return result != 0  # 端口未被占用
-        except Exception:
-            return True
+        except Exception as e:
+            logger.warning("启动检查 port_available 无法执行，判定为未通过: %s", e)
+            return False
 
 
 def run_startup_checks() -> bool:

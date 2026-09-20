@@ -9,6 +9,26 @@
     masked = engine.mask_text('我的卡号是 1234 5678 9012 3456')
 """
 
+# ============================================================================
+# 接线状态：未接线（WIRED = False）
+# ============================================================================
+# 本模块在生产代码（run.py / 各业务层 / 其它 core 模块）中**没有任何 import 引用**。
+# 模块本身可用，但当前没有调用方 —— 也就是说它宣称的这项能力**当前并未生效**。
+#
+# 为什么保留而不删除：删掉即丢能力，模块本身有测试价值；这里只把「没接线」显式化、
+# 可追踪，避免「代码在库里」被误读成「功能在跑」。
+#
+# 自动化复核（防止本标注过期）：
+#   tests/test_core_regressions.py::test_unwired_marker_matches_reality
+#   —— 该用例用 AST 扫描全仓库 import。一旦有人把本模块接进生产代码，
+#      而这里仍写着 WIRED = False，用例即失败，强制文档与事实同步。
+#
+# 接线建议（需改 run.py / 各层，core 内部无权自行接线）：
+#     在日志 filter 与 API 响应出口接入 MaskingRuleEngine 做动态脱敏。
+# ============================================================================
+WIRED = False
+
+
 import re
 import json
 import time
@@ -53,13 +73,18 @@ class MaskingRule:
 class MaskingRuleEngine:
     """脱敏规则引擎"""
 
+    #: 规则执行失败时的整段替换文本（fail-closed，杜绝明文外泄）
+    FAILSAFE_MASK = '[REDACTED]'
+
     def __init__(self):
         self._rules: List[MaskingRule] = []
         self._lock = threading.Lock()
         self._stats = {
             'total_masks': 0,
             'by_rule': {},
+            'rule_errors': 0,
         }
+        self._rule_errors = 0
         self._load_defaults()
 
     def _load_defaults(self):
@@ -114,12 +139,34 @@ class MaskingRuleEngine:
         self._rules.extend(defaults)
 
     def add_rule(self, name: str, strategy: str = 'full_mask', **kwargs) -> MaskingRule:
-        """添加规则"""
+        """添加规则
+
+        Raises:
+            ValueError: 新增规则（含默认规则）的 pattern 或 keywords 无法作为合法正则
+                编译时抛出。脱敏是安全控制，**必须在配置那一刻**就把坏正则拦住 ——
+                旧实现不校验，坏正则要等到运行时 `re.sub` 才抛 `re.error`，
+                而那时 except 分支直接把**未脱敏的原文**返回了（见 _apply_pattern_rule）。
+        """
         rule = MaskingRule(
             name=name,
             strategy=MaskStrategy(strategy),
             **kwargs,
         )
+        # 提前编译校验：坏正则在这里就被拒绝，不会带着"脱敏其实没生效"上线
+        for attr in ('pattern',):
+            pat = getattr(rule, attr)
+            if pat:
+                try:
+                    re.compile(pat)
+                except re.error as e:
+                    raise ValueError(
+                        f"脱敏规则 {name!r} 的 {attr} 不是合法正则: {e}") from e
+        for kw in (rule.keywords or []):
+            try:
+                re.compile(re.escape(kw))
+            except re.error as e:  # pragma: no cover - escape 后不应失败
+                raise ValueError(f"脱敏规则 {name!r} 的关键字非法: {e}") from e
+
         with self._lock:
             self._rules.append(rule)
             self._rules.sort(key=lambda r: r.priority, reverse=True)
@@ -181,14 +228,26 @@ class MaskingRuleEngine:
         return result
 
     def _apply_pattern_rule(self, text: str, rule: MaskingRule) -> str:
-        """应用正则规则"""
+        """应用正则规则
+
+        正则出错时必须 **fail-closed**：脱敏是安全控制，旧实现 `except re.error:
+        return text` 会原样返回**未脱敏**的文本 —— 日志/响应里直接漏出密码、卡号，
+        而且没有任何日志或计数，看起来"脱敏正常工作"。
+        """
         try:
             def replacer(match):
                 self._record_mask(rule.name)
                 return self._apply_strategy(match.group(), rule)
             return re.sub(rule.pattern, replacer, text)
-        except re.error:
-            return text
+        except re.error as e:
+            self._rule_errors += 1
+            self._stats['rule_errors'] = self._rule_errors
+            logger.error(
+                "脱敏规则 %s 的正则执行失败，已整段遮蔽以避免明文泄漏"
+                "（累计 %d 次）: pattern=%r: %s",
+                rule.name, self._rule_errors, rule.pattern, e)
+            # 整段遮蔽：宁可过度遮蔽，也不能把敏感原文漏出去
+            return self.FAILSAFE_MASK
 
     def _apply_keyword_rule(self, text: str, rule: MaskingRule) -> str:
         """应用关键字规则"""
@@ -252,9 +311,10 @@ class MaskingRuleEngine:
             return dict(self._stats)
 
     def reset_stats(self):
-        """重置统计"""
+        """重置统计（保留 rule_errors 键，避免调用方按固定结构读时 KeyError）"""
         with self._lock:
-            self._stats = {'total_masks': 0, 'by_rule': {}}
+            self._stats = {'total_masks': 0, 'by_rule': {}, 'rule_errors': 0}
+            self._rule_errors = 0
 
 
 # 全局实例

@@ -64,6 +64,8 @@ class RequestQueue:
         self._tasks_lock = threading.Lock()
         self._active_workers = 0
         self._worker_lock = threading.Lock()
+        # 入队失败计数（队列满导致的丢弃，必须可观测）
+        self._enqueue_failures = 0
 
         # 启动工作线程
         for i in range(max_workers):
@@ -94,10 +96,17 @@ class RequestQueue:
 
         try:
             self._queue.put((task_id, func, args, kwargs), timeout=1)
-        except Exception:
+        except Exception as e:
+            # 入队失败：状态被标成 FAILED 且写了错误原因，但**必须同时落日志 + 计数**。
+            # 旧实现只有状态字段，调用方若只拿 task_id 不去查状态，
+            # "任务没进队列"就完全不可见（前端看到的只是一个永不完成的任务）。
             with self._tasks_lock:
                 self._tasks[task_id]['status'] = TaskStatus.FAILED
                 self._tasks[task_id]['error'] = '队列已满，请稍后重试'
+            self._enqueue_failures += 1
+            logger.warning(
+                "任务入队失败(%s): task=%s 队列已满(累计 %d 次): %s",
+                self.name, task_id, self._enqueue_failures, e)
             return task_id
 
         logger.info("任务已入队: %s/%s (队列长度=%d)", self.name, task_id, self._queue.qsize())
@@ -148,6 +157,8 @@ class RequestQueue:
                 'completed': completed,
                 'failed': failed,
                 'total_tasks': len(self._tasks),
+                # 因队列满被拒的任务数（这些任务从没进过队列，不计入 tasks）
+                'enqueue_failures': self._enqueue_failures,
             }
 
     def _worker(self):
