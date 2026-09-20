@@ -39,6 +39,9 @@ data/queue/
 data/runtime.json
 # 运行期标准输出/错误转储（历史误跟踪，建议 git rm --cached 清理）
 data/run_*.log
+# 膨胀数据库的本地备份（体积可达数 GB，仅本地保留，绝不入库）
+data/*.bulky-*
+data/*.db.bulky-*
 exports/*.csv
 
 # Logs
