@@ -392,26 +392,44 @@ class EnergyManager:
                         self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
 
     def feed_water_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
-        """喂入水表数据"""
+        """
+        喂入水表数据
+
+        瞬时流量(m³/h) × Δt(h) 得到用量增量。Δt 必须为正：
+        时间戳倒序（乱序数据/时钟回拨）时 dt <= 0，若直接相乘会**负累加**
+        （把已统计的用水量抹掉），因此这里与电力路径一致地做 dt 保护。
+        """
         now = timestamp or datetime.now()
         with self._lock:
             old = self.realtime_power.get(f"{device_id}_water", {})
             if old and 'timestamp' in old:
                 dt_hours = (now - old['timestamp']).total_seconds() / 3600
-                self.energy_accumulated[device_id]['water_m3'] += flow_m3h * dt_hours
+                if dt_hours > 0:
+                    self.energy_accumulated[device_id]['water_m3'] += flow_m3h * dt_hours
+                else:
+                    logger.warning(
+                        "水表时间戳非递增: %s Δt=%.3fh，本次不累加（避免负增量）",
+                        device_id, dt_hours,
+                    )
             self.realtime_power[f"{device_id}_water"] = {
                 'flow_m3h': flow_m3h,
                 'timestamp': now,
             }
 
     def feed_gas_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
-        """喂入气表数据"""
+        """喂入气表数据（Δt 保护同 feed_water_data，避免乱序数据导致负累加）"""
         now = timestamp or datetime.now()
         with self._lock:
             old = self.realtime_power.get(f"{device_id}_gas", {})
             if old and 'timestamp' in old:
                 dt_hours = (now - old['timestamp']).total_seconds() / 3600
-                self.energy_accumulated[device_id]['gas_m3'] += flow_m3h * dt_hours
+                if dt_hours > 0:
+                    self.energy_accumulated[device_id]['gas_m3'] += flow_m3h * dt_hours
+                else:
+                    logger.warning(
+                        "气表时间戳非递增: %s Δt=%.3fh，本次不累加（避免负增量）",
+                        device_id, dt_hours,
+                    )
             self.realtime_power[f"{device_id}_gas"] = {
                 'flow_m3h': flow_m3h,
                 'timestamp': now,

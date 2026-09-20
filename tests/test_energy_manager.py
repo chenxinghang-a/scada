@@ -280,3 +280,141 @@ class TestConfigPersistence:
 
         em2 = EnergyManager(database=MagicMock(), config_path=cfg_path)
         assert em2.tariff['peak'] == 5.0
+
+
+# ============================================================
+# 费率单一来源（2026-09 修复：两套默认费率 → 同一能耗两种费用）
+# ============================================================
+
+class TestRateSingleSource:
+    """EnergyManager 与 EnergyOptimizer/EnergyAnalyzer 必须共用同一套费率与碳因子。"""
+
+    def test_default_rates_match_energy_manager(self):
+        """EnergyAnalyzer 默认电价/碳因子必须等于 DEFAULT_CONFIG（不再自带第二套）"""
+        from 智能层.energy_optimizer import EnergyAnalyzer
+        analyzer = EnergyAnalyzer()
+        assert analyzer.tariff == DEFAULT_CONFIG['tariff']
+        assert analyzer.carbon_factor == DEFAULT_CONFIG['carbon_factor']
+
+    def test_peak_valley_hours_derived_from_tariff_periods(self):
+        """峰/谷时段由 tariff_periods 推导，避免出现两套时段口径"""
+        from 智能层.energy_optimizer import EnergyAnalyzer
+        analyzer = EnergyAnalyzer()
+
+        expected_peak = set()
+        for start, end in DEFAULT_CONFIG['tariff_periods']['peak']:
+            expected_peak.update(range(start, end))
+        expected_valley = set()
+        for start, end in DEFAULT_CONFIG['tariff_periods']['valley']:
+            expected_valley.update(range(start, end))
+
+        assert set(analyzer.peak_hours) == expected_peak
+        assert set(analyzer.valley_hours) == expected_valley
+        assert set(analyzer.peak_hours).isdisjoint(set(analyzer.valley_hours))
+
+    def test_explicit_override_still_honored(self):
+        """显式配置仍可覆盖（只是默认值不再各写一套）"""
+        from 智能层.energy_optimizer import EnergyAnalyzer
+        analyzer = EnergyAnalyzer({'peak_price': 3.0, 'carbon_factor': 0.9})
+        assert analyzer.tariff['peak'] == 3.0
+        assert analyzer.tariff['flat'] == DEFAULT_CONFIG['tariff']['flat']
+        assert analyzer.carbon_factor == 0.9
+
+    def test_same_energy_same_cost_across_modules(self, tmp_path):
+        """同一份能耗（1kWh @ 每个小时）在两个模块必须算出相同电费与碳排"""
+        from 智能层.energy_optimizer import EnergyAnalyzer
+
+        for hour in range(24):
+            ts = datetime(2026, 3, 1, hour, 0, 0)
+
+            em = EnergyManager(database=MagicMock(), config_path=tmp_path / 'energy.yaml')
+            em.feed_power_data('dev1', power_kw=0, energy_kwh=0.0, timestamp=ts)  # 建基线
+            em.feed_power_data('dev1', power_kw=0, energy_kwh=1.0, timestamp=ts)  # 增量 1kWh
+            summary = em.get_energy_summary()
+            assert summary['total_energy_kwh'] == 1.0
+
+            analyzer = EnergyAnalyzer()
+            analyzer.add_record('dev1', ts.timestamp(), 1.0)
+            consumption = analyzer.get_device_consumption('dev1')
+
+            assert summary['electricity_cost'] == consumption['total_cost_yuan'], \
+                f'{hour}时电价口径不一致: EnergyManager={summary["electricity_cost"]}, ' \
+                f'EnergyAnalyzer={consumption["total_cost_yuan"]}'
+            assert abs(summary['carbon_emission_kg'] - consumption['carbon_kg']) < 0.01
+
+    def test_hour_bucket_classification_matches(self, tmp_path):
+        """小时 → 峰/平/谷 的归类必须在两个模块中一致"""
+        from 智能层.energy_optimizer import EnergyAnalyzer
+
+        for hour in range(24):
+            ts = datetime(2026, 3, 1, hour, 0, 0)
+
+            em = EnergyManager(database=MagicMock(), config_path=tmp_path / 'energy.yaml')
+            em.feed_power_data('dev1', power_kw=0, energy_kwh=0.0, timestamp=ts)
+            em.feed_power_data('dev1', power_kw=0, energy_kwh=1.0, timestamp=ts)
+            summary = em.get_energy_summary()
+            em_bucket = max(
+                ('peak', 'flat', 'valley'),
+                key=lambda b: summary[f'{b}_kwh'],
+            )
+
+            analyzer = EnergyAnalyzer()
+            analyzer.add_record('dev1', ts.timestamp(), 1.0)
+            c = analyzer.get_device_consumption('dev1')
+            an_bucket = max(
+                (('peak', c['peak_energy_kwh']), ('flat', c['flat_energy_kwh']),
+                 ('valley', c['valley_energy_kwh'])),
+                key=lambda kv: kv[1],
+            )[0]
+
+            assert em_bucket == an_bucket, f'{hour}时的峰谷平归类不一致: {em_bucket} vs {an_bucket}'
+
+
+# ============================================================
+# dt<=0 边界保护（2026-09 修复：水/气路径缺保护 → 可能负累加）
+# ============================================================
+
+class TestNonPositiveDtGuard:
+
+    def test_water_backwards_timestamp_does_not_subtract(self, em):
+        """水表时间戳回拨时不得负累加（把已统计用量抹掉）"""
+        from datetime import timedelta
+        t0 = datetime(2026, 3, 1, 10, 0, 0)
+
+        em.feed_water_data('dev1', 10.0, timestamp=t0)                    # 建基线
+        em.feed_water_data('dev1', 10.0, timestamp=t0 + timedelta(hours=1))
+        assert em.energy_accumulated['dev1']['water_m3'] == 10.0
+
+        em.feed_water_data('dev1', 10.0, timestamp=t0)                    # 时间回拨
+        assert em.energy_accumulated['dev1']['water_m3'] == 10.0, '时间回拨导致负累加'
+
+    def test_water_same_timestamp_does_not_accumulate(self, em):
+        """Δt=0 不应累加任何用量"""
+        t0 = datetime(2026, 3, 1, 10, 0, 0)
+        em.feed_water_data('dev1', 10.0, timestamp=t0)
+        em.feed_water_data('dev1', 10.0, timestamp=t0)
+        assert em.energy_accumulated['dev1']['water_m3'] == 0.0
+
+    def test_gas_backwards_timestamp_does_not_subtract(self, em):
+        """气表时间戳回拨时不得负累加"""
+        from datetime import timedelta
+        t0 = datetime(2026, 3, 1, 10, 0, 0)
+
+        em.feed_gas_data('dev1', 20.0, timestamp=t0)
+        em.feed_gas_data('dev1', 20.0, timestamp=t0 + timedelta(hours=1))
+        assert em.energy_accumulated['dev1']['gas_m3'] == 20.0
+
+        em.feed_gas_data('dev1', 20.0, timestamp=t0)
+        assert em.energy_accumulated['dev1']['gas_m3'] == 20.0, '时间回拨导致负累加'
+
+    def test_power_backwards_timestamp_does_not_subtract(self, em):
+        """电力路径同样不得因时间回拨产生负增量（既有一致性）"""
+        from datetime import timedelta
+        t0 = datetime(2026, 3, 1, 10, 0, 0)
+        em.feed_power_data('dev1', power_kw=10.0, timestamp=t0)
+        em.feed_power_data('dev1', power_kw=10.0, timestamp=t0 + timedelta(hours=1))
+        before = em.energy_accumulated['dev1']['energy_kwh']
+        assert before > 0
+
+        em.feed_power_data('dev1', power_kw=10.0, timestamp=t0)
+        assert em.energy_accumulated['dev1']['energy_kwh'] == before

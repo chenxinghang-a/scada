@@ -60,6 +60,15 @@ class SPCAnalyzer:
         # 判异结果
         self.violations: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
+        # 判异去重状态
+        # 控制图每计算一次都会**重扫整个窗口**，若直接 extend，同一条违规会被
+        # 每个计算周期重复计入，越跑越多（并且会在锁外写入）。
+        # 这里用「绝对采样位置区间」做指纹：窗口滑动时，同一条物理违规的绝对
+        # 区间不变 → 只计入一次；真正的新数据才产生新指纹。
+        self._total_fed: dict[str, int] = defaultdict(int)
+        self._violation_seen: dict[str, set[tuple]] = defaultdict(set)
+        self._violation_fingerprint_cap = 4096  # 指纹集合上限（超出后清空重置）
+
         # 锁
         self._lock = threading.Lock()
 
@@ -77,6 +86,7 @@ class SPCAnalyzer:
         key = f"{device_id}:{register_name}"
         with self._lock:
             self.data_buffers[key].append(value)
+            self._total_fed[key] += 1
             # 自动设置默认规格限（如果未配置）
             if key not in self.spec_limits:
                 self._auto_set_spec_limits(key, register_name)
@@ -123,6 +133,62 @@ class SPCAnalyzer:
             if kw in register_name.lower():
                 self.spec_limits[key] = spec
                 break
+
+    # ==================== 判异结果记录 ====================
+
+    def _violation_fingerprint(self, violation: dict[str, Any],
+                                base_index: int) -> tuple:
+        """
+        生成判异的稳定指纹（rule + 绝对采样位置区间）
+
+        窗口每滑一格，窗口内下标整体 -1，若用下标做指纹会持续"变新" → 重复计入。
+        因此这里把窗口下标换算成绝对采样序号：
+
+            绝对序号 = max(0, 已喂入总数 - 当前窗口长度) + 窗口内下标
+
+        同一条物理违规在滑窗过程中绝对区间不变，指纹稳定。
+        """
+        abs_start = base_index + violation.get('index', 0)
+        span = violation.get('span', 1)
+        return (violation.get('rule'), abs_start, abs_start + span - 1)
+
+    def _record_violations(self, key: str, violations: list[dict[str, Any]],
+                            device_id: str, register_name: str,
+                            window_len: int) -> list[dict[str, Any]]:
+        """
+        记录本轮判异结果 —— **必须在 self._lock 内调用**。
+
+        只写入指纹未出现过的判异（去重），并返回本轮新增的部分。
+        这样 `get_violations()` 不会因为反复重扫窗口而线性膨胀。
+        """
+        if not violations:
+            return []
+
+        base_index = max(0, self._total_fed[key] - window_len)
+        seen = self._violation_seen[key]
+        if len(seen) > self._violation_fingerprint_cap:
+            seen.clear()
+
+        now_iso = datetime.now().isoformat()
+        fresh = []
+        for v in violations:
+            fp = self._violation_fingerprint(v, base_index)
+            if fp in seen:
+                continue
+            seen.add(fp)
+            v['device_id'] = device_id
+            v['register_name'] = register_name
+            v['timestamp'] = now_iso
+            v['abs_index'] = fp[1]
+            fresh.append(v)
+
+        if fresh:
+            self.violations[key].extend(fresh)
+            # 限制每个key最多保留100条
+            if len(self.violations[key]) > 100:
+                self.violations[key] = self.violations[key][-100:]
+
+        return fresh
 
     def calculate_xbar_r_chart(self, device_id: str, register_name: str) -> dict[str, Any] | None:
         """
@@ -185,17 +251,6 @@ class SPCAnalyzer:
         # 判异检测
         violations = self._check_violations(xbar_values, xbar_bar, xbar_ucl, xbar_lcl)
 
-        # 存储判异结果（带时间戳）
-        if violations:
-            for v in violations:
-                v['device_id'] = device_id
-                v['register_name'] = register_name
-                v['timestamp'] = datetime.now().isoformat()
-            self.violations[key].extend(violations)
-            # 限制每个key最多保留100条
-            if len(self.violations[key]) > 100:
-                self.violations[key] = self.violations[key][-100:]
-
         result = {
             'chart_type': 'X̄-R',
             'subgroup_size': n,
@@ -216,8 +271,11 @@ class SPCAnalyzer:
             'is_in_control': len(violations) == 0,
         }
 
-        # 缓存控制限
-        self.control_limits[key] = result
+        # 判异结果去重 + 控制限缓存：同一把锁内原子完成
+        with self._lock:
+            self._record_violations(key, violations, device_id, register_name,
+                                    len(xbar_values))
+            self.control_limits[key] = result
 
         return result
 
@@ -282,15 +340,10 @@ class SPCAnalyzer:
 
         violations = self._check_violations(xbar_values, xbar_bar, xbar_ucl, xbar_lcl)
 
-        # 存储判异结果
-        if violations:
-            for v in violations:
-                v['device_id'] = device_id
-                v['register_name'] = register_name
-                v['timestamp'] = datetime.now().isoformat()
-            self.violations[key].extend(violations)
-            if len(self.violations[key]) > 100:
-                self.violations[key] = self.violations[key][-100:]
+        # 判异结果去重 + 锁内写入（与 X̄-R 图保持一致）
+        with self._lock:
+            self._record_violations(key, violations, device_id, register_name,
+                                    len(xbar_values))
 
         return {
             'chart_type': 'X̄-S',
@@ -472,6 +525,7 @@ class SPCAnalyzer:
                     'description': f'点{i+1}超出3σ控制限',
                     'value': round(p, 4),
                     'index': i,
+                    'span': 1,
                     'severity': 'critical',
                 })
 
@@ -483,6 +537,7 @@ class SPCAnalyzer:
                     'rule': 2,
                     'description': f'点{i+1}~{i+9}连续9点在中心线同一侧',
                     'index': i,
+                    'span': 9,
                     'severity': 'warning',
                 })
 
@@ -494,6 +549,7 @@ class SPCAnalyzer:
                     'rule': 3,
                     'description': f'点{i+1}~{i+6}连续6点递增',
                     'index': i,
+                    'span': 6,
                     'severity': 'warning',
                 })
             elif all(segment[j] > segment[j+1] for j in range(5)):
@@ -501,6 +557,7 @@ class SPCAnalyzer:
                     'rule': 3,
                     'description': f'点{i+1}~{i+6}连续6点递减',
                     'index': i,
+                    'span': 6,
                     'severity': 'warning',
                 })
 
@@ -518,6 +575,7 @@ class SPCAnalyzer:
                         'rule': 4,
                         'description': f'点{i+1}~{i+14}连续14点交替上下',
                         'index': i,
+                        'span': 14,
                         'severity': 'warning',
                     })
 
@@ -530,6 +588,7 @@ class SPCAnalyzer:
                     'rule': 5,
                     'description': f'点{i+1}~{i+3}连续3点中有2点超出2σ',
                     'index': i,
+                    'span': 3,
                     'severity': 'warning',
                 })
 
@@ -542,6 +601,7 @@ class SPCAnalyzer:
                     'rule': 6,
                     'description': f'点{i+1}~{i+5}连续5点中有4点超出1σ',
                     'index': i,
+                    'span': 5,
                     'severity': 'warning',
                 })
 
@@ -553,6 +613,7 @@ class SPCAnalyzer:
                     'rule': 7,
                     'description': f'点{i+1}~{i+15}连续15点在1σ以内（过度集中）',
                     'index': i,
+                    'span': 15,
                     'severity': 'info',
                 })
 
@@ -564,6 +625,7 @@ class SPCAnalyzer:
                     'rule': 8,
                     'description': f'点{i+1}~{i+8}连续8点超出1σ',
                     'index': i,
+                    'span': 8,
                     'severity': 'warning',
                 })
 
@@ -600,16 +662,17 @@ class SPCAnalyzer:
         return self.calculate_capability(device_id, register_name)
 
     def get_violations(self, device_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
-        """获取判异结果"""
-        if device_id:
-            key_prefix = f"{device_id}:"
-            results = []
-            for k, v in self.violations.items():
-                if k.startswith(key_prefix):
-                    results.extend(v)
-            return results[-limit:]
+        """获取判异结果（去重后的唯一违规，按发生顺序）"""
+        with self._lock:
+            if device_id:
+                key_prefix = f"{device_id}:"
+                results = []
+                for k, v in self.violations.items():
+                    if k.startswith(key_prefix):
+                        results.extend(v)
+                return results[-limit:]
 
-        all_violations = []
-        for v in self.violations.values():
-            all_violations.extend(v)
-        return sorted(all_violations, key=lambda x: x.get('index', 0))[-limit:]
+            all_violations = []
+            for v in self.violations.values():
+                all_violations.extend(v)
+            return sorted(all_violations, key=lambda x: x.get('index', 0))[-limit:]

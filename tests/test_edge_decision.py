@@ -413,3 +413,107 @@ class TestStartStop:
         engine.start()
         engine.stop()
         assert engine._running is False
+
+
+# ============================================================
+# 优先级排序（2026-09 修复：priority 字段此前从未参与排序）
+# ============================================================
+
+class TestPriorityOrdering:
+    """规则/联锁必须按 priority 升序执行：高危规则不得被低危规则抢先。"""
+
+    @staticmethod
+    def _recorder(order, tag):
+        def _cb(message, level='warning'):
+            order.append(tag)
+        return _cb
+
+    def test_rules_execute_in_priority_order(self, engine):
+        """低优先级先注册，高优先级仍须先执行"""
+        order = []
+        engine.add_rule('low_rule', condition={
+            'type': 'threshold', 'key': 'dev1:temp', 'operator': 'gt', 'value': 50
+        }, action={'type': 'set_alarm', 'message': 'LOW'}, priority=50)
+        engine.add_rule('high_rule', condition={
+            'type': 'threshold', 'key': 'dev1:temp', 'operator': 'gt', 'value': 50
+        }, action={'type': 'set_alarm', 'message': 'HIGH'}, priority=1)
+        engine.register_action('set_alarm', self._recorder(order, 'x'))
+
+        engine.update_data('dev1:temp', 100.0)
+        engine._execute_cycle()
+
+        log = [e['rule_id'] for e in engine.get_decision_log()]
+        assert log == ['high_rule', 'low_rule'], f'执行顺序不符合优先级: {log}'
+
+    def test_decision_log_follows_priority(self, engine):
+        """决策日志（审计用）的顺序必须反映真实执行顺序"""
+        engine.add_rule('c', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                        action={'type': 'set_alarm', 'message': 'c'}, priority=30)
+        engine.add_rule('a', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                        action={'type': 'set_alarm', 'message': 'a'}, priority=10)
+        engine.add_rule('b', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                        action={'type': 'set_alarm', 'message': 'b'}, priority=20)
+        engine.register_action('set_alarm', MagicMock())
+        engine.update_data('k', 1.0)
+
+        engine._execute_cycle()
+        assert [e['rule_id'] for e in engine.get_decision_log()] == ['a', 'b', 'c']
+
+    def test_interlocks_before_rules_and_sorted(self, engine):
+        """联锁整体先于规则执行；联锁之间同样按 priority 排序"""
+        engine.add_rule('r1', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                        action={'type': 'set_alarm', 'message': 'RULE'}, priority=0)
+        engine.add_interlock('il_low', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                             action={'type': 'set_alarm', 'message': 'IL_LOW'}, priority=5)
+        engine.add_interlock('il_high', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                             action={'type': 'set_alarm', 'message': 'IL_HIGH'}, priority=1)
+        engine.register_action('set_alarm', MagicMock())
+        engine.update_data('k', 1.0)
+
+        engine._execute_cycle()
+        assert [e['rule_id'] for e in engine.get_decision_log()] == ['il_high', 'il_low', 'r1']
+
+    def test_default_rules_respect_declared_priorities(self, engine):
+        """内置默认规则的执行顺序必须按声明的优先级（10/15/20），而非注册顺序"""
+        engine.start()   # 加载默认规则与联锁
+        engine.stop()
+        engine.register_action('set_alarm', MagicMock())
+        engine.update_data('siemens_plc_01:temperature', 200.0)
+        engine.update_data('siemens_plc_01:motor_current', 20.0)
+        engine.update_data('siemens_plc_01:pressure', 2.0)
+
+        engine._execute_cycle()
+        executed = [e['rule_id'] for e in engine.get_decision_log()
+                    if e['rule_type'] == 'rule']
+        assert executed == ['temp_control_rule', 'motor_current_rule', 'pressure_control_rule'], \
+            f'默认规则未按优先级执行: {executed}'
+
+    def test_equal_priority_execute_all(self, engine):
+        """同优先级规则不得被去重/跳过"""
+        engine.add_rule('r1', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                        action={'type': 'set_alarm', 'message': '1'}, priority=10)
+        engine.add_rule('r2', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                        action={'type': 'set_alarm', 'message': '2'}, priority=10)
+        engine.register_action('set_alarm', MagicMock())
+        engine.update_data('k', 1.0)
+
+        engine._execute_cycle()
+        assert sorted(e['rule_id'] for e in engine.get_decision_log()) == ['r1', 'r2']
+
+    def test_disabled_high_priority_rule_skipped_but_order_preserved(self, engine):
+        """高优先级但被禁用的规则跳过，其余仍按优先级执行"""
+        engine.add_rule('disabled', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                        action={'type': 'set_alarm', 'message': 'd'}, priority=1, enabled=False)
+        engine.add_rule('enabled', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                        action={'type': 'set_alarm', 'message': 'e'}, priority=99)
+        engine.register_action('set_alarm', MagicMock())
+        engine.update_data('k', 1.0)
+
+        engine._execute_cycle()
+        assert [e['rule_id'] for e in engine.get_decision_log()] == ['enabled']
+
+    def test_priority_stored_for_interlock(self, engine):
+        """add_interlock 必须保存 priority（排序依据）"""
+        engine.add_interlock('il', condition={'type': 'threshold', 'key': 'k', 'operator': 'gt', 'value': 0},
+                             action={'type': 'set_alarm', 'message': 'x'}, priority=3)
+        assert engine.interlocks['il']['priority'] == 3

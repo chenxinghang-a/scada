@@ -7,6 +7,18 @@
 - 峰谷电价优化
 - 节能建议生成
 - 能效指标计算
+
+⚠️ 未接线（NOT WIRED INTO run.py）
+    本模块的 `EnergyOptimizer` 在 run.py 中**从未被实例化**，当前不参与生产运行，
+    因此它给出的"优化建议/节省金额"在生产链路上并不存在。生产实际使用的是
+    `智能层/energy_manager.py` 的 `EnergyManager`（已接线，提供电价/碳排/能耗汇总）。
+    接线方式见本文件末尾注释；在接线之前，请勿把本模块的输出当作线上结论。
+
+费率一致性（2026-09 修复）：
+    本模块原先自带一套默认电价（平0.8/谷0.4）与碳因子（0.5），与 energy_manager
+    的默认值（峰1.2/平0.7/谷0.35，碳0.581）**不一致** —— 同一份能耗数据在两处
+    会算出两种费用。现统一从 `energy_manager.DEFAULT_CONFIG` 取值，峰/谷时段也由
+    同一份 `tariff_periods` 推导，保证"一份能耗只有一个费用"。
 """
 
 import time
@@ -16,7 +28,22 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 
+from 智能层.energy_manager import DEFAULT_CONFIG as CANONICAL_ENERGY_CONFIG
+
 logger = logging.getLogger(__name__)
+
+
+def _hours_from_periods(periods: List[Tuple[int, int]] | None) -> List[int]:
+    """把 [start, end) 时段区间展开成小时集合（与 EnergyManager 口径一致）"""
+    hours: set[int] = set()
+    for period in periods or []:
+        try:
+            start, end = int(period[0]), int(period[1])
+        except (TypeError, ValueError, IndexError):
+            logger.warning("忽略非法时段定义: %r", period)
+            continue
+        hours.update(h for h in range(start, end) if 0 <= h < 24)
+    return sorted(hours)
 
 
 class EnergyRecord:
@@ -39,19 +66,28 @@ class EnergyAnalyzer:
         self.records: List[EnergyRecord] = []
         self._lock = threading.Lock()
 
-        # 电价配置（元/kWh）
+        # 电价与碳因子：默认值统一取自 EnergyManager 的默认配置（单一数据源），
+        # 仅允许通过显式配置覆盖，不再自带第二套默认值。
+        canonical_tariff = CANONICAL_ENERGY_CONFIG['tariff']
         self.tariff = {
-            'peak': self.config.get('peak_price', 1.2),    # 峰时
-            'flat': self.config.get('flat_price', 0.8),     # 平时
-            'valley': self.config.get('valley_price', 0.4), # 谷时
+            'peak': self.config.get('peak_price', canonical_tariff['peak']),    # 峰时
+            'flat': self.config.get('flat_price', canonical_tariff['flat']),     # 平时
+            'valley': self.config.get('valley_price', canonical_tariff['valley']),  # 谷时
         }
 
-        # 峰谷时段配置（24小时制）
-        self.peak_hours = self.config.get('peak_hours', [8, 9, 10, 11, 18, 19, 20, 21])
-        self.valley_hours = self.config.get('valley_hours', [0, 1, 2, 3, 4, 5, 22, 23])
+        # 峰谷时段配置（24小时制）：由同一份 tariff_periods 推导，避免两套时段口径
+        canonical_periods = CANONICAL_ENERGY_CONFIG['tariff_periods']
+        self.peak_hours = self.config.get('peak_hours') or _hours_from_periods(
+            canonical_periods.get('peak')
+        )
+        self.valley_hours = self.config.get('valley_hours') or _hours_from_periods(
+            canonical_periods.get('valley')
+        )
 
         # 碳排放因子（kg CO2/kWh）
-        self.carbon_factor = self.config.get('carbon_factor', 0.5)
+        self.carbon_factor = self.config.get(
+            'carbon_factor', CANONICAL_ENERGY_CONFIG['carbon_factor']
+        )
 
     def add_record(self, device_id: str, timestamp: float, energy_kwh: float,
                    power_kw: float = 0.0):
@@ -331,3 +367,21 @@ class EnergyOptimizer:
             'peak_valley_analysis': peak_valley,
             'suggestions': self.generate_suggestions(),
         }
+
+# =============================================================================
+# 接线建议（未执行；需改 run.py，本文件无权修改）
+# -----------------------------------------------------------------------------
+# run.py 的"初始化工业4.0智能层"段落中增加：
+#
+#     from 智能层.energy_optimizer import EnergyOptimizer
+#     energy_optimizer = EnergyOptimizer()
+#
+# 然后在 DataCollector 的能耗数据回调处（energy_manager.feed_power_data 之后）
+# 同步调用：
+#
+#     energy_optimizer.add_energy_data(device_id, timestamp.timestamp(),
+#                                      delta_kwh, power_kw)
+#
+# 并在 create_app(...) 中注入 energy_optimizer，供 /industry40/energy/suggestions
+# 之类接口返回优化建议。接线前该模块仅存在于代码库中，不产生任何线上行为。
+# =============================================================================

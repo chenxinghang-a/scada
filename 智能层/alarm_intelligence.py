@@ -7,6 +7,27 @@
 - 报警模式识别
 - 智能抑制策略
 - 报警优先级调整
+
+⚠️ 未接线（NOT WIRED INTO run.py）
+    本模块的 `SmartAlarmManager` / `AlarmNoiseReducer` / `AlarmCorrelator` 在
+    run.py 中**从未被实例化**，当前不参与生产运行：报警降噪/抑制/关联分析
+    在生产链路上并不生效（生产报警仍走 报警层/alarm_manager.py）。
+    在完成接线前，请勿把本模块的能力计入系统功能清单。
+
+    接线建议（需改 run.py 与 报警层/alarm_manager.py，本文件无权修改）：
+    本模块不是"注入即生效"的类型 —— 它必须在**报警产生前**被查询才有意义：
+
+        # run.py：初始化智能层处
+        from 智能层.alarm_intelligence import SmartAlarmManager
+        alarm_intelligence = SmartAlarmManager()
+        alarm_intelligence.start()
+
+        # 报警层在落库/播报前插入抑制判断：
+        #     if not alarm_intelligence.should_emit_alarm(device_id, register_name, rule_id):
+        #         return  # 被降噪策略抑制
+
+    由于需要改动报警层主链路且涉及"抑制报警"这一高风险动作（抑制规则配错会漏报
+    真实事故），本次不接线，保持未启用状态并在报告中说明。
 """
 
 import time

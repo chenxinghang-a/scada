@@ -182,12 +182,28 @@ class EdgeDecisionEngine:
             time.sleep(1)  # 1秒决策周期
 
     def _execute_cycle(self):
-        """执行一个决策周期"""
+        """
+        执行一个决策周期
+
+        执行顺序（priority 升序，数字越小优先级越高）：
+        1. 安全联锁（默认 priority=0，最高，最先执行）
+        2. 决策规则（按 priority 排序 —— 高危规则不得因注册顺序靠后而被低危规则抢先）
+        3. PID调节
+
+        规则/联锁列表在锁内取快照后再执行，避免执行期间字典被并发修改，
+        同时避免 `_execute_action` 内部再加锁造成死锁。
+        """
         with self._lock:
             snapshot = dict(self._data_snapshot)
+            ordered_interlocks = sorted(
+                self.interlocks.items(), key=lambda kv: kv[1].get('priority', 0)
+            )
+            ordered_rules = sorted(
+                self.rules.items(), key=lambda kv: kv[1].get('priority', 10)
+            )
 
         # 1. 安全联锁（最高优先级）
-        for rule_id, rule in self.interlocks.items():
+        for rule_id, rule in ordered_interlocks:
             if not rule.get('enabled', True):
                 continue
             try:
@@ -196,8 +212,8 @@ class EdgeDecisionEngine:
             except Exception as e:
                 logger.error(f"联锁规则 {rule_id} 执行异常: {e}")
 
-        # 2. 规则引擎
-        for rule_id, rule in self.rules.items():
+        # 2. 规则引擎（按优先级从高到低）
+        for rule_id, rule in ordered_rules:
             if not rule.get('enabled', True):
                 continue
             try:
@@ -280,22 +296,25 @@ class EdgeDecisionEngine:
         logger.info(f"添加决策规则: {rule_id} - {name}")
 
     def add_interlock(self, interlock_id: str, condition: dict[str, Any], action: dict[str, Any],
-                       name: str = '', enabled: bool = True):
+                       name: str = '', enabled: bool = True, priority: int = 0):
         """
         添加安全联锁规则
 
-        联锁规则优先级最高，用于安全关键场景
+        联锁规则优先级最高，用于安全关键场景。
+        同类联锁之间也支持 priority 排序（数字越小越先执行），用于把
+        "急停/烟感" 这类 0 级安全动作排在 "门禁" 这类降级动作之前。
         """
         self.interlocks[interlock_id] = {
             'name': name or interlock_id,
             'condition': condition,
             'action': action,
+            'priority': priority,
             'enabled': enabled,
             'created_at': datetime.now().isoformat(),
             'last_triggered': None,
             'trigger_count': 0,
         }
-        logger.info(f"添加安全联锁: {interlock_id} - {name}")
+        logger.info(f"添加安全联锁: {interlock_id} - {name} (priority={priority})")
 
     def add_pid_controller(self, ctrl_id: str, input_key: str, output_key: str,
                             setpoint: float, kp: float = 1.0, ki: float = 0.1,

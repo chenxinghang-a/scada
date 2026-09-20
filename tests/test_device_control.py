@@ -310,3 +310,236 @@ class TestBypassRequestModel:
             approvals=['approver1', 'approver2']
         )
         assert req.is_approved is True
+
+
+# ============================================================
+# 控制点位配置化（2026-09 修复：batch_control 原写死 coil0/reg100）
+# ============================================================
+
+def _make_dc(devices, client=None):
+    """构造带模拟 device_manager/client 的 DeviceControlSafety"""
+    from 智能层.device_control import DeviceControlSafety
+    dm = MagicMock()
+    dm.devices = devices
+    dm.simulation_mode = False
+    client = client if client is not None else MagicMock()
+    client.connected = True
+    client.write_single_coil = MagicMock(return_value=True)
+    client.write_single_register = MagicMock(return_value=True)
+    dm.get_client.return_value = client
+    dm.start_device = MagicMock()
+    dm.stop_device = MagicMock()
+    return DeviceControlSafety(MagicMock(), device_manager=dm), client
+
+
+class TestControlPointConfig:
+    """起停点位必须来自设备配置，而不是写死的 0/100。"""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_interlock_file(self, monkeypatch):
+        """把联锁配置路径指向不存在的文件，保证用例不受仓库配置影响"""
+        import 智能层.device_control as dc_mod
+        monkeypatch.setattr(dc_mod, 'INTERLOCK_CONFIG_PATH', '配置/__test_nonexistent__.yaml')
+
+    def test_start_uses_configured_coil_address(self):
+        """start 应写配置的线圈地址(7)，而不是写死的 0"""
+        devices = {'plc_a': {
+            'protocol': 'modbus_tcp',
+            'control': {'start': {'type': 'coil', 'address': 7, 'value': True}},
+        }}
+        dc, client = _make_dc(devices)
+        result = dc.batch_control('start', 'op')
+        client.write_single_coil.assert_called_once_with(7, True)
+        assert result['success'] is True
+
+    def test_stop_uses_configured_coil_address(self):
+        """stop 同样按配置点位写入"""
+        devices = {'plc_a': {
+            'protocol': 'modbus_tcp',
+            'control': {'stop': {'type': 'coil', 'address': 9, 'value': False}},
+        }}
+        dc, client = _make_dc(devices)
+        dc.batch_control('stop', 'op')
+        client.write_single_coil.assert_called_once_with(9, False)
+
+    def test_reset_uses_configured_register(self):
+        """reset 走寄存器路径时应写配置地址(321)，而不是写死的 100"""
+        devices = {'plc_a': {
+            'protocol': 'modbus_tcp',
+            'control': {'reset': {'type': 'register', 'address': 321, 'value': 0}},
+        }}
+        dc, client = _make_dc(devices)
+        dc.batch_control('reset', 'op')
+        client.write_single_register.assert_called_once_with(321, 0)
+
+    def test_flat_control_form_shared_address(self):
+        """扁平写法：共用 type/address，各动作取自己的 value"""
+        devices = {'plc_a': {
+            'protocol': 'modbus_tcp',
+            'control': {'type': 'coil', 'address': 3, 'start_value': True, 'stop_value': False},
+        }}
+        dc, client = _make_dc(devices)
+        dc.batch_control('start', 'op')
+        dc.batch_control('stop', 'op')
+        assert client.write_single_coil.call_args_list[0][0] == (3, True)
+        assert client.write_single_coil.call_args_list[1][0] == (3, False)
+
+    def test_missing_control_falls_back_with_warning(self, caplog):
+        """未配置 control 时使用显式回退点位，并且必须告警（不再静默硬编码）"""
+        import logging
+        devices = {'plc_a': {'protocol': 'modbus_tcp'}}
+        dc, client = _make_dc(devices)
+        with caplog.at_level(logging.WARNING):
+            dc.batch_control('start', 'op')
+        client.write_single_coil.assert_called_once_with(0, True)
+        assert '未配置控制点位' in caplog.text
+
+    def test_invalid_control_type_rejected(self):
+        """非法点位类型必须拒绝写入，而不是猜一个点位写下命令"""
+        devices = {'plc_a': {
+            'protocol': 'modbus_tcp',
+            'control': {'start': {'type': 'pwm', 'address': 1, 'value': 1}},
+        }}
+        dc, client = _make_dc(devices)
+        result = dc.batch_control('start', 'op')
+        client.write_single_coil.assert_not_called()
+        client.write_single_register.assert_not_called()
+        assert result['success'] is False
+
+    def test_invalid_control_address_rejected(self):
+        """点位地址非法必须拒绝写入"""
+        devices = {'plc_a': {
+            'protocol': 'modbus_tcp',
+            'control': {'start': {'type': 'coil', 'address': 'x', 'value': True}},
+        }}
+        dc, client = _make_dc(devices)
+        result = dc.batch_control('start', 'op')
+        client.write_single_coil.assert_not_called()
+        assert result['success'] is False
+
+    def test_audit_records_actual_point(self):
+        """审计日志必须记录真实写入点位（可追溯）"""
+        devices = {'plc_a': {
+            'protocol': 'modbus_tcp',
+            'control': {'start': {'type': 'coil', 'address': 5, 'value': True}},
+        }}
+        dc, _ = _make_dc(devices)
+        dc.batch_control('start', 'op')
+        texts = [entry.get('detail', '') for entry in dc.get_audit_log()]
+        assert any('coil#5' in t for t in texts), texts
+
+
+# ============================================================
+# 联锁配置化（2026-09 修复：原硬编码 plc_reactor_01 等幽灵设备）
+# ============================================================
+
+INTERLOCK_SAMPLE = {
+    'id': 'il_temp_high',
+    'name': '温度超限联锁',
+    'priority': 1,
+    'enabled': True,
+    'condition': {'type': 'threshold', 'device_id': 'plc_a', 'register': 'temperature',
+                  'operator': '>', 'value': 95.0},
+    'action': {'type': 'write_register', 'device_id': 'plc_a', 'register': 'heater_enable',
+               'value': 0},
+    'alarm': {'level': 'critical', 'message': '温度超限联锁触发'},
+}
+
+
+class TestInterlockConfigDriven:
+
+    @pytest.fixture(autouse=True)
+    def _isolate_interlock_file(self, monkeypatch):
+        import 智能层.device_control as dc_mod
+        monkeypatch.setattr(dc_mod, 'INTERLOCK_CONFIG_PATH', '配置/__test_nonexistent__.yaml')
+
+    def test_no_config_installs_no_interlocks(self):
+        """没有联锁配置就不装规则（不再内置幽灵设备名的假联锁）"""
+        from 智能层.device_control import DeviceControlSafety
+        dc = DeviceControlSafety(MagicMock())
+        assert dc._interlock_rules == {}
+
+    def test_no_interlocks_means_no_phantom_rules(self):
+        """确认不再注入 plc_reactor_01 这类配置中不存在的设备规则"""
+        from 智能层.device_control import DeviceControlSafety
+        dc = DeviceControlSafety(MagicMock())
+        assert dc._interlock_rules == {}
+        assert dc.get_interlock_status() == {}
+
+    def test_interlocks_loaded_from_config_injection(self):
+        """构造参数注入的联锁规则应被装载"""
+        from 智能层.device_control import DeviceControlSafety
+        dc = DeviceControlSafety(MagicMock(), config={'interlocks': [INTERLOCK_SAMPLE]})
+        assert 'il_temp_high' in dc._interlock_rules
+        assert dc._interlock_rules['il_temp_high']['priority'] == 1
+        assert dc._interlock_states['il_temp_high'] is False
+
+    def test_interlocks_loaded_from_device_config(self):
+        """设备配置内的 interlocks 段应被装载"""
+        from 智能层.device_control import DeviceControlSafety
+        dm = MagicMock()
+        dm.devices = {'plc_a': {'protocol': 'modbus_tcp', 'interlocks': [INTERLOCK_SAMPLE]}}
+        dc = DeviceControlSafety(MagicMock(), device_manager=dm)
+        assert 'il_temp_high' in dc._interlock_rules
+
+    def test_invalid_rules_are_skipped(self):
+        """缺 id / 缺 condition 的规则必须被丢弃（不得半装）"""
+        from 智能层.device_control import DeviceControlSafety
+        bad_rules = [
+            {'name': 'no id'},
+            {'id': 'il_bad'},                                   # 缺 condition/action
+            {'id': 'il_bad2', 'condition': {}, 'action': {}},    # 结构合法但内容空
+            'not-a-dict',
+        ]
+        dc = DeviceControlSafety(MagicMock(), config={'interlocks': bad_rules})
+        assert 'il_bad' not in dc._interlock_rules
+        assert 'il_bad2' in dc._interlock_rules  # 结构合法的仍会装载（条件求值由引擎兜底）
+
+    def test_configured_interlock_triggers_and_writes(self):
+        """配置化联锁在条件满足时触发，并按寄存器名解析地址后写入"""
+        from 智能层.device_control import DeviceControlSafety
+        dm = MagicMock()
+        dm.devices = {'plc_a': {
+            'protocol': 'modbus_tcp',
+            'registers': [{'name': 'heater_enable', 'address': 10}],
+        }}
+        client = MagicMock()
+        client.write_single_register = MagicMock(return_value=True)
+        dm.get_client.return_value = client
+
+        dc = DeviceControlSafety(MagicMock(), device_manager=dm,
+                                 config={'interlocks': [INTERLOCK_SAMPLE]})
+        dc.check_interlocks('plc_a', 'temperature', 99.0)
+
+        assert dc._interlock_states['il_temp_high'] is True
+        client.write_single_register.assert_called_once_with(10, 0)
+
+    def test_interlock_not_triggered_below_threshold(self):
+        """条件不满足时不得触发"""
+        from 智能层.device_control import DeviceControlSafety
+        dc = DeviceControlSafety(MagicMock(), config={'interlocks': [INTERLOCK_SAMPLE]})
+        dc.check_interlocks('plc_a', 'temperature', 20.0)
+        assert dc._interlock_states['il_temp_high'] is False
+
+
+class TestWriteLimitsConfigDriven:
+
+    def test_device_write_limits_override_builtin(self):
+        """设备配置里的 write_limits 应覆盖内置演示量程"""
+        from 智能层.device_control import DeviceControlSafety
+        dm = MagicMock()
+        dm.devices = {'plc_a': {'write_limits': {'temperature_setpoint': [0, 200]}}}
+        dc = DeviceControlSafety(MagicMock(), device_manager=dm)
+        assert dc._write_limits['plc_a']['temperature_setpoint'] == (0.0, 200.0)
+
+    def test_invalid_write_limits_ignored(self):
+        """非法量程应被忽略（不得写入脏数据）"""
+        from 智能层.device_control import DeviceControlSafety
+        dm = MagicMock()
+        dm.devices = {'plc_a': {'write_limits': {
+            'bad_range': [10, 0],
+            'bad_type': 'oops',
+        }}}
+        dc = DeviceControlSafety(MagicMock(), device_manager=dm)
+        assert 'bad_range' not in dc._write_limits.get('plc_a', {})
+        assert 'bad_type' not in dc._write_limits.get('plc_a', {})

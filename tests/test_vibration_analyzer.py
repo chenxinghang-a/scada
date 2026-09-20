@@ -342,3 +342,184 @@ class TestBearingCoefficients:
             assert ft in BEARING_FAULT_COEFFICIENTS
             assert 'name' in BEARING_FAULT_COEFFICIENTS[ft]
             assert 'typical' in BEARING_FAULT_COEFFICIENTS[ft]
+
+
+# ============================================================
+# 采样率真实性（2026-09 修复：不再假定 100Hz）
+# ============================================================
+
+class TestRealSampleRate:
+    """频谱必须建立在**真实**采样率上；取不到采样率时降级为不可用。"""
+
+    @staticmethod
+    def _feed_sine(analyzer, device_id, freq_hz, fs_hz, n=200):
+        for i in range(n):
+            analyzer.feed_data(device_id, 'vibration_x',
+                               math.sin(2 * math.pi * freq_hz * i / fs_hz),
+                               sample_rate=fs_hz)
+
+    def test_no_sample_rate_degrades_instead_of_faking(self):
+        """未提供采样率时：available=False、spectrum=None，绝不产出假频谱"""
+        va = VibrationAnalyzer()
+        va.start()
+        try:
+            for i in range(128):
+                va.feed_data('dev1', 'vibration_x', math.sin(2 * math.pi * 10 * i / 100))
+            result = va.get_spectrum('dev1')
+        finally:
+            va.stop()
+
+        assert result is not None
+        assert result['available'] is False
+        assert result['spectrum'] is None
+        assert result['sample_rate'] is None
+        assert '采样率' in result['reason']
+        # 关键：不得出现任何"看起来对"的频谱数据
+        assert 'frequencies' not in result
+
+    def test_invalid_sample_rate_treated_as_unknown(self):
+        """非法采样率(0/负数/非数值)按"未知"处理，不得被当作有效值使用"""
+        for bad in (0, -100, 'abc', None):
+            va = VibrationAnalyzer(config={'sample_rate': bad})
+            assert va._sample_rate is None
+            assert va.resolve_sample_rate('dev1') is None
+
+    def test_spectrum_becomes_available_with_real_sample_rate(self):
+        """提供真实采样率后频谱可用，且返回该采样率"""
+        va = VibrationAnalyzer(config={'sample_rate': 200})
+        va.start()
+        try:
+            self._feed_sine(va, 'dev1', 10.0, 200.0)
+            result = va.get_spectrum('dev1')
+        finally:
+            va.stop()
+
+        assert result['available'] is True
+        assert result['sample_rate'] == 200
+        assert result['spectrum'] is not None
+
+    def test_dominant_frequency_matches_physical_frequency_at_200hz(self):
+        """物理 10Hz 信号以 200Hz 采样：主频必须是 10Hz（若用假定的 100Hz 会算成 5Hz）"""
+        va = VibrationAnalyzer(config={'device_sample_rates': {'dev1': 200}})
+        va.start()
+        try:
+            self._feed_sine(va, 'dev1', 10.0, 200.0)
+            result = va.get_spectrum('dev1')
+        finally:
+            va.stop()
+
+        dominant = result['spectrum']['dominant_frequency_hz']
+        assert abs(dominant - 10.0) < 0.6, f'主频应为10Hz，实际 {dominant}Hz（疑似使用了假采样率）'
+
+    def test_dominant_frequency_matches_physical_frequency_at_500hz(self):
+        """物理 30Hz 信号以 500Hz 采样：主频必须是 30Hz"""
+        va = VibrationAnalyzer(config={'device_sample_rates': {'dev1': 500}})
+        va.start()
+        try:
+            self._feed_sine(va, 'dev1', 30.0, 500.0)
+            result = va.get_spectrum('dev1')
+        finally:
+            va.stop()
+
+        dominant = result['spectrum']['dominant_frequency_hz']
+        assert abs(dominant - 30.0) < 1.5, f'主频应为30Hz，实际 {dominant}Hz'
+
+    def test_feed_sample_rate_overrides_config(self):
+        """feed_data 随数据点上报的采样率优先级最高"""
+        va = VibrationAnalyzer(config={'sample_rate': 100})
+        va.start()
+        try:
+            self._feed_sine(va, 'dev1', 10.0, 200.0)  # 显式 200Hz
+            result = va.get_spectrum('dev1')
+        finally:
+            va.stop()
+
+        assert result['sample_rate'] == 200
+
+    def test_do_fft_requires_explicit_sample_rate(self):
+        """_do_fft 的采样率是必填参数：缺参/传 None 一律拒绝，防止复用假定频率"""
+        va = VibrationAnalyzer()
+        with pytest.raises(TypeError):
+            va._do_fft([1.0] * 64)          # 缺参
+        with pytest.raises(ValueError):
+            va._do_fft([1.0] * 64, None)     # 显式 None
+        with pytest.raises(ValueError):
+            va._do_fft([1.0] * 64, 0)        # 非法 0
+
+    def test_bearing_fault_skipped_without_sample_rate(self):
+        """无采样率时不做轴承故障判定（不得给出"正常/故障"的假结论）"""
+        va = VibrationAnalyzer()
+        va.start()
+        try:
+            for i in range(128):
+                va.feed_data('dev1', 'vibration_x', math.sin(2 * math.pi * 25 * i / 100))
+            result = va.check_bearing_fault('dev1', 1500)
+        finally:
+            va.stop()
+
+        assert result is not None
+        assert result['available'] is False
+        assert result['bearing_faults'] == {}
+        assert result['fault_count'] == 0
+        assert '跳过' in result['diagnosis']
+
+
+# ============================================================
+# 后台分析线程（2026-09 修复：start/stop 原为空实现）
+# ============================================================
+
+class TestAnalysisThread:
+
+    def test_start_launches_thread(self):
+        """start() 必须真正拉起后台分析线程"""
+        va = VibrationAnalyzer()
+        va.start()
+        try:
+            assert va._thread is not None
+            assert va._thread.is_alive() is True
+        finally:
+            va.stop()
+
+    def test_stop_joins_thread(self):
+        """stop() 必须回收线程，而不是只翻一个标志位"""
+        va = VibrationAnalyzer()
+        va.start()
+        thread = va._thread
+        va.stop()
+        assert thread is not None
+        assert thread.is_alive() is False
+        assert va._running is False
+
+    def test_stop_without_start_is_safe(self):
+        """未启动就 stop 不得抛异常"""
+        VibrationAnalyzer().stop()
+
+    def test_double_start_no_duplicate_thread(self):
+        """重复 start 不得产生第二个线程"""
+        va = VibrationAnalyzer()
+        va.start()
+        try:
+            t1 = va._thread
+            va.start()
+            assert va._thread is t1
+        finally:
+            va.stop()
+
+    def test_refresh_scores_recomputes_buffered_devices(self):
+        """后台刷新会对已缓存设备重算评分（线程做的是实际工作，不是空转）"""
+        va = VibrationAnalyzer()
+        va.start()
+        try:
+            for i in range(30):
+                va.feed_data('dev1', 'vibration_x', 0.5)
+            va._scores.clear()  # 模拟评分丢失
+            devices = va.refresh_scores()
+            assert 'dev1' in devices
+            assert va.get_device_vibration('dev1') is not None
+        finally:
+            va.stop()
+
+    def test_refresh_scores_does_not_raise_on_empty(self):
+        """无数据时刷新是安全的"""
+        va = VibrationAnalyzer()
+        assert va.refresh_scores() == []

@@ -7,6 +7,25 @@
 - 异常值检测
 - 数据一致性验证
 - 质量报告生成
+
+⚠️ 未接线（NOT WIRED INTO run.py）
+    `DataQualityMonitor` 在 run.py 中**从未被实例化**，采集质量评估目前没有
+    调用方（采集层 data_collector.py 也未注入本模块）。也就是说：模块本身可用，
+    但"生产数据质量评分"这一能力当前并不存在。
+
+    接线建议（需改 run.py / 采集层，本文件无权修改）——这是最低成本的一条接线：
+
+        # run.py：初始化智能层处
+        from 智能层.data_quality import DataQualityMonitor
+        data_quality = DataQualityMonitor()
+
+        # 采集回调（与 spc_analyzer/energy_manager 同一处）：
+        #     ok, reason = data_quality.validate_data(device_id, register_name, value,
+        #                                             metadata={'timestamp': ts})
+        #     if not ok: logger.warning("数据质量: %s %s -> %s", device_id, register_name, reason)
+
+    接线后即可按测点产出 完整性/范围/一致性/时效性 统计（get_statistics()），
+    无需额外基础设施；因需同时改动 run.py 与采集层，本次仅标注未接线。
 """
 
 import time

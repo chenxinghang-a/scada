@@ -7,6 +7,21 @@
 - 生产瓶颈识别
 - 效率优化建议
 - 产能规划
+
+⚠️ 未接线（NOT WIRED INTO run.py）
+    `ProductionAnalyzer` 在 run.py 中**从未被实例化**，当前不参与生产运行。
+    生产上计算 OEE 的是 `智能层/oee_calculator.py`（已接线，作为 DataCollector
+    的 oee_calculator 参数）；本模块的"OEE趋势/瓶颈/产能规划"属于其上层分析，
+    目前没有任何调用方，因此这些分析结论在生产上并不存在。
+
+    接线建议（需改 run.py，本文件无权修改）：在 OEE 计算之后追加
+
+        from 智能层.production_analyzer import ProductionAnalyzer
+        production_analyzer = ProductionAnalyzer()
+        # 在 oee_calculator 更新后同步：
+        #     production_analyzer.add_production_record(...)
+
+    接线前保持未启用状态，不要在前端展示其输出。
 """
 
 import time

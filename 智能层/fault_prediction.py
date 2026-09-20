@@ -7,6 +7,15 @@
 - 故障趋势预测
 - 维护建议生成
 - 异常检测
+
+⚠️ 未接线（NOT WIRED INTO run.py）
+    `FaultPredictionEngine` 在 run.py 中**从未被实例化**，当前不参与生产运行。
+    生产上做预测性维护的是 `智能层/predictive_maintenance.py`（已接线，作为
+    DataCollector 的 predictive_maintenance 参数），本模块与其功能重叠但更重
+    （自建健康档案），属于未启用的第二实现。
+
+    处置结论：不接线。两套预测性维护并存会得到两个互相矛盾的"健康分"，
+    在收敛为单一实现（或明确分工）之前，保留代码但保持未启用状态。
 """
 
 import time

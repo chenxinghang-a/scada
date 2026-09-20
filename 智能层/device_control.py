@@ -10,6 +10,16 @@
 5. 操作审计（Audit Trail）— 完整链路，持久化，防篡改
 6. 写操作回读验证 — 写入后回读确认
 7. 操作互斥（Mutex）— 防止多用户同时操作同一设备
+
+配置驱动（2026-09 修复）：
+    - 安全联锁规则不再在代码里写死具体设备名（原预置规则绑定 `plc_reactor_01`
+      等"幽灵设备"：该设备在 配置/devices*.yaml 中并不存在，条件永远不匹配，
+      等于一条永不触发的安全联锁）。现改为从 配置/interlocks.yaml、
+      构造参数 config['interlocks'] 或各设备的 `interlocks` 段加载；
+      本地未配置任何联锁时不安装任何规则，并输出明确告警。
+    - 批量起停的写入点位不再写死 coil0/reg100，改为按设备配置
+      `control: {start/stop/reset: {type, address, value}}` 解析；
+      未配置时使用带告警的显式回退常量（LEGACY_FALLBACK_CONTROL_POINTS）。
 """
 
 import time
@@ -24,6 +34,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import paths
 
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:  # pragma: no cover - 环境缺 yaml 时退化为纯内存配置
+    HAS_YAML = False
+
 logger = logging.getLogger(__name__)
 
 # --- 命名常量（替代魔法数字） ---
@@ -33,6 +49,21 @@ EMA_ALPHA = 0.3                     # 指数移动平均系数
 BACKOFF_CEILING_S = 60              # 退避上限（秒）
 SENSOR_STUCK_WINDOW_S = 300         # 传感器卡死检测窗口（秒）
 DEVICE_LOCK_TIMEOUT_S = 5.0         # 设备锁超时（秒）
+
+# 联锁规则配置文件（生产推荐）
+INTERLOCK_CONFIG_PATH = '配置/interlocks.yaml'
+
+# 批量起停的**显式回退点位**（仅在设备未配置 control 段时使用，并记录告警）
+# 历史实现把 coil0 / reg100 直接写死在 batch_control 内且无任何提示；
+# 现改为"设备配置优先、回退值显式命名并告警"，避免把点位猜测静默写进现场设备。
+LEGACY_FALLBACK_CONTROL_POINTS = {
+    'start': {'type': 'coil', 'address': 0},
+    'stop': {'type': 'coil', 'address': 0},
+    'reset': {'type': 'register', 'address': 100},
+}
+
+# 未显式给出 value 时，各动作的默认写入值
+_DEFAULT_ACTION_VALUES = {'start': True, 'stop': False, 'reset': 0}
 
 
 class SafetyLevel:
@@ -77,10 +108,12 @@ class DeviceControlSafety:
     - 操作审计日志
     """
 
-    def __init__(self, database, device_manager=None, alarm_manager=None):
+    def __init__(self, database, device_manager=None, alarm_manager=None,
+                 config: dict[str, Any] | None = None):
         self.database = database
         self.device_manager = device_manager
         self.alarm_manager = alarm_manager
+        self.config = config or {}
 
         # ===== 安全联锁规则 =====
         self._interlock_rules: dict[str, dict[str, Any]] = {}
@@ -135,146 +168,138 @@ class DeviceControlSafety:
     # ==================== 安全联锁 ====================
 
     def _load_preset_interlocks(self):
-        """加载预置安全联锁规则（工厂标准配置）"""
-        preset_rules = [
-            {
-                'id': 'interlock_temp_high',
-                'name': '温度超限联锁',
-                'description': '反应釜温度超过上限自动停加热',
-                'priority': 1,
-                'condition': {
-                    'type': 'threshold',
-                    'device_id': 'plc_reactor_01',
-                    'register': 'temperature',
-                    'operator': '>',
-                    'value': 95.0
-                },
-                'action': {
-                    'type': 'write_register',
-                    'device_id': 'plc_reactor_01',
-                    'register': 'heater_enable',
-                    'value': 0
-                },
-                'alarm': {
-                    'level': 'critical',
-                    'message': '温度超限联锁触发：反应釜温度>{threshold}°C，加热已自动关闭'
-                }
-            },
-            {
-                'id': 'interlock_pressure_high',
-                'name': '压力超限联锁',
-                'description': '管道压力超过上限自动停泵',
-                'priority': 1,
-                'condition': {
-                    'type': 'threshold',
-                    'device_id': 'plc_reactor_01',
-                    'register': 'pressure',
-                    'operator': '>',
-                    'value': 2.5
-                },
-                'action': {
-                    'type': 'write_register',
-                    'device_id': 'plc_reactor_01',
-                    'register': 'pump_enable',
-                    'value': 0
-                },
-                'alarm': {
-                    'level': 'critical',
-                    'message': '压力超限联锁触发：管道压力>{threshold}MPa，泵已自动停止'
-                }
-            },
-            {
-                'id': 'interlock_estop',
-                'name': '急停按钮联锁',
-                'description': '急停按钮按下全厂停机',
-                'priority': 0,  # 最高优先级
-                'condition': {
-                    'type': 'coil',
-                    'device_id': 'relay_output_01',
-                    'address': 0,  # DI0 = 急停按钮
-                    'value': True
-                },
-                'action': {
-                    'type': 'emergency_stop'
-                },
-                'alarm': {
-                    'level': 'critical',
-                    'message': '急停按钮已按下！全厂设备紧急停机'
-                }
-            },
-            {
-                'id': 'interlock_fire_alarm',
-                'name': '烟感报警联锁',
-                'description': '烟感报警自动切断电源',
-                'priority': 0,
-                'condition': {
-                    'type': 'coil',
-                    'device_id': 'relay_output_01',
-                    'address': 2,  # DI2 = 烟感
-                    'value': True
-                },
-                'action': {
-                    'type': 'write_register',
-                    'device_id': 'relay_output_01',
-                    'register': 'power_cut',
-                    'value': 1
-                },
-                'alarm': {
-                    'level': 'critical',
-                    'message': '烟感报警联锁触发：已自动切断非安全电源'
-                }
-            },
-            {
-                'id': 'interlock_water_leak',
-                'name': '水浸报警联锁',
-                'description': '水浸传感器报警自动停泵',
-                'priority': 0,
-                'condition': {
-                    'type': 'coil',
-                    'device_id': 'relay_output_01',
-                    'address': 3,  # DI3 = 水浸
-                    'value': True
-                },
-                'action': {
-                    'type': 'write_register',
-                    'device_id': 'plc_reactor_01',
-                    'register': 'pump_enable',
-                    'value': 0
-                },
-                'alarm': {
-                    'level': 'critical',
-                    'message': '水浸报警联锁触发：泵已自动停止'
-                }
-            },
-            {
-                'id': 'interlock_door_open',
-                'name': '门禁联锁',
-                'description': '设备间门打开时禁止启动设备',
-                'priority': 2,
-                'condition': {
-                    'type': 'coil',
-                    'device_id': 'relay_output_01',
-                    'address': 1,  # DI1 = 门禁
-                    'value': True
-                },
-                'action': {
-                    'type': 'block_start'  # 阻止设备启动
-                },
-                'alarm': {
-                    'level': 'warning',
-                    'message': '门禁联锁：设备间门未关闭，禁止启动设备'
-                }
-            },
-        ]
+        """
+        加载安全联锁规则（配置驱动）
 
-        for rule in preset_rules:
-            self._interlock_rules[rule['id']] = rule
-            self._interlock_states[rule['id']] = False
+        规则来源（按优先级，先命中先返回）：
+        1. 配置/interlocks.yaml（生产推荐：含真实设备ID与寄存器名）
+        2. 构造参数 config['interlocks']（测试/嵌入式注入）
+        3. 各设备配置中的 `interlocks` 段（按设备就近声明）
 
-        logger.info(f"已加载 {len(preset_rules)} 条预置安全联锁规则")
+        历史实现把 6 条"预置规则"直接写死在代码里，绑定了 `plc_reactor_01`
+        等**配置中并不存在**的设备名 —— 条件永远不会匹配，等于装了一批永不触发的
+        安全联锁；而 `relay_output_01` 地址 0 又是 relay_1（输出线圈）与 di_1
+        共用的地址，读到输出线圈值就可能误触发"急停"。
+        因此这里不再内置任何具体设备名：没有配置就没有联锁，并明确告警，
+        而不是用一批看起来在工作、实际不工作的假规则充数。
+
+        YAML 结构示例（配置/interlocks.yaml）：
+
+            interlocks:
+              - id: interlock_temp_high
+                name: 温度超限联锁
+                priority: 1                 # 数字越小越先执行
+                enabled: true
+                condition: {type: threshold, device_id: siemens_1500_01,
+                            register: boiler_temperature, operator: '>', value: 95.0}
+                action: {type: write_register, device_id: siemens_1500_01,
+                         register: boiler_status, value: 0}
+                alarm: {level: critical, message: '温度超限联锁触发'}
+        """
+        rules = []
+        source = None
+
+        # 1. 配置文件
+        file_rules = self._load_interlocks_from_file()
+        if file_rules:
+            rules, source = file_rules, str(paths.resolve(INTERLOCK_CONFIG_PATH))
+
+        # 2. 构造参数注入
+        if not rules:
+            injected = self.config.get('interlocks')
+            if isinstance(injected, list) and injected:
+                rules, source = list(injected), "config['interlocks']"
+
+        # 3. 设备配置内的 interlocks 段
+        if not rules:
+            from_devices = self._load_interlocks_from_devices()
+            if from_devices:
+                rules, source = from_devices, '设备配置 interlocks 段'
+
+        if not rules:
+            logger.warning(
+                "未加载到任何安全联锁规则：请配置 %s（或设备配置的 interlocks 段）。"
+                "此前写死的 plc_reactor_01 等预置规则已移除 —— 那些设备在设备清单中"
+                "不存在，条件永不匹配，属于「看似在保护、实际不保护」的死规则。",
+                INTERLOCK_CONFIG_PATH,
+            )
+            return
+
+        loaded = 0
+        for rule in rules:
+            if not isinstance(rule, dict):
+                logger.error("忽略非法联锁规则（非字典）: %r", rule)
+                continue
+            rule_id = rule.get('id')
+            if not rule_id:
+                logger.error("忽略缺 id 的联锁规则: %r", rule)
+                continue
+            if 'condition' not in rule or 'action' not in rule:
+                logger.error("忽略缺 condition/action 的联锁规则: %s", rule_id)
+                continue
+            rule.setdefault('name', rule_id)
+            rule.setdefault('priority', 1)
+            rule.setdefault('enabled', True)
+            self._interlock_rules[rule_id] = rule
+            self._interlock_states.setdefault(rule_id, False)
+            loaded += 1
+
+        logger.info("已从 %s 加载 %d 条安全联锁规则", source, loaded)
+
+    def _load_interlocks_from_file(self) -> list[dict[str, Any]]:
+        """从 配置/interlocks.yaml 读取联锁规则；文件不存在或不可用时返回 []"""
+        if not HAS_YAML:
+            logger.warning("未安装 PyYAML，无法读取 %s", INTERLOCK_CONFIG_PATH)
+            return []
+
+        path = paths.resolve(INTERLOCK_CONFIG_PATH)
+        try:
+            if not path.exists():
+                logger.info("联锁配置文件不存在: %s", path)
+                return []
+            with open(path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.error("加载联锁配置失败 %s: %s", path, e)
+            return []
+
+        if isinstance(data, list):
+            return [r for r in data if isinstance(r, dict)]
+        if isinstance(data, dict):
+            rules = data.get('interlocks')
+            if isinstance(rules, list):
+                return [r for r in rules if isinstance(r, dict)]
+        logger.error("联锁配置格式错误（应为 {interlocks: [...]}）: %s", path)
+        return []
+
+    def _load_interlocks_from_devices(self) -> list[dict[str, Any]]:
+        """汇总各设备配置中声明的 interlocks 段（设备ID就近声明，避免跨文件写死）"""
+        if not self.device_manager:
+            return []
+        try:
+            devices = getattr(self.device_manager, 'devices', {}) or {}
+        except Exception:
+            return []
+
+        rules: list[dict[str, Any]] = []
+        for device_id, device_config in devices.items():
+            if not isinstance(device_config, dict):
+                continue
+            for rule in device_config.get('interlocks') or []:
+                if isinstance(rule, dict) and 'id' in rule:
+                    rules.append(rule)
+                else:
+                    logger.error("设备 %s 的联锁声明非法（缺 id）: %r", device_id, rule)
+        return rules
 
     def _load_write_limits(self):
-        """加载写操作安全限制（防止写入危险值）"""
+        """
+        加载写操作安全限制（防止写入危险值）
+
+        下方内置表是**演示用默认量程**，仅对同名设备生效（不存在该设备即为惰性数据）。
+        真实设备的量程应在 `配置/devices*.yaml` 中按设备声明 `write_limits` 段，
+        由 `_merge_device_write_limits()` 覆盖/补充，避免把现场量程写死在代码里。
+        """
         self._write_limits = {
             'plc_reactor_01': {
                 'temperature_setpoint': (0, 150),    # 温度设定值 0-150°C
@@ -298,6 +323,35 @@ class DeviceControlSafety:
                 'default': (0, 1)
             }
         }
+        self._merge_device_write_limits()
+
+    def _merge_device_write_limits(self):
+        """把设备配置中的 write_limits 段合并进量程表（配置优先，覆盖内置演示值）"""
+        if not self.device_manager:
+            return
+        try:
+            devices = getattr(self.device_manager, 'devices', {}) or {}
+        except Exception as e:
+            logger.error("读取设备配置失败（write_limits 合并）: %s", e)
+            return
+
+        for device_id, device_config in devices.items():
+            if not isinstance(device_config, dict):
+                continue
+            limits = device_config.get('write_limits')
+            if not isinstance(limits, dict):
+                continue
+            target = self._write_limits.setdefault(device_id, {})
+            for register_name, bounds in limits.items():
+                try:
+                    low, high = float(bounds[0]), float(bounds[1])
+                except (TypeError, ValueError, IndexError):
+                    logger.error("设备 %s 的 write_limits.%s 非法: %r", device_id, register_name, bounds)
+                    continue
+                if low > high:
+                    logger.error("设备 %s 的 write_limits.%s 下限大于上限: %r", device_id, register_name, bounds)
+                    continue
+                target[str(register_name)] = (low, high)
 
     def _init_device_health(self):
         """从设备管理器初始化设备健康数据"""
@@ -428,26 +482,32 @@ class DeviceControlSafety:
                             continue
 
                 success = False
-                if action == 'start':
+                point = self._resolve_control_point(device_id, action)
+                if point is None:
+                    results[device_id] = {
+                        'success': False,
+                        'message': f'设备 {device_id} 无可用控制点位（control.{action}），拒绝写入',
+                    }
+                    self._audit(f'batch_{action}', operator,
+                                f'批量{action}设备 {device_id}: 无可用控制点位，已拒绝写入')
+                    continue
+
+                if point['type'] == 'coil':
                     if hasattr(client, 'write_single_coil'):
-                        success = client.write_single_coil(0, True)
+                        success = client.write_single_coil(point['address'], bool(point['value']))
                     elif hasattr(client, 'write_single_register'):
-                        success = client.write_single_register(100, 1)
-                    if self.device_manager:
-                        self.device_manager.start_device(device_id)
-                elif action == 'stop':
-                    if hasattr(client, 'write_single_coil'):
-                        success = client.write_single_coil(0, False)
-                    elif hasattr(client, 'write_single_register'):
-                        success = client.write_single_register(100, 0)
-                    # 同步 device_manager 状态
-                    if self.device_manager:
-                        self.device_manager.stop_device(device_id)
-                elif action == 'reset':
+                        success = client.write_single_register(point['address'], int(bool(point['value'])))
+                else:  # register
                     if hasattr(client, 'write_single_register'):
-                        success = client.write_single_register(100, 0)
+                        success = client.write_single_register(point['address'], int(point['value']))
                     elif hasattr(client, 'write_single_coil'):
-                        success = client.write_single_coil(0, False)
+                        success = client.write_single_coil(point['address'], bool(point['value']))
+
+                if success and self.device_manager:
+                    if action == 'start':
+                        self.device_manager.start_device(device_id)
+                    elif action == 'stop':
+                        self.device_manager.stop_device(device_id)
 
                 results[device_id] = {
                     'success': success,
@@ -455,7 +515,8 @@ class DeviceControlSafety:
                 }
 
                 self._audit(f'batch_{action}', operator,
-                            f'批量{action}设备 {device_id}: {"成功" if success else "失败"}')
+                            f'批量{action}设备 {device_id}: {"成功" if success else "失败"}'
+                            f' (点位 {point["type"]}#{point["address"]}={point["value"]})')
 
             except Exception as e:
                 results[device_id] = {'success': False, 'message': str(e)}
@@ -997,6 +1058,82 @@ class DeviceControlSafety:
             'reason': self._estop_reason,
             'affected_devices': self._estop_devices
         }
+
+    def _resolve_control_point(self, device_id: str, action: str) -> dict[str, Any] | None:
+        """
+        解析批量控制（start/stop/reset）要写入的点位
+
+        点位不再写死：优先取设备配置的 `control` 段，取不到才回退到显式命名的
+        LEGACY_FALLBACK_CONTROL_POINTS（并记录告警，提示补配置）。
+
+        设备配置形态（配置/devices*.yaml 中该设备的 control 段）——两种写法均支持：
+
+            control:                                  # 写法A：按动作声明
+              start: {type: coil, address: 0, value: true}
+              stop:  {type: coil, address: 0, value: false}
+              reset: {type: register, address: 100, value: 0}
+
+            control:                                  # 写法B：共用点位，动作值分开
+              type: coil
+              address: 0
+              start_value: true
+              stop_value: false
+              reset_value: 0
+
+        Returns:
+            {'type': 'coil'|'register', 'address': int, 'value': Any}；无法解析返回 None
+        """
+        default_value = _DEFAULT_ACTION_VALUES.get(action)
+
+        spec = None
+        if self.device_manager:
+            try:
+                device_config = (getattr(self.device_manager, 'devices', {}) or {}).get(device_id) or {}
+                control = device_config.get('control') or {}
+            except Exception as e:
+                logger.error("读取设备 %s 控制点位配置失败: %s", device_id, e)
+                control = {}
+
+            if isinstance(control, dict):
+                candidate = control.get(action)
+                if isinstance(candidate, dict):
+                    spec = dict(candidate)
+                elif control.get('type') is not None and control.get('address') is not None:
+                    # 写法B：共用 type/address
+                    spec = {
+                        'type': control.get('type'),
+                        'address': control.get('address'),
+                        'value': control.get(f'{action}_value', default_value),
+                    }
+
+        if spec is None:
+            fallback = LEGACY_FALLBACK_CONTROL_POINTS.get(action)
+            if fallback is None:
+                logger.error("设备 %s 的批量动作 %s 无可用点位（无回退值）", device_id, action)
+                return None
+            spec = dict(fallback)
+            logger.warning(
+                "设备 %s 未配置控制点位 control.%s，使用旧版回退点位 %s#%s —— "
+                "请在该设备配置中显式声明 control 段，避免写错点位",
+                device_id, action, spec['type'], spec['address'],
+            )
+
+        kind = str(spec.get('type', 'coil')).lower()
+        if kind not in ('coil', 'register'):
+            logger.error("设备 %s 控制点位类型非法: %r", device_id, spec.get('type'))
+            return None
+        try:
+            address = int(spec.get('address'))
+        except (TypeError, ValueError):
+            logger.error("设备 %s 控制点位地址非法: %r", device_id, spec.get('address'))
+            return None
+
+        value = spec.get('value', default_value)
+        if value is None:
+            logger.error("设备 %s 控制点位缺少写入值（action=%s）", device_id, action)
+            return None
+
+        return {'type': kind, 'address': address, 'value': value}
 
     def _get_controllable_devices(self) -> list[str]:
         """获取所有可控设备ID列表"""

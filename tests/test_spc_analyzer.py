@@ -304,3 +304,122 @@ class TestQueryAPI:
             spc.violations['dev1:temp'].append({'rule': 1, 'index': i})
         result = spc.get_violations(limit=10)
         assert len(result) <= 10
+
+
+# ============================================================
+# 判异结果去重（2026-09 修复：每轮重扫窗口 + 锁外 extend → 重复累积）
+# ============================================================
+
+class TestViolationDedup:
+    """同一违规只能计入一次：控制图重复计算不得让判异列表越长越多。"""
+
+    KEY = 'dev1:temp'
+
+    @staticmethod
+    def _feed_monotonic(spc, count, start=50.0, step=0.5):
+        """喂入单调递增数据 → 必然触发规则3（连续6点递增）等判异"""
+        for i in range(count):
+            spc.feed_data('dev1', 'temp', start + i * step)
+
+    def test_repeated_calculation_does_not_accumulate(self, spc):
+        """同一窗口重复计算 5 次，判异条数必须保持不变"""
+        self._feed_monotonic(spc, 40)
+
+        spc.calculate_xbar_r_chart('dev1', 'temp')
+        after_first = len(spc.violations[self.KEY])
+        assert after_first > 0, '构造的数据应当触发判异，否则本测试无意义'
+
+        for _ in range(4):
+            spc.calculate_xbar_r_chart('dev1', 'temp')
+
+        assert len(spc.violations[self.KEY]) == after_first, \
+            f'重复计算导致判异重复计入: {after_first} -> {len(spc.violations[self.KEY])}'
+
+    def test_repeated_calculation_of_s_chart_does_not_accumulate(self, spc):
+        """X̄-S 图同样不得重复累积"""
+        self._feed_monotonic(spc, 40)
+
+        spc.calculate_xbar_s_chart('dev1', 'temp')
+        after_first = len(spc.violations[self.KEY])
+        assert after_first > 0
+
+        for _ in range(4):
+            spc.calculate_xbar_s_chart('dev1', 'temp')
+
+        assert len(spc.violations[self.KEY]) == after_first
+
+    def test_r_and_s_chart_share_dedup_state(self, spc):
+        """R 图与 S 图对同一窗口给出相同判异 → 合并后仍不重复"""
+        self._feed_monotonic(spc, 40)
+        spc.calculate_xbar_r_chart('dev1', 'temp')
+        first = len(spc.violations[self.KEY])
+        spc.calculate_xbar_s_chart('dev1', 'temp')
+        spc.calculate_xbar_r_chart('dev1', 'temp')
+        assert len(spc.violations[self.KEY]) == first
+
+    def test_new_data_still_recorded_once(self, spc):
+        """去重不能过度抑制：真正的新违规必须被记录，且只记录一次"""
+        self._feed_monotonic(spc, 40)
+        spc.calculate_xbar_r_chart('dev1', 'temp')
+        baseline = len(spc.violations[self.KEY])
+
+        self._feed_monotonic(spc, 30, start=100.0, step=0.5)
+        spc.calculate_xbar_r_chart('dev1', 'temp')
+        after_new = len(spc.violations[self.KEY])
+        assert after_new > baseline, '新数据产生的新违规必须被记录'
+
+        spc.calculate_xbar_r_chart('dev1', 'temp')
+        assert len(spc.violations[self.KEY]) == after_new
+
+    def test_violations_are_unique_by_rule_and_position(self, spc):
+        """判异列表内不得存在 (rule, 绝对位置区间) 重复项"""
+        self._feed_monotonic(spc, 60)
+        for _ in range(3):
+            spc.calculate_xbar_r_chart('dev1', 'temp')
+
+        fingerprints = [(v['rule'], v['abs_index'], v['span'])
+                        for v in spc.violations[self.KEY]]
+        assert len(fingerprints) == len(set(fingerprints))
+
+    def test_violations_carry_span(self, spc):
+        """每条判异都必须带 span（去重换算绝对区间所需）"""
+        violations = spc._check_violations([46.0, 47.0, 48.0, 49.0, 50.0, 51.0],
+                                           50.0, 55.0, 45.0)
+        assert violations
+        for v in violations:
+            assert isinstance(v['span'], int)
+            assert v['span'] >= 1
+
+    def test_get_violations_reflects_dedup(self, spc):
+        """查询接口返回的也是去重后的结果"""
+        self._feed_monotonic(spc, 40)
+        for _ in range(3):
+            spc.calculate_xbar_r_chart('dev1', 'temp')
+        listed = spc.get_violations(device_id='dev1', limit=1000)
+        stored = spc.violations[self.KEY]
+        assert len(listed) == len(stored)
+
+    def test_concurrent_calculation_is_consistent(self, spc):
+        """并发重算（锁竞争）下不得破坏去重状态、不得抛异常"""
+        import threading
+
+        self._feed_monotonic(spc, 60)
+        errors = []
+
+        def worker():
+            try:
+                for _ in range(5):
+                    spc.calculate_xbar_r_chart('dev1', 'temp')
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        fingerprints = [(v['rule'], v['abs_index'], v['span'])
+                        for v in spc.violations[self.KEY]]
+        assert len(fingerprints) == len(set(fingerprints))

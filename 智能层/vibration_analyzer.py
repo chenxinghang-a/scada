@@ -13,7 +13,18 @@
 - 泵/风机不平衡检测
 - 联轴器对中不良检测
 
-依赖：numpy（可选，无numpy时使用简化FFT）
+采样率（关键前提）：
+    FFT 的频率轴 = k * fs / N，fs 错则整条频谱错。振动数据源（PLC 轮询/寄存器
+    采集）通常**没有固定采样率**——采集周期受轮询、网络、调度抖动影响，
+    因此本模块不再假定任何默认 fs：
+
+    - 采样率来源优先级：feed_data(sample_rate=...) > config['device_sample_rates']
+      [device_id] > config['sample_rate'] 全局配置；
+    - 三者都取不到时 → `get_spectrum()` 返回 available=False 并给出原因，
+      **不产出频谱**（宁可不给，也不给出无物理意义的假频谱）；
+    - `_do_fft()` 的 sample_rate 为必填位置参数，从签名上杜绝"默认 100Hz"复用。
+
+依赖：numpy（可选，无numpy时使用简化DFT）
 """
 
 import math
@@ -138,28 +149,131 @@ class VibrationAnalyzer:
         # 振动评分
         self._scores: dict[str, dict[str, Any]] = {}  # device_id -> score_info
 
-        # 采样率（Hz）
-        self._sample_rate = self.config.get('sample_rate', 100)
+        # 采样率（Hz）：None 表示"数据源未声明采样率"——此时频谱不可用，
+        # 绝不用假定值（如 100Hz）代替。见模块 docstring。
+        self._sample_rate = self._validate_sample_rate(self.config.get('sample_rate'))
+
+        # 每设备采样率（Hz）：device_id -> float，形如
+        #   {'device_sample_rates': {'vibration_sensor_01': 2000}}
+        self._device_sample_rates: dict[str, float] = {}
+        for dev_id, rate in (self.config.get('device_sample_rates') or {}).items():
+            valid = self._validate_sample_rate(rate)
+            if valid is not None:
+                self._device_sample_rates[dev_id] = valid
+
+        # feed_data 时随数据点显式上报的采样率（最高优先级）
+        self._feed_sample_rates: dict[str, float] = {}
 
         # 阈值配置
         self._warning_threshold = self.config.get('warning_threshold', 1.8)  # mm/s
         self._alarm_threshold = self.config.get('alarm_threshold', 4.5)  # mm/s
 
+        # 运行状态与后台分析线程
         self._running = False
-        logger.info("振动分析器初始化完成")
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._analysis_interval = self.config.get('analysis_interval_s', 5.0)
+        # 已告警过的设备（避免后台线程重复刷同一条告警）
+        self._alerted: set[str] = set()
+
+        logger.info(
+            "振动分析器初始化完成（采样率=%s）",
+            f"{self._sample_rate}Hz" if self._sample_rate else "未配置，频谱功能将降级为不可用"
+        )
+
+    @staticmethod
+    def _validate_sample_rate(rate: Any) -> float | None:
+        """校验采样率：非数值或 <=0 一律视为"未知采样率"（返回 None）"""
+        if rate is None or isinstance(rate, bool):
+            return None
+        try:
+            value = float(rate)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0 or math.isnan(value) or math.isinf(value):
+            return None
+        return value
+
+    def resolve_sample_rate(self, device_id: str) -> float | None:
+        """
+        解析设备的真实采样率（Hz）
+
+        优先级：feed_data 显式上报 > config['device_sample_rates'] > 全局 config['sample_rate']
+        全部取不到返回 None（调用方必须降级，不得假定）。
+        """
+        with self._lock:
+            rate = self._feed_sample_rates.get(device_id)
+            if rate is None:
+                rate = self._device_sample_rates.get(device_id)
+        if rate is not None:
+            return rate
+        return self._sample_rate
 
     def start(self):
-        """启动分析器"""
+        """启动分析器（含后台分析线程）"""
+        if self._running:
+            return
         self._running = True
-        logger.info("振动分析器已启动")
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._analysis_loop, name='vibration-analyzer', daemon=True
+        )
+        self._thread.start()
+        logger.info("振动分析器已启动（分析周期 %.1fs）", self._analysis_interval)
 
-    def stop(self):
-        """停止分析器"""
+    def stop(self, timeout: float = 5.0):
+        """停止分析器并回收分析线程"""
         self._running = False
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                logger.warning("振动分析线程未在 %.1fs 内退出", timeout)
+        self._thread = None
         logger.info("振动分析器已停止")
 
+    def _analysis_loop(self):
+        """后台分析循环：周期性重算振动评分并做阈值告警"""
+        while not self._stop_event.wait(self._analysis_interval):
+            if not self._running:
+                break
+            try:
+                self.refresh_scores()
+            except Exception as e:  # 后台线程不能因单次异常退出
+                logger.error(f"振动分析周期异常: {e}", exc_info=True)
+
+    def refresh_scores(self) -> list[str]:
+        """
+        重算所有已缓存设备的振动评分/趋势，并对越过阈值的设备告警一次
+
+        Returns:
+            本次刷新过的设备ID列表
+        """
+        with self._lock:
+            device_ids = list(self._buffers.keys())
+
+        for device_id in device_ids:
+            with self._lock:
+                self._update_score(device_id)
+                score = self._scores.get(device_id)
+
+            if not score:
+                continue
+            rms = score['rms']
+            if rms >= self._alarm_threshold and device_id not in self._alerted:
+                self._alerted.add(device_id)
+                logger.error(
+                    "振动超标告警: %s RMS=%.2fmm/s (阈值 %.2f) 等级=%s",
+                    device_id, rms, self._alarm_threshold, score['zone'],
+                )
+            elif rms < self._warning_threshold:
+                self._alerted.discard(device_id)
+        return device_ids
+
     def feed_data(self, device_id: str, register_name: str,
-                  value: float, timestamp: datetime = None):
+                  value: float, timestamp: datetime = None,
+                  sample_rate: float | None = None):
         """
         喂入振动数据
 
@@ -168,6 +282,8 @@ class VibrationAnalyzer:
             register_name: 寄存器名（包含vibration关键字的会被处理）
             value: 振动值
             timestamp: 时间戳
+            sample_rate: 该数据点所属波形的采样率(Hz)。只有数据源真实提供采样率时
+                才应传入；本值一旦注册即用于该设备的 FFT 频率轴。
         """
         if not self._running:
             return
@@ -181,9 +297,13 @@ class VibrationAnalyzer:
 
         ts = timestamp.timestamp() if hasattr(timestamp, 'timestamp') else float(timestamp)
 
+        rate = self._validate_sample_rate(sample_rate)
+
         record = VibrationRecord(ts, value)
 
         with self._lock:
+            if rate is not None:
+                self._feed_sample_rates[device_id] = rate
             if device_id not in self._buffers:
                 self._buffers[device_id] = deque(maxlen=self._buffer_size)
             self._buffers[device_id].append(record)
@@ -290,7 +410,10 @@ class VibrationAnalyzer:
             device_id: 设备ID
 
         Returns:
-            频谱分析结果
+            - 采样率已知：{'available': True, 'spectrum': {...}, 'sample_rate': fs, ...}
+            - 采样率未知：{'available': False, 'spectrum': None, 'reason': '...', ...}
+              （FFT 频率轴依赖真实 fs，未知则频谱无物理意义 → 降级，不产出假频谱）
+            - 数据不足（<64点）或无该设备：None
         """
         with self._lock:
             buffer = self._buffers.get(device_id)
@@ -299,26 +422,59 @@ class VibrationAnalyzer:
 
             values = [r.value for r in buffer]
 
-        # 执行FFT
-        fft_result = self._do_fft(values)
+        sample_rate = self.resolve_sample_rate(device_id)
+        now_iso = datetime.now().isoformat()
+
+        if sample_rate is None:
+            logger.warning(
+                "振动频谱不可用: 设备 %s 未提供采样率，FFT 频率轴无法确定（已降级）",
+                device_id,
+            )
+            return {
+                'device_id': device_id,
+                'available': False,
+                'reason': (
+                    '采样率未知：数据源未声明固定采样率，FFT 频率轴无法确定，'
+                    '频谱结果无物理意义，已降级为不可用。'
+                    '请通过 feed_data(sample_rate=...) 或配置 device_sample_rates/sample_rate 提供'
+                ),
+                'spectrum': None,
+                'sample_count': len(values),
+                'sample_rate': None,
+                'updated_at': now_iso,
+            }
+
+        # 执行FFT（显式传入真实采样率）
+        fft_result = self._do_fft(values, sample_rate)
 
         return {
             'device_id': device_id,
+            'available': True,
             'spectrum': fft_result.to_dict(),
             'sample_count': len(values),
-            'sample_rate': self._sample_rate,
-            'updated_at': datetime.now().isoformat(),
+            'sample_rate': sample_rate,
+            'updated_at': now_iso,
         }
 
-    def _do_fft(self, values: list[float]) -> FFTResult:
-        """执行FFT分析"""
+    def _do_fft(self, values: list[float], sample_rate: float) -> FFTResult:
+        """
+        执行FFT分析
+
+        Args:
+            values: 时域采样序列
+            sample_rate: **真实**采样率(Hz)。必填且必须 >0 —— 频率轴 = k*fs/N，
+                没有任何合理的"默认值"，因此本参数刻意不设默认（防止误用假定频率）。
+        """
+        if sample_rate is None or sample_rate <= 0:
+            raise ValueError("FFT 需要有效的真实采样率(Hz)，收到: %r" % (sample_rate,))
+
         n = len(values)
 
         if HAS_NUMPY:
             # 使用numpy的FFT
             fft_vals = np.fft.rfft(values)
             fft_amps = np.abs(fft_vals) / n * 2
-            fft_freqs = np.fft.rfftfreq(n, 1.0 / self._sample_rate)
+            fft_freqs = np.fft.rfftfreq(n, 1.0 / sample_rate)
 
             # 找到主频
             # 跳过DC分量（index=0）
@@ -339,7 +495,7 @@ class VibrationAnalyzer:
             frequencies = []
 
             for k in range(n_half):
-                freq = k * self._sample_rate / n
+                freq = k * sample_rate / n
                 real = sum(values[m] * math.cos(2 * math.pi * k * m / n) for m in range(n))
                 imag = sum(values[m] * math.sin(2 * math.pi * k * m / n) for m in range(n))
                 amp = math.sqrt(real * real + imag * imag) / n * 2
@@ -371,11 +527,27 @@ class VibrationAnalyzer:
             rpm: 转速（RPM）
 
         Returns:
-            轴承故障检测结果
+            - 频谱可用：故障特征检测结果
+            - 频谱不可用（采样率未知）：'diagnosis' 明确说明判定已跳过，不做假判断
+            - 无数据：None
         """
         spectrum = self.get_spectrum(device_id)
         if not spectrum:
             return None
+
+        if not spectrum.get('available', True):
+            # 没有可信频谱 → 不做轴承故障判定（避免基于假频率给出"正常/故障"结论）
+            logger.warning("轴承故障判定跳过（设备 %s）: %s", device_id, spectrum.get('reason'))
+            return {
+                'device_id': device_id,
+                'rpm': rpm,
+                'available': False,
+                'reason': spectrum.get('reason'),
+                'bearing_faults': {},
+                'fault_count': 0,
+                'diagnosis': '频谱不可用（采样率未知），轴承故障判定已跳过',
+                'updated_at': datetime.now().isoformat(),
+            }
 
         # 转速频率（Hz）
         shaft_freq = rpm / 60.0
