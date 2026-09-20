@@ -49,14 +49,26 @@
     font-weight: var(--weight-semibold);
 }
 
-/* ========== 主布局 ========== */
+/* ========== 主布局 ==========
+ * 高度不再用 calc(100vh - 44px) 硬减顶栏：dashboard.html 之上还有 base.html 的
+ * 导航栏/面包屑、之下还有页脚，硬算会让 .main 超出视口，导致设备区被挤成 0 高、
+ * 卡片"看不见"。现在由 dashboard.js 量出真实可用高度写入 --dash-main-h，
+ * 并在 js 尚未执行时用 dvh 兜底；设备行固定为可伸缩行并内部滚动，页面只有一层滚动条。 */
 .main {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr 1fr;
-    grid-template-rows: auto 1fr auto;
+    /* 行：KPI / 设备区(可伸缩，不塌成 0) / 分页 / 趋势 / 状态栏 */
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto;
     gap: var(--space-2);
     padding: var(--space-2);
-    height: calc(100vh - 44px);
+    height: var(--dash-main-h, calc(100dvh - 210px));
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* 页面锁定视口高度后，滚动只发生在设备区/报警列表内部，避免"页面 + 网格"两层滚动 */
+body.dashboard-page {
+    overflow: hidden;
 }
 
 /* ========== KPI 卡片行 ========== */
@@ -72,7 +84,7 @@
     border: 1px solid var(--border-base);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-sm);
-    padding: var(--space-3);
+    padding: var(--space-2) var(--space-3);
     position: relative;
     overflow: hidden;
 }
@@ -149,7 +161,7 @@
     vector-effect: non-scaling-stroke;
 }
 
-/* ========== 设备卡片网格（自适应列数） ========== */
+/* ========== 设备卡片网格（自适应列数，网格内部滚动一层） ========== */
 .device-grid {
     grid-column: 1 / 4;
     display: grid;
@@ -157,6 +169,8 @@
     gap: var(--space-2);
     align-content: start;
     overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
     padding-right: var(--space-1);
 }
 
@@ -173,8 +187,11 @@
     padding: var(--space-3);
     display: flex;
     gap: var(--space-3);
-    align-items: center;
+    align-items: flex-start;
     cursor: pointer;
+    min-width: 0;
+    /* 明确不裁切：卡片内容（量表条/趋势/展开点位）不得被整块裁掉 */
+    overflow: visible;
     transition: background var(--duration-fast) var(--ease-out),
                 border-color var(--duration-fast) var(--ease-out);
 }
@@ -184,10 +201,16 @@
     border-color: var(--border-strong);
 }
 
+/* 告警设备：左边框加粗提示 + 标签（不做闪烁，不发光） */
+.dev-card--alarm {
+    border-color: var(--color-danger);
+}
+
 /* 设备状态色条（左侧扫描锚点，颜色与 .tag/.status-dot 一致） */
 .dev-status {
     width: 5px;
     min-height: 40px;
+    align-self: stretch;
     border-radius: var(--radius-pill);
     background: var(--color-offline);
     flex-shrink: 0;
@@ -268,6 +291,7 @@
     text-overflow: ellipsis;
 }
 
+/* 第二行：协议 · host:port · 点位数 */
 .dev-meta {
     font-size: var(--font-xs);
     color: var(--text-secondary);
@@ -277,28 +301,211 @@
     text-overflow: ellipsis;
 }
 
+.dev-meta__proto {
+    color: var(--text-muted);
+    font-weight: var(--weight-medium);
+}
+
+.dev-meta__points {
+    color: var(--text-muted);
+}
+
 .dev-host {
     color: var(--color-info);
     font-family: var(--font-mono);
     font-weight: var(--weight-medium);
 }
 
+/* 第三行：关键值（2 个）＝标签 + 大号等宽值 + 单位 + 质量点 + 量表条 + 迷你趋势 */
 .dev-values {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-3);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
     margin-top: var(--space-2);
 }
 
 .dev-val {
+    min-width: 0;
     font-size: var(--font-xs);
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+}
+
+.dev-val--none {
+    grid-column: 1 / -1;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+}
+
+.dev-val__label {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dev-val__row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-1);
+    min-width: 0;
+    overflow: hidden;
+}
+
+.dev-val__meters {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+    min-height: 14px;
+}
+
+.dev-val .num {
+    color: var(--text-primary);
+    font-weight: var(--weight-semibold);
+    /* 关键值用大号等宽数字，刷新时不抖动 */
+    font-size: var(--font-xl);
+    line-height: var(--leading-tight);
     white-space: nowrap;
 }
 
-.dev-val .label { color: var(--text-muted); }
-.dev-val .num   { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.dev-val .unit {
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    white-space: nowrap;
+}
+
+/* 量表条：有真实量程用真实量程；只有报警阈值时画"相对阈值位置"（阈值刻度固定在 50%，
+ * 明确不是量程）；两者都没有则不画。颜色全部取设计令牌。 */
+.point-gauge {
+    position: relative;
+    display: inline-block;
+    width: 56px;
+    height: 5px;
+    flex: none;
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+    overflow: hidden;
+}
+
+.point-gauge__fill {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--color-brand);
+    border-radius: var(--radius-pill);
+}
+
+.point-gauge__tick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--border-strong);
+}
+
+.point-gauge--warn .point-gauge__fill { background: var(--color-warning); }
+.point-gauge--alarm .point-gauge__fill { background: var(--color-danger); }
+
+/* 迷你 trend：内存样本自绘 SVG，无新依赖 */
+.dev-spark {
+    display: inline-block;
+    width: 42px;
+    height: 14px;
+    flex: none;
+}
+
+.dev-spark svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.dev-spark polyline {
+    fill: none;
+    stroke: var(--chart-2);
+    stroke-width: 1.2;
+    vector-effect: non-scaling-stroke;
+}
+
+/* 告警标记（置顶设备） */
+.dev-alarm-flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-xs);
+    font-weight: var(--weight-semibold);
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+    white-space: nowrap;
+    flex: none;
+}
+
+/* 就地展开：该设备全部点位（地址/主题 + 值 + 单位 + 质量点） */
+.dev-points {
+    margin-top: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(146px, 1fr));
+    gap: var(--space-1) var(--space-3);
+}
+
+.dev-point {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-1);
+    min-width: 0;
+    font-size: var(--font-xs);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+.dev-point__name {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dev-point__val {
+    color: var(--text-primary);
+    font-weight: var(--weight-semibold);
+    white-space: nowrap;
+}
+
+.dev-point__unit {
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.dev-point__addr {
+    color: var(--text-disabled);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 90px;
+}
+
+/* 卡片右侧：启停按钮 + 展开指示 */
+.dev-card__side {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-1);
+    flex: none;
+}
+
+.dev-expand {
+    font-size: var(--font-xs);
+    color: var(--text-disabled);
+    line-height: 1;
+}
 
 /* OPC UA 数据质量指示点（颜色由 dashboard.js 按 quality 阈值写入令牌值） */
 .quality-dot {
@@ -310,7 +517,40 @@
     vertical-align: middle;
 }
 
-/* ========== 空数据态 ========== */
+/* ========== 加载中骨架 / 空态 / 失败态（三者样式可区分） ========== */
+.dev-card--skeleton {
+    cursor: default;
+    pointer-events: none;
+}
+
+.dev-card--skeleton:hover {
+    background: var(--bg-surface);
+    border-color: var(--border-base);
+}
+
+.sk-line {
+    height: 10px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-subtle);
+}
+
+.sk-line--name  { width: 55%; }
+.sk-line--meta  { width: 35%; margin-top: var(--space-2); }
+.sk-line--value { width: 78%; height: 18px; margin-top: var(--space-3); }
+
+.grid-loading-note {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-1);
+    margin: 0;
+    padding: var(--space-1) 0;
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+}
+
 .empty-state {
     grid-column: 1 / -1;
     display: flex;
@@ -327,6 +567,42 @@
 .empty-state i {
     font-size: var(--font-xl);
     color: var(--text-disabled);
+}
+
+/* 失败态：与空态区分——图标/标题用告警色，并给出原因与重试入口 */
+.empty-state--error i {
+    color: var(--color-danger);
+}
+
+.empty-state__title {
+    color: var(--text-primary);
+    font-weight: var(--weight-semibold);
+}
+
+.empty-state__hint {
+    color: var(--text-secondary);
+    font-size: var(--font-xs);
+    max-width: 420px;
+    word-break: break-all;
+}
+
+.empty-state__retry {
+    margin-top: var(--space-2);
+    padding: var(--space-1) var(--space-4);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: var(--font-sm);
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out),
+                color var(--duration-fast) var(--ease-out);
+}
+
+.empty-state__retry:hover {
+    background: var(--color-brand);
+    border-color: var(--color-brand);
+    color: var(--text-inverse);
 }
 
 /* ========== 设备分页控件 ========== */
@@ -426,6 +702,7 @@
 .alarm-list {
     flex: 1;
     overflow-y: auto;
+    min-height: 0;
     padding: var(--space-1);
 }
 
@@ -568,7 +845,9 @@
     padding: var(--space-2) var(--space-3);
     display: flex;
     flex-direction: column;
-    min-height: 200px;
+    /* 趋势区高度可压缩，优先把可视空间留给设备区（设备卡才是巡检主视图） */
+    height: clamp(140px, 22dvh, 210px);
+    min-height: 0;
 }
 
 .trend-header {
@@ -621,7 +900,7 @@
 .trend-body {
     position: relative;
     flex: 1;
-    min-height: 160px;
+    min-height: 0;
 }
 
 #trend-chart {
@@ -671,3 +950,20 @@
 }
 
 .statusbar-link:hover { text-decoration: underline; }
+
+/* ========== 窄高窗口降级：优先保证设备卡可见 ==========
+ * 视口不够高时依次压缩趋势区、报警面板，设备区始终保留可滚动的高度，
+ * 避免出现"设备区高度被挤成 0、卡片整块看不见"的情况。 */
+@media (max-height: 760px) {
+    .trend-area { height: clamp(120px, 18dvh, 160px); }
+    .kpi-sub { margin-top: 0; }
+}
+
+@media (max-height: 640px) {
+    /* 趋势区与 KPI 进度条在该高度下已无阅读价值，让位给设备卡 */
+    .trend-area { display: none; }
+    .kpi .kpi-bar { display: none; }
+    .alarm-panel { display: none; }
+    .device-grid { grid-column: 1 / -1; }
+}
+

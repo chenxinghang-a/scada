@@ -62,12 +62,19 @@
         </div>
     </div>
 
-    <!-- 设备卡片网格 -->
-    <div class="device-grid" id="device-grid">
-        <div class="empty-state">
-            <i class="bi bi-hdd-rack"></i>
-            <span>正在加载设备…</span>
+    <!-- 设备卡片网格：首次进入显示骨架；加载失败显示原因+重试；确实无设备显示空态（三态可分辨） -->
+    <div class="device-grid" id="device-grid" aria-busy="true">
+        {% for _ in range(4) %}
+        <div class="dev-card dev-card--skeleton" aria-hidden="true">
+            <div class="dev-status"></div>
+            <div class="dev-info">
+                <div class="sk-line sk-line--name"></div>
+                <div class="sk-line sk-line--meta"></div>
+                <div class="sk-line sk-line--value"></div>
+            </div>
         </div>
+        {% endfor %}
+        <p class="grid-loading-note"><i class="bi bi-hourglass-split"></i> 正在加载设备…</p>
     </div>
 
     <!-- 报警面板 -->

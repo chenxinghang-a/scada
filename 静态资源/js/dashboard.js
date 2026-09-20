@@ -12,6 +12,20 @@ const lastDeviceValues = {}; // {"device_id:register_name": "formatted_value"}
 const lastDeviceQuality = {}; // {"device_id:register_name": quality_code}
 const MAX_CHART_POINTS = 200;
 
+// ========== 设备卡增强所需状态（全部只在内存，5s 轮询驱动） ==========
+// 点位来源顺序：Modbus → OPC UA → MQTT → REST（同一设备可同时存在多种）
+const POINT_SOURCES = ['registers', 'nodes', 'topics', 'endpoints'];
+const SERIES_MAX_POINTS = 20;   // 每点位保留最近 20 个样本（5s 轮询 ≈ 100s 趋势）
+const SERIES_MAX_KEYS = 400;    // series 键上限，防内存无界增长
+const deviceSeries = {};        // {"device_id:register_name": [数值…]} 迷你趋势样本
+const alarmRuleIndex = {};      // {"device_id:register_name": {threshold, condition, level}}
+const alarmsByDevice = {};      // {device_id: {count, level}} 由活动报警列表重建
+let alarmRulesLoaded = false;   // 报警阈值/量程只在首次拉取一次
+let expandedDeviceId = null;    // 就地展开全部点位的设备（同时只展开一个）
+let gridErrorMsg = '';          // 设备区加载失败原因
+let lastApiError = '';          // 最近一次接口错误（用于区分"加载失败"与"确实无设备"）
+
+
 // ========== 分页（100+设备场景） ==========
 const PAGE_SIZE = 50;  // 100台设备以内不需要分页
 let currentPage = 1;
@@ -60,9 +74,9 @@ function pushKpiSample(key, value) {
     renderSparkline(document.getElementById('kpi-rate-spark'), arr);
 }
 
-function renderSparkline(el, values) {
-    if (!el) return;
-    if (!values || values.length < 2) { el.innerHTML = ''; return; }
+// 迷你折线（内联 SVG）：只在样本 ≥2 时出图，避免画一条无意义的直线
+function sparklineMarkup(values) {
+    if (!values || values.length < 2) return '';
     const W = 100, H = 22, PAD = 2;
     const min = Math.min(...values);
     const max = Math.max(...values);
@@ -73,13 +87,178 @@ function renderSparkline(el, values) {
         const y = (H - PAD - ((v - min) / span) * (H - PAD * 2)).toFixed(2);
         return x + ',' + y;
     }).join(' ');
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${points}"></polyline></svg>`;
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${points}"></polyline></svg>`;
 }
+
+function renderSparkline(el, values) {
+    if (!el) return;
+    el.innerHTML = values && values.length >= 2 ? sparklineMarkup(values) : '';
+}
+
+// ========== 点位归一（修"设备卡只剩名字"的核心） ==========
+// 30 台设备里 22 台是 Modbus（点位在 registers），另外 8 台（MQTT/OPC UA/REST）的
+// 点位分别在 topics / nodes / endpoints，registers 为空数组。
+// 后端 /api/system/status?brief=1 已把四者统一成 [{name, unit}]，
+// 这里仍兼容完整配置的原始字段（address/topic/node_id/path），避免换接口后再次失明。
+function pointDisplayName(p) {
+    if (!p || typeof p !== 'object') return '';
+    const raw = p.name ?? p.description ?? p.address ?? p.topic ?? p.node_id ?? p.path ?? '';
+    return String(raw).trim();
+}
+
+function pointAddress(p) {
+    if (!p || typeof p !== 'object') return '';
+    const raw = p.address ?? p.topic ?? p.node_id ?? p.path ?? p.endpoint ?? '';
+    return raw == null ? '' : String(raw);
+}
+
+function pointUnit(p) {
+    return p && p.unit ? String(p.unit) : '';
+}
+
+// registers → nodes → topics → endpoints 合并去重，每项至少要有可显示的名字。
+// 归一化后仍保留原始字段（min/max/scale 等），供量表条判断真实量程。
+function devicePoints(d) {
+    const out = [];
+    const seen = Object.create(null);
+    if (!d) return out;
+    const sources = Array.isArray(POINT_SOURCES) ? POINT_SOURCES : [];
+    sources.forEach(src => {
+        const list = d[src];
+        if (!Array.isArray(list)) return;
+        list.forEach(p => {
+            const name = pointDisplayName(p);
+            if (!name) return;
+            const key = name.toLowerCase();
+            if (seen[key]) return;      // 同名点位只保留靠前来源（Modbus 优先）
+            seen[key] = true;
+            out.push(Object.assign({}, (p && typeof p === 'object') ? p : {}, {
+                name,
+                address: pointAddress(p),
+                unit: pointUnit(p),
+                source: src,
+            }));
+        });
+    });
+    return out;
+}
+
+// ========== 数值 / 迷你趋势样本 ==========
+function toNumber(v) {
+    if (v === null || v === undefined || v === '') return null;
+    const n = typeof v === 'number' ? v : parseFloat(v);
+    return isFinite(n) ? n : null;
+}
+
+// 关键值格式化：全是数值就统一 1 位小数（等宽数字下不会左右跳）
+function formatMeasure(v) {
+    const n = toNumber(v);
+    return n === null ? (v === null || v === undefined ? '--' : String(v)) : n.toFixed(1);
+}
+
+function pushDeviceSample(deviceId, registerName, value) {
+    if (!deviceId || !registerName) return;
+    const n = toNumber(value);
+    if (n === null) return;
+    const key = `${deviceId}:${registerName}`;
+    let arr = deviceSeries[key];
+    if (!arr) {
+        arr = deviceSeries[key] = [];
+        const keys = Object.keys(deviceSeries);
+        if (keys.length > SERIES_MAX_KEYS) {   // 防内存无界增长
+            keys.slice(0, keys.length - SERIES_MAX_KEYS).forEach(k => delete deviceSeries[k]);
+        }
+    }
+    arr.push(n);
+    if (arr.length > SERIES_MAX_POINTS) arr.shift();
+}
+
+// 量测条用量：优先取样本末值（与 sparkline 同源），退回 lastDeviceValues 的显示值
+function lastNumericValue(deviceId, registerName) {
+    const arr = deviceSeries[`${deviceId}:${registerName}`];
+    if (arr && arr.length) return arr[arr.length - 1];
+    return toNumber(lastDeviceValues[`${deviceId}:${registerName}`]);
+}
+
+// ========== 量表条：真实量程 > 相对阈值位置 > 只有值与单位 ==========
+function pointRange(p) {
+    const min = toNumber(p && (p.min ?? p.min_value ?? p.range_min));
+    const max = toNumber(p && (p.max ?? p.max_value ?? p.range_max));
+    return (min !== null && max !== null && max > min) ? { min, max } : null;
+}
+
+function pointThreshold(deviceId, registerName) {
+    const rule = alarmRuleIndex[`${deviceId}:${registerName}`];
+    if (!rule) return null;
+    const thr = toNumber(rule.threshold);
+    if (thr === null || thr === 0) return null;   // 0 阈值无相对刻度意义，不画
+    return { threshold: thr, condition: rule.condition || 'greater_than', level: rule.level || 'warning' };
+}
+
+// 关键值旁边的量表条。不造量程：
+//   有真实 min/max → 用真实量程填充；
+//   只有报警阈值 → 画"相对阈值位置"（阈值刻度固定 50%，明确标注非量程）；
+//   都没有 → 返回空字符串，只显示值与单位。
+function pointGaugeMarkup(deviceId, p) {
+    const cacheKey = `${deviceId}:${p.name}`;
+    const shown = lastDeviceValues[cacheKey];
+    const v = lastNumericValue(deviceId, p.name);
+    if (v === null) return '';               // 尚无数据不画条，避免误导
+    const unit = p.unit ? escapeHtml(p.unit) : '';
+
+    const range = pointRange(p);
+    if (range) {
+        const ratio = Math.max(0, Math.min(1, (v - range.min) / (range.max - range.min)));
+        const text = `量程 ${range.min}–${range.max}${unit ? ' ' + unit : ''}`;
+        return `<span class="point-gauge" title="${escapeHtml(text)}"><span class="point-gauge__fill" style="width:${(ratio * 100).toFixed(1)}%"></span></span>`;
+    }
+
+    const thr = pointThreshold(deviceId, p.name);
+    if (thr) {
+        const span = Math.abs(thr.threshold) * 2;   // 阈值落在 50% 处
+        const ratio = Math.max(0, Math.min(1, v / span));
+        const violated = thr.condition === 'less_than' ? v < thr.threshold : v > thr.threshold;
+        const near = !violated && Math.abs(v - thr.threshold) / Math.abs(thr.threshold) <= 0.1;
+        const mod = violated ? ' point-gauge--alarm' : (near ? ' point-gauge--warn' : '');
+        const condText = thr.condition === 'less_than' ? '低于' : '超过';
+        const text = `相对阈值位置：${condText} ${thr.threshold}${unit ? ' ' + unit : ''} 报警（刻度 50% 为阈值，非量程）当前 ${shown || ''}`;
+        return `<span class="point-gauge${mod}" title="${escapeHtml(text)}"><span class="point-gauge__fill" style="width:${(ratio * 100).toFixed(1)}%"></span><span class="point-gauge__tick" style="left:50%"></span></span>`;
+    }
+
+    return '';
+}
+
+// 报警阈值索引（GET /api/alarm-rules 返回 {rules:[{device_id, register_name, threshold, condition, level}]}）
+async function loadAlarmRules() {
+    if (alarmRulesLoaded) return;
+    alarmRulesLoaded = true;
+    const data = await apiFetch('/alarm-rules');
+    if (!data || !Array.isArray(data.rules)) { alarmRulesLoaded = false; return; }
+    data.rules.forEach(r => {
+        if (!r || !r.device_id || !r.register_name) return;
+        if (r.enabled === false) return;
+        alarmRuleIndex[`${r.device_id}:${r.register_name}`] = {
+            threshold: r.threshold, condition: r.condition, level: r.level
+        };
+    });
+    // 阈值到位后立即补上量表条，不必等下一轮询（此时还没有设备就不重绘，避免闪出空态）
+    if (allDevices.length) renderCurrentPage();
+}
+
 
 // ========== 初始化 ==========
 document.addEventListener('DOMContentLoaded', () => {
+    // 仪表盘页面锁定视口：滚动只发生在设备区/报警列表内部（只有一层滚动条）
+    document.body.classList.add('dashboard-page');
+    syncMainHeight();
+    window.addEventListener('resize', syncMainHeight);
+    if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(syncMainHeight).observe(document.body);
+    }
+
     initClock();
     initTrendChart();
+    loadAlarmRules();
     loadData();
     setInterval(loadData, 5000);  // 30台设备时5秒轮询足够
 
@@ -89,6 +268,22 @@ document.addEventListener('DOMContentLoaded', () => {
         setText('status-user', u.display_name || u.username || 'operator');
     } catch(e) {}
 });
+
+// 量出 .main 真实可用高度（视口 - 上方导航/面包屑 - 页脚），写入 --dash-main-h。
+// 不再用 calc(100vh - 44px) 硬减一个顶栏高度。
+function syncMainHeight() {
+    const el = document.querySelector('.main');
+    if (!el) return;
+    const top = el.getBoundingClientRect().top + (window.scrollY || 0);
+    const footer = document.querySelector('.app-footer');
+    const footerH = footer ? footer.offsetHeight : 0;
+    const h = Math.max(0, Math.round(window.innerHeight - top - footerH - 8));
+    if (h <= 0) return;   // 量不到就不写死高度，交给 CSS 兜底
+    const cur = parseFloat(document.documentElement.style.getPropertyValue('--dash-main-h'));
+    if (isFinite(cur) && Math.abs(cur - h) < 1) return;   // 防 ResizeObserver 自激循环
+    document.documentElement.style.setProperty('--dash-main-h', h + 'px');
+}
+
 
 function initClock() {
     function tick() {
@@ -109,6 +304,7 @@ async function apiFetch(url) {
     } catch (e) {
         // 网络错误 → 不清token，不跳转
         console.error('Network error:', url, e);
+        lastApiError = `网络不可达（${url}）: ${e.message || e}`;
         return null;
     }
     if (r.status === 401) {
@@ -116,7 +312,11 @@ async function apiFetch(url) {
         window.location.href = '/login';
         return null;
     }
-    if (!r.ok) return null;
+    if (!r.ok) {
+        lastApiError = `接口 ${url} 返回 HTTP ${r.status}`;
+        return null;
+    }
+    lastApiError = '';
     return r.json();
 }
 
@@ -134,9 +334,20 @@ async function loadData() {
     try {
         const status = await apiFetch('/system/status?brief=1');
         if (gen !== loadGeneration) return;
-        if (!status) return;
+        if (!status) {
+            // 失败不再静默：首次失败给出原因+重试；已有卡片则保留旧数据并标注连接异常
+            if (!allDevices.length) {
+                gridErrorMsg = lastApiError || '设备状态接口无响应';
+                renderCurrentPage([]);
+            }
+            const dot = document.getElementById('status-dot');
+            if (dot) dot.className = 'status-dot status-dot--danger';
+            setText('status-text', '连接异常');
+            return;
+        }
         updateKPI(status);
         updateStatusBar(status);
+        gridErrorMsg = '';   // 本轮成功：清掉上一轮失败态，避免它继续压住正常渲染
 
         // 先获取实时数据填充缓存，再渲染网格（避免首次显示"--"）
         const data = await apiFetch('/data/realtime?limit=5000');
@@ -145,11 +356,19 @@ async function loadData() {
             data.data.forEach(item => {
                 if (item.device_id && item.register_name && item.value != null) {
                     const key = `${item.device_id}:${item.register_name}`;
-                    lastDeviceValues[key] = typeof item.value === 'number'
-                        ? item.value.toFixed(1) : String(item.value);
+                    lastDeviceValues[key] = formatMeasure(item.value);
+                    // 迷你趋势样本：只保留最近 SERIES_MAX_POINTS 点
+                    pushDeviceSample(item.device_id, item.register_name, item.value);
                 }
             });
             updateTrendChart(data.data);
+        }
+
+        // 先拿活动报警：设备卡据此置顶/打标（放在渲染之前，避免排序滞后一轮）
+        const alarms = await apiFetch('/alarms?limit=50');
+        if (gen !== loadGeneration) return;
+        if (alarms && alarms.alarms) {
+            updateAlarmPanel(alarms.alarms);
         }
 
         // 数据缓存就绪后，再渲染设备网格
@@ -163,20 +382,31 @@ async function loadData() {
                 window.socket.emit('subscribe', {device_id: id});
             });
         }
-
-        const alarms = await apiFetch('/alarms?limit=50');
-        if (gen !== loadGeneration) return;
-        if (alarms && alarms.alarms) {
-            updateAlarmPanel(alarms.alarms);
-        }
     } catch (e) {
         console.error('loadData:', e);
+        if (!allDevices.length) {
+            gridErrorMsg = '渲染异常: ' + (e.message || e);
+            renderCurrentPage([]);
+        }
         const dot = document.getElementById('status-dot');
         if (dot) dot.className = 'status-dot status-dot--danger';
         setText('status-text', '连接异常');
     } finally {
         loadDataInProgress = false;
     }
+}
+
+// 设备区重试：清掉失败态重新拉取
+function retryDeviceLoad() {
+    gridErrorMsg = '';
+    lastApiError = '';
+    const grid = document.getElementById('device-grid');
+    if (grid) {
+        grid.innerHTML = skeletonCardsHtml();
+        grid.setAttribute('aria-busy', 'true');
+    }
+    loadDataInProgress = false;
+    loadData();
 }
 
 // ========== KPI 更新 ==========
@@ -238,7 +468,7 @@ function updateKPI(stats) {
     }
 }
 
-// ========== 设备卡片网格（简化版：每次轮询全量重建） ==========
+// ========== 设备卡片网格（每次轮询全量重建） ==========
 function updateDeviceGrid(stats) {
     if (!stats || !stats.devices) {
         allDevices = [];
@@ -259,25 +489,57 @@ function updateDeviceGrid(stats) {
     // 直接渲染，不做快照比较
     renderCurrentPage(devs);
 
-    // 填充设备选择下拉框（只绑定一次，避免轮询重复挂监听）
+    refreshTrendSelect(devs);
+}
+
+// 有活动报警/故障的设备置顶（同档内保持原顺序，避免设备位置乱跳）
+function deviceSortRank(d) {
+    if (!d) return 1;
+    const id = d.device_id || d.id;
+    return (alarmsByDevice[id] || d.status === 'warning' || d.status === 'fault') ? 0 : 1;
+}
+
+// 设备下拉框：选项变化时才重建，监听只绑定一次
+function refreshTrendSelect(devs) {
     const select = document.getElementById('trend-device-select');
-    if (select && !trendSelectBound) {
+    if (!select) return;
+    const ids = (devs || []).map(d => d.device_id || d.id);
+    const signature = ids.join('|');
+    if (select.dataset.signature !== signature) {
         select.innerHTML = devs.length
             ? devs.map(d => {
                 const id = d.device_id || d.id;
-                return `<option value="${escapeHtml(id)}" ${id === selectedDeviceId ? 'selected' : ''}>${escapeHtml(d.name || id)}</option>`;
+                return `<option value="${escapeHtml(id)}">${escapeHtml(d.name || id)}</option>`;
             }).join('')
             : '<option value="">暂无设备</option>';
-        select.addEventListener('change', function() {
-            selectedDeviceId = this.value;
-            Object.keys(dataBuffers).forEach(k => delete dataBuffers[k]);
-            if (trendChart) trendChart.clear();
-        });
-        trendSelectBound = true;
-        if (!selectedDeviceId && devs.length > 0) {
-            selectedDeviceId = devs[0].device_id || devs[0].id;
+        select.dataset.signature = signature;
+        if (!trendSelectBound) {
+            select.addEventListener('change', function() {
+                selectedDeviceId = this.value;
+                Object.keys(dataBuffers).forEach(k => delete dataBuffers[k]);
+                if (trendChart) trendChart.clear();
+            });
+            trendSelectBound = true;
         }
     }
+    if (!selectedDeviceId && ids.length > 0) selectedDeviceId = ids[0];
+    if (selectedDeviceId && ids.indexOf(selectedDeviceId) >= 0) select.value = selectedDeviceId;
+}
+
+// 加载中骨架（与 dashboard.html 首屏骨架保持一致）
+function skeletonCardsHtml() {
+    let cards = '';
+    for (let i = 0; i < 4; i++) {
+        cards += `<div class="dev-card dev-card--skeleton" aria-hidden="true">
+            <div class="dev-status"></div>
+            <div class="dev-info">
+                <div class="sk-line sk-line--name"></div>
+                <div class="sk-line sk-line--meta"></div>
+                <div class="sk-line sk-line--value"></div>
+            </div>
+        </div>`;
+    }
+    return cards + '<p class="grid-loading-note"><i class="bi bi-hourglass-split"></i> 正在加载设备…</p>';
 }
 
 // 获取当前页设备
@@ -286,51 +548,133 @@ function getPageDevices() {
     return allDevices.slice(start, start + PAGE_SIZE);
 }
 
-// 构建设备卡片HTML（状态 = .tag--* + .status-dot--*，数值等宽字体）
+// 设备状态：success(运行中) / info(已停止) / warning·danger(告警) / offline(离线)
+function deviceStateInfo(d) {
+    const id = d.device_id || d.id;
+    const online = !!d.connected;
+    const stopped = !!d.stopped;
+    const alarm = alarmsByDevice[id];
+    if (online && !stopped && alarm) {
+        return { mod: alarm.level === 'critical' ? 'danger' : 'warning', text: '告警', alarmed: true };
+    }
+    if (online && stopped) return { mod: 'info', text: '已停止', alarmed: false };
+    if (online && (d.status === 'warning' || d.status === 'fault')) {
+        return { mod: 'warning', text: '告警', alarmed: true };
+    }
+    if (online) return { mod: 'success', text: '运行中', alarmed: false };
+    return { mod: 'offline', text: '离线', alarmed: false };
+}
+
+// 关键值（第三行）：标签 / 大号等宽值+单位+质量点 / 量表条 + 迷你趋势
+function buildPointValue(deviceId, p) {
+    const cacheKey = `${deviceId}:${p.name}`;
+    const shown = lastDeviceValues[cacheKey] ?? '--';
+    const quality = lastDeviceQuality[cacheKey];
+    const qualityDot = quality != null
+        ? `<span class="quality-dot" style="background:${getQualityColor(quality)}" title="数据质量: ${getQualityLabel(quality)} (${quality})"></span>`
+        : '';
+    const gauge = pointGaugeMarkup(deviceId, p);
+    const spark = sparklineMarkup(deviceSeries[cacheKey]);
+    const meters = (gauge || spark)
+        ? `<div class="dev-val__meters">${gauge}${spark ? `<span class="dev-spark" title="最近 ${deviceSeries[cacheKey].length} 个采样点趋势">${spark}</span>` : ''}</div>`
+        : '';
+    const label = getShortLabel(p.name);
+    const labelTitle = p.address ? `${p.name} · ${p.address}` : p.name;
+    return `<div class="dev-val">
+        <div class="dev-val__label" title="${escapeHtml(labelTitle)}">${escapeHtml(label)}</div>
+        <div class="dev-val__row">
+            <span class="num" id="dv-${escapeHtml(deviceId)}-${escapeHtml(p.name)}">${escapeHtml(shown)}</span>
+            ${p.unit ? `<span class="unit">${escapeHtml(p.unit)}</span>` : ''}
+            ${qualityDot}
+        </div>
+        ${meters}
+    </div>`;
+}
+
+// 展开后的单条点位（含地址/主题，值用 dvx- 前缀避免与关键值重复 id）
+function buildPointRow(deviceId, p) {
+    const cacheKey = `${deviceId}:${p.name}`;
+    const shown = lastDeviceValues[cacheKey] ?? '--';
+    const quality = lastDeviceQuality[cacheKey];
+    const qualityDot = quality != null
+        ? `<span class="quality-dot" style="background:${getQualityColor(quality)}" title="数据质量: ${getQualityLabel(quality)} (${quality})"></span>`
+        : '';
+    const title = p.address ? `${p.name} · ${p.address}` : p.name;
+    return `<div class="dev-point" title="${escapeHtml(title)}">
+        <span class="dev-point__name">${escapeHtml(getShortLabel(p.name))}</span>
+        <span class="dev-point__val" id="dvx-${escapeHtml(deviceId)}-${escapeHtml(p.name)}">${escapeHtml(shown)}</span>
+        ${p.unit ? `<span class="dev-point__unit">${escapeHtml(p.unit)}</span>` : ''}
+        ${p.address ? `<span class="dev-point__addr">${escapeHtml(p.address)}</span>` : ''}
+        ${qualityDot}
+    </div>`;
+}
+
+// 构建设备卡片HTML
+//   主行：设备名 + 状态标签（+ 告警标记/区域）
+//   次行：协议 · host[:port] · 点位数
+//   三行：关键值（大号等宽）+ 单位 + 质量点 + 量表条 + 迷你趋势
+//   展开：该设备全部点位（就地展开，不跳页）
 function buildDeviceCard(d) {
     const id = d.device_id || d.id;
     const name = d.name || id;
-    const online = d.connected;
-    const stopped = d.stopped;
-    const hasAlarm = d.status === 'fault' || d.status === 'warning';
     const category = d.device_category || 'sensor';
+    const state = deviceStateInfo(d);
+    const points = devicePoints(d);
+    const keyPoints = points.slice(0, 2);
+    const expanded = expandedDeviceId === id;
+    const alarm = alarmsByDevice[id];
 
-    // 状态映射：success(运行中) / info(已停止) / warning(告警) / offline(离线)
-    let stateMod = 'offline';
-    let statusText = '离线';
-    if (online && stopped) { stateMod = 'info'; statusText = '已停止'; }
-    else if (online && hasAlarm) { stateMod = 'warning'; statusText = '告警'; }
-    else if (online) { stateMod = 'success'; statusText = '运行中'; }
+    const valuesHtml = keyPoints.length
+        ? keyPoints.map(p => buildPointValue(id, p)).join('')
+        : `<div class="dev-val dev-val--none">无点位配置（registers/nodes/topics/endpoints 均为空）</div>`;
 
-    const regs = d.registers || [];
-    const valStr = regs.slice(0, 2).map(r => {
-        const label = getShortLabel(r.name);
-        const cacheKey = `${id}:${r.name}`;
-        const cached = lastDeviceValues[cacheKey] ?? '--';
-        const quality = lastDeviceQuality[cacheKey];
-        const qualityDot = quality != null
-            ? `<span class="quality-dot" style="background:${getQualityColor(quality)}" title="数据质量: ${getQualityLabel(quality)} (${quality})"></span>`
-            : '';
-        return `<span class="dev-val"><span class="label">${escapeHtml(label)}</span> <span class="num" id="dv-${escapeHtml(id)}-${escapeHtml(r.name)}">${escapeHtml(cached)}</span>${qualityDot}</span>`;
-    }).join('');
-
-    const ctrlBtn = category === 'mechanical' && online
-        ? `<button class="dev-ctrl-btn ${stopped ? 'start' : 'stop'}" onclick="event.stopPropagation();toggleDevice('${escapeHtml(id)}',${!stopped})" title="${stopped ? '启动' : '停止'}">${stopped ? '▶' : '■'}</button>`
+    const more = points.length > keyPoints.length
+        ? `<span class="dev-meta__points"> · 展开 ${points.length} 点</span>`
         : '';
 
-    return `<div class="dev-card" data-device-id="${escapeHtml(id)}" onclick="selectDevice('${escapeHtml(id)}')" title="${escapeHtml(name)}">
-        <div class="dev-status dev-status--${stateMod}"></div>
+    const pointsHtml = expanded
+        ? `<div class="dev-points">${points.map(p => buildPointRow(id, p)).join('')}</div>`
+        : '';
+
+    const alarmFlag = alarm
+        ? `<span class="dev-alarm-flag" title="活动报警 ${alarm.count} 条（${alarm.level === 'critical' ? '紧急' : '警告'}）"><i class="bi bi-exclamation-triangle-fill"></i>${alarm.count}</span>`
+        : '';
+
+    const ctrlBtn = category === 'mechanical' && d.connected
+        ? `<button class="dev-ctrl-btn ${d.stopped ? 'start' : 'stop'}" onclick="event.stopPropagation();toggleDevice('${escapeHtml(id)}',${!d.stopped})" title="${d.stopped ? '启动' : '停止'}">${d.stopped ? '▶' : '■'}</button>`
+        : '';
+
+    const portText = d.port ? ':' + escapeHtml(String(d.port)) : '';
+    const meta = `<span class="dev-meta__proto">${escapeHtml(d.protocol || 'modbus_tcp')}</span> · <span class="dev-host">${escapeHtml(d.host || '--')}${portText}</span> · <span class="dev-meta__points">${points.length} 点</span>${more}`;
+
+    return `<div class="dev-card${state.alarmed ? ' dev-card--alarm' : ''}" data-device-id="${escapeHtml(id)}"
+            onclick="toggleDeviceCard('${escapeHtml(id)}')" title="${escapeHtml(name)}${d.host ? ' · ' + escapeHtml(d.host) : ''}"
+            role="button" tabindex="0" aria-expanded="${expanded ? 'true' : 'false'}">
+        <div class="dev-status dev-status--${state.mod}"></div>
         <div class="dev-info">
             <div class="dev-name">
                 <span class="dev-name__text">${escapeHtml(name)}</span>
-                <span class="tag tag--${stateMod}"><span class="status-dot status-dot--${stateMod}"></span>${statusText}</span>
+                <span class="tag tag--${state.mod}"><span class="status-dot status-dot--${state.mod}"></span>${state.text}</span>
+                ${alarmFlag}
                 ${d.zone ? `<span class="dev-zone-tag">${escapeHtml(d.zone)}</span>` : ''}
             </div>
-            <div class="dev-meta">${escapeHtml(d.protocol || 'modbus_tcp')} · <span class="dev-host">${escapeHtml(d.host || '--')}</span></div>
-            <div class="dev-values">${valStr}</div>
+            <div class="dev-meta">${meta}</div>
+            <div class="dev-values">${valuesHtml}</div>
+            ${pointsHtml}
         </div>
-        ${ctrlBtn}
+        <div class="dev-card__side">
+            ${ctrlBtn}
+            <span class="dev-expand" aria-hidden="true">${expanded ? '▴' : '▾'}</span>
+        </div>
     </div>`;
+}
+
+// 就地展开/收起该设备全部点位（同时保留原有的"选中设备"行为，趋势图跟随）
+function toggleDeviceCard(id) {
+    // 已选中的设备不再重复 select，避免每次展开都把趋势缓存清空
+    if (selectedDeviceId !== id) selectDevice(id);
+    expandedDeviceId = (expandedDeviceId === id) ? null : id;
+    renderCurrentPage();
 }
 
 // 渲染当前页设备卡片（全量替换，确保host等字段始终显示）
@@ -340,8 +684,22 @@ function renderCurrentPage(devs) {
     const grid = document.getElementById('device-grid');
     if (!grid) return;
 
-    // 空数据 → 统一空提示
+    // 失败态：给出原因 + 重试入口（不再与"无设备"混为一谈）
+    if (gridErrorMsg && (!devs || devs.length === 0)) {
+        grid.setAttribute('aria-busy', 'false');
+        grid.innerHTML = `<div class="empty-state empty-state--error">
+            <i class="bi bi-exclamation-triangle"></i>
+            <span class="empty-state__title">设备列表加载失败</span>
+            <span class="empty-state__hint">原因：${escapeHtml(gridErrorMsg)}</span>
+            <button class="empty-state__retry" onclick="retryDeviceLoad()">重试</button>
+        </div>`;
+        renderPagination(0, 1);
+        return;
+    }
+
+    // 空数据 → 统一空提示（接口正常但确实没有设备）
     if (!devs || devs.length === 0) {
+        grid.setAttribute('aria-busy', 'false');
         grid.innerHTML = `<div class="empty-state"><i class="bi bi-hdd-rack"></i><span>暂无设备（等待采集服务上报）</span></div>`;
         renderPagination(0, 1);
         return;
@@ -350,10 +708,14 @@ function renderCurrentPage(devs) {
     const totalPages = Math.ceil(devs.length / PAGE_SIZE);
     if (currentPage > totalPages) currentPage = totalPages || 1;
 
-    const start = (currentPage - 1) * PAGE_SIZE;
-    const pageDevs = devs.slice(start, start + PAGE_SIZE);
+    // 告警设备置顶（Array.sort 在现代引擎里稳定，同档保持原顺序）
+    const ordered = devs.slice().sort((a, b) => deviceSortRank(a) - deviceSortRank(b));
 
-    // 全量替换当前页卡片（同时清除首次加载占位符）
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const pageDevs = ordered.slice(start, start + PAGE_SIZE);
+
+    // 全量替换当前页卡片（同时清除首屏骨架）
+    grid.setAttribute('aria-busy', 'false');
     grid.innerHTML = pageDevs.map(d => buildDeviceCard(d)).join('');
 
     // 渲染分页控件
@@ -510,6 +872,17 @@ function createAlarmRow(info) {
 
 function updateAlarmPanel(alarms) {
     const list = document.getElementById('alarm-list');
+
+    // 重建"每设备活动报警"索引：设备卡据此置顶 + 打告警标记
+    Object.keys(alarmsByDevice).forEach(k => delete alarmsByDevice[k]);
+    (alarms || []).forEach(a => {
+        const did = a && a.device_id;
+        if (!did) return;
+        const cur = alarmsByDevice[did] || (alarmsByDevice[did] = { count: 0, level: 'warning' });
+        cur.count++;
+        if (a.alarm_level === 'critical') cur.level = 'critical';
+    });
+
     if (!list) return;
 
     if (!alarms || alarms.length === 0) {
@@ -557,6 +930,17 @@ document.addEventListener('click', function(e) {
         const register = e.target.dataset.register;
         ackAlarm(alarmId, deviceId, register);
     }
+});
+
+// 事件委托：设备卡键盘展开/收起（卡片是 role=button 的 div）
+document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+    const card = e.target.closest && e.target.closest('.dev-card');
+    if (!card || e.target !== card) return;
+    const id = card.dataset.deviceId;
+    if (!id) return;
+    e.preventDefault();
+    toggleDeviceCard(id);
 });
 
 // XSS 安全转义
@@ -609,14 +993,18 @@ function updateAlarmCountFromDOM() {
 }
 
 // 设备值更新（质量颜色取自设计令牌的质量阈值）
+// 关键值（dv-）与展开行（dvx-）共用同一份数据，避免出现"展开后值不动"
 function updateDeviceValue(deviceId, registerName, value, quality) {
-    const el = document.getElementById(`dv-${deviceId}-${registerName}`);
-    if (!el) return;
-    el.textContent = typeof value === 'number' ? value.toFixed(2) : value;
-    if (quality !== undefined && quality !== null) {
-        el.style.color = getQualityColor(quality);
-        el.title = `数据质量: ${getQualityLabel(quality)} (${quality})`;
-    }
+    const formatted = formatMeasure(value);
+    [`dv-${deviceId}-${registerName}`, `dvx-${deviceId}-${registerName}`].forEach(domId => {
+        const el = document.getElementById(domId);
+        if (!el) return;
+        el.textContent = formatted;
+        if (quality !== undefined && quality !== null) {
+            el.style.color = getQualityColor(quality);
+            el.title = `数据质量: ${getQualityLabel(quality)} (${quality})`;
+        }
+    });
 }
 
 function getAuthHeaders() {
@@ -821,19 +1209,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const val = info.value;
                 if (!devId || val == null) return;
                 const key = `${devId}:${regName}`;
-                const formatted = typeof val === 'number' ? val.toFixed(1) : String(val);
-                lastDeviceValues[key] = formatted;
-                const el = document.getElementById(`dv-${devId}-${regName}`);
-                if (el) {
-                    el.textContent = formatted;
-                    // OPC UA 数据质量指示（颜色取设计令牌）
-                    const quality = info.quality;
-                    if (quality != null) {
-                        lastDeviceQuality[key] = quality;
-                        el.style.color = getQualityColor(quality);
-                        el.title = `数据质量: ${getQualityLabel(quality)} (${quality})`;
-                    }
-                }
+                lastDeviceValues[key] = formatMeasure(val);
+                if (info.quality != null) lastDeviceQuality[key] = info.quality;
+                // 关键值与展开行统一由 updateDeviceValue 落地（含 OPC UA 数据质量颜色）
+                updateDeviceValue(devId, regName, val, info.quality);
             });
         });
         // 实时更新告警面板
@@ -895,6 +1274,7 @@ function getQualityLabel(quality) {
 }
 
 function getShortLabel(name) {
+    if (!name) return '';
     const map = {
         'boiler_temperature': '锅炉温度', 'boiler_pressure': '锅炉压力',
         'heat_exchanger_temperature': '换热器温度', 'flue_gas_temperature': '排烟温度',
@@ -905,14 +1285,72 @@ function getShortLabel(name) {
         'spray_pressure': '喷涂压力', 'oven_temperature': '烘干温度',
         'voltage_a': 'A相电压', 'current_a': 'A相电流',
         'active_power': '总有功', 'frequency': '频率',
+        // ---- MQTT 设备（topics） ----
+        'vibration_x': 'X轴振动', 'vibration_y': 'Y轴振动', 'vibration_z': 'Z轴振动',
+        'bearing_temperature': '轴承温度', 'dissolved_oxygen': '溶解氧',
+        'turbidity': '浊度', 'ph': 'pH值', 'water_temperature': '水温',
+        // ---- REST 设备（endpoints） ----
+        'ambient_temperature': '环境温度', 'system_pressure': '系统压力',
+        'production_count': '生产计数', 'line_status': '产线状态',
+        'oee': 'OEE', 'quality_rate': '合格率', 'defect_rate': '不良率',
+        'planned_quantity': '计划产量', 'actual_quantity': '实际产量',
+        // ---- OPC UA 设备（nodes） ----
+        'motor_speed': '电机转速', 'running_status': '运行状态',
+        'robot_status': '机器人状态', 'gripper_state': '夹爪状态',
+        'cycle_time': '节拍时间', 'alarm_code': '报警码',
+        'reactor_status': '反应釜状态', 'feed_valve_1': '进料阀1',
+        'feed_valve_2': '进料阀2', 'discharge_valve': '出料阀', 'cooling_valve': '冷却阀',
+        // ---- 数控/加工中心（REST） ----
+        'spindle_speed': '主轴转速', 'spindle_load': '主轴负载', 'feed_override': '进给倍率',
+        'program_number': '程序号', 'program_runtime': '运行时长', 'current_tool': '当前刀具',
+        'tool_life': '刀具寿命', 'part_count': '零件计数', 'machine_mode': '机床模式',
+        // ---- 通用 ----
         'temperature': '温度', 'pressure': '压力',
         'flow': '流量', 'level': '液位',
         'voltage': '电压', 'current': '电流', 'power': '功率',
     };
     if (map[name]) return map[name];
-    const lower = name.toLowerCase();
+
+    const lower = String(name).toLowerCase();
+
+    // 规则优先于子串匹配：规则带 ^/$ 锚点，比 includes 更精确。
+    // 非 Modbus 设备点位命名无固定词表（joint_1 / reactor1_temp / tc_reactor_1 …）。
+    // 注意 reactor1_pressure / reactor2_pressure 若走子串会都叫"压力"，无法区分。
+    const rules = [
+        [/^vibration_([xyz])$/, (m) => `${m[1].toUpperCase()}轴振动`],
+        [/^joint_(\d+)$/, (m) => `关节${m[1]}`],
+        [/^reactor(\d+)_(temp|temperature)$/, (m) => `反应釜${m[1]}温度`],
+        [/^reactor(\d+)_pressure$/, (m) => `反应釜${m[1]}压力`],
+        [/^reactor(\d+)_level$/, (m) => `反应釜${m[1]}液位`],
+        [/^reactor(\d+)_speed$/, (m) => `反应釜${m[1]}转速`],
+        [/^tc_reactor_(\d+)$/, (m) => `反应釜${m[1]}热电偶`],
+        [/^rtd_pipeline_(\d+)$/, (m) => `管线${m[1]}热电阻`],
+        [/^tc_exhaust_(\d+)$/, (m) => `排烟热电偶${m[1]}`],
+        [/_valve$|_valve_\d+$/, () => '阀门'],
+        [/_torque$|^torque_/, () => '扭矩'],
+        [/_count$|^part_count$/, () => '计数'],
+        [/_health$/, () => '健康度'],
+        [/_error_count$/, () => '通信错误'],
+        [/^pressure_|_pressure$/, () => '压力'],
+        [/_temperature$|_temp$/, () => '温度'],
+        [/_speed$/, () => '转速'],
+        [/_load$/, () => '负载'],
+        [/_level$/, () => '液位'],
+        [/_flow$|^flow_|^totalizer_/, () => '流量'],
+        [/_override$/, () => '倍率'],
+        [/_life$/, () => '寿命'],
+        [/_state$|_status$/, () => '状态'],
+    ];
+    for (const [re, fn] of rules) {
+        const m = lower.match(re);
+        if (m) return fn(m);
+    }
+
     for (const [k, v] of Object.entries(map)) {
         if (lower.includes(k)) return v;
     }
+
     return name.length > 6 ? name.slice(0, 6) : name;
 }
+
+
