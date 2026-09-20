@@ -16,6 +16,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
+# paths 是仓库根模块（与 core 同级），用别名 _paths 避免与局部变量冲突
+import paths as _paths
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +42,11 @@ class QueryAnalyzer:
             db_path: 数据库路径
             slow_query_threshold: 慢查询阈值（秒）
         """
-        self.db_path = db_path
+        # 绝对路径化：sqlite3.connect(self.db_path) 若收到相对路径，
+        # 结果取决于 CWD —— 从服务/计划任务启动时会静默连到**另一个空库**，
+        # EXPLAIN 拿到的是"表不存在"而调用方只看 returncode，看不出错。
+        # 与 存储层.database / 用户层.audit_logger 等保持同一口径。
+        self.db_path = str(_paths.resolve(db_path))
         self.slow_query_threshold = slow_query_threshold
         self._query_history: List[QueryStats] = []
         self._lock = threading.Lock()

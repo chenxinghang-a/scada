@@ -8,6 +8,7 @@ import threading
 import time
 import math
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from 采集层.data_collector import DataCollector, DataQualityAssessor, _has_keyword
@@ -541,3 +542,126 @@ class TestDataQualityAssessor:
             device_status='running'
         )
         assert q == DataQualityAssessor.GOOD
+
+
+# ============================================================
+# 路径解析回归（2026-09 审计 P2-5）
+# ============================================================
+
+class TestPersistDirPathResolution:
+    """``DiskBackedQueue`` 的持久化目录必须是绝对路径。
+
+    为什么值得单独立测试：``DEFAULT_PERSIST_DIR = 'data/queue'`` 是**相对**
+    字面量。它只在「CWD 恰好是仓库根」时才落到项目数据目录；从服务、计划
+    任务、PyInstaller 产物启动时会在启动目录下**另建一个 data/queue**，
+    于是待发数据分裂成两处 —— 重启后 ``pending_data.jsonl`` 看着是空的、
+    数据对不上，而日志里没有任何异常。这是典型的"静默错库"故障。
+
+    注意 ``SCADA_QUEUE_PERSIST_DIR`` 环境变量若已是绝对路径，
+    ``paths.resolve`` 走 passthrough，所以现有测试（传 tmp 目录）不受影响。
+    """
+
+    def test_default_persist_dir_is_absolute(self, monkeypatch, tmp_path):
+        """不传参 + 无环境变量时，落点必须在 BASE_DIR 下而非 CWD"""
+        import os
+        from 采集层.data_collector import DiskBackedQueue
+
+        monkeypatch.delenv('SCADA_QUEUE_PERSIST_DIR', raising=False)
+        # 把 BASE_DIR 指到 tmp，避免往真实项目 data/ 写探针文件
+        import paths
+        monkeypatch.setattr(paths, 'BASE_DIR', tmp_path)
+
+        q = DiskBackedQueue(maxsize=10)
+        assert q._persist_dir.is_absolute(), '持久化目录不是绝对路径'
+        assert q._persist_dir == tmp_path / 'data' / 'queue'
+
+    def test_persist_dir_independent_of_cwd(self, monkeypatch, tmp_path):
+        """切换 CWD 不会改变落点 —— 锁死"与 CWD 无关"这个契约"""
+        import os
+        import paths
+        from 采集层.data_collector import DiskBackedQueue
+
+        monkeypatch.delenv('SCADA_QUEUE_PERSIST_DIR', raising=False)
+        base = tmp_path / 'fake_root'
+        base.mkdir()
+        monkeypatch.setattr(paths, 'BASE_DIR', base)
+
+        old = os.getcwd()
+        elsewhere = tmp_path / 'elsewhere'
+        elsewhere.mkdir()
+        os.chdir(elsewhere)
+        try:
+            q = DiskBackedQueue(maxsize=10)
+            assert q._persist_dir == base / 'data' / 'queue'
+            # 关键断言：绝不能落到当前工作目录
+            assert not (elsewhere / 'data' / 'queue').exists(), (
+                '持久化目录被错误地建在了 CWD 下（CWD 依赖 bug 复现）'
+            )
+        finally:
+            os.chdir(old)
+
+    def test_explicit_absolute_persist_dir_is_honored(self, tmp_path):
+        """显式传绝对路径时必须原样使用（测试隔离依赖这一点）"""
+        from 采集层.data_collector import DiskBackedQueue
+
+        target = tmp_path / 'explicit'
+        q = DiskBackedQueue(maxsize=10, persist_dir=str(target))
+        assert q._persist_dir == target
+
+    def test_env_var_absolute_is_honored(self, monkeypatch, tmp_path):
+        """环境变量给绝对路径时不能被 BASE_DIR 拼接污染"""
+        from 采集层.data_collector import DiskBackedQueue
+
+        target = tmp_path / 'from_env'
+        monkeypatch.setenv('SCADA_QUEUE_PERSIST_DIR', str(target))
+        q = DiskBackedQueue(maxsize=10)
+        assert q._persist_dir == target
+
+    def test_pending_file_lives_under_persist_dir(self, monkeypatch, tmp_path):
+        """持久化文件路径必须由解析后的目录派生"""
+        import paths
+        from 采集层.data_collector import DiskBackedQueue
+
+        monkeypatch.delenv('SCADA_QUEUE_PERSIST_DIR', raising=False)
+        monkeypatch.setattr(paths, 'BASE_DIR', tmp_path)
+
+        q = DiskBackedQueue(maxsize=10)
+        assert q._persist_file.name == 'pending_data.jsonl'
+        assert q._persist_file.parent == q._persist_dir
+        assert q._persist_file.is_absolute()
+
+    def test_ctor_does_not_write_into_repo_data_dir(self, monkeypatch, tmp_path):
+        """构造 DiskBackedQueue 绝不能在仓库真实 data/queue 下落盘。
+
+        这是上面那个 106MB / 80 万行 ``pending_data.jsonl`` 事故的直接回归测试。
+        用 `paths.resolve` 之后默认落点是**仓库内**的 ``data/queue``（真实数据目录），
+        所以只要某个测试忘了设 ``SCADA_QUEUE_PERSIST_DIR``，就会往生产数据文件里
+        追加探针数据 —— 而且下一个测试 `_recover_from_disk()` 会把它读走并
+        ``unlink()``，导致一批**与队列无关的**测试集体飘红（数据完整性 / 灾备 /
+        批量缩容最先暴露），单跑每个用例却又都是绿的。
+
+        这里把 BASE_DIR 指到 tmp，然后断言仓库真实目录下没有新文件产生 ——
+        相当于把「路径解析必须尊重 BASE_DIR」和「测试不许污染生产数据」两件事
+        同时钉死。
+        """
+        import paths
+        from 采集层.data_collector import DiskBackedQueue
+
+        repo_queue = Path(paths.PROJECT_ROOT) / 'data' / 'queue'
+        real_probe = repo_queue / 'pending_data.jsonl'
+        size_before = real_probe.stat().st_size if real_probe.is_file() else None
+
+        monkeypatch.delenv('SCADA_QUEUE_PERSIST_DIR', raising=False)
+        monkeypatch.setattr(paths, 'BASE_DIR', tmp_path)
+
+        q = DiskBackedQueue(maxsize=10)
+        # 落点跟着 BASE_DIR 走，而不是跟着 PROJECT_ROOT 走
+        assert q._persist_dir == tmp_path / 'data' / 'queue'
+        assert repo_queue not in q._persist_dir.parents
+
+        # 真实生产文件的大小不能变（构造流程只 mkdir，不该写 probe）
+        size_after = real_probe.stat().st_size if real_probe.is_file() else None
+        assert size_after == size_before, (
+            f'构造队列时污染了仓库真实队列文件：'
+            f'{size_before} → {size_after} 字节'
+        )

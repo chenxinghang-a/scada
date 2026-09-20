@@ -17,6 +17,9 @@ from datetime import datetime, timedelta
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 
+# paths 是仓库根模块。用别名 _paths 避免与局部变量 / 参数名冲突。
+import paths as _paths
+
 logger = logging.getLogger(__name__)
 
 
@@ -171,7 +174,13 @@ class DiskBackedQueue:
             persist_dir = os.environ.get(
                 'SCADA_QUEUE_PERSIST_DIR', self.DEFAULT_PERSIST_DIR
             )
-        self._persist_dir = Path(persist_dir)
+        # 绝对路径化：默认值 'data/queue' 是相对路径，从服务 / 计划任务 /
+        # 冻结产物启动（CWD 不是项目根）时，会在启动目录下**悄悄另建一个
+        # data/queue**，于是"待发数据"分裂成两处 —— 表现为重启后
+        # pending_data.jsonl 莫名其妙为空、数据对不上，日志里毫无异常。
+        # 环境变量 SCADA_QUEUE_PERSIST_DIR 若已是绝对路径则原样返回
+        # （paths.resolve 对绝对路径是 passthrough），测试传 tmp 目录不受影响。
+        self._persist_dir = _paths.resolve(persist_dir)
         self._persist_dir.mkdir(parents=True, exist_ok=True)
         self._persist_file = self._persist_dir / 'pending_data.jsonl'
         self._lock = threading.Lock()
@@ -321,6 +330,21 @@ class DataCollector:
         self._pool = ThreadPoolExecutor(max_workers=20, thread_name_prefix="collector")
 
         # 数据队列（磁盘持久化，崩溃恢复）
+        #
+        # 这里**刻意不传 persist_dir**，让 DiskBackedQueue 走
+        # 「环境变量 SCADA_QUEUE_PERSIST_DIR → 默认 'data/queue'（经 paths.resolve
+        # 解析成仓库根下的绝对路径）」这条链。生产环境这条链是对的：
+        # 无论从哪个 CWD 启动，落点都是固定的数据目录。
+        #
+        # ⚠️ 对测试的影响（踩过一次，记在这免得再踩）：
+        # 凡是构造 DataCollector 的测试，**必须**由 autouse fixture
+        # `tests/conftest.py::isolate_queue_persistence` 把环境变量指向 tmp。
+        # 万一漏了，落点就是仓库真实的 `data/queue/pending_data.jsonl`：
+        #   - 构造时 `_recover_from_disk()` 若发现该文件非空，会 read + put_nowait，
+        #     然后 **unlink()** → 直接删掉生产数据文件
+        #   - put 数据后 `_persist_item()` 会往生产文件追加
+        # 症状是一批与队列无关的测试集体飘红且单跑变绿。
+        # conftest 里另有 `guard_repo_queue_persist_dir` 会话级哨兵兜底。
         self.data_queue = DiskBackedQueue(maxsize=200000)
 
         # 动态采集频率配置

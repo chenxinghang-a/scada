@@ -15,6 +15,10 @@ from typing import Any, Dict, List, Optional
 from contextlib import contextmanager
 from collections import defaultdict
 
+# paths 是仓库根模块（与 core 同级）。用别名 _paths 避免与局部变量、参数名冲突。
+# 部署布局（PyInstaller 产物 / 直接从仓库根启动）下它都在 sys.path 上。
+import paths as _paths
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,7 +72,13 @@ class EnhancedConnectionPool:
         health_check_interval: float = 60,
         liveness_probe_interval: float = 30,
     ):
-        self.db_path = db_path
+        # 解析为绝对路径：连接池会把该路径直接交给 sqlite3.connect()，
+        # 若保持相对路径，从服务/计划任务/冻结产物启动（CWD 非项目根）时
+        # 会**静默开出一个空的错误库** —— 查询全部命中不存在的表，
+        # 表现为"数据库莫名空了"，而日志里没有任何异常。
+        # 与 存储层.database.Database.__init__ / 用户层.audit_logger / timeseries.offline_buffer
+        # 保持同一口径（都用 paths.resolve）。
+        self.db_path = str(_paths.resolve(db_path))
         self.max_connections = max_connections
         self.min_connections = min_connections
         self.max_idle_time = max_idle_time

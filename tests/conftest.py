@@ -141,6 +141,89 @@ def restore_polluted_configs():
         print(f"\n[conftest] 已还原被测试写脏的配置文件: {', '.join(restored)}")
 
 
+def _local_service_running() -> bool:
+    """本机 SCADA 服务是否在运行（用于判定队列污染守卫是否适用）。
+
+    服务运行时会持续向 ``data/queue/pending_data.jsonl`` 写数据，此时守卫
+    「会话前后快照必须一致」的前提不成立 —— 文件是被**服务**写脏的，不是被
+    测试写脏的。若不区分，本地一边跑服务一边跑测试就会得到必然失败的假告警。
+    CI 环境没有服务，守卫照常生效。
+    """
+    try:
+        import json as _json
+        import socket as _socket
+
+        port = 5000
+        runtime = Path(PROJECT_ROOT) / "data" / "runtime.json"
+        if runtime.exists():
+            try:
+                port = int((_json.loads(runtime.read_text(encoding="utf-8")) or {}).get("port") or port)
+            except (ValueError, OSError, AttributeError):
+                pass
+        with _socket.socket() as s:
+            s.settimeout(0.3)
+            return s.connect_ex(("127.0.0.1", port)) == 0
+    except OSError:
+        return False
+
+
+@pytest.fixture(scope="session", autouse=True)
+def guard_repo_queue_persist_dir():
+    """兜底：绝不让任何测试写到**仓库内**的 `data/queue/`。
+
+    背景：`DiskBackedQueue` 现在用 `paths.resolve()` 把默认值
+    `'data/queue'` 解析成 ``<仓库根>/data/queue``（修复「从别的 CWD 启动时
+    静默另建一套数据目录」的 bug，见 2026-09 审计 P2-5）。
+    副作用是：**忘记设** ``SCADA_QUEUE_PERSIST_DIR`` 的测试，落点从
+    「CWD 下的 data/queue」变成了「仓库里的 data/queue」—— 也就是真实数据目录。
+
+    `isolate_queue_persistence` 是函数级 autouse 的，正常路径下每个测试都会
+    拿到自己的 tmp 目录。但**模块级 import 期构造的对象**、或某个 fixture
+    内部在 autouse fixture 之前就构造好的队列，仍可能绕过它。一旦发生：
+
+      - 测试往真实 `data/queue/pending_data.jsonl` 写探针数据
+      - 下一个测试 `_recover_from_disk()` 读到并 unlink 它
+      - 表现为一批**与队列无关的测试**集体飘红（数据完整性/灾备/批量缩容
+        这几个模块最先暴露），而单跑每个用例都绿 —— 极难定位
+
+    这里在会话开始断言该落点是干净的，并在结束时断言没有被写脏。
+    失败信息直接把根因写出来（哪个文件、多大），省掉下次的排查时间。
+    """
+    queue_dir = Path(PROJECT_ROOT) / "data" / "queue"
+    probe = queue_dir / "pending_data.jsonl"
+
+    def _snapshot():
+        if not probe.exists():
+            return None
+        try:
+            return probe.read_bytes()
+        except OSError:
+            return b"<unreadable>"
+
+    if _local_service_running():
+        print(
+            "\n[conftest] 检测到本机 SCADA 服务正在运行，跳过队列污染守卫 —— "
+            "服务会持续写 data/queue/pending_data.jsonl，"
+            "该守卫只在没有服务运行时才有判定意义（CI 即为此场景）。"
+        )
+        yield
+        return
+
+    before = _snapshot()
+    yield
+    after = _snapshot()
+
+    if after != before:
+        raise AssertionError(
+            f"有测试往仓库真实队列目录写了数据，且未清理：{probe}\n"
+            f"  会话前: {'不存在' if before is None else f'{len(before)} 字节'}\n"
+            f"  会话后: {'不存在' if after is None else f'{len(after)} 字节'}\n"
+            "根因排查方向：某个测试构造 DiskBackedQueue / DataCollector 时\n"
+            "既没传 persist_dir、也没生效 SCADA_QUEUE_PERSIST_DIR。\n"
+            "(persist_dir 若为相对路径会被 paths.resolve 解析到仓库根下。)"
+        )
+
+
 @pytest.fixture(autouse=True)
 def _reset_singletons():
     """Reset all class-based singletons between tests"""
