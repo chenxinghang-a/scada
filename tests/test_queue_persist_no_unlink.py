@@ -27,7 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SOURCE = REPO_ROOT / '采集层' / 'data_collector.py'
 
 # 被守卫的方法：这些方法里的文件清理动作必须用截断
-GUARDED_METHODS = ('clear_persistence', '_recover_from_disk')
+GUARDED_METHODS = ('clear_persistence', '_recover_from_disk', '_rewrite_persist_file')
 
 
 def _method_nodes():
@@ -92,7 +92,12 @@ def test_clear_persistence_keeps_file_but_empties_it(tmp_path, monkeypatch):
 
 
 def test_recover_from_disk_keeps_file(tmp_path, monkeypatch):
-    """行为守卫：启动恢复后文件同样不得被删除。"""
+    """行为守卫：启动恢复后文件不得被删除，且**记录要留到确认入库为止**。
+
+    旧实现是「恢复进内存 → 立刻截断文件」，等于在数据落库之前就把唯一的磁盘
+    副本交出去：恢复完还没写库就再崩一次，这批数据同样没了。
+    现在只截断（不删除），且记录保留到 `clear_persistence(已入库的那批)` 为止。
+    """
     monkeypatch.setenv('SCADA_QUEUE_PERSIST_DIR', str(tmp_path / 'q'))
     from 采集层.data_collector import DiskBackedQueue
 
@@ -110,4 +115,19 @@ def test_recover_from_disk_keeps_file(tmp_path, monkeypatch):
         '_recover_from_disk 把文件删掉了 —— 残留行数超阈值时启动阶段会被'
         '直接拦下并终止进程。必须改为截断。'
     )
-    assert persist_file.stat().st_size == 0, '恢复后应清空文件内容'
+    assert persist_file.stat().st_size > 0, (
+        '恢复后立刻把记录清掉了 —— 此时数据只存在于内存队列里，'
+        '再崩一次就真丢了。记录必须保留到确认写库成功。'
+    )
+
+    # 未确认 → 再重启一次仍然能恢复（崩溃安全）
+    third = DiskBackedQueue(maxsize=100)
+    assert third.qsize() == 5, '未确认入库的数据在第二次重启后仍应可恢复'
+
+    # 确认入库后才允许移除记录
+    flushed = []
+    while not second.empty():
+        flushed.append(second.get_nowait())
+    second.clear_persistence(flushed)
+    assert persist_file.exists(), 'clear_persistence 不得删除文件（只能截断重写）'
+    assert persist_file.stat().st_size == 0, '确认入库后应无待恢复记录'

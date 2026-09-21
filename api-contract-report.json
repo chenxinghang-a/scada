@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-09-20T02:51:32+00:00",
+  "generated_at": "2026-09-21T16:05:37+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -51,7 +51,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:98",
       "source_file": "alarms.ts",
-      "source_line": 116
+      "source_line": 182
     },
     {
       "method": "GET",
@@ -61,7 +61,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:325",
       "source_file": "alarms.ts",
-      "source_line": 145
+      "source_line": 211
     },
     {
       "method": "PUT",
@@ -71,7 +71,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:338",
       "source_file": "alarms.ts",
-      "source_line": 149
+      "source_line": 215
     },
     {
       "method": "POST",
@@ -81,7 +81,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:128",
       "source_file": "alarms.ts",
-      "source_line": 124
+      "source_line": 190
     },
     {
       "method": "POST",
@@ -91,7 +91,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:113",
       "source_file": "alarms.ts",
-      "source_line": 120
+      "source_line": 186
     },
     {
       "method": "GET",
@@ -101,7 +101,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:78",
       "source_file": "alarms.ts",
-      "source_line": 112
+      "source_line": 178
     },
     {
       "method": "GET",
@@ -111,7 +111,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:207",
       "source_file": "alarms.ts",
-      "source_line": 91
+      "source_line": 157
     },
     {
       "method": "POST",
@@ -121,7 +121,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:216",
       "source_file": "alarms.ts",
-      "source_line": 95
+      "source_line": 161
     },
     {
       "method": "DELETE",
@@ -131,7 +131,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_alarms.py:275",
       "source_file": "alarms.ts",
-      "source_line": 103
+      "source_line": 169
     },
     {
       "method": "PUT",
@@ -141,7 +141,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_alarms.py:243",
       "source_file": "alarms.ts",
-      "source_line": 99
+      "source_line": 165
     },
     {
       "method": "PUT",
@@ -151,7 +151,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:300",
       "source_file": "alarms.ts",
-      "source_line": 141
+      "source_line": 207
     },
     {
       "method": "GET",
@@ -161,7 +161,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:25",
       "source_file": "alarms.ts",
-      "source_line": 34
+      "source_line": 99
     },
     {
       "method": "POST",
@@ -171,7 +171,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_alarms.py:52",
       "source_file": "alarms.ts",
-      "source_line": 51
+      "source_line": 116
     },
     {
       "method": "GET",
@@ -181,7 +181,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:44",
       "source_file": "alarms.ts",
-      "source_line": 41
+      "source_line": 106
     },
     {
       "method": "GET",
@@ -191,7 +191,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:538",
       "source_file": "alarms.ts",
-      "source_line": 83
+      "source_line": 148
     },
     {
       "method": "PUT",
@@ -201,7 +201,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:547",
       "source_file": "alarms.ts",
-      "source_line": 87
+      "source_line": 152
     },
     {
       "method": "GET",
@@ -211,7 +211,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:529",
       "source_file": "alarms.ts",
-      "source_line": 79
+      "source_line": 144
     },
     {
       "method": "GET",
@@ -221,7 +221,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:68",
       "source_file": "alarms.ts",
-      "source_line": 61
+      "source_line": 126
     },
     {
       "method": "POST",
@@ -351,7 +351,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:182",
       "source_file": "alarms.ts",
-      "source_line": 129
+      "source_line": 195
     },
     {
       "method": "GET",
@@ -361,7 +361,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:433",
       "source_file": "alarms.ts",
-      "source_line": 153
+      "source_line": 219
     },
     {
       "method": "PUT",
@@ -371,7 +371,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:454",
       "source_file": "alarms.ts",
-      "source_line": 157
+      "source_line": 223
     },
     {
       "method": "GET",
@@ -381,7 +381,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:193",
       "source_file": "alarms.ts",
-      "source_line": 133
+      "source_line": 199
     },
     {
       "method": "POST",
@@ -391,7 +391,7 @@
       "status": "match",
       "detail": "精确匹配 api_alarms.py:156",
       "source_file": "alarms.ts",
-      "source_line": 137
+      "source_line": 203
     },
     {
       "method": "GET",
@@ -401,7 +401,7 @@
       "status": "match",
       "detail": "精确匹配 api_system.py:103",
       "source_file": "system.ts",
-      "source_line": 63
+      "source_line": 162
     },
     {
       "method": "PUT",
@@ -411,7 +411,7 @@
       "status": "match",
       "detail": "精确匹配 api_system.py:153",
       "source_file": "system.ts",
-      "source_line": 67
+      "source_line": 166
     },
     {
       "method": "GET",
@@ -911,7 +911,7 @@
       "status": "match",
       "detail": "精确匹配 api_data.py:117",
       "source_file": "alarms.ts",
-      "source_line": 107
+      "source_line": 173
     },
     {
       "method": "POST",
@@ -971,7 +971,7 @@
       "status": "match",
       "detail": "精确匹配 api_health.py:311",
       "source_file": "system.ts",
-      "source_line": 91
+      "source_line": 190
     },
     {
       "method": "GET",
@@ -981,7 +981,7 @@
       "status": "match",
       "detail": "精确匹配 api_health.py:257",
       "source_file": "system.ts",
-      "source_line": 83
+      "source_line": 182
     },
     {
       "method": "GET",
@@ -991,7 +991,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_health.py:280",
       "source_file": "system.ts",
-      "source_line": 87
+      "source_line": 186
     },
     {
       "method": "GET",
@@ -1001,7 +1001,7 @@
       "status": "match",
       "detail": "精确匹配 api_health.py:200",
       "source_file": "system.ts",
-      "source_line": 75
+      "source_line": 174
     },
     {
       "method": "GET",
@@ -1011,7 +1011,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_health.py:226",
       "source_file": "system.ts",
-      "source_line": 79
+      "source_line": 178
     },
     {
       "method": "GET",
@@ -1021,7 +1021,7 @@
       "status": "match",
       "detail": "精确匹配 api_health.py:20",
       "source_file": "system.ts",
-      "source_line": 71
+      "source_line": 170
     },
     {
       "method": "GET",
@@ -1031,7 +1031,7 @@
       "status": "match",
       "detail": "精确匹配 api_health.py:331",
       "source_file": "system.ts",
-      "source_line": 95
+      "source_line": 194
     },
     {
       "method": "GET",
@@ -1041,7 +1041,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:453",
       "source_file": "industry40.ts",
-      "source_line": 151
+      "source_line": 417
     },
     {
       "method": "GET",
@@ -1051,7 +1051,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:433",
       "source_file": "industry40.ts",
-      "source_line": 146
+      "source_line": 412
     },
     {
       "method": "GET",
@@ -1061,7 +1061,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:416",
       "source_file": "industry40.ts",
-      "source_line": 143
+      "source_line": 409
     },
     {
       "method": "GET",
@@ -1071,7 +1071,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:399",
       "source_file": "industry40.ts",
-      "source_line": 140
+      "source_line": 406
     },
     {
       "method": "GET",
@@ -1081,7 +1081,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:226",
       "source_file": "industry40.ts",
-      "source_line": 114
+      "source_line": 376
     },
     {
       "method": "GET",
@@ -1091,7 +1091,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:356",
       "source_file": "industry40.ts",
-      "source_line": 132
+      "source_line": 398
     },
     {
       "method": "PUT",
@@ -1101,7 +1101,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:372",
       "source_file": "industry40.ts",
-      "source_line": 135
+      "source_line": 401
     },
     {
       "method": "GET",
@@ -1111,7 +1111,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:260",
       "source_file": "industry40.ts",
-      "source_line": 120
+      "source_line": 382
     },
     {
       "method": "GET",
@@ -1121,7 +1121,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:243",
       "source_file": "industry40.ts",
-      "source_line": 117
+      "source_line": 379
     },
     {
       "method": "GET",
@@ -1131,7 +1131,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:277",
       "source_file": "industry40.ts",
-      "source_line": 123
+      "source_line": 385
     },
     {
       "method": "GET",
@@ -1141,7 +1141,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:299",
       "source_file": "industry40.ts",
-      "source_line": 126
+      "source_line": 388
     },
     {
       "method": "PUT",
@@ -1151,7 +1151,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:316",
       "source_file": "industry40.ts",
-      "source_line": 129
+      "source_line": 395
     },
     {
       "method": "GET",
@@ -1161,7 +1161,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:69",
       "source_file": "industry40.ts",
-      "source_line": 79
+      "source_line": 330
     },
     {
       "method": "GET",
@@ -1171,7 +1171,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_industry40.py:86",
       "source_file": "industry40.ts",
-      "source_line": 82
+      "source_line": 333
     },
     {
       "method": "GET",
@@ -1181,7 +1181,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:106",
       "source_file": "industry40.ts",
-      "source_line": 85
+      "source_line": 336
     },
     {
       "method": "GET",
@@ -1191,7 +1191,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:143",
       "source_file": "industry40.ts",
-      "source_line": 95
+      "source_line": 357
     },
     {
       "method": "GET",
@@ -1201,7 +1201,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_industry40.py:160",
       "source_file": "industry40.ts",
-      "source_line": 98
+      "source_line": 360
     },
     {
       "method": "GET",
@@ -1211,7 +1211,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:552",
       "source_file": "industry40.ts",
-      "source_line": 74
+      "source_line": 325
     },
     {
       "method": "GET",
@@ -1221,7 +1221,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_industry40.py:182",
       "source_file": "industry40.ts",
-      "source_line": 103
+      "source_line": 365
     },
     {
       "method": "GET",
@@ -1231,7 +1231,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:205",
       "source_file": "industry40.ts",
-      "source_line": 109
+      "source_line": 371
     },
     {
       "method": "GET",
@@ -1241,7 +1241,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_industry40.py:124",
       "source_file": "industry40.ts",
-      "source_line": 90
+      "source_line": 341
     },
     {
       "method": "GET",
@@ -1251,7 +1251,7 @@
       "status": "match",
       "detail": "精确匹配 api_industry40.py:472",
       "source_file": "industry40.ts",
-      "source_line": 156
+      "source_line": 422
     },
     {
       "method": "GET",
@@ -1261,7 +1261,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_industry40.py:489",
       "source_file": "industry40.ts",
-      "source_line": 159
+      "source_line": 425
     },
     {
       "method": "GET",
@@ -1271,7 +1271,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_industry40.py:529",
       "source_file": "industry40.ts",
-      "source_line": 165
+      "source_line": 431
     },
     {
       "method": "GET",
@@ -1281,7 +1281,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_industry40.py:509",
       "source_file": "industry40.ts",
-      "source_line": 162
+      "source_line": 428
     },
     {
       "method": "GET",
@@ -1321,7 +1321,7 @@
       "status": "match",
       "detail": "精确匹配 api_system.py:50",
       "source_file": "system.ts",
-      "source_line": 51
+      "source_line": 150
     },
     {
       "method": "POST",
@@ -1331,7 +1331,7 @@
       "status": "match",
       "detail": "精确匹配 api_system.py:134",
       "source_file": "system.ts",
-      "source_line": 103
+      "source_line": 202
     },
     {
       "method": "GET",
@@ -1341,7 +1341,7 @@
       "status": "match",
       "detail": "精确匹配 api_system.py:124",
       "source_file": "system.ts",
-      "source_line": 99
+      "source_line": 198
     },
     {
       "method": "GET",
@@ -1351,7 +1351,7 @@
       "status": "match",
       "detail": "精确匹配 api_system.py:57",
       "source_file": "system.ts",
-      "source_line": 55
+      "source_line": 154
     },
     {
       "method": "POST",
@@ -1361,7 +1361,7 @@
       "status": "match",
       "detail": "精确匹配 api_system.py:66",
       "source_file": "system.ts",
-      "source_line": 59
+      "source_line": 158
     },
     {
       "method": "GET",
@@ -1371,7 +1371,7 @@
       "status": "match",
       "detail": "精确匹配 api_system.py:25",
       "source_file": "system.ts",
-      "source_line": 47
+      "source_line": 146
     }
   ],
   "unused_backend_endpoints": [

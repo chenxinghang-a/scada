@@ -21,6 +21,13 @@
 `_recover_from_disk()` 就能把这批数据捞回来。
 
 修法：只有确认入库成功才清除持久化文件；失败则保留并明确告警。
+
+补充（2026-09-20）
+----------------
+「清除」的手段后来从 `unlink()` 改成**截断**：消费线程每秒数次 unlink，
+会被运行环境的「批量删除保护」挂起（采集照常、落库停止、队列膨胀、日志静默）。
+因此本文件里「已清除」一律断言为**无待恢复记录**（空文件或文件不存在），
+不断言文件本身不存在 —— 断言机制细节会让测试在正确的重构后假红。
 """
 import json
 
@@ -76,21 +83,44 @@ def test_persist_file_kept_when_final_flush_fails(persist_dir):
     )
 
 
+def _pending_records(persist_file):
+    """读回持久化文件里**待恢复**的记录数（空文件 = 0 条）。"""
+    if not persist_file.exists():
+        return 0
+    text = persist_file.read_text(encoding='utf-8').strip()
+    return len([ln for ln in text.splitlines() if ln.strip()])
+
+
 def test_persist_file_cleared_when_final_flush_succeeds(persist_dir):
-    """写库成功时仍要清除持久化文件（否则下次启动会重复入库）"""
+    """写库成功时必须清除持久化**记录**（否则下次启动会重复入库）。
+
+    注意断言的是「无待恢复记录」而不是「文件不存在」：
+    2026-09-20 把清除手段从 `unlink()` 改成了截断（truncate），
+    因为消费线程每秒数次 unlink，会被运行环境的「批量删除保护」挂起 ——
+    表现为采集照常、落库停止、队列文件持续膨胀、日志完全静默。
+    截断后文件本体保留、内容清空，对恢复语义完全等价。
+    这里顺带用「新建队列实际恢复出几条」来验证，机制无关。
+    """
     db = MagicMock()
     c = _make_collector(db)
 
     c.data_queue.put(_item())
     persist_file = c.data_queue._persist_file
-    assert persist_file.exists()
+    assert _pending_records(persist_file) == 1, '前置条件：put() 应先把数据落盘'
 
     c.stop()
 
-    assert not persist_file.exists(), (
-        '数据已成功入库，持久化文件应被清除，否则下次启动会重复恢复'
+    assert _pending_records(persist_file) == 0, (
+        '数据已成功入库，持久化文件仍残留记录 —— 下次启动会重复恢复'
     )
     db.insert_data_batch.assert_called_once()
+
+    # 机制无关的等价断言：真的重启一次，看能恢复出几条
+    restarted = _make_collector(MagicMock())
+    recovered = []
+    while not restarted.data_queue.empty():
+        recovered.append(restarted.data_queue.get_nowait())
+    assert recovered == [], f'重启后恢复出 {len(recovered)} 条本不该存在的重复数据'
 
 
 def test_data_is_recoverable_on_next_startup(persist_dir):
@@ -116,7 +146,7 @@ def test_data_is_recoverable_on_next_startup(persist_dir):
 
 
 def test_no_data_lost_when_db_ok(persist_dir):
-    """对照：一切正常时，剩余数据必须进库且不残留持久化文件"""
+    """对照：一切正常时，剩余数据必须进库且不残留待恢复记录"""
     written = []
     db = MagicMock()
     db.insert_data_batch.side_effect = lambda rows: written.extend(rows)
@@ -124,10 +154,15 @@ def test_no_data_lost_when_db_ok(persist_dir):
 
     for i in range(5):
         c.data_queue.put(_item(value=float(i)))
+    persist_file = c.data_queue._persist_file
+    assert _pending_records(persist_file) == 5
+
     c.stop()
 
     assert len(written) == 5, f'应写入 5 条，实际 {len(written)}'
-    assert not c.data_queue._persist_file.exists()
+    assert _pending_records(persist_file) == 0, (
+        f'5 条全部入库成功，持久化文件仍残留 {_pending_records(persist_file)} 条记录'
+    )
 
 
 def test_processing_loop_keeps_persist_file_when_batch_write_fails(persist_dir):

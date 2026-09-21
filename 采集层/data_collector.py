@@ -184,6 +184,15 @@ class DiskBackedQueue:
         self._persist_dir.mkdir(parents=True, exist_ok=True)
         self._persist_file = self._persist_dir / 'pending_data.jsonl'
         self._lock = threading.Lock()
+        # 与磁盘文件内容一一对应的「待恢复」清单（顺序 = 文件行顺序）。
+        #
+        # 存在的理由：确认入库时必须只移除**本批**对应的记录，而不是清空整个文件。
+        # 无脑清空会有一个真实的丢数据窗口 —— 消费线程取走本批之后、清空文件之前，
+        # 采集线程可能刚 `put()` 进新数据：新数据已经落盘，但不在本批里，
+        # 于是它的磁盘副本被这次清空抹掉，而它还在内存队列里等下一批。
+        # 此刻进程崩溃 → 这条数据在内存与磁盘上**同时消失**。
+        self._pending: list[Dict[str, Any]] = []
+        self._pending_ids: set[int] = set()
         # 启动时恢复
         self._recover_from_disk()
 
@@ -215,89 +224,142 @@ class DiskBackedQueue:
         return self._queue.full()
 
     def _persist_item(self, item: Dict[str, Any]) -> None:
-        """持久化单条数据"""
+        """持久化单条数据（幂等）。
+
+        幂等的必要性：写库失败后 `_process_data` 会把整批 `put_nowait()` 重新入队。
+        若不去重，文件里会留下同一批数据的**第二份**，崩溃恢复时就会重复入库
+        （history_data 出现重复行，聚合/报表随之偏大）。同一条数据的对象身份
+        在 `_pending` 里已经存在时直接跳过。
+        """
         try:
             with self._lock:
+                if id(item) in self._pending_ids:
+                    return
                 with open(self._persist_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(item, default=str, ensure_ascii=False) + '\n')
+                self._pending.append(item)
+                self._pending_ids.add(id(item))
         except Exception as e:
             logger.debug(f"数据持久化失败: {e}")  # 持久化失败不影响主流程
 
     def _recover_from_disk(self) -> None:
-        """从磁盘恢复未处理的数据"""
+        """从磁盘恢复未处理的数据。
+
+        与旧实现的区别：**恢复后不再清空文件**。
+
+        旧实现是「恢复进内存 → 立刻把磁盘副本删掉」，那等于把数据的唯一崩溃保护
+        提前交出去：恢复完还没落库就再崩一次，这批数据同样没了。
+        现在文件里的记录只会在**确认写库成功后**被逐批移除（见 clear_persistence），
+        所以恢复出来的数据在落库之前始终有磁盘副本兜底。
+        代价是「至少一次」语义：写库成功与移除记录之间若崩溃，重启会重复入库一条。
+        """
         if not self._persist_file.exists():
             return
 
         recovered = 0
         queue_full = False
+        invalid = 0
         try:
             with open(self._persist_file, 'r', encoding='utf-8') as f:
                 for line in f:
                     line = line.strip()
-                    if line:
-                        try:
-                            item = json.loads(line)
-                            if item.get('value') is not None:
-                                self._queue.put_nowait(item)
-                                recovered += 1
-                            else:
-                                logger.warning(f"磁盘恢复: 跳过无value字段的记录 keys={list(item.keys())}")
-                        except json.JSONDecodeError as e:
-                            # 安全忽略并跳过该行：崩溃时可能留下半行不完整 JSON，
-                            # 只丢这一条，不影响后续行恢复
-                            logger.debug(f"磁盘恢复: 跳过损坏记录行: {e} | {line[:200]}")
-                            continue
-                        except queue.Full:
-                            queue_full = True
-                            break
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError as e:
+                        # 安全忽略并跳过该行：崩溃时可能留下半行不完整 JSON，
+                        # 只丢这一条，不影响后续行恢复
+                        logger.debug(f"磁盘恢复: 跳过损坏记录行: {e} | {line[:200]}")
+                        continue
+
+                    if item.get('value') is None:
+                        # 这条记录永远无法入库，不进待恢复清单 —— 免得它被反复
+                        # 重写回文件、每次启动都刷同一条告警
+                        invalid += 1
+                        logger.warning(f"磁盘恢复: 跳过无value字段的记录 keys={list(item.keys())}")
+                        continue
+
+                    # 该行有效 → 纳入待恢复清单，与文件内容保持一一对应
+                    with self._lock:
+                        if id(item) not in self._pending_ids:
+                            self._pending.append(item)
+                            self._pending_ids.add(id(item))
+
+                    if queue_full:
+                        continue
+                    try:
+                        self._queue.put_nowait(item)
+                        recovered += 1
+                    except queue.Full:
+                        # 队列满 → 剩余记录留在文件里，下次启动继续恢复。
+                        # 这里**继续读**而不是 break：要让 _pending 与文件行数
+                        # 保持一致，否则后续按批移除时会算错行。
+                        queue_full = True
         except Exception as e:
             logger.warning(f"磁盘恢复失败: {e}")
 
-        # 只有全部恢复成功才清空文件；队列满时保留文件供下次恢复
-        #
-        # 同 clear_persistence()：这里**不用 unlink()**。启动时若队列文件已累积
-        # 大量记录，unlink 会被「批量删除保护」拦下并终止启动流程
-        # （实测：残留 51 行即触发 SAFE_DELETE_BULK_CONFIRM_REQUIRED，进程直接退出）。
-        # 改为截断，语义等价且不触发保护。
-        if recovered > 0 and not queue_full:
-            try:
-                with open(self._persist_file, 'w', encoding='utf-8'):
-                    pass
-            except Exception as e:
-                # 清空失败 → 持久化文件残留，下次启动会把这些记录再恢复一遍（重复数据）
-                logger.warning(
-                    f"磁盘恢复后清空持久化文件失败，下次启动可能重复恢复 "
-                    f"{self._persist_file}: {e}"
-                )
-
         if recovered > 0:
-            logger.info(f"从磁盘恢复 {recovered} 条未处理数据" +
-                       (f"（队列满，剩余数据待下次恢复）" if queue_full else ""))
+            logger.info(
+                f"从磁盘恢复 {recovered} 条未处理数据（已落盘待入库，"
+                f"写库成功后才会从文件移除）"
+                + ("；队列已满，剩余记录留待下次启动" if queue_full else "")
+            )
+        if invalid:
+            logger.warning(f"磁盘恢复: 丢弃 {invalid} 条结构无效的记录（无 value 字段）")
 
-    def clear_persistence(self) -> None:
-        """清空持久化文件内容（每批落库成功后调用）。
+    def _rewrite_persist_file(self) -> None:
+        """把持久化文件重写为当前 ``_pending`` 的内容（调用方必须已持有 ``_lock``）。
 
-        注意：这里**刻意不使用 ``unlink()`` 删除文件**。
+        注意：**刻意不使用 ``unlink()`` 删除文件**。
 
-        原因（2026-09-20 实机排查）：消费线程每落库一批就调用本方法一次，
+        原因（2026-09-20 实机排查）：消费线程每落库一批就确认一次，
         即每秒数次 unlink。当运行环境存在「同一轮内批量删除保护」时
         （工作台/安全策略会对删除调用计数，超过阈值即拦截），
         unlink 累积到阈值后会被挂起 —— 表现为：
 
           - 采集线程照常运行（last_collection_time 持续更新）
-          - 消费线程卡在本方法这一行，**不再落库**（history_data 长时间不增长）
+          - 消费线程卡住，**不再落库**（history_data 长时间不增长）
           - 队列文件持续膨胀（无人清理）
           - **日志完全静默**（线程被挂起，既没抛异常也没有任何输出）
 
-        改成截断（truncate）后：文件本体保留，内容清空，语义完全等价
-        （下次启动读到空文件即视为无待恢复数据），但不会触发删除保护。
+        改成「截断 + 重写」后：文件本体保留、内容与待恢复清单一致，
+        恢复语义等价，且不会触发删除保护。
+        """
+        with open(self._persist_file, 'w', encoding='utf-8') as f:
+            for item in self._pending:
+                # `_db_retry` 是本次进程内的重试标记，不该持久化：
+                # 否则崩溃恢复出来的数据带着它，第一次写库失败就被直接丢弃
+                # （等于把「还能再试一次」的机会提前用掉）。
+                payload = {k: v for k, v in item.items() if k != '_db_retry'}
+                f.write(json.dumps(payload, default=str, ensure_ascii=False) + '\n')
+
+    def clear_persistence(self, flushed_items: Optional[list] = None) -> None:
+        """确认已入库：把这些记录从持久化文件里移除。
+
+        - ``flushed_items`` 传具体列表 → 只移除这批（消费线程每批落库成功后调用）
+        - ``flushed_items`` 为 None → 全部确认（仅用于 ``stop()`` 收尾：
+          此时生产者线程已停、队列已排空）
+
+        **为什么不能无脑清空整个文件**：消费线程取走本批之后、清空文件之前，
+        采集线程可能刚 ``put()`` 进新数据。新数据已经落盘、但不在本批里，
+        无脑清空会把它的磁盘副本一起抹掉 —— 而它还在内存队列里等下一批，
+        此刻进程崩溃，这条数据在内存与磁盘上同时消失。按批移除就没有这个窗口。
         """
         try:
-            if self._persist_file.exists():
-                with open(self._persist_file, 'w', encoding='utf-8'):
-                    pass
+            with self._lock:
+                if flushed_items is None:
+                    self._pending.clear()
+                    self._pending_ids.clear()
+                else:
+                    acked = {id(it) for it in flushed_items}
+                    if not acked:
+                        return
+                    self._pending[:] = [p for p in self._pending if id(p) not in acked]
+                    self._pending_ids.difference_update(acked)
+                self._rewrite_persist_file()
         except Exception as e:
-            # 截断失败 → 文件残留，下次启动会重复恢复这批已处理的数据
+            # 移除失败 → 文件残留，下次启动会重复恢复这批已处理的数据
             logger.warning(
                 f"清空持久化文件失败，下次启动可能重复恢复数据 "
                 f"{self._persist_file}: {e}"
@@ -1366,7 +1428,9 @@ class DataCollector:
                 # 此刻它们**只存在于内存队列**里，磁盘上的副本是唯一的崩溃保护。
                 # 无条件清除 = 把它们的保护也一起抹掉（崩溃就真丢了）。
                 if db_write_ok and hasattr(self.data_queue, 'clear_persistence'):
-                    self.data_queue.clear_persistence()
+                    # 只确认本批 —— 不要清空整个文件，否则会把「已落盘但还没被
+                    # 本批取走」的新数据一起抹掉（崩溃即真丢）。
+                    self.data_queue.clear_persistence(batch)
 
                 with self._stats_lock:
                     self.stats['queue_size'] = self.data_queue.qsize()
