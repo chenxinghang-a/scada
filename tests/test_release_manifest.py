@@ -262,20 +262,68 @@ class TestOnedirArtifactRecorded:
             "它不参与安装包组装，记录它会让清单夸大实际交付内容。"
         )
 
-    def test_onedir_artifact_carries_companion_dir(self, manifest_module):
-        manifest = manifest_module.generate_manifest()
-        onedir = next(
-            (a for a in manifest["artifacts"] if a["name"] == "backend_windows_onedir"),
-            None,
+    def test_onedir_artifact_carries_companion_dir(self, manifest_module, tmp_path, monkeypatch):
+        """onedir 产物必须带 `_internal/` 的目录级指纹。
+
+        **测试自造产物布局**，不依赖开发机上是否构建过 `dist/scada-backend/`。
+        原先是直接对仓库里的 `dist/` 断言 —— 本机有旧产物所以绿，
+        而 CI 的 test job 是干净检出（根本没有 `dist/`）→ 必红。
+        测试依赖机器状态就会「本机绿 / CI 红」，且红的原因与缺陷无关。
+        """
+        dist = tmp_path / 'dist' / 'scada-backend'
+        (dist / '_internal').mkdir(parents=True)
+        (dist / 'scada-backend.exe').write_bytes(b'MZ fake exe')
+        (dist / '_internal' / 'python313.dll').write_bytes(b'x' * 128)
+        (dist / '_internal' / 'base_library.zip').write_bytes(b'y' * 64)
+
+        monkeypatch.setattr(manifest_module, 'BACKEND_ROOT', tmp_path)
+
+        artifacts = manifest_module._collect_artifacts('9.9.9')
+        onedir = next(a for a in artifacts if a['name'] == 'backend_windows_onedir')
+
+        assert onedir['sha256'], '主产物存在时必须给出 sha256'
+        assert 'companion_dir' in onedir, (
+            'onedir 产物必须带 companion_dir（_internal/ 的目录级指纹）—— '
+            '依赖代码全在 _internal/ 里，只记 exe 会严重低估交付内容'
         )
-        assert onedir is not None
-        assert "companion_dir" in onedir, (
-            "onedir 产物必须带 companion_dir（_internal/ 的目录级指纹）"
+        cd = onedir['companion_dir']
+        assert 'sha256' in cd and 'files' in cd and 'bytes' in cd, (
+            f'companion_dir 结构不完整: {cd}'
         )
-        cd = onedir["companion_dir"]
-        assert "sha256" in cd and "files" in cd and "bytes" in cd, (
-            f"companion_dir 结构不完整: {cd}"
+        assert cd['files'] == 2, f'应指纹化 _internal/ 下 2 个文件: {cd}'
+        assert cd['bytes'] == 192
+        assert len(cd['sha256']) == 64
+
+    def test_missing_onedir_dir_has_no_companion_dir(self, manifest_module, tmp_path, monkeypatch):
+        """反向：`_internal/` 不存在时不得给出可用的 companion_dir 指纹。
+
+        两种情况必须区分开，否则「清单字段齐全」会掩盖产物不完整：
+          - exe 不存在 → 该产物整条只有 sha256=None + note，**不带** companion_dir
+          - exe 存在但 `_internal/` 缺失 → 带 companion_dir，但 sha256=None + 明确 note
+        """
+        dist = tmp_path / 'dist' / 'scada-backend'
+        dist.mkdir(parents=True)
+        monkeypatch.setattr(manifest_module, 'BACKEND_ROOT', tmp_path)
+
+        # 情况一：连 exe 都没有（CI 的 test job 就是这种干净检出状态）
+        artifacts = manifest_module._collect_artifacts('9.9.9')
+        onedir = next(a for a in artifacts if a['name'] == 'backend_windows_onedir')
+        assert onedir['sha256'] is None
+        assert 'companion_dir' not in onedir, (
+            '产物根本不存在，却给出了 companion_dir 结构 —— 清单会声称覆盖了不存在的内容'
         )
+
+        # 情况二：exe 在，_internal/ 丢了（onedir 产物不完整）
+        (dist / 'scada-backend.exe').write_bytes(b'MZ fake exe')
+        artifacts = manifest_module._collect_artifacts('9.9.9')
+        onedir = next(a for a in artifacts if a['name'] == 'backend_windows_onedir')
+        assert onedir['sha256'], 'exe 存在时应有 sha256'
+        cd = onedir.get('companion_dir')
+        assert cd is not None, '_internal/ 缺失必须显式记录，不能当没这回事'
+        assert cd['sha256'] is None, (
+            f'_internal/ 不存在却给出了指纹 —— 清单会掩盖"依赖代码没打进去": {cd}'
+        )
+        assert 'note' in cd, '缺失原因必须写出来，否则运维只看到一个 null'
 
 
 class TestManifestFileOnDisk:

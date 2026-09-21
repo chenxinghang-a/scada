@@ -39,8 +39,28 @@ jobs:
       # PYTHONIOENCODING 再加一道保险（某些三方库会自己看这个变量）。
       PYTHONUTF8: '1'
       PYTHONIOENCODING: 'utf-8'
+      # 契约测试（tests/test_frontend_contract.py）要在下面 checkout 的前端源码里
+      # 找 src/api。显式给出绝对路径，不依赖目录相对位置猜测。
+      SCADA_FRONTEND_API_DIR: ${{ github.workspace }}/scada-app/src/api
     steps:
       - uses: actions/checkout@v7
+
+      - name: Checkout frontend sources
+        # tests/test_frontend_contract.py 要**静态**比对「前端声明的 API 端点」
+        # 与「后端实现的路由」，两侧源码都得在。后端仓库里没有前端源码，
+        # 所以这里把 scada-app 拉进来（与前端 CI 反向取后端源码是对称做法）。
+        #
+        # 该测试刻意用 pytest.fail 而不是 pytest.skip —— 找不到前端源码就显式红灯。
+        # 静默跳过会让「匹配率 100%」变成一个**永远为真**的假信号，
+        # 而它存在的意义正是消灭 performance.ts 双 /api 前缀那类契约错配。
+        # 2026-09-20 引入该测试时漏了这一步，导致 CI 在 setup 阶段报 9 个 ERROR
+        # （"未找到前端 api 目录"）。
+        uses: actions/checkout@v7
+        with:
+          repository: chenxinghang-a/scada-app
+          ref: main
+          path: scada-app
+          fetch-depth: 1
 
       - uses: actions/setup-python@v7
         with:
