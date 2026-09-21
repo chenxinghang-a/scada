@@ -19,6 +19,7 @@
 import logging
 import os
 import sqlite3
+import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -28,6 +29,7 @@ from 存储层.data_lifecycle import DataLifecycleManager, RetentionPolicy
 from 存储层.database import (
     ARCHIVE_TABLE,
     BLOAT_FREE_PAGE_RATIO_THRESHOLD,
+    BLOAT_WARN_INTERVAL_SECONDS,
     Database,
 )
 from timeseries.migration import SQLiteToTDengineMigrator
@@ -457,6 +459,35 @@ class TestBloatDetection:
             conn.execute('DELETE FROM history_data')
             conn.execute("DELETE FROM realtime_data WHERE device_id = 'dev2'")
 
+    @staticmethod
+    def _bloat_diag(db) -> str:
+        """把「判定膨胀」用到的全部输入打出来，供断言失败时排障。
+
+        为什么需要：这三条用例在 **CI 上红、本机全绿**，而远端唯一公开可读的
+        排障通道是 annotation（job log 需管理员权限，403）—— annotation 只包含
+        断言消息。没有数值就只能猜（上一轮我就猜错了方向：以为 `check_bloat` 的
+        quick 口径与 dbstat 口径不一致，实际上 `free_page_ratio` 两条路径都来自
+        `PRAGMA freelist_count`，`include_dbstats` 只影响 `data_bytes_mb`）。
+        把数值写进消息，下一次 CI 的 annotation 直接给出根因。
+        """
+        quick = db.get_fragmentation_stats(include_dbstats=False)
+        full = db.get_fragmentation_stats(include_dbstats=True)
+        lg = logging.getLogger('存储层.database')
+        return (
+            f'\n  quick: free_page_ratio={quick["free_page_ratio"]} '
+            f'freelist={quick["free_page_count"]} page_count={quick["page_count"]} '
+            f'is_bloated={quick["is_bloated"]}'
+            f'\n  full : free_page_ratio={full["free_page_ratio"]} '
+            f'data_bytes_mb={full["data_bytes_mb"]} '
+            f'size_to_data_ratio={full["size_to_data_ratio"]}'
+            f'\n  阈值={BLOAT_FREE_PAGE_RATIO_THRESHOLD}'
+            f'\n  logger: effective_level='
+            f'{logging.getLevelName(lg.getEffectiveLevel())} '
+            f'propagate={lg.propagate} manager.disable={logging.root.manager.disable}'
+            f'\n  节流: _last_bloat_warn_at={getattr(db, "_last_bloat_warn_at", None)} '
+            f'now={time.monotonic():.0f} 间隔={BLOAT_WARN_INTERVAL_SECONDS}'
+        )
+
     def test_healthy_db_is_not_bloated(self, db):
         db.insert_data('dev1', 'temp', 25.0, datetime.now(), 'C')
 
@@ -473,12 +504,18 @@ class TestBloatDetection:
         self._make_bloat(db)
         # checkpoint 让数据落进主库文件，便于"文件大小 vs 实际数据量"对比
         db.wal_checkpoint()
+        # 节流是实例级的，但显式归零可以让本用例不依赖"这个实例此前没告警过"
+        db._last_bloat_warn_at = 0.0
 
+        # 测量与告警都放进同一个 caplog 上下文 —— 原先 `db.check_bloat()` 写在
+        # `with` 块**外面**，`caplog.at_level` 已经失效，是否捕获取决于当时
+        # logger 的生效级别（会被别的测试污染）。
         with caplog.at_level(logging.WARNING, logger='存储层.database'):
             stats = db.get_fragmentation_stats()
+            db.check_bloat()
 
         assert stats['free_page_ratio'] >= BLOAT_FREE_PAGE_RATIO_THRESHOLD, (
-            f"构造的膨胀没被量化: {stats}"
+            f"构造的膨胀没被量化: {stats}{self._bloat_diag(db)}"
         )
         assert stats['is_bloated'] is True
         assert stats['free_page_count'] > 0
@@ -490,25 +527,32 @@ class TestBloatDetection:
             assert stats['size_to_data_ratio'] > 1
 
         # 告警必须由 check_bloat 触发
-        db.check_bloat()
         assert any('膨胀' in rec.message for rec in caplog.records), (
             '空闲页占比过高却没有告警日志 —— 缺陷 7 的核心就是"没有自动检测"'
+            f'{self._bloat_diag(db)}'
+            f'\n  caplog 记录数={len(caplog.records)}'
         )
 
     def test_bloat_warning_is_throttled(self, db, caplog):
         """告警必须节流：get_database_stats 会被健康检查/WebSocket 每 10 秒调一次，
         不节流就会用同一条 warning 淹没日志（那正是当初没发现的另一面）。"""
         self._make_bloat(db)
+        db._last_bloat_warn_at = 0.0
 
         with caplog.at_level(logging.WARNING, logger='存储层.database'):
             for _ in range(3):
                 db.check_bloat()
 
         warnings = [rec for rec in caplog.records if '膨胀' in rec.message]
-        assert len(warnings) == 1, f'同一实例重复告警了 {len(warnings)} 次'
+        assert len(warnings) == 1, (
+            f'同一实例重复告警了 {len(warnings)} 次'
+            f'{self._bloat_diag(db)}'
+            f'\n  caplog 记录数={len(caplog.records)}'
+        )
 
     def test_get_database_stats_exposes_free_page_ratio(self, db, caplog):
         self._make_bloat(db)
+        db._last_bloat_warn_at = 0.0
 
         with caplog.at_level(logging.WARNING, logger='存储层.database'):
             stats = db.get_database_stats()
@@ -516,10 +560,14 @@ class TestBloatDetection:
         assert 'free_page_ratio' in stats
         assert 'database_size_mb' in stats
         assert 'free_bytes_mb' in stats
-        assert stats['free_page_ratio'] >= BLOAT_FREE_PAGE_RATIO_THRESHOLD
+        assert stats['free_page_ratio'] >= BLOAT_FREE_PAGE_RATIO_THRESHOLD, (
+            f'get_database_stats 报的膨胀指标没到阈值{self._bloat_diag(db)}'
+        )
         assert stats['is_bloated'] is True
         assert any('膨胀' in rec.message for rec in caplog.records), (
             'get_database_stats 是给运维/健康检查看的入口，必须顺带告警'
+            f'{self._bloat_diag(db)}'
+            f'\n  caplog 记录数={len(caplog.records)}'
         )
 
     def test_check_bloat_on_empty_db_is_safe(self, tmp_path):
