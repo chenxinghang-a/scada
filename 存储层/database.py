@@ -82,8 +82,19 @@ class Database:
         # 线程本地存储：每个线程复用一个连接
         self._local = threading.local()
 
-        # 上次膨胀告警时间（单调时钟），用于告警节流
-        self._last_bloat_warn_at = 0.0
+        # 上次膨胀告警时间（单调时钟），用于告警节流。
+        #
+        # ⚠️ 初值必须是 -inf（语义 =「从未告警」），**不能写 0.0**。
+        # `time.monotonic()` 在 Windows 上返回的是**开机以来的秒数**
+        # （GetTickCount64），不是 Unix 时间戳。写成 0.0 等于断言
+        # 「在开机后第 0 秒告警过」，于是在任何开机不足
+        # ``BLOAT_WARN_INTERVAL_SECONDS``(3600) 的机器上，
+        # ``now - 0.0 >= 3600`` 恒为假 —— 首条膨胀告警被节流吃掉，
+        # 最长静默 1 小时。CI runner 每次都是全新开机的机器，
+        # 所以这条路径在 CI 上**必然**被走到。
+        # 现场设备重启后同样会掉进这个窗口，等于「缺陷 7（膨胀无自动检测）」
+        # 只修了一半。用 -inf 让首次检测永远通过节流。
+        self._last_bloat_warn_at = float('-inf')
 
         # 清理残留锁（崩溃后可能遗留的 stale WAL 锁）
         self._cleanup_stale_locks()
@@ -1091,8 +1102,9 @@ class Database:
                 （疑似膨胀时才额外跑 dbstat，正常库只花 3 次 O(1) PRAGMA。）
 
         Side Effects:
-            空闲页占比超阈值时打一条 warning（同一实例 1 小时内最多一条，
-            见 ``BLOAT_WARN_INTERVAL_SECONDS``）。**不会**自动 VACUUM。
+            空闲页占比超阈值时打一条 warning。**首次检测永远不节流**，
+            之后同一实例 1 小时内最多一条（见 ``BLOAT_WARN_INTERVAL_SECONDS``）。
+            **不会**自动 VACUUM。
         """
         # 先用 PRAGMA 口径探一下（O(1)）；确认异常再上 dbstat 量化
         quick = self.get_fragmentation_stats(include_dbstats=False)

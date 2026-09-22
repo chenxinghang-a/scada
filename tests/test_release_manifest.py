@@ -326,6 +326,179 @@ class TestOnedirArtifactRecorded:
         assert 'note' in cd, '缺失原因必须写出来，否则运维只看到一个 null'
 
 
+class TestFrontendVersionLockstep:
+    """前后端版本必须同步 —— 否则清单会记下**永不产生**的前端产物路径。
+
+    背景：本清单里前端产物路径是用**后端 VERSION** 拼的
+    （``SmartSCADA Setup {version}.exe``），而安装包名实际由前端
+    ``package.json`` 的 version 决定（electron-builder 读它）。
+    生成器原先从不读前端 package.json，于是两端版本一旦不同步，
+    清单就会写出一条字段齐全、看起来正常、但**永远不可能存在**的路径 ——
+    这正是本项目一直在清的那类「静默失效」。
+    """
+
+    @staticmethod
+    def _fake_frontend(tmp_path, version):
+        """造一个最小可识别的假前端仓库（定位靠 package-lock.json）。"""
+        fe = tmp_path / 'scada-app'
+        fe.mkdir()
+        (fe / 'package.json').write_text(
+            json.dumps({'name': 'smartscada', 'version': version}),
+            encoding='utf-8',
+        )
+        (fe / 'package-lock.json').write_text('{}', encoding='utf-8')
+        return fe
+
+    def test_frontend_version_is_read_from_package_json(self, manifest_module,
+                                                        tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            manifest_module, 'FRONTEND_ROOT', self._fake_frontend(tmp_path, '7.7.7'))
+        assert manifest_module._frontend_version() == '7.7.7', (
+            '必须从**前端自己的** package.json 读版本；'
+            '拿后端 VERSION 当答案就永远发现不了不同步'
+        )
+
+    def test_frontend_version_none_when_unavailable(self, manifest_module,
+                                                    tmp_path, monkeypatch):
+        monkeypatch.setattr(manifest_module, 'FRONTEND_ROOT', tmp_path / 'nope')
+        assert manifest_module._frontend_version() is None
+        assert manifest_module._lockstep_state('1.0.0', None) == 'unknown', (
+            '前端仓库不在场时状态必须是 unknown，不能猜成 synced'
+        )
+
+    def test_lockstep_state_classification(self, manifest_module):
+        assert manifest_module._lockstep_state('1.2.3', '1.2.3') == 'synced'
+        assert manifest_module._lockstep_state('1.2.3', '1.2.2') == 'skewed'
+        assert manifest_module._lockstep_state('1.2.3', None) == 'unknown'
+
+    def test_skew_annotates_missing_frontend_artifact(self, manifest_module,
+                                                      tmp_path, monkeypatch):
+        """不同步 + 产物不存在 → note 必须点明「这路径造不出来」。"""
+        monkeypatch.setattr(
+            manifest_module, 'FRONTEND_ROOT', self._fake_frontend(tmp_path, '1.0.0'))
+
+        artifacts = manifest_module._collect_artifacts('1.0.1', '1.0.0')
+        fe_arts = [a for a in artifacts if a['owner'] == 'frontend']
+        assert fe_arts, '应当有前端产物条目'
+        for a in fe_arts:
+            note = a.get('note') or ''
+            assert '不同步' in note, (
+                f'前后端版本不同步却没有标注，运维只会看到"还没构建"：{a}'
+            )
+            assert '1.0.0' in note and '1.0.1' in note, (
+                f'note 必须写出两端各自的实际版本，否则无法定位改哪边：{note}'
+            )
+
+    def test_skew_marks_existing_frontend_artifact_stale(self, manifest_module,
+                                                         tmp_path, monkeypatch):
+        """不同步 + 磁盘上**真有**同名文件 → 仍须标 stale（它不可能是本次源码的产物）。"""
+        fe = self._fake_frontend(tmp_path, '1.0.0')
+        (fe / 'release').mkdir()
+        # 注意文件名用的是**后端**版本（生成器的拼法），所以它会「找得到」
+        (fe / 'release' / 'SmartSCADA Setup 1.0.1.exe').write_bytes(b'MZ fake')
+        monkeypatch.setattr(manifest_module, 'FRONTEND_ROOT', fe)
+
+        artifacts = manifest_module._collect_artifacts('1.0.1', '1.0.0')
+        inst = next(a for a in artifacts if a['name'] == 'frontend_installer')
+        assert inst['sha256'], '文件在就该有 sha256'
+        assert inst.get('stale') is True, (
+            '版本不同步却把文件当有效交付证据 —— 清单会撒谎'
+        )
+        assert '不同步' in (inst.get('note') or '')
+
+    def test_synced_does_not_annotate_frontend_artifacts(self, manifest_module,
+                                                         tmp_path, monkeypatch):
+        """反向对照：版本一致时不得误标（否则标注会被当成噪音忽略）。"""
+        monkeypatch.setattr(
+            manifest_module, 'FRONTEND_ROOT', self._fake_frontend(tmp_path, '1.0.1'))
+
+        assert manifest_module._lockstep_state('1.0.1', '1.0.1') == 'synced'
+        artifacts = manifest_module._collect_artifacts('1.0.1', '1.0.1')
+        # 只看前端条目：后端产物可能因本机 dist/ 早于 HEAD 而**合法地**带 stale，
+        # 那是既有行为，与版本同步无关。
+        fe_arts = [a for a in artifacts if a['owner'] == 'frontend']
+        assert fe_arts, '应当有前端产物条目'
+        for a in fe_arts:
+            assert 'stale' not in a, f'版本已同步却标了 stale: {a}'
+            assert '不同步' not in (a.get('note') or ''), f'版本已同步却报了不同步: {a}'
+
+    def test_candidate_list_covers_ci_layout(self, manifest_module):
+        """候选列表必须覆盖 CI 的布局：前端在后端工作区的**子目录**里。
+
+        CI 的 test job 把前端 checkout 到 ``<workspace>/scada-app``，
+        而后端就在 ``<workspace>`` 根 —— 也就是 ``BACKEND_ROOT / 'scada-app'``。
+        少了这条候选，CI 上 FRONTEND_ROOT 指向不存在的路径，
+        frontend_deps_lock_digest 会静默变成 null（清单少字段但无人报错）。
+        """
+        cands = manifest_module._frontend_root_candidates()
+        assert manifest_module.BACKEND_ROOT / 'scada-app' in cands, (
+            f'候选路径缺少 CI 布局 BACKEND_ROOT/scada-app，实际候选={cands}'
+        )
+
+    def test_resolve_picks_first_existing_candidate(self, manifest_module,
+                                                    tmp_path, monkeypatch):
+        """搜索逻辑：命中第一个「有 package-lock.json」的候选。"""
+        good = tmp_path / 'a' / 'scada-app'
+        good.mkdir(parents=True)
+        (good / 'package-lock.json').write_text('{}', encoding='utf-8')
+        empty = tmp_path / 'b' / 'scada-app'
+        empty.mkdir(parents=True)  # 没有 package-lock.json，应被跳过
+
+        monkeypatch.setattr(
+            manifest_module, '_frontend_root_candidates',
+            lambda: [empty, good],
+        )
+        assert manifest_module._resolve_frontend_root() == good, (
+            '应跳过没有 package-lock.json 的候选'
+        )
+
+    def test_resolve_falls_back_when_nothing_matches(self, manifest_module,
+                                                     tmp_path, monkeypatch):
+        """一个候选都不命中时返回默认位置（让下游字段记 null 而不是抛异常）。"""
+        monkeypatch.setattr(
+            manifest_module, '_frontend_root_candidates',
+            lambda: [tmp_path / 'nope1', tmp_path / 'nope2'],
+        )
+        monkeypatch.setattr(manifest_module, 'BACKEND_ROOT', tmp_path / 'be')
+        # 兜底 = BACKEND_ROOT.parent / 'scada-app'
+        assert manifest_module._resolve_frontend_root() == tmp_path / 'scada-app'
+
+    def test_generate_manifest_exposes_lockstep_fields(self, manifest_module):
+        manifest = manifest_module.generate_manifest()
+        assert 'frontend_version' in manifest, (
+            '清单必须暴露前端实际版本，否则无法从清单判断同步与否'
+        )
+        assert manifest['version_lockstep'] in ('synced', 'skewed', 'unknown'), (
+            f"version_lockstep 取值非法: {manifest['version_lockstep']!r}"
+        )
+
+    def test_committed_manifest_lockstep_is_self_consistent(self, manifest_module):
+        """磁盘上那份清单的同步状态必须与它自己的两个版本字段自洽。
+
+        刻意**不断言**等于 synced：本机/CI 的前端检出状态可能不同，
+        写死就会变成"依赖机器状态"的用例（本机绿 CI 红）。
+        自洽性才是真正要守的不变量。
+        """
+        on_disk = json.loads(
+            (BACKEND_ROOT / 'release-manifest.json').read_text(encoding='utf-8'))
+        state = on_disk.get('version_lockstep')
+        fv = on_disk.get('frontend_version')
+        assert state in ('synced', 'skewed', 'unknown'), (
+            f'已提交的清单缺少/非法 version_lockstep={state!r}；'
+            '重新运行 tools/gen_release_manifest.py'
+        )
+        if state == 'synced':
+            assert fv == on_disk['version'], (
+                f'清单自称 synced，但 version={on_disk["version"]} != frontend_version={fv}'
+            )
+        elif state == 'skewed':
+            assert fv != on_disk['version'], (
+                f'清单自称 skewed，两个版本却相同（{fv}）'
+            )
+        else:
+            assert fv is None, f'unknown 状态下 frontend_version 应为 null，实为 {fv!r}'
+
+
 class TestManifestFileOnDisk:
     """仓库内已提交的清单文件本身必须是可解析且自洽的。"""
 

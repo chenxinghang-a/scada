@@ -8,12 +8,16 @@
     node_version            - 运行环境 Node 版本（不可用时 unknown）
     backend_deps_lock_digest  - requirements.txt 的 sha256（文件缺失则 null）
     frontend_deps_lock_digest - scada-app/package-lock.json 的 sha256（缺失则 null）
+    frontend_version        - 前端 package.json 的 version（读不到则 null）
+    version_lockstep        - 前后端版本同步状态：synced / skewed / unknown
     artifacts               - 交付产物清单（路径 + sha256）；产物缺失记 null 并注明
 
 设计要点：
     * 产物（安装包/归档）尚未构建时是常态，脚本**必须仍能成功运行**，
       缺失产物记为 null 而非抛异常退出。
     * 依赖锁文件缺失同样记为 null，不影响其余字段生成。
+    * 前端产物路径是用**后端 VERSION** 拼的，所以必须读前端 package.json
+      核对版本；不同步时显式标注（否则清单会记下永不存在的路径）。
 """
 
 from __future__ import annotations
@@ -32,18 +36,33 @@ logger = logging.getLogger(__name__)
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _frontend_root_candidates() -> list[Path]:
+    """前端仓库根的候选路径，**按优先级**排列（抽成独立函数是为了可测）。
+
+    对应两种真实布局：
+      1. 开发机：前端与后端是同级目录
+         （``.../Claw/industrial_scada`` + ``.../Claw/scada-app``）
+      2. CI：前端被 checkout 到**后端工作区的子目录** ``<workspace>/scada-app``
+         （见 .github/workflows/ci.yml 的 "Checkout frontend sources"）
+    漏掉第 2 条时 CI 上 ``FRONTEND_ROOT`` 指向不存在的路径，
+    ``frontend_deps_lock_digest`` 会**静默变成 null** —— 清单少了一个字段
+    却没人报错，属于典型的静默失效。
+    """
+    return [
+        BACKEND_ROOT.parent / "scada-app",
+        BACKEND_ROOT / "scada-app",
+        Path("C:/Users/cxx/scada-app"),
+        BACKEND_ROOT.parent.parent / "scada-app",
+    ]
+
+
 def _resolve_frontend_root() -> Path:
     """定位前端仓库根（不同环境可能不在后端根的同级目录）。
 
     只要某候选目录下存在 package-lock.json 即视为前端根；
     都找不到则返回 BACKEND_ROOT.parent / 'scada-app'（让产物/锁文件字段记 null）。
     """
-    candidates = [
-        BACKEND_ROOT.parent / "scada-app",
-        Path("C:/Users/cxx/scada-app"),
-        BACKEND_ROOT.parent.parent / "scada-app",
-    ]
-    for cand in candidates:
+    for cand in _frontend_root_candidates():
         if (cand / "package-lock.json").is_file():
             return cand
     return BACKEND_ROOT.parent / "scada-app"
@@ -75,6 +94,35 @@ def _sha256_of_file(path: Path) -> str | None:
 def _lock_digest(rel_path: Path) -> str | None:
     """依赖锁文件 digest：存在则 sha256，缺失则 None（调用方据实记录）。"""
     return _sha256_of_file(rel_path)
+
+
+def _frontend_version() -> str | None:
+    """读前端仓库 package.json 的 version；读不到返回 None。
+
+    为什么必须读它：本清单里前端产物路径是用**后端 VERSION** 拼的
+    （``SmartSCADA Setup {version}.exe``，见 ``_collect_artifacts``），
+    而安装包名由前端自己的 package.json 决定。两端版本不同步时，
+    清单会记下一个实际构建**永远产生不了**的路径 —— 字段齐全、
+    看起来正常，但内容是错的。这类"静默失效"正是本清单要消灭的东西，
+    所以这里把前端真实版本也读出来，不同步就显式标注。
+    """
+    pkg = FRONTEND_ROOT / "package.json"
+    if not pkg.is_file():
+        return None
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.warning("读取前端 package.json 失败，版本同步状态未知: %s", e)
+        return None
+    v = data.get("version")
+    return v if isinstance(v, str) and v else None
+
+
+def _lockstep_state(backend_version: str, frontend_version: str | None) -> str:
+    """前后端版本同步状态：``synced`` / ``skewed`` / ``unknown``。"""
+    if frontend_version is None:
+        return "unknown"
+    return "synced" if frontend_version == backend_version else "skewed"
 
 
 def _git_head_commit_time() -> float | None:
@@ -186,7 +234,7 @@ def _dir_digest(path: Path, max_files: int = 20000) -> dict | None:
     return result
 
 
-def _collect_artifacts(version: str) -> list[dict]:
+def _collect_artifacts(version: str, frontend_version: str | None = None) -> list[dict]:
     """收集交付产物。
 
     列出"期望存在"的产物路径；存在则给 sha256，缺失则 sha256=null 并注明原因。
@@ -195,7 +243,18 @@ def _collect_artifacts(version: str) -> list[dict]:
     额外做**陈旧性校验**：产物 mtime 早于 HEAD 提交时间时附加 ``stale`` 说明。
     否则清单会把旧世代的包记录成当前版本的产物——这是最危险的
     "证据撒谎"：字段齐全、sha256 真实，但内容与源码不对应。
+
+    额外做**版本同步校验**：前端产物路径是用后端 VERSION 拼的，
+    若 ``frontend_version`` 与之不符，该路径不可能被构建出来，
+    因此给前端产物条目加 ``stale`` + 说明（见 ``_frontend_version``）。
     """
+    frontend_skewed = frontend_version is not None and frontend_version != version
+    skew_note = (
+        f"前后端版本不同步：后端 VERSION={version}，前端 package.json="
+        f"{frontend_version}；清单中的前端产物路径按**后端版本**拼出，"
+        f"实际构建不会产生该文件"
+        if frontend_skewed else ""
+    )
     # (展示名, 路径, 归属, 伴随目录)
     #
     # 主后端产物是 **onedir 布局的 dist/scada-backend/scada-backend.exe**，
@@ -232,13 +291,16 @@ def _collect_artifacts(version: str) -> list[dict]:
     for name, path, owner, companion_dir in candidates:
         digest = _sha256_of_file(path)
         if digest is None:
+            note = "artifact not built yet / not found"
+            if owner == "frontend" and skew_note:
+                note = f"{note}；{skew_note}"
             artifacts.append(
                 {
                     "name": name,
                     "owner": owner,
                     "path": str(path),
                     "sha256": None,
-                    "note": "artifact not built yet / not found",
+                    "note": note,
                 }
             )
             continue
@@ -282,6 +344,13 @@ def _collect_artifacts(version: str) -> list[dict]:
         if stale:
             entry["stale"] = True
             entry["note"] = stale
+        if owner == "frontend" and skew_note:
+            # 即便磁盘上真有这么个文件（比如人为改名），版本不同步也说明
+            # 它不是本次源码的产物，不能当作有效交付证据。
+            entry["stale"] = True
+            entry["note"] = (
+                f"{entry['note']}；{skew_note}" if entry.get("note") else skew_note
+            )
         artifacts.append(entry)
     return artifacts
 
@@ -298,12 +367,15 @@ def generate_manifest() -> dict:
 
     backend_lock = _lock_digest(BACKEND_ROOT / "requirements.txt")
     frontend_lock = _lock_digest(FRONTEND_ROOT / "package-lock.json")
+    frontend_version = _frontend_version()
 
     manifest = {
         **build_info,
+        "frontend_version": frontend_version,
+        "version_lockstep": _lockstep_state(version, frontend_version),
         "backend_deps_lock_digest": backend_lock,
         "frontend_deps_lock_digest": frontend_lock,
-        "artifacts": _collect_artifacts(version),
+        "artifacts": _collect_artifacts(version, frontend_version),
         # 生成清单的工具自身版本，便于追溯清单格式
         "manifest_generator": "tools/gen_release_manifest.py",
     }

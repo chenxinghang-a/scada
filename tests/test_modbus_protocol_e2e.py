@@ -201,6 +201,46 @@ def test_write_multiple_readback(simulator):
         c.close()
 
 
+def test_client_write_is_held_across_model_updates(simulator):
+    """客户端写入必须**跨过模型更新周期**仍然有效（写保持）。
+
+    防回归用例，钉死的是一个真实的模拟器缺陷（2026-09-21 定位）：
+    `build_slave_block` 把每台寄存器的保持时长算进 `spec['hold']` 后**没人读**，
+    四个 `SimDataBlock` 一律用 `hold_seconds=0` 构造 → `setValues` 记的是 `now + 0`
+    → 模型线程的跳过条件 `_written[i] > now` **恒为假** → 写保持形同虚设。
+
+    实测（修复前）：写 [111,222,333,444] → 立即回读正确 →
+    等 1.5s 回读得到模型值 [1,1,1,1]。
+
+    这也让 `test_write_multiple_readback` 变成**概率性失败** ——
+    写与读之间撞上一次更新 tick 就红，全量套件偶发、单跑不复现。
+
+    对产品的意义：`--simulator` 模式下用户在界面上改的继电器/设定值
+    1 秒后就被模型改回去，看起来"写了没用"；`writable_hold_seconds: 300`
+    这个配置项完全是个摆设。
+    """
+    devs, _ = _load_config()
+    target = next(d for d in devs if d["id"] == "relay_output_01")
+    sid = int(target["slave_id"])
+    c = _client(simulator)
+    try:
+        vals = [111, 222, 333, 444]
+        wr = c.write_registers(address=0, values=vals, slave=sid)
+        assert not wr.isError(), wr
+
+        # 跨过至少一个模型更新周期（fixture 用 --interval 1.0）
+        time.sleep(1.5)
+
+        rr = c.read_holding_registers(address=0, count=len(vals), slave=sid)
+        assert not rr.isError(), rr
+        assert rr.registers == vals, (
+            f"客户端写入被模型更新覆盖 —— 写保持失效。"
+            f"写入 {vals}，等 1.5s 后回读 {rr.registers}"
+        )
+    finally:
+        c.close()
+
+
 # ----------------------------------------------------------------
 # 6. 越界/未定义地址 → 异常响应（不得静默返回 0）
 # ----------------------------------------------------------------

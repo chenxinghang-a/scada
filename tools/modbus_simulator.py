@@ -17,6 +17,12 @@ pymodbus 3.9.2 的 `pymodbus.simulator` 模块 API 漂移严重：
 后台线程直接改 hr.values（普通 list，可变）即可被客户端读到；客户端写入也落在同一个
 list，写后读回天然成立。
 
+⚠️ 但"写后读回天然成立"**只在同一个更新周期内成立**：后台模型线程每个 interval
+会把模型值写回 hr.values，把客户端刚写的值覆盖掉。所以必须有**写保持**机制
+（``SimDataBlock._written`` 记录过期时刻，模型线程跳过仍在保持期的地址），
+否则客户端写入活不过一个 interval —— 见 ``build_slave_block`` 里关于
+``hold_by_index`` 的说明。
+
 地址映射（重要）
 ---------------
 pymodbus 3.9.2 的 ModbusSlaveContext.getValues/setValues 内部硬编码 `address += 1`，
@@ -161,14 +167,27 @@ class SimDataBlock(ModbusSequentialDataBlock):
 
     - getValues 越界时返回 int(ILLEGAL_ADDRESS)，让 pymodbus 回异常响应，
       而不是静默返回 0（满足"越界地址必须异常"）。
-    - setValues 记录每个被写地址的过期时刻（写保持），模型线程据此跳过被写的寄存器。
+    - setValues 记录每个被写地址的**过期时刻**（写保持），模型线程据此跳过被写的寄存器。
+      保持时长**逐地址**查 ``hold_by_index``（rw 寄存器 300s、只读 5s）——
+      同一个 hr 块里两种时长的寄存器混在一起，单个 ``hold_seconds`` 表达不了。
     - 注意：模型线程直接改 .values[idx]，不经过 setValues，因此不会被记为"客户端写入"。
+      **但正因如此，模型线程必须与 setValues 互斥**：否则它可能在"检查写保持"之后、
+      "写模型值"之前被客户端插入，把客户端的值静默覆盖掉。
+      ``self.lock`` 就是为此存在（见 ``update_slave``）。
     """
 
-    def __init__(self, address, values, written=None, hold_seconds=0):
+    def __init__(self, address, values, written=None, hold_seconds=0,
+                 hold_by_index=None):
         super().__init__(address, values)
         self._written = written if written is not None else {}
         self._hold = float(hold_seconds)
+        self._hold_by_index = dict(hold_by_index or {})
+        # 与模型更新线程互斥（见类 docstring）
+        self.lock = threading.Lock()
+
+    def hold_for(self, block_index: int) -> float:
+        """该 block 索引对应的写保持时长（秒）。"""
+        return self._hold_by_index.get(block_index, self._hold)
 
     def _in_bounds(self, start, count):
         return 0 <= start and start + count <= len(self.values)
@@ -185,10 +204,13 @@ class SimDataBlock(ModbusSequentialDataBlock):
         start = address - self.address
         if not self._in_bounds(start, len(values)):
             return ILLEGAL_ADDRESS
-        self.values[start:start + len(values)] = values
-        now = time.monotonic()
-        for i in range(len(values)):
-            self._written[start + i] = now + self._hold
+        # 写入与登记必须在同一临界区内，否则模型线程可能在这两步之间插入并覆盖
+        with self.lock:
+            self.values[start:start + len(values)] = values
+            now = time.monotonic()
+            for i in range(len(values)):
+                idx = start + i
+                self._written[idx] = now + self.hold_for(idx)
         return None
 
 
@@ -226,7 +248,23 @@ def build_slave_block(registers: list[dict], byte_order: str,
 
     block_size = max_block_idx + 2  # +1 余量，block 索引 0 恒为空
 
-    hr = SimDataBlock(0, [0] * block_size, written={}, hold_seconds=0)
+    # 逐 block 索引的写保持时长。
+    #
+    # ⚠️ 这里原先只把时长存进 spec['hold']，**从来没有人读它** ——
+    # 四个块一律用 hold_seconds=0 构造，于是 setValues 记的是 `now + 0`，
+    # 模型线程的跳过条件 `_written[i] > now` 恒为假 → **写保持形同虚设**：
+    # 客户端写进去的设定值活不过一个更新周期（实测写 [111,222,333,444]，
+    # 1.5s 后回读变成模型值 [1,1,1,1]）。
+    # 后果不只是测试 flaky：`--simulator` 模式下用户在界面上改的继电器/设定值
+    # 1 秒后就被模型改回去，看起来"写了没用"，而 `writable_hold_seconds: 300`
+    # 这个配置项完全是个摆设。
+    hold_by_index: dict[int, float] = {}
+    for spec in specs:
+        for k in range(spec['length']):
+            hold_by_index[spec['bi_start'] + k] = spec['hold']
+
+    hr = SimDataBlock(0, [0] * block_size, written={}, hold_seconds=0,
+                      hold_by_index=hold_by_index)
     di = SimDataBlock(0, [1] * block_size, written={}, hold_seconds=0)  # 离散输入默认置 1
     co = SimDataBlock(0, [0] * block_size, written={}, hold_seconds=0)  # 线圈默认 0
     ir = SimDataBlock(0, [0] * block_size, written={}, hold_seconds=0)  # 输入寄存器默认 0
@@ -256,28 +294,34 @@ def update_slave(hr: SimDataBlock, specs: list[dict], byte_order: str, start_tim
     for spec in specs:
         bi = spec['bi_start']
         length = spec['length']
-        # 若整段寄存器仍在写保持期内，跳过（rw 长期保持，只读短暂保持）
-        if any(hr._written.get(i, 0.0) > now for i in range(bi, bi + length)):
-            continue
         name = spec['name']
         data_type = spec['data_type']
         t = time.time() - start_time
 
-        if data_type in ('float32', 'float', 'real', 'uint32'):
-            val = calc_value(spec['profile'], t)
-            if data_type == 'uint32':
-                regs = list(struct.unpack('>HH', struct.pack('>I', int(max(0, val)))))
-            else:
-                regs = pack_float32(val, byte_order)
-            hr.values[bi:bi + 2] = regs
-        else:  # uint16 / int16
-            if 'status' in name.lower():
-                val = model_status_value(name, t)
-            elif any(k in name.lower() for k in ('relay', 'light', 'buzzer')):
-                val = model_discrete_value(name, t)
-            else:
-                val = int(max(0, min(65535, round(calc_value(spec['profile'], t)))))
-            hr.values[bi] = val
+        # 「检查写保持」与「写模型值」必须在同一临界区内。
+        # 否则客户端可能恰好插在两步之间：检查时该地址还没被写（不跳过），
+        # 随后模型值把客户端刚写进去的值覆盖掉 —— 一次静默丢写。
+        # 窗口虽小（微秒级），但写保持的整个意义就是"客户端写了就别动它"。
+        with hr.lock:
+            # 若整段寄存器仍在写保持期内，跳过（rw 长期保持，只读短暂保持）
+            if any(hr._written.get(i, 0.0) > now for i in range(bi, bi + length)):
+                continue
+
+            if data_type in ('float32', 'float', 'real', 'uint32'):
+                val = calc_value(spec['profile'], t)
+                if data_type == 'uint32':
+                    regs = list(struct.unpack('>HH', struct.pack('>I', int(max(0, val)))))
+                else:
+                    regs = pack_float32(val, byte_order)
+                hr.values[bi:bi + 2] = regs
+            else:  # uint16 / int16
+                if 'status' in name.lower():
+                    val = model_status_value(name, t)
+                elif any(k in name.lower() for k in ('relay', 'light', 'buzzer')):
+                    val = model_discrete_value(name, t)
+                else:
+                    val = int(max(0, min(65535, round(calc_value(spec['profile'], t)))))
+                hr.values[bi] = val
 
 
 def build_update_thread(slaves_specs: list[tuple[SimDataBlock, list[dict], str]], interval: float):

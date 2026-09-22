@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from 存储层 import database as db_module
 from 存储层.data_archive import DataArchive
 from 存储层.data_lifecycle import DataLifecycleManager, RetentionPolicy
 from 存储层.database import (
@@ -445,6 +446,32 @@ class TestUnwiredModules:
 # 缺陷 7：膨胀自动检测（空闲页占比）
 # ============================================================
 
+class _FakeMonotonic:
+    """把某个模块里的 ``time.monotonic()`` 伪装成指定的「开机时长」。
+
+    为什么需要：``time.monotonic()`` 在 Windows 上返回的是**开机以来的秒数**
+    （``GetTickCount64``），不是 Unix 时间戳，也**不是**从进程启动算起。
+    于是任何「用 monotonic 做节流」的代码，行为都会随**机器开机时长**变化：
+    本机开了 24 小时 → ``now≈89000``；CI runner 刚开机 → ``now≈200``。
+    这类差异在本地永远复现不出来，只能在 CI 上红 —— 本文件的三条膨胀用例
+    就是这么红了很久。把时钟伪装掉，才能把这种场景搬进本地回归。
+
+    用法（配合 ``monkeypatch``）：:
+
+        monkeypatch.setattr(db_module, 'time', _FakeMonotonic(200.0))
+
+    其余属性透传给真的 ``time`` 模块，避免被测代码用到别的函数时炸掉。
+    """
+
+    def __init__(self, uptime_seconds: float):
+        self._uptime = uptime_seconds
+
+    def __getattr__(self, name):
+        if name == 'monotonic':
+            return lambda: self._uptime
+        return getattr(time, name)
+
+
 class TestBloatDetection:
     @staticmethod
     def _make_bloat(db, rows=5000):
@@ -458,6 +485,28 @@ class TestBloatDetection:
         with db.get_connection() as conn:
             conn.execute('DELETE FROM history_data')
             conn.execute("DELETE FROM realtime_data WHERE device_id = 'dev2'")
+
+    @staticmethod
+    def _force_warn_window(db):
+        """把节流窗口拨到「很久以前告警过」，且**不依赖机器开机时长**。
+
+        ⚠️ 不能写 ``db._last_bloat_warn_at = 0.0``（本文件原先的写法）：
+        在 Windows 上 ``time.monotonic()`` 是开机以来的秒数，``0.0`` 的语义是
+        「开机瞬间告警过」。于是任何开机不足 ``BLOAT_WARN_INTERVAL_SECONDS``
+        的机器上 ``now - 0.0 >= 3600`` 为假 → 告警被节流吃掉。
+        CI runner 全是新开机机器，所以这三条用例在 CI 上必红、本机必绿。
+
+        正解：用**当前时钟**往前推一个完整窗口再多 1 秒，
+        这样 ``now - last`` 恒等于 ``间隔 + 1``，与开机时长无关。
+
+        注意这里取的是 ``db_module.time.monotonic()`` —— **被测模块自己的时钟**，
+        不是本测试模块的 ``time``。两者通常是同一个对象，但用例一旦伪装了
+        被测模块的时钟（见 ``test_fresh_boot_does_not_suppress_first_warning``），
+        用错时钟就会算出「很久以后」而不是「很久以前」，节流照样命中。
+        """
+        db._last_bloat_warn_at = (
+            db_module.time.monotonic() - BLOAT_WARN_INTERVAL_SECONDS - 1.0
+        )
 
     @staticmethod
     def _bloat_diag(db) -> str:
@@ -484,8 +533,10 @@ class TestBloatDetection:
             f'\n  logger: effective_level='
             f'{logging.getLevelName(lg.getEffectiveLevel())} '
             f'propagate={lg.propagate} manager.disable={logging.root.manager.disable}'
-            f'\n  节流: _last_bloat_warn_at={getattr(db, "_last_bloat_warn_at", None)} '
-            f'now={time.monotonic():.0f} 间隔={BLOAT_WARN_INTERVAL_SECONDS}'
+            f'\n  节流: _last_bloat_warn_at='
+            f'{getattr(db, "_last_bloat_warn_at", None)} '
+            f'now={db_module.time.monotonic():.0f} 间隔={BLOAT_WARN_INTERVAL_SECONDS}'
+            f'（注意 now 是**开机以来的秒数**，CI runner 上只有几百）'
         )
 
     def test_healthy_db_is_not_bloated(self, db):
@@ -504,8 +555,9 @@ class TestBloatDetection:
         self._make_bloat(db)
         # checkpoint 让数据落进主库文件，便于"文件大小 vs 实际数据量"对比
         db.wal_checkpoint()
-        # 节流是实例级的，但显式归零可以让本用例不依赖"这个实例此前没告警过"
-        db._last_bloat_warn_at = 0.0
+        # 节流是实例级的，显式把窗口拨到「很久以前」可以让本用例不依赖
+        # "这个实例此前没告警过"。**别改回 0.0**，见 _force_warn_window 的说明。
+        self._force_warn_window(db)
 
         # 测量与告警都放进同一个 caplog 上下文 —— 原先 `db.check_bloat()` 写在
         # `with` 块**外面**，`caplog.at_level` 已经失效，是否捕获取决于当时
@@ -533,11 +585,59 @@ class TestBloatDetection:
             f'\n  caplog 记录数={len(caplog.records)}'
         )
 
+    def test_fresh_boot_does_not_suppress_first_warning(self, db, caplog,
+                                                        monkeypatch):
+        """**首条**膨胀告警不得因机器「刚开机」而被节流吞掉。
+
+        这是一条防回归用例，钉死的是一个真实的产品缺陷（不只是测试缺陷）：
+
+        ``time.monotonic()`` 在 Windows 上返回**开机以来的秒数**
+        （``GetTickCount64``）。若把「上次告警时间」的初值写成 ``0.0``，
+        其语义就是「在开机后第 0 秒告警过」。于是在任何开机不足
+        ``BLOAT_WARN_INTERVAL_SECONDS``(3600) 的机器上，
+        ``now - 0.0 >= 3600`` 恒为假 → **首条告警被打不出来**。
+
+        谁会踩到：
+        - CI runner —— 每次都是全新开机的虚拟机，``now`` 只有几百秒，
+          所以 ``TestBloatDetection`` 长期在 CI 上红、本机（开机 24h+）全绿；
+        - 现场设备 —— 掉电重启后同样会静默最长 1 小时，
+          等于「缺陷 7：膨胀无自动检测」只修了一半。
+
+        修复方式：初值用 ``float('-inf')``（语义 =「从未告警」），
+        让首次检测永远通过节流。
+        """
+        # ① 初值必须代表「从未告警」——0.0 会被低开机时长的机器误读成"刚刚告警过"
+        assert db._last_bloat_warn_at == float('-inf'), (
+            'Database._last_bloat_warn_at 的初值必须是 float("-inf")；'
+            f'当前={db._last_bloat_warn_at!r}。'
+            '写成 0.0 时，开机不足 1 小时的机器上首条膨胀告警会被节流吞掉。'
+        )
+
+        self._make_bloat(db)
+        # 刻意**不**重置 `_last_bloat_warn_at` —— 本用例要考察的正是
+        # 「全新实例、从未告警过」时的行为。`check_bloat` 只被
+        # `get_database_stats` 调用（见 存储层/database.py），而 `_make_bloat`
+        # 只走 `insert_data_batch` + 裸 DELETE，不会碰到节流字段。
+        # 因此走到下面那行时它仍是 __init__ 里的初值 —— 初值写错就直接红。
+
+        # ② 把被测模块的单调时钟伪装成「刚开机 200 秒」（CI runner 的量级）
+        monkeypatch.setattr(db_module, 'time', _FakeMonotonic(200.0))
+
+        with caplog.at_level(logging.WARNING, logger='存储层.database'):
+            db.check_bloat()
+
+        assert any('膨胀' in rec.message for rec in caplog.records), (
+            '刚开机的机器上首条膨胀告警被节流吞掉了 —— 重启后的设备会静默'
+            f'最长 {BLOAT_WARN_INTERVAL_SECONDS}s 才发现库在膨胀'
+            f'{self._bloat_diag(db)}'
+            f'\n  caplog 记录数={len(caplog.records)}'
+        )
+
     def test_bloat_warning_is_throttled(self, db, caplog):
         """告警必须节流：get_database_stats 会被健康检查/WebSocket 每 10 秒调一次，
         不节流就会用同一条 warning 淹没日志（那正是当初没发现的另一面）。"""
         self._make_bloat(db)
-        db._last_bloat_warn_at = 0.0
+        self._force_warn_window(db)
 
         with caplog.at_level(logging.WARNING, logger='存储层.database'):
             for _ in range(3):
@@ -552,7 +652,7 @@ class TestBloatDetection:
 
     def test_get_database_stats_exposes_free_page_ratio(self, db, caplog):
         self._make_bloat(db)
-        db._last_bloat_warn_at = 0.0
+        self._force_warn_window(db)
 
         with caplog.at_level(logging.WARNING, logger='存储层.database'):
             stats = db.get_database_stats()
