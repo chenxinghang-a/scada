@@ -13,9 +13,17 @@ import os
 import sqlite3
 import sys
 import time
+from pathlib import Path
 
-SRC = 'data/scada_simulated.db'
-DST = 'data/scada_simulated_compact.db'
+# 允许从任意工作目录运行（本工具的全部意义就是"数据出问题时拿来跑"，
+# 而那时你多半不在仓库根目录）。相对路径会让它连到 CWD 下的另一个（或空的）库，
+# 校验行数全是 0 → 误判为"数据全丢了"。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import paths  # noqa: E402
+
+SRC = str(paths.resolve('data/scada_simulated.db'))
+DST = str(paths.resolve('data/scada_simulated_compact.db'))
 TABLES = ['realtime_data', 'history_data', 'alarm_records', 'device_status', 'history_archive']
 
 

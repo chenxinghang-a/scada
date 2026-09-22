@@ -110,23 +110,70 @@ ALLOWED_SILENT_BROAD: dict[tuple[str, int], str] = {
 }
 
 
+def _git_listed_py():
+    """列出「受版本控制 + 未被 .gitignore 忽略」的 .py 相对路径；git 不可用返回 None。
+
+    为什么不用 `os.walk` 直接扫盘：仓库里存在**构建产物**目录
+    （`dist-scada-<版本>/`、`build-scada-<版本>/`，见 .gitignore），它们是源码的
+    **逐字副本**。一旦被扫到，守卫就会对着构建产物报违规 ——
+    表现为「本地一打包，守卫就红」。**假红比漏报更危险**：它训练人
+    「看到这守卫红了就忽略」，等于把守卫废掉。2026-09-22 实测踩到
+    （PyInstaller 输出 `dist-scada-1.3.1037/`，本文件与
+    `test_timestamp_sql_consistency.py` 双双假红）。
+
+    用 git 的文件清单则天然只覆盖「人写的代码」：
+      - `--cached`：已跟踪文件（`legacy/`、`测试/` 等仍在，是否扫由 skip 集决定）
+      - `--others --exclude-standard`：新增但未被忽略的源文件（新代码仍受管辖）
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others",
+             "--exclude-standard", "--", "*.py"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    # `-z` 用 NUL 分隔，非 ASCII 路径不会被转义（core.quotepath 干扰不到）
+    return [p for p in proc.stdout.decode("utf-8", "replace").split("\0") if p]
+
+
 def _iter_py(skip_dirs: set[str]):
-    """遍历仓库里的全部 .py 文件，产出 (相对路径, 绝对路径)。
+    """遍历仓库里的 .py 文件，产出 (相对路径, 绝对路径)。
 
     Args:
         skip_dirs: 要跳过的目录名集合（按**目录名**匹配，不做路径前缀匹配）。
     """
-    for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if d not in skip_dirs]
-        for name in files:
-            if not name.endswith(".py"):
-                continue
-            abs_path = os.path.join(root, name)
-            rel = os.path.relpath(abs_path, REPO_ROOT).replace(os.sep, "/")
-            # 仓库根目录下的临时脚本（下划线开头）跳过
-            if "/" not in rel and name.startswith("_"):
-                continue
-            yield rel, abs_path
+    listed = _git_listed_py()
+
+    if listed is None:
+        # git 不可用（或不是 git 仓库）→ 退回扫盘，行为与历史一致
+        for root, dirs, files in os.walk(REPO_ROOT):
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            for name in files:
+                if not name.endswith(".py"):
+                    continue
+                abs_path = os.path.join(root, name)
+                rel = os.path.relpath(abs_path, REPO_ROOT).replace(os.sep, "/")
+                # 仓库根目录下的临时脚本（下划线开头）跳过
+                if "/" not in rel and name.startswith("_"):
+                    continue
+                yield rel, abs_path
+        return
+
+    for rel in listed:
+        parts = rel.split("/")
+        if any(p in skip_dirs for p in parts[:-1]):
+            continue
+        # 仓库根目录下的临时脚本（下划线开头）跳过
+        if len(parts) == 1 and parts[0].startswith("_"):
+            continue
+        yield rel, os.path.join(REPO_ROOT, rel.replace("/", os.sep))
 
 
 def _parse(rel: str, abs_path: str) -> ast.Module:
@@ -239,6 +286,26 @@ def test_bare_except_rule_covers_tests_and_tools():
     assert any(r.startswith("tests/") for r in rels), "tests/ 未纳入裸 except 扫描"
     assert any(r.startswith("测试/") for r in rels), "测试/ 未纳入裸 except 扫描"
     assert not any(r.startswith("legacy/") for r in rels), "legacy/ 归档区不应被扫"
+
+
+def test_scan_excludes_build_output():
+    """构建产物目录不得进入扫描集 —— 假红比漏报更危险。
+
+    回归背景（2026-09-22）：本地跑完 PyInstaller（输出 `dist-scada-1.3.1037/`）后，
+    本文件与 `test_timestamp_sql_consistency.py` 双双变红，报的全是
+    **构建产物里的源码副本**。历史实现按目录名精确匹配跳过（只认 `dist` / `build`），
+    认不出 `dist-scada-*` / `build-scada-*` 这类带后缀的产物目录。
+    修法是「只扫 git 清单」（见 :func:`_git_listed_py`），这条测试钉住该性质。
+    """
+    files = list(_iter_py(BARE_RULE_SKIP))
+    assert files, "扫描集为空，守卫已失效"
+    # 只看**目录段**：`build.py` / `build.bat` / `release-manifest.json` 是文件，不算
+    offenders = [
+        rel for rel, _ in files
+        if len(rel.split("/")) > 1
+        and rel.split("/")[0].startswith(("dist", "build", "release"))
+    ]
+    assert not offenders, f"扫描集混入构建产物: {offenders[:5]}"
 
 
 def test_no_bare_except():

@@ -30,7 +30,11 @@ class OpsAuditLogger:
     """运维操作审计日志"""
 
     def __init__(self, log_dir: str = "logs"):
-        self._log_dir = Path(log_dir)
+        # 绝对路径化：本类在模块尾部被**实例化为全局单例**（`ops_audit = OpsAuditLogger()`），
+        # 也就是说「import core.ops_tools」这一步就会 mkdir。默认值 'logs' 是相对路径，
+        # 于是目录会建在**当前工作目录**下 —— 从服务/计划任务/冻结产物启动时
+        # 运维审计日志落到别处，与 LogConfig.LOG_DIR（绝对）指向的日志目录分裂成两处。
+        self._log_dir = paths.resolve(log_dir)
         self._log_dir.mkdir(parents=True, exist_ok=True)
         self._audit_file = self._log_dir / "ops_audit.jsonl"
         self._lock = threading.Lock()
@@ -481,10 +485,16 @@ class DataCleaner:
             return {'operation': 'clean_audit_logs', 'status': 'error', 'error': str(e), 'duration_sec': time.time() - start}
 
     def clean_old_backups(self, backup_dir: str = "data", keep_count: int = 5) -> Dict[str, Any]:
-        """清理旧备份文件，只保留最近 N 个"""
+        """清理旧备份文件，只保留最近 N 个
+
+        ``backup_dir`` 经 :func:`paths.resolve` 解析。相对路径会让 glob 打在
+        CWD 下的错误目录上 —— 匹配不到任何文件 → ``deleted_count=0`` →
+        返回 ``status: 'success'``。**「清理成功但一个都没删」是最坏的失败形态**：
+        调用方看到 success 就不会再查。
+        """
         start = time.time()
         try:
-            backup_path = Path(backup_dir)
+            backup_path = paths.resolve(backup_dir)
             backups = sorted(
                 backup_path.glob("scada_backup_*.db"),
                 key=lambda f: f.stat().st_mtime,
@@ -507,10 +517,14 @@ class DataCleaner:
             return {'operation': 'clean_old_backups', 'status': 'error', 'error': str(e), 'duration_sec': time.time() - start}
 
     def clean_log_files(self, log_dir: str = "logs", retention_days: int = 30) -> Dict[str, Any]:
-        """清理过期日志文件"""
+        """清理过期日志文件
+
+        与 :meth:`clean_old_backups` 同因：相对路径会让 glob 打错目录，
+        「成功清理 0 个文件」与「本来就没有过期文件」不可区分。
+        """
         start = time.time()
         try:
-            log_path = Path(log_dir)
+            log_path = paths.resolve(log_dir)
             cutoff_ts = time.time() - (retention_days * 86400)
             deleted = []
 
@@ -653,9 +667,14 @@ class DiagnosticExporter:
         return state
 
     def _collect_config(self) -> Dict[str, Any]:
-        """收集配置信息"""
+        """收集配置信息
+
+        必须走 :func:`paths.resolve`：打包后配置在 ``_internal/配置/``，
+        而 ``Path('配置')`` 是相对 CWD 的，永远找不到 →
+        诊断包里 config 段恒为 ``{}``，而诊断包正是排障时唯一能带走的证据。
+        """
         config = {}
-        config_dir = Path('配置')
+        config_dir = paths.resolve('配置')
         if config_dir.exists():
             for f in config_dir.glob('*.yaml'):
                 try:
@@ -680,9 +699,13 @@ class DiagnosticExporter:
         return config
 
     def _collect_db_stats(self) -> Dict[str, Any]:
-        """收集数据库统计"""
+        """收集数据库统计
+
+        同上：``Path('data')`` 找不到打包后位于 ``_internal/data/`` 的库文件，
+        诊断包会缺掉「库有多大、各表多少行」这一整段。
+        """
         stats = {}
-        data_dir = Path('data')
+        data_dir = paths.resolve('data')
         if data_dir.exists():
             for db_file in data_dir.glob('*.db'):
                 try:
@@ -715,8 +738,12 @@ class DiagnosticExporter:
         return stats
 
     def _copy_recent_logs(self, diag_dir: Path):
-        """复制最近日志"""
-        log_dir = Path('logs')
+        """复制最近日志
+
+        同上：``Path('logs')`` 相对 CWD，找不到真实日志目录 → 诊断包里没有日志，
+        而「日志」正是排障时最需要的那一份。
+        """
+        log_dir = paths.resolve('logs')
         if not log_dir.exists():
             return
 

@@ -120,16 +120,32 @@ class TestAlarmAPIEdgeCases:
 class TestSystemAPIEdgeCases:
     """系统API边界测试"""
 
-    def test_toggle_simulation_mode(self, client, auth_headers, app):
+    def test_toggle_simulation_mode(self, client, auth_headers, app, tmp_path):
         """POST /api/system/simulation-mode"""
         app.device_manager.switch_simulation_mode.return_value = {'success': True}
-        with patch('展示层.api.api_system.Path') as mock_path:
-            mock_path.return_value.exists.return_value = False
+        # 该端点会**整份重写** `配置/system.yaml`（yaml.dump 丢注释 + 翻转
+        # simulation_mode）。历史写法 `patch('...api_system.Path')` 自端点改用
+        # `paths.resolve` 后已失效 —— patch 打在一个不再参与落点计算的符号上，
+        # 于是测试真的写进了**受版本控制的仓库配置**（全量套件后工作区变脏）。
+        # 这里只重定向 `配置/system.yaml` 这一个落点，其余路径解析保持原样。
+        fake_cfg = tmp_path / 'system.yaml'
+
+        import paths as _paths
+        _real_resolve = _paths.resolve
+
+        def _redirect(cfg):
+            if str(cfg).replace('\\', '/').endswith('配置/system.yaml'):
+                return fake_cfg
+            return _real_resolve(cfg)
+
+        with patch('展示层.api.api_system.paths.resolve', side_effect=_redirect):
             resp = client.post('/api/system/simulation-mode',
                                json={'simulation_mode': True},
                                headers=auth_headers)
         # 正常切换必须 200；原 `in (200, 500)` 把 500 也当通过 = 假绿
         assert resp.status_code == 200
+        # 落点确实被重写了（说明走的仍是真实持久化分支），但写的是 tmp
+        assert fake_cfg.is_file()
 
     def test_update_config_success(self, client, auth_headers, app):
         """PUT /api/config 成功"""

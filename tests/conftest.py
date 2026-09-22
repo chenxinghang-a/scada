@@ -7,6 +7,7 @@ import sys
 import os
 import sqlite3
 import tempfile
+import warnings
 from unittest.mock import MagicMock
 from pathlib import Path
 
@@ -120,12 +121,33 @@ def restore_polluted_configs():
     这里只做「快照 → 会话结束还原」，不改变任何生产行为。
     之所以用 session 粒度：2000+ 个测试逐条还原开销不划算，
     而这些配置在单次会话内被读到中间态的风险很低（现有测试只断言字段存在）。
+
+    已知局限（本 fixture 的**盲区**，2026-09 踩过）：
+        快照取自**当前工作区**，所以它只能把文件还原到「本次会话开始时的样子」。
+        如果上一次会话被中断（Ctrl-C / 超时 SIGTERM）导致 teardown 没跑，
+        污染会沉积下来，被下一次会话当作"原状"快照 —— 还原等于空操作，
+        脏状态就永久化了。故这里在会话开始额外检测"开局即脏"并告警。
+        根因侧已修：`tests/test_api_edge_cases.py::test_toggle_simulation_mode`
+        不再把落点写到仓库配置上。
     """
     snapshots = {}
+    dirty_at_start = []
     for rel in _POLLUTABLE_CONFIGS:
         p = Path(PROJECT_ROOT) / rel
         if p.is_file():
             snapshots[p] = p.read_bytes()
+            if _differs_from_git_head(rel):
+                dirty_at_start.append(rel)
+
+    if dirty_at_start:
+        warnings.warn(
+            "[conftest] 会话开始时这些受版本控制的配置**已经是脏的**: "
+            + ", ".join(dirty_at_start)
+            + "。本 fixture 只能还原到「会话开始时的样子」，无法把它们恢复到提交状态"
+            " —— 多半是上一次会话被中断（teardown 没跑）留下的。"
+            "建议先 `git checkout -- 配置/` 再跑测试。",
+            stacklevel=1,
+        )
 
     yield
 
@@ -139,6 +161,32 @@ def restore_polluted_configs():
             pass
     if restored:
         print(f"\n[conftest] 已还原被测试写脏的配置文件: {', '.join(restored)}")
+
+
+def _differs_from_git_head(rel: str) -> bool:
+    """工作区里的 ``rel`` 是否与 git HEAD 版本不同。
+
+    刻意用 ``git diff --quiet HEAD -- <rel>`` 而不是「读 HEAD blob 逐字节比对」：
+    本机 ``core.autocrlf=true``，工作区文件是 CRLF、git 里的 blob 是 LF，
+    逐字节比对会把**每一份配置文件都判成脏的**，告警就永远在响、彻底失去信号。
+    ``git diff`` 走的是 git 自己的行尾归一化，不会踩这个坑。
+
+    git 不可用 / 命令失败 / 文件未被跟踪时一律返回 ``False``
+    （宁可漏报不误报，免得在没有 git 的环境里凭空造出告警）。
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", rel],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    # 0 = 无差异；1 = 有差异；其它（129 = 未知路径等）= 不当成脏
+    return proc.returncode == 1
 
 
 def _local_service_running() -> bool:

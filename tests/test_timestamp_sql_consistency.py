@@ -15,6 +15,7 @@
   1. 静态扫描：防止新增代码再次写出 ``isoformat()`` 参与 SQL 时间比较。
   2. 行为验证：对已修的 6 个模块断言"同日记录不被误删 / 不被漏算"。
 """
+import os
 import re
 import sqlite3
 from datetime import datetime, timedelta
@@ -44,12 +45,53 @@ _SQL_RE = re.compile(
 _PLACEHOLDER_RE = re.compile(r'[<>]=?\s*\?|BETWEEN\s*\?\s*AND\s*\?', re.I)
 
 
+def _iter_scanned_py():
+    """产出待扫描的 (相对路径, 绝对路径)，只含「人写的代码」。
+
+    为什么不用 ``REPO_ROOT.rglob('*.py')`` 直接扫盘：仓库里存在**构建产物**目录
+    （``dist-scada-<版本>/``、``build-scada-<版本>/``，见 .gitignore），它们是源码的
+    **逐字副本**。扫到它们就会对着构建产物报违规 —— 表现为「本地一打包，守卫就红」。
+    **假红比漏报更危险**：它训练人「看到守卫红了就忽略」，等于把守卫废掉。
+    2026-09-22 实测踩到（PyInstaller 输出 ``dist-scada-1.3.1037/``）。
+
+    改用 git 的文件清单（受跟踪 + 未被忽略的新文件），天然只覆盖「人写的代码」；
+    git 不可用时退回 ``rglob`` + :data:`_SKIP_DIRS`（历史行为）。
+    """
+    import subprocess
+
+    listed = None
+    try:
+        proc = subprocess.run(
+            ['git', 'ls-files', '-z', '--cached', '--others',
+             '--exclude-standard', '--', '*.py'],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            timeout=60,
+        )
+        if proc.returncode == 0:
+            # `-z` 用 NUL 分隔，非 ASCII 路径不会被转义
+            listed = [p for p in proc.stdout.decode('utf-8', 'replace').split('\0') if p]
+    except (OSError, subprocess.SubprocessError):
+        listed = None
+
+    if listed is None:
+        for path in REPO_ROOT.rglob('*.py'):
+            if set(path.parts) & _SKIP_DIRS:
+                continue
+            rel = str(path.relative_to(REPO_ROOT)).replace('\\', '/')
+            yield rel, path
+        return
+
+    for rel in listed:
+        if set(rel.split('/')[:-1]) & _SKIP_DIRS:
+            continue
+        yield rel, REPO_ROOT / rel.replace('/', os.sep)
+
+
 def _scan_bare_isoformat():
     """返回 [(相对路径, 行号, 行内容)]，即疑似参与 SQL 时间比较的 isoformat()"""
     hits = []
-    for path in REPO_ROOT.rglob('*.py'):
-        if set(path.parts) & _SKIP_DIRS:
-            continue
+    for rel, path in _iter_scanned_py():
         try:
             lines = path.read_text(encoding='utf-8').splitlines()
         except (UnicodeDecodeError, OSError):
@@ -59,8 +101,7 @@ def _scan_bare_isoformat():
                 continue
             window = '\n'.join(lines[max(0, idx - 6):idx + 8])
             if _SQL_RE.search(window) or _PLACEHOLDER_RE.search(window):
-                hits.append((str(path.relative_to(REPO_ROOT)).replace('\\', '/'),
-                             idx + 1, line.strip()))
+                hits.append((rel, idx + 1, line.strip()))
     return hits
 
 
@@ -78,6 +119,26 @@ def test_no_bare_isoformat_in_sql_comparisons():
         "库内 timestamp 是空格分隔格式，'T' 分隔会导致同日记录被误删/漏算。\n"
         "请改为 .isoformat(sep=' ')：\n  " + '\n  '.join(offenders)
     )
+
+
+def test_scan_excludes_build_output():
+    """构建产物目录不得进入扫描集 —— 假红比漏报更危险。
+
+    回归背景（2026-09-22）：本地跑完 PyInstaller（输出 ``dist-scada-1.3.1037/``）后，
+    本文件与 ``test_silent_exception_guard.py`` 双双变红，报的全是
+    **构建产物里的源码副本**。历史实现按目录名精确匹配跳过（只认 ``dist`` / ``build``），
+    认不出 ``dist-scada-*`` / ``build-scada-*`` 这类带后缀的产物目录。
+    修法是「只扫 git 清单」（见 :func:`_iter_scanned_py`），这条测试钉住该性质。
+    """
+    scanned = list(_iter_scanned_py())
+    assert scanned, '扫描集为空，守卫已失效'
+    # 只看**目录段**：`build.py` / `build.bat` / `release-manifest.json` 是文件，不算
+    offenders = [
+        rel for rel, _ in scanned
+        if len(rel.split('/')) > 1
+        and rel.split('/')[0].startswith(('dist', 'build', 'release'))
+    ]
+    assert not offenders, f'扫描集混入构建产物: {offenders[:5]}'
 
 
 def test_adapter_output_is_space_separated():

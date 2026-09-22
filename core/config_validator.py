@@ -5,7 +5,7 @@
 import jsonschema
 import yaml
 import logging
-from pathlib import Path
+import paths
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -154,9 +154,16 @@ def validate_config(config_path: str, schema_type: str) -> tuple[bool, list[str]
 
 
 def validate_all_configs(config_dir: str = "配置") -> Dict[str, tuple[bool, list[str]]]:
-    """验证所有配置文件"""
+    """验证所有配置文件
+
+    ``config_dir`` 走 :func:`paths.resolve` 解析为绝对路径。
+    历史实现直接 ``Path("配置")``，只在「CWD 恰好是项目根」时成立 ——
+    打包后的应用（``_internal/配置/``）与从服务/计划任务启动时**一律找不到**，
+    于是启动日志里永远出现三行「配置文件不存在: 配置\\devices.yaml」，
+    把「配置真的坏了」和「路径不对」混成同一个信号，校验形同虚设。
+    """
     results = {}
-    config_path = Path(config_dir)
+    config_path = paths.resolve(config_dir)
 
     for schema_type, schema_file in [
         ("devices", "devices.yaml"),

@@ -12,7 +12,7 @@ import sys
 import json
 import logging
 import threading
-from pathlib import Path
+import paths
 from datetime import datetime
 from typing import Optional, Dict, Any
 from contextvars import ContextVar
@@ -57,13 +57,20 @@ def setup_logging(
     retention: str = "30 days",
     compression: str = "gz"
 ):
-    """配置结构化日志"""
+    """配置结构化日志
+
+    ``log_dir`` 经 :func:`paths.resolve` 解析。默认值 ``"logs"`` 是相对路径，
+    会让日志目录取决于**启动时的 CWD** —— ``run.py`` 传的是
+    ``LogConfig.LOG_DIR``（绝对），所以生产路径没事；但任何按默认值调用
+    （测试、脚本、别的模块）都会把日志写到启动目录下，
+    与 ``paths.LOG_DIR`` 分裂成两处，排障时"日志不见了"。
+    """
     from loguru import logger
 
     # 移除默认handler
     logger.remove()
 
-    log_path = Path(log_dir)
+    log_path = paths.resolve(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
 
     if json_format:

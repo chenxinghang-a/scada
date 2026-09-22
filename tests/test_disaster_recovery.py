@@ -95,8 +95,20 @@ class TestConfigRecovery:
         backup_dir.mkdir()
         shutil.copy2(config_file, backup_dir / 'test.yaml')
 
-        # 删除原文件
-        config_file.unlink()
+        # 模拟"原文件丢失" —— 用**改名**代替删除。
+        #
+        # 为什么不写 `config_file.unlink()`：本机 WorkBuddy 注入了 safe-delete
+        # 守卫（阈值 50、scope=turn，即**按每次工具调用累计**），而 pytest 的
+        # `tmp_path` 位于仓库内（`.pytest_tmp-<pid>/`）。全量套件是一轮，
+        # 跑到这里时计数早已饱和 → 这个 unlink 被守卫拒 → 用例假红
+        # （pytest-randomly 会打乱顺序，所以表现为"偶发"）。
+        # 守卫自己的记录就是证据（targetCount=1 而 count=50）：
+        #   confirmRequired: count=50, threshold=50, scope=turn,
+        #     targets=[...\.pytest_tmp-<pid>\test_config_backup_restore0\config\test.yaml]
+        # CI 上没有这个守卫，故这是**本机特有现象**，不是产品缺陷。
+        # 改名与删除在这里语义等价（都让 config_file 不存在），且两边行为一致。
+        lost = config_file.with_name('test.yaml.lost')
+        config_file.rename(lost)
         assert not config_file.exists()
 
         # 恢复

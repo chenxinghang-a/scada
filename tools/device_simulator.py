@@ -5,18 +5,27 @@
 """
 
 import json
+import sys
 import time
 import random
 import threading
 from datetime import datetime
 from pathlib import Path
 
+# 允许从任意工作目录运行：把仓库根加入 sys.path 才能 import paths。
+# 否则 `python tools/device_simulator.py` 只在 CWD 恰好是仓库根时才成立。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import paths  # noqa: E402
+
 
 class DeviceSimulator:
     """设备模拟器"""
 
     def __init__(self, config_path: str = '配置/devices.yaml'):
-        self.config_path = config_path
+        # 绝对路径化：相对路径会按 CWD 解析，从别处运行时表现为
+        # "配置文件不存在: 配置/devices.yaml" —— 与文件真的缺失无法区分。
+        self.config_path = str(paths.resolve(config_path))
         self.devices = {}
         self.running = False
         self.threads = []

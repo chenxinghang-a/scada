@@ -27,7 +27,12 @@ import pathlib
 import re
 import sys
 
-LOG = pathlib.Path('pytest.log')
+# 相对 __file__ 定位仓库根，而不是靠 CWD。
+# 这个脚本是 CI 失败时**唯一公开可读**的诊断通道（job log 要管理员权限），
+# 一旦它自己因为"在别的目录下执行"而读不到 pytest.log，就会退化成一句
+# "未找到 pytest.log（测试步骤可能没跑到）" —— 把"通道坏了"伪装成"测试没跑"。
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+LOG = _REPO_ROOT / 'pytest.log'
 
 #: 单条 annotation 的字符上限（GitHub 侧还有更严格的总量限制，这里留足余量）
 MAX_CHARS = 8000
