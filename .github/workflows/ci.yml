@@ -172,9 +172,18 @@ jobs:
       - name: Build backend (PyInstaller onedir)
         run: python -m PyInstaller scada-backend.spec --noconfirm --clean
 
-      - name: Verify entry exe exists
-        shell: bash
-        run: test -f dist/scada-backend/scada-backend.exe
+      - name: Smoke packaged backend (start it, probe health, kill it)
+        # 原先这里只有 `test -f dist/scada-backend/scada-backend.exe` —— 只证明
+        # **文件存在**，与「产物能不能用」无关，是典型的 fail-open 闸门：
+        # PyInstaller 缺 hiddenimport 时打包照样成功、exe 照样存在，只有进程
+        # 启动那一刻才 ModuleNotFoundError，于是「CI 全绿」和「产物一运行就崩」
+        # 可以同时成立。
+        #
+        # 现在真起进程：等端口 → 判 /api/health/status 的**响应体**（不只看状态码，
+        # 探活接口在磁盘写满/落库停摆时照样回 200）→ 整树杀掉。
+        # 任何「测不出来」的情形（exe 不存在 / 进程提前退出 / 端口不开 /
+        # 健康判定有负面信号）一律 exit 1，没有静默放行分支。
+        run: python .github/scripts/smoke_packaged_backend.py --exe dist/scada-backend/scada-backend.exe
 
       - name: Clean-checkout verification
         # 本 job 本身就是 clean checkout 验证：runner 上只有 git 跟踪的文件，
