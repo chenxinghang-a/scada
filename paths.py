@@ -59,8 +59,18 @@ LOG_DIR = _BASE / 'logs'
 EXPORT_DIR = _BASE / 'exports'
 
 #: 运行时端口文件。后端启动后把实际监听的 ``port/pid/mode/started_at`` 写入此文件，
-#: 供 Electron（`scada-app/electron/main.js`）发现真实端口，避免 5000/5001 错配。
-#: Electron 侧通过 ``<backend_dir>/data/runtime.json`` 读取（与冻结/开发布局一致）。
+#: 供 Electron（`scada-app/electron/backend-paths.js`）发现真实端口，避免 5000/5001 错配。
+#:
+#: ⚠️ 冻结（PyInstaller **onedir**）布局下 ``DATA_DIR`` 是 ``<backend_dir>/_internal/data``
+#: （见上方 ``_BASE`` 的推导：``_internal`` 存在时 ``_BASE = PROJECT_ROOT / '_internal'``），
+#: 所以真实落点是 ``<backend_dir>/_internal/data/runtime.json`` ——
+#: **不是** ``<backend_dir>/data/runtime.json``。
+#:
+#: 这一点曾被写错（2026-09-24 修复）：前端按后者拼路径，于是 ``readRuntimePort()``
+#: 恒返回 null，整个「避免 5000/5001 错配」的机制**从未生效过** ——
+#: 只是回退值 5000 恰好等于模拟模式端口才没暴露。
+#: 前端现在按 `electron/backend-paths.js` 的候选列表**两种布局都探测**，
+#: 并由 CI 闸门 `scada-app/tools/verify-backend-runtime.js` 在真产物上验证这条契约。
 RUNTIME_JSON_PATH = DATA_DIR / 'runtime.json'
 
 #: 存放 `配置/`、`data/`、`logs/` 等运行时目录的基准目录。

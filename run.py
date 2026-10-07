@@ -448,7 +448,10 @@ def main():
         # 写入运行时端口文件，供 Electron 发现真实端口（避免 5000/5001 错配）。
         # 格式：{"port": int, "host": str, "pid": int, "mode": "real"|"simulated", "started_at": ISO}
         # 路径：<DATA_DIR>/runtime.json（paths.RUNTIME_JSON_PATH）。
-        # Electron 通过 <backend_dir>/data/runtime.json 读取；读不到则回退 5000 并探测 5000/5001。
+        # ⚠️ 冻结 onedir 布局下 DATA_DIR = <backend_dir>/_internal/data，
+        # 所以真实落点是 <backend_dir>/_internal/data/runtime.json。
+        # 前端（scada-app/electron/backend-paths.js）**两种布局都探测**；
+        # 读不到则回退 5000 并探测 5000/5001。
         try:
             import json as _json
             _runtime = {
