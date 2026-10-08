@@ -274,6 +274,59 @@ def assess_health(payload: Any) -> dict:
     return result
 
 
+#: 冻结产物在 VERSION 缺失时自报的版本标记（见 `core/version.py::UNKNOWN_VERSION`）。
+#: 它**不是**一个合法版本号 —— 出现它就说明 `VERSION` 没进 PyInstaller 的 datas。
+UNKNOWN_VERSION_MARKER = "0.0.0-unknown"
+
+
+def assess_version(payload: Any, expected: str | None) -> dict:
+    """从健康响应里取产物**自报的版本**，并与源码 ``VERSION`` 比对（纯函数）。
+
+    为什么需要它
+    ------------
+    ``build-backend`` 之前只验证「产物能起、模块就绪」，**从不看版本号**。
+    而 ``VERSION`` 长期不在 PyInstaller 的 datas 里 —— 冻结产物里根本没有这个文件，
+    于是 ``core/version.py::get_version()`` 返回 ``"0.0.0-unknown"``，
+    打包产物在 ``/api/health/status``、``/api/system/status``、Swagger、
+    Prometheus 指标里**一致自报一个不存在的版本**，而开发机一切正常
+    （仓库根就有 VERSION）。2026-10-08 实测坐实（round 191）。
+
+    这是典型的「**fail-open 闸门**」：闸门只看「能不能起」，不看「起的是什么」。
+
+    判定口径：
+      * 取不到 ``data.version``（字段缺失 / 不是字符串）→ **判负**（契约破了）
+      * ``expected is None`` → 只报告、不判定（本机手工跑方便）
+      * 自报 == expected → 通过
+      * 否则 → **判负**，并把两边都打出来
+
+    返回 ``{"reported": str | None, "ok": bool, "reason": str}``
+    """
+    reported: str | None = None
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict):
+            value = data.get("version")
+            if isinstance(value, str):
+                reported = value
+
+    if reported is None:
+        return {"reported": None, "ok": False,
+                "reason": "健康响应里没有 data.version 字符串字段 —— 版本契约破了"}
+
+    if expected is None:
+        return {"reported": reported, "ok": True, "reason": "(未指定 --expect-version)"}
+
+    if reported == expected:
+        return {"reported": reported, "ok": True, "reason": ""}
+
+    hint = ""
+    if reported == UNKNOWN_VERSION_MARKER:
+        hint = (" —— 产物里读不到 VERSION 文件，检查 scada-backend.spec 的 datas "
+                "是否包含 ('VERSION', '.')")
+    return {"reported": reported, "ok": False,
+            "reason": f"产物自报版本 {reported!r} != 源码 VERSION {expected!r}{hint}"}
+
+
 # --------------------------------------------------------------------------
 # 进程管理
 # --------------------------------------------------------------------------
@@ -377,8 +430,9 @@ def _fail(reason: str, log_text: str, log_tail: int) -> int:
 
 
 def smoke(exe: Path, ports: list[int], health_path: str,
-          timeout: float, checks_timeout: float, log_tail: int) -> int:
-    """起 exe、等端口、判健康、杀掉。返回进程退出码。"""
+          timeout: float, checks_timeout: float, log_tail: int,
+          expect_version: str | None = None) -> int:
+    """起 exe、等端口、判健康、判版本、杀掉。返回进程退出码。"""
     if not exe.is_file():
         # fail-closed：产物不存在是**闸门失败**，不是"跳过"
         print(f"[FAIL] 打包产物不存在: {exe}", file=sys.stderr)
@@ -391,6 +445,7 @@ def smoke(exe: Path, ports: list[int], health_path: str,
     print(f"cwd      : {exe_dir}")
     print(f"ports    : {ports}")
     print(f"timeout  : 启动 {timeout:.0f}s / 健康 {checks_timeout:.0f}s")
+    print(f"expect   : version={expect_version!r}")
 
     log_path = Path(tempfile.mkdtemp(prefix="smoke-backend-")) / "backend.log"
     print(f"log      : {log_path}")
@@ -459,6 +514,7 @@ def smoke(exe: Path, ports: list[int], health_path: str,
         checks_deadline = time.time() + checks_timeout
         last_note = "(未尝试)"
         last_assess: dict | None = None
+        last_version: str | None = None
 
         while True:
             rc = proc.poll()
@@ -477,6 +533,17 @@ def smoke(exe: Path, ports: list[int], health_path: str,
                 else:
                     assess = assess_health(payload)
                     last_assess = assess
+
+                    # 版本判定放在健康判定之后：先确认「能起」，再确认「起的是哪个版本」。
+                    # 版本不符是**确定性**失败，不会自己好 → 立刻判死，不重试。
+                    ver = assess_version(payload, expect_version)
+                    if not ver["ok"]:
+                        _print_health(assess)
+                        print(f"version       : {ver['reported']}", file=sys.stderr)
+                        return _fail(f"版本判定失败: {ver['reason']}",
+                                     _read_log(), log_tail)
+                    last_version = ver["reported"]
+
                     if not assess["ok"]:
                         # 确定的负面信号 —— 再等也不会自己好，直接判死
                         _print_health(assess)
@@ -484,8 +551,9 @@ def smoke(exe: Path, ports: list[int], health_path: str,
                                      _read_log(), log_tail)
                     if assess["resolved"]:
                         _print_health(assess)
+                        print(f"version       : {last_version}")
                         print("\n[PASS] 打包产物能启动、模块全部就绪、"
-                              "后台巡检线程已跑过至少一轮")
+                              "后台巡检线程已跑过至少一轮、自报版本与源码一致")
                         ok = True
                         return 0
                     last_note = ("HTTP 200 且无负面信号，但后台巡检线程尚未跑第一轮"
@@ -537,6 +605,10 @@ def main(argv: list[str] | None = None) -> int:
                              f"（默认 {DEFAULT_CHECKS_TIMEOUT:.0f}）")
     parser.add_argument("--log-tail", type=int, default=4000,
                         help="失败时打印日志尾部字符数（默认 4000）")
+    parser.add_argument("--expect-version", default=None,
+                        help="期望产物自报的版本号（通常传源码 VERSION 文件内容）。"
+                             "给了就变成硬断言：不一致即闸门失败。"
+                             "不给则只打印自报版本，不判定。")
     args = parser.parse_args(argv)
 
     try:
@@ -553,7 +625,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2  # pragma: no cover
 
     return smoke(Path(args.exe).resolve(), ports, args.health_path,
-                 args.timeout, args.checks_timeout, args.log_tail)
+                 args.timeout, args.checks_timeout, args.log_tail,
+                 expect_version=args.expect_version)
 
 
 if __name__ == "__main__":

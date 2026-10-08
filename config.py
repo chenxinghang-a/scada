@@ -72,12 +72,38 @@ def _get_bool(env_var: str, default: bool) -> bool:
     return value.lower() in ('true', '1', 'yes', 'on')
 
 # 项目根目录（通过 paths 模块统一管理）
+#
+# ⚠️ 这里必须是 ``paths.BASE_DIR``，**不是** ``paths.PROJECT_ROOT``。
+#    两者在开发布局下恰好相等，但在冻结（PyInstaller onedir）布局下**差一级**：
+#        PROJECT_ROOT = exe 所在目录            （如 ``<backend>/``）
+#        BASE_DIR     = 运行时数据基准目录       （如 ``<backend>/_internal/``）
+#    `配置/`、`data/`、`logs/`、`exports/`、`VERSION` 冻结后都在 ``_internal/`` 下
+#    （见 `paths.py` 的 ``_BASE`` 推导与 spec 的 datas 落点）。
+#
+#    用错的那一版（2026-10-08 修复，round 191）造成的后果：
+#      * ``DatabaseConfig.DB_PATH`` / ``ExportConfig.EXPORT_DIR`` /
+#        ``LogConfig.LOG_DIR`` 在冻结产物里全部指向 ``_internal/`` **外面**，
+#        与 ``paths.DATA_DIR`` / ``paths.EXPORT_DIR`` / ``paths.LOG_DIR`` 静默分叉；
+#      * ``_read_version()`` 去 ``<backend>/VERSION`` 找版本号 —— 那里没有，
+#        于是 ``APP_VERSION`` 恒为 ``'0.0.0'``。
+#    开发机上 ``_internal`` 不存在，两者恰好相等，所以**本机永远测不出来**。
+#    回归测试 `tests/test_frozen_layout_paths.py` 在子进程里伪造冻结布局来钉死它。
 try:
     import paths
-    BASE_DIR = paths.PROJECT_ROOT
+    BASE_DIR = paths.BASE_DIR
+    # 运行时目录**直接委托**给 paths，而不是在 config 里再拼一遍 ——
+    # 拼一遍就有第二个真源，就有再次漂移的机会（round 173 的教训）。
+    _DATA_DIR = paths.DATA_DIR
+    _LOG_DIR = paths.LOG_DIR
+    _EXPORT_DIR = paths.EXPORT_DIR
+    _DEFAULT_DB_PATH = paths.DB_PATHS['default']
 except ImportError:
     from pathlib import Path
     BASE_DIR = Path(__file__).resolve().parent
+    _DATA_DIR = BASE_DIR / 'data'
+    _LOG_DIR = BASE_DIR / 'logs'
+    _EXPORT_DIR = BASE_DIR / 'exports'
+    _DEFAULT_DB_PATH = _DATA_DIR / 'scada.db'
 
 
 # 版本号：唯一真源为项目根目录的 VERSION 文件
@@ -112,7 +138,7 @@ class FlaskConfig:
 # 数据库配置
 class DatabaseConfig:
     # SQLite数据库路径
-    DB_PATH = BASE_DIR / 'data' / 'scada.db'
+    DB_PATH = _DEFAULT_DB_PATH
 
     # 数据保留天数
     RETENTION_DAYS = 30
@@ -187,7 +213,7 @@ class LogConfig:
     LEVEL = os.environ.get('SCADA_LOG_LEVEL', 'INFO')
 
     # 日志文件路径
-    LOG_DIR = os.environ.get('SCADA_LOG_DIR', str(BASE_DIR / 'logs'))
+    LOG_DIR = os.environ.get('SCADA_LOG_DIR', str(_LOG_DIR))
 
     # 是否输出JSON格式（用于SIEM集成）
     LOG_JSON = os.environ.get('SCADA_LOG_JSON', 'true').lower() == 'true'
@@ -204,7 +230,7 @@ WebConfig = FlaskConfig
 # 导出配置
 class ExportConfig:
     # 导出目录
-    EXPORT_DIR = BASE_DIR / 'exports'
+    EXPORT_DIR = _EXPORT_DIR
 
     # 支持的导出格式
     FORMATS = ['csv', 'excel', 'json']

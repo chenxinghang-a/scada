@@ -507,6 +507,67 @@ class TestAssessHealth:
 
 
 # ==========================================================================
+# 版本判定（round 191 新增）
+# ==========================================================================
+
+class TestAssessVersion:
+    """``assess_version()`` —— 「产物自报版本 == 源码 VERSION」的硬断言。
+
+    背景：``VERSION`` 曾不在 PyInstaller 的 datas 里 → 冻结产物恒报
+    ``0.0.0-unknown``，而**开发机完全正常**（仓库根就有 VERSION）。
+    闸门原先只看「能不能起」，不看「起的是哪个版本」—— fail-open。
+    """
+
+    def test_matching_version_passes(self, smoke_mod):
+        result = smoke_mod.assess_version(_good_payload(), "1.3.1039")
+        assert result["ok"] is True
+        assert result["reported"] == "1.3.1039"
+
+    def test_mismatch_fails(self, smoke_mod):
+        result = smoke_mod.assess_version(_good_payload(), "1.3.1057")
+        assert result["ok"] is False
+        assert result["reported"] == "1.3.1039"
+        assert "1.3.1039" in result["reason"] and "1.3.1057" in result["reason"]
+
+    def test_unknown_marker_gives_targeted_hint(self, smoke_mod):
+        """产物自报 ``0.0.0-unknown`` 时，报错里要直接点出 datas 缺 VERSION。"""
+        payload = _good_payload()
+        payload["data"]["version"] = smoke_mod.UNKNOWN_VERSION_MARKER
+        result = smoke_mod.assess_version(payload, "1.3.1057")
+        assert result["ok"] is False
+        assert "datas" in result["reason"] and "VERSION" in result["reason"]
+
+    def test_no_expectation_only_reports(self, smoke_mod):
+        """不给 ``--expect-version`` 时只报告、不判定（本机手工跑方便）。"""
+        result = smoke_mod.assess_version(_good_payload(), None)
+        assert result["ok"] is True
+        assert result["reported"] == "1.3.1039"
+
+    def test_missing_version_field_fails_even_without_expectation(self, smoke_mod):
+        """字段**缺失**是契约破裂，即使没给期望值也要判负。"""
+        payload = _good_payload()
+        del payload["data"]["version"]
+        result = smoke_mod.assess_version(payload, None)
+        assert result["ok"] is False
+        assert result["reported"] is None
+
+    @pytest.mark.parametrize("bad", [None, 1, 1.0, True, [], {}])
+    def test_non_string_version_is_not_accepted(self, smoke_mod, bad):
+        """非字符串版本号一律视作「没有」—— 不做隐式 str() 转换。"""
+        payload = _good_payload()
+        payload["data"]["version"] = bad
+        result = smoke_mod.assess_version(payload, "1.3.1039")
+        assert result["ok"] is False
+        assert result["reported"] is None
+
+    def test_not_a_dict_payload_fails(self, smoke_mod):
+        assert smoke_mod.assess_version("nope", "1.3.1039")["ok"] is False
+
+    def test_missing_data_section_fails(self, smoke_mod):
+        assert smoke_mod.assess_version({"success": True}, "1.3.1039")["ok"] is False
+
+
+# ==========================================================================
 # fail-closed 契约（真进程）
 # ==========================================================================
 
@@ -687,6 +748,24 @@ class TestCiWiring:
                          if not line.lstrip().startswith("#"))
         assert "test -f dist/scada-backend/scada-backend.exe" not in code, (
             "「test -f exe」又回来了 —— 它是 fail-open 闸门，只证明文件存在"
+        )
+
+    def test_smoke_step_asserts_version(self):
+        """冒烟步骤必须把源码 VERSION 传进去做硬比对（round 191）。
+
+        只断言「能起、模块就绪」的闸门是 fail-open 的：产物可能自报
+        ``0.0.0-unknown`` 而闸门照样绿。期望值必须来自 **VERSION 文件**。
+        """
+        ci = _CI_YML.read_text(encoding="utf-8")
+        step = _step_block(_job_block(ci, "build-backend"),
+                           "smoke_packaged_backend.py")
+        code = "\n".join(line for line in step.splitlines()
+                         if not line.lstrip().startswith("#"))
+        assert "--expect-version" in code, (
+            "冒烟步骤没传 --expect-version —— 版本断言在 CI 上等于没开"
+        )
+        assert "VERSION" in code, (
+            "期望值不是从源码 VERSION 文件取的"
         )
 
     def test_checks_timeout_covers_periodic_interval(self, smoke_mod):
