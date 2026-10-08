@@ -1,4 +1,4 @@
-# Industrial SCADA System v1.3.1028
+# Industrial SCADA System v1.3.1072
 
 工业级数据采集与监控系统 -- 符合中国国标等保2.0 (GB/T 22239)
 
@@ -54,10 +54,12 @@ industrial_scada/
 ├── 采集层/                       # 数据采集模块
 │   ├── base_client.py           # 采集客户端基类
 │   ├── simulated_device_manager.py  # 模拟设备管理器
-│   ├── device_manager_factory.py    # 设备管理器工厂
+│   ├── device_manager.py        # 设备管理器 (模拟模式；多协议统一接入)
+│   ├── real_device_manager.py   # 真实设备管理器 (真实模式；额外支持 MC / FINS)
 │   ├── modbus_client.py         # Modbus TCP/RTU 客户端
 │   ├── opcua_client.py          # OPC UA 客户端
-│   ├── s7_client.py             # S7协议客户端
+│   ├── mqtt_client.py           # MQTT 客户端
+│   │                            #   (S7 / IEC 104 不在采集层 —— 走 gateway/ 那条独立路径)
 │   ├── fins_client.py           # FINS协议客户端 (Omron)
 │   ├── mc_client.py             # MC协议客户端 (Mitsubishi)
 │   ├── rest_client.py           # REST HTTP客户端
@@ -79,11 +81,10 @@ industrial_scada/
 ├── 报警层/                       # 报警管理模块
 │   ├── alarm_manager.py         # 报警管理器 (阈值检测/去重/升级)
 │   ├── alarm_rules.py           # 报警规则引擎
-│   ├── alarm_statistics.py      # 报警统计分析
+│   ├── alarm_escalation.py      # 告警升级管理器 (规则列表模型)
 │   ├── alarm_output.py          # 声光报警器输出 (Modbus DO)
 │   ├── broadcast_system.py      # PA广播系统 (MQTT)
-│   ├── notification.py          # 通知服务 (邮件/短信)
-│   └── interfaces.py            # 输出接口抽象
+│   └── notification.py          # 通知服务 (邮件/短信)
 │
 ├── 智能层/                       # 工业4.0智能分析
 │   ├── oee_calculator.py        # OEE综合效率计算
@@ -96,8 +97,8 @@ industrial_scada/
 │   └── tsdb_adapter.py          # TDengine适配器
 │
 ├── 用户层/                       # 用户认证与权限
-│   ├── auth.py                  # JWT认证 + RBAC权限
-│   └── audit_logger.py          # 审计日志
+│   └── auth.py                  # JWT认证 + RBAC权限
+│                                #   (审计日志写在 展示层/api/api_ops.py 的 /ops/audit 端点)
 │
 ├── core/                        # 核心基础设施
 │   ├── structured_logging.py    # 结构化日志 (JSON/SIEM集成)
@@ -118,7 +119,7 @@ industrial_scada/
 ├── timeseries/                  # 时序数据库模块
 │   ├── tdengine_client.py       # TDengine客户端
 │   ├── mqtt_to_tsdb.py          # MQTT -> TDengine桥接
-│   ├── offline_buffer.py        # 离线数据缓冲
+│   ├── migration.py             # 时序库迁移
 │   └── query_builder.py         # 时序查询构建器
 │
 ├── 模板/                         # HTML模板 (Jinja2)
