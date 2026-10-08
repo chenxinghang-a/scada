@@ -400,22 +400,6 @@ class TestDeviceBehaviorSimulator:
         assert 'total_cycles' in stats
 
 
-class TestDeviceManagerFactory:
-    """设备管理器工厂测试"""
-
-    def test_factory_creates_simulated_manager(self):
-        """工厂直接创建模拟设备管理器"""
-        from 采集层.device_manager_factory import DeviceManagerFactory
-        manager = DeviceManagerFactory.create_simulated()
-        assert manager is not None
-        assert manager.simulation_mode is True
-
-    def test_factory_creates_real_manager(self):
-        """工厂直接创建真实设备管理器"""
-        from 采集层.device_manager_factory import DeviceManagerFactory
-        manager = DeviceManagerFactory.create_real()
-        assert manager is not None
-        assert manager.simulation_mode is False
 
 
 class TestRecipeSimulator:

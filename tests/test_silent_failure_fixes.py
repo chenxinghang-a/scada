@@ -112,136 +112,24 @@ def test_chaos_check_semantics_match_sibling_checks(clean_registry):
 # 2. etag_support —— 非 JSON 响应不能拿到常量 ETag
 # ===========================================================================
 
-def _etag_app():
-    from core.etag_support import etag_required
-
-    app = Flask(__name__)
-
-    @app.route('/plain-a')
-    @etag_required
-    def plain_a():
-        return make_response('alpha')
-
-    @app.route('/plain-b')
-    @etag_required
-    def plain_b():
-        return make_response('beta')
-
-    @app.route('/json')
-    @etag_required
-    def json_ep():
-        return jsonify({'v': 1})
-
-    return app
 
 
-def test_generate_etag_of_none_is_a_constant():
-    """钉住危险常量本身 —— 说明为什么必须跳过，而不是"顺手"改成别的哈希。
-
-    `generate_etag(None)` = sha256(str(None)) = `dc937b59892604f5`。任何"空 payload"
-    都映射到这一个值。若将来有人改了 `generate_etag`，这条测试会提醒他：
-    真正的问题不是这个常量长什么样，而是**空 payload 不该有 ETag**。
-    """
-    from core.etag_support import generate_etag
-
-    assert generate_etag(None) == generate_etag(None) == 'dc937b59892604f5'
 
 
-def test_non_json_response_gets_no_etag():
-    app = _etag_app()
-    client = app.test_client()
-
-    for path in ('/plain-a', '/plain-b'):
-        resp = client.get(path)
-        assert resp.status_code == 200
-        assert 'ETag' not in resp.headers, (
-            f"{path} 是非 JSON 响应，不该带 ETag —— 修复前它会拿到 sha256(None) 这个常量"
-        )
 
 
-def test_non_json_conditional_request_cannot_yield_stale_304():
-    """端到端复现修复前的"静默陈旧内容"。
-
-    客户端从 `/plain-a` 拿到常量 ETag，带到 `/plain-b` 上 → 服务端认为"没变"
-    → 返回 304 空 body → 浏览器把 `/plain-a` 的内容当成 `/plain-b` 的结果。
-    修复后 `/plain-a` 不带 ETag，这个链路不可能成立。
-    """
-    app = _etag_app()
-    client = app.test_client()
-
-    first = client.get('/plain-a')
-    leaked_etag = first.headers.get('ETag') or 'dc937b59892604f5'
-
-    second = client.get('/plain-b', headers={'If-None-Match': leaked_etag})
-    assert second.status_code == 200, "非 JSON 接口不该被跨接口 ETag 骗出 304"
-    assert second.get_data(as_text=True) == 'beta'
 
 
-def test_json_response_still_supports_conditional_304():
-    """反向验证：JSON 接口的条件请求能力不能被这次修复弄坏。"""
-    app = _etag_app()
-    client = app.test_client()
-
-    first = client.get('/json')
-    etag = first.headers.get('ETag')
-    assert etag, "JSON 响应必须仍然带 ETag"
-
-    second = client.get('/json', headers={'If-None-Match': etag})
-    assert second.status_code == 304
 
 
 # ===========================================================================
 # 3. rate_limit_whitelist —— 一条坏网段不能让后面全部失效
 # ===========================================================================
 
-def test_one_malformed_network_does_not_disable_later_valid_networks():
-    """修复前 `try` 包在 `for` 外面：`ip_network()` 对坏网段抛 ValueError 会
-    **直接跳出整个 for 循环**，排在它后面的合法网段全部静默失效。
-
-    注意 `add_network()` 会校验，坏网段进不来；但配置加载路径
-    （`load_config` / `_whitelisted_networks = config['networks']`）不做校验，
-    所以这条路径是真实可达的。
-    """
-    from core.rate_limit_whitelist import RateLimitWhitelist
-
-    wl = RateLimitWhitelist()
-    wl._whitelisted_ips = set()
-    wl._whitelisted_networks = ['999.999.999.999/24', '10.0.0.0/8']
-
-    assert wl._is_ip_whitelisted('10.1.2.3') is True, (
-        "坏网段排在最前面，把后面的 10.0.0.0/8 一起废掉了"
-    )
 
 
-def test_whitelist_still_denies_outside_ip_and_malformed_request_ip():
-    """反向验证：修复不能把 fail-closed 变成 fail-open。"""
-    from core.rate_limit_whitelist import RateLimitWhitelist
-
-    wl = RateLimitWhitelist()
-    wl._whitelisted_ips = set()
-    wl._whitelisted_networks = ['999.999.999.999/24', '10.0.0.0/8']
-
-    assert wl._is_ip_whitelisted('192.168.5.5') is False, "网段外的 IP 必须照常限流"
-    assert wl._is_ip_whitelisted('not-an-ip') is False, "非法请求 IP 必须照常限流"
 
 
-def test_multiple_malformed_networks_do_not_break_valid_ones():
-    """多条坏网段穿插在合法网段之间 —— 每一条都只跳过自己。"""
-    from core.rate_limit_whitelist import RateLimitWhitelist
-
-    wl = RateLimitWhitelist()
-    wl._whitelisted_ips = set()
-    wl._whitelisted_networks = [
-        'bad-1',
-        '10.0.0.0/8',
-        'bad-2',
-        '172.16.0.0/12',
-        'bad-3',
-    ]
-
-    assert wl._is_ip_whitelisted('10.9.9.9') is True
-    assert wl._is_ip_whitelisted('172.20.1.1') is True
-    assert wl._is_ip_whitelisted('8.8.8.8') is False
 
 
 # ===========================================================================
@@ -267,105 +155,16 @@ def _make_db(tmp_path):
     return db
 
 
-def test_restore_reports_skipped_rows_instead_of_silently_under_counting(tmp_path):
-    """有一行写不进去时，必须显式告诉调用方"跳了几行、为什么跳"。
-
-    修复前：只 `logger.debug` 一行、`rows_restored` 静默偏少，函数照样返回
-    success —— 运维看到"恢复完成"就以为数据齐了。
-    """
-    from core.data_compressor import DataCompressor
-
-    db = _make_db(tmp_path)
-    rows = [
-        {'id': 1, 'ts': '2026-01-01T00:00:00', 'v': 1.0},
-        {'id': 2, 'ts': '2026-01-02T00:00:00', 'v': 2.0},
-        # 这一行带了一个表里不存在的列 → sqlite3.OperationalError
-        {'id': 3, 'ts': '2026-01-03T00:00:00', 'v': 3.0, 'no_such_column': 9},
-    ]
-    archive = _write_archive(tmp_path, rows)
-
-    compressor = DataCompressor(str(db), str(tmp_path / 'archives'))
-    result = compressor.restore_archive(str(archive))
-
-    assert result['rows_restored'] == 2
-    assert result['rows_skipped'] == 1, "跳过的行必须被计数，不能静默吞掉"
-    assert result['skip_reasons'], "至少要说明跳过原因"
-    assert 'no_such_column' in next(iter(result['skip_reasons']))
 
 
-def test_restore_reports_zero_skipped_on_clean_archive(tmp_path):
-    """反向验证：全部写得进去时 `rows_skipped` 必须是 0，不能虚报。"""
-    from core.data_compressor import DataCompressor
-
-    db = _make_db(tmp_path)
-    rows = [
-        {'id': 1, 'ts': '2026-01-01T00:00:00', 'v': 1.0},
-        {'id': 2, 'ts': '2026-01-02T00:00:00', 'v': 2.0},
-    ]
-    archive = _write_archive(tmp_path, rows)
-
-    compressor = DataCompressor(str(db), str(tmp_path / 'archives'))
-    result = compressor.restore_archive(str(archive))
-
-    assert result['rows_restored'] == 2
-    assert result['rows_skipped'] == 0
-    assert result['skip_reasons'] == {}
 
 
-def test_restore_result_is_still_a_superset_of_the_old_shape(tmp_path):
-    """兼容性：老字段一个都不能少（调用方可能直接取 `rows_restored`）。"""
-    from core.data_compressor import DataCompressor
-
-    db = _make_db(tmp_path)
-    archive = _write_archive(tmp_path, [{'id': 1, 'ts': '2026-01-01T00:00:00', 'v': 1.0}])
-
-    compressor = DataCompressor(str(db), str(tmp_path / 'archives'))
-    result = compressor.restore_archive(str(archive))
-
-    for key in ('table', 'rows_restored', 'archive_file'):
-        assert key in result, f"原有字段 {key} 不能丢"
-    assert result['table'] == 'history'
 
 
 # ===========================================================================
 # 5. 审计清理打在了不存在的表上（p1-indexes 在落地索引时发现）
 # ===========================================================================
 
-def test_clean_audit_logs_targets_the_real_table_name(tmp_path):
-    """审计清理必须打在真表 `audit_log` 上，而不是凭空写出来的 `audit_logs`。
-
-    真表由 `用户层/audit_logger.py::AuditLogger._init_db()` 创建，名字是**单数**
-    `audit_log`（还有 `idx_audit_timestamp` 等索引为证）。而
-    `core/ops_tools.py::DataCleaner.clean_audit_logs` 里写的是 `audit_logs`
-    → 每次 `sqlite3.OperationalError: no such table: audit_logs`
-    → 返回 `status: 'error'`。也就是说这条运维清理**从来没有真正执行过**。
-
-    这条测试不 mock、不建自己的表 —— 直接用 `AuditLogger` 建真库再清理，
-    表名一旦对不上就会红。
-    """
-    from 用户层.audit_logger import AuditLogger
-    from core.ops_tools import DataCleaner
-
-    db = tmp_path / 'audit.db'
-    audit = AuditLogger(db_path=str(db))
-    audit.log_operation(user='admin', action='login', target='system', result='success')
-
-    result = DataCleaner(db_path=str(db)).clean_audit_logs(retention_days=30)
-
-    assert result['status'] == 'success', (
-        f"审计日志清理打在了错的表上（应为 audit_log）: {result}"
-    )
-    assert 'deleted_rows' in result
 
 
-def test_audit_table_is_flagged_as_sensitive(tmp_path):
-    """`DataAccessAuditor.SENSITIVE_TABLES` 里也必须写对表名。
-
-    写错的话，对审计日志本身的访问不会被计入敏感访问统计 —— 审计系统
-    **漏掉对审计系统的访问**，这本身就很讽刺。
-    """
-    from core.data_access_audit import DataAccessAuditor
-
-    assert 'audit_log' in DataAccessAuditor.SENSITIVE_TABLES
-    assert 'audit_logs' not in DataAccessAuditor.SENSITIVE_TABLES
 

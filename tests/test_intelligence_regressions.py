@@ -2,82 +2,33 @@
 智能层横切回归测试（2026-09 审计修复项）
 
 覆盖无法归入单模块测试文件的问题：
-1. 五个"零引用模块"的处置状态：必须显式标注"未接线"，且标注必须与事实一致
-   （run.py 里确实没有引用）—— 防止"代码在库里，却让人以为它在工作"。
-2. 这些未接线模块本身仍须可导入、可实例化（未接线 ≠ 代码坏死）。
-3. 费率/碳因子的单一数据源（跨 energy_manager 与 energy_optimizer）。
+1. 已接线模块必须仍然出现在 run.py 中（防误删接线）。
+2. 振动模块不得再出现"默认 100Hz"式的假定采样率。
+3. SPC 判异结果的写入必须唯一入口且在锁内。
+
+⚠️ 2026-10-08（round 188 · D4 死代码清理）删掉的部分
+------------------------------------------------------
+原先这里还有 3 组用例（共 15 例），覆盖「五个零引用模块的处置状态」：
+`test_unwired_module_is_documented_as_unwired` /
+`test_unwired_claim_is_factually_true` /
+`test_unwired_module_is_importable_and_instantiable`，
+针对 `智能层` 下五个**生产不可达**模块
+（alarm_intelligence / data_quality / energy_optimizer / fault_prediction / production_analyzer）。
+
+那五个模块已按 D4 决策**备份后删除**
+（备份：`C:\\Users\\cxx\\scada-dead-modules-backup-20261008\\`，含 MANIFEST.json 与 git blob）。
+模块不存在了，「它有没有被标注为未接线」这个问题本身也就不存在 ——
+**这是本轮唯一一类"删除测试"，删的是只对已删代码有意义的断言，不是覆盖。**
+
+「未接线」这条约定本身的机械守卫仍保留在
+`tests/test_wiring_declaration.py`（它用合成小仓库自测，不依赖仓库里恰好有死模块）。
 """
 
-import importlib
-import re
 from pathlib import Path
-
-import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 INTELLIGENCE_DIR = PROJECT_ROOT / '智能层'
 RUN_PY = PROJECT_ROOT / 'run.py'
-
-# 模块名 -> 主类名（2026-09 审计确认在 run.py 中零引用）
-UNWIRED_MODULES = {
-    'alarm_intelligence': 'SmartAlarmManager',
-    'data_quality': 'DataQualityMonitor',
-    'energy_optimizer': 'EnergyOptimizer',
-    'fault_prediction': 'FaultPredictionEngine',
-    'production_analyzer': 'ProductionAnalyzer',
-}
-
-
-def _module_docstring(module_name: str) -> str:
-    """读取模块级 docstring（文件头第一个三引号块）"""
-    text = (INTELLIGENCE_DIR / f'{module_name}.py').read_text(encoding='utf-8')
-    match = re.match(r'\s*(?:#.*\n)*\s*"""(.*?)"""', text, re.DOTALL)
-    assert match, f'{module_name}.py 缺少模块级 docstring'
-    return match.group(1)
-
-
-# ============================================================
-# 未接线状态标注
-# ============================================================
-
-@pytest.mark.parametrize('module_name', sorted(UNWIRED_MODULES))
-def test_unwired_module_is_documented_as_unwired(module_name):
-    """零引用模块的文件头必须明确标注"未接线"，不得默认它已在工作"""
-    doc = _module_docstring(module_name)
-    assert '未接线' in doc, f'{module_name}.py 未标注未接线状态'
-    assert 'run.py' in doc, f'{module_name}.py 未说明与 run.py 的关系'
-
-
-@pytest.mark.parametrize('module_name', sorted(UNWIRED_MODULES))
-def test_unwired_claim_is_factually_true(module_name):
-    """"未接线"必须与事实一致：run.py 中不得出现该模块
-
-    若有人真的把它接进 run.py，本用例会失败 —— 此时应同步删除文件头的
-    "未接线"标注（把文档与事实一起更新），而不是放任标注过期。
-    """
-    run_src = RUN_PY.read_text(encoding='utf-8')
-    assert module_name not in run_src, (
-        f'{module_name} 已出现在 run.py 中，请更新 {module_name}.py 文件头的"未接线"标注'
-    )
-
-
-@pytest.mark.parametrize('module_name,class_name', sorted(UNWIRED_MODULES.items()))
-def test_unwired_module_is_importable_and_instantiable(module_name, class_name):
-    """未接线 ≠ 坏死：模块必须可导入，主类必须可实例化（均支持 config=None）"""
-    module = importlib.import_module(f'智能层.{module_name}')
-    cls = getattr(module, class_name)
-    instance = cls()
-    assert instance is not None
-
-
-def test_energy_optimizer_uses_canonical_rates():
-    """energy_optimizer 不得自带第二套费率/碳因子（必须与 energy_manager 同源）"""
-    from 智能层.energy_manager import DEFAULT_CONFIG
-    from 智能层.energy_optimizer import EnergyAnalyzer
-
-    analyzer = EnergyAnalyzer()
-    assert analyzer.tariff == DEFAULT_CONFIG['tariff']
-    assert analyzer.carbon_factor == DEFAULT_CONFIG['carbon_factor']
 
 
 def test_wired_modules_are_still_wired():

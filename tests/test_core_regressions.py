@@ -42,79 +42,16 @@ def _valid_key() -> str:
     return Fernet.generate_key().decode()
 
 
-def test_decrypt_failure_raises_instead_of_returning_ciphertext():
-    """解密失败必须抛 ConfigDecryptionError，绝不 return ciphertext。
-
-    旧实现 `except Exception as e: logger.error(...); return ciphertext` ——
-    调用方拿到的是 `gAAAAA...` 密文，却以为是明文密码，继续拿去登录/连库，
-    表现为"密钥配错了却没有任何报错，只是认证一直失败"。
-    """
-    from core.config_encryption import ConfigEncryptor, ConfigDecryptionError
-
-    enc = ConfigEncryptor(key=_valid_key())
-    bogus = 'gAAAAABm-not-a-real-token'
-
-    with pytest.raises(ConfigDecryptionError):
-        enc.decrypt(bogus)
 
 
-def test_decrypt_failure_message_does_not_leak_return_value_as_ciphertext():
-    """回归守卫：旧实现"失败返回值 == 密文"这一性质必须不再成立。"""
-    from core.config_encryption import ConfigEncryptor, ConfigDecryptionError
-
-    enc = ConfigEncryptor(key=_valid_key())
-    bogus = 'totally-not-decryptable'
-
-    returned = None
-    try:
-        returned = enc.decrypt(bogus)
-    except ConfigDecryptionError:
-        returned = None
-    assert returned != bogus, '解密失败仍然把密文原文返回给了调用方'
 
 
-def test_encrypt_decrypt_roundtrip_unchanged():
-    """正常路径不受影响。"""
-    from core.config_encryption import ConfigEncryptor
-
-    enc = ConfigEncryptor(key=_valid_key())
-    token = enc.encrypt('my-secret')
-    assert token != 'my-secret'
-    assert enc.decrypt(token) == 'my-secret'
 
 
-def test_encrypt_and_decrypt_are_fail_closed_without_backend():
-    """后端不可用时也必须 fail-closed（旧实现返回明文/原文）。"""
-    from core.config_encryption import ConfigEncryptor, ConfigDecryptionError
-
-    enc = ConfigEncryptor(key=_valid_key())
-    enc._fernet = None
-    with pytest.raises(ConfigDecryptionError):
-        enc.encrypt('plain')
-    with pytest.raises(ConfigDecryptionError):
-        enc.decrypt('whatever')
 
 
-def test_is_encrypted_failure_is_logged(caplog):
-    """is_encrypted 的 except 分支原来静默 return False，现在必须留痕。"""
-    from core.config_encryption import ConfigEncryptor
-
-    enc = ConfigEncryptor(key=_valid_key())
-    enc._fernet = None
-    with caplog.at_level(logging.WARNING):
-        assert enc.is_encrypted('gAAAAAxxx') is False
-    assert any('无法判定' in r.message for r in caplog.records), \
-        '加密不可用时判定失败没有留痕'
 
 
-def test_encryptor_exposes_available_flag():
-    """降级必须由调用方显式判断 available，而不是靠静默降级。"""
-    from core.config_encryption import ConfigEncryptor
-
-    assert ConfigEncryptor(key=_valid_key()).available is True
-    broken = ConfigEncryptor(key=_valid_key())
-    broken._fernet = None
-    assert broken.available is False
 
 
 # ======================================================================
@@ -224,125 +161,22 @@ def test_tiered_warmup_summary_reports_failures(tmp_path, caplog):
 # A-3  core/backup_verifier.py：except 分支不得因未绑定 tmp_path 抛 NameError
 # ======================================================================
 
-def test_restore_test_reports_real_error_when_tempfile_fails(tmp_path, monkeypatch, caplog):
-    """临时文件都建不出来时，必须报出真实原因，而不是 NameError。"""
-    import tempfile
-
-    from core.backup_verifier import BackupVerifier
-
-    src = tmp_path / 'backup.db'
-    src.write_bytes(b'not-empty')
-
-    def boom(*a, **kw):
-        raise OSError('磁盘已满')
-
-    monkeypatch.setattr(tempfile, 'NamedTemporaryFile', boom)
-
-    verifier = BackupVerifier(str(tmp_path / 'x.db'), backup_dir=str(tmp_path))
-    with caplog.at_level(logging.WARNING):
-        result = verifier.test_restore(str(src))
-
-    assert result['status'] == 'fail'
-    assert '磁盘已满' in result['error'], \
-        f'真实错误被掩盖了，实际 error={result.get("error")!r}'
-    assert 'NameError' not in result['error'], '临时变量未绑定，仍会抛 NameError'
-    assert any('备份恢复测试失败' in r.message for r in caplog.records)
 
 
-def test_restore_test_reports_error_when_source_missing(tmp_path):
-    """源文件不存在：错误信息要带异常类型 + 消息。"""
-    from core.backup_verifier import BackupVerifier
-
-    verifier = BackupVerifier(str(tmp_path / 'x.db'), backup_dir=str(tmp_path))
-    result = verifier.test_restore(str(tmp_path / 'nope.db'))
-
-    assert result['status'] == 'fail'
-    assert 'FileNotFoundError' in result['error']
 
 
-def test_restore_test_success_path_unchanged(tmp_path):
-    """正常路径不受影响：能统计出各表行数。"""
-    import sqlite3
-
-    from core.backup_verifier import BackupVerifier
-
-    db = tmp_path / 'ok.db'
-    conn = sqlite3.connect(str(db))
-    conn.execute('CREATE TABLE devices (id INTEGER)')
-    conn.executemany('INSERT INTO devices VALUES (?)', [(1,), (2,)])
-    conn.commit()
-    conn.close()
-
-    verifier = BackupVerifier(str(tmp_path / 'x.db'), backup_dir=str(tmp_path))
-    result = verifier.test_restore(str(db))
-
-    assert result['status'] == 'pass'
-    assert result['table_stats']['devices'] == 2
 
 
 # ======================================================================
 # A-4  core/data_access_audit.py：datetime 属性不存在 + 持久化失败可见
 # ======================================================================
 
-def test_user_access_pattern_does_not_raise_attribute_error():
-    """`DataAccessRecord` 只有 timestamp，没有 datetime —— 旧实现必抛 AttributeError。"""
-    from core.data_access_audit import DataAccessAuditor
-
-    auditor = DataAccessAuditor()
-    auditor.log_access('u1', 'devices', 'read')
-    auditor.log_access('u1', 'alarms', 'write', sensitive_fields=['password'])
-
-    pattern = auditor.get_user_access_pattern('u1')     # 不得抛异常
-
-    assert pattern['total_accesses'] == 2
-    assert pattern['sensitive_accesses'] == 1
-    assert pattern['first_access'] and pattern['last_access']
-    # 与 to_dict()['datetime'] 同格式（ISO 字符串），保证两处口径一致
-    expected = auditor.get_recent_access(user_id='u1', limit=10)[0]['datetime']
-    assert pattern['first_access'] == expected
-    assert re.match(r'\d{4}-\d{2}-\d{2}T', pattern['first_access'])
 
 
-def test_user_access_pattern_missing_user_unchanged():
-    from core.data_access_audit import DataAccessAuditor
-
-    assert DataAccessAuditor().get_user_access_pattern('nobody') == {
-        'user_id': 'nobody', 'total_accesses': 0}
 
 
-def test_persist_failure_is_warning_and_counted(tmp_path, caplog):
-    """审计落库失败旧实现只有 logger.debug —— 默认 INFO 级别下完全静默。"""
-    from core.data_access_audit import DataAccessAuditor
-
-    auditor = DataAccessAuditor(db_path=str(tmp_path))     # 目录：必然写失败
-
-    with caplog.at_level(logging.WARNING):
-        auditor.log_access('u1', 'devices', 'read')
-
-    stats = auditor.get_access_stats()
-    assert stats['persist_failures'] == 1, '审计持久化失败没有计数（审计链断裂不可见）'
-    assert stats['last_persist_error']
-    assert stats['persistence_enabled'] is True
-    assert any(r.levelno >= logging.WARNING and '持久化失败' in r.message
-               for r in caplog.records), '持久化失败没有 WARNING 级留痕'
 
 
-def test_persist_success_has_no_failures(tmp_path):
-    import sqlite3
-
-    from core.data_access_audit import DataAccessAuditor
-
-    db = tmp_path / 'audit.db'
-    conn = sqlite3.connect(str(db))
-    conn.execute('''CREATE TABLE data_access_log (
-        user_id TEXT, table_name TEXT, operation TEXT, record_id TEXT,
-        sensitive_fields TEXT, ip_address TEXT, user_agent TEXT, timestamp REAL)''')
-    conn.commit()
-    conn.close()
-
-    auditor = DataAccessAuditor(db_path=str(db))
-    auditor.log_access('u1', 'devices', 'read')
-    assert auditor.get_access_stats()['persist_failures'] == 0
 
 
 # ======================================================================
@@ -516,178 +350,34 @@ def _seed_last_logged(sampler, *keys):
         sampler._last_logged[k] = now
 
 
-def test_suppressed_count_is_per_key():
-    """`_suppressed_count` 写在实例上时，A 路的抑制数会串到 B 路。"""
-    from core.log_sampler import LogSampler
-
-    sampler = LogSampler()
-    _seed_last_logged(sampler, 'A', 'B')
-
-    # 同一个 key 累计到采样率：第 3 次记录，前 2 条被抑制
-    assert sampler.should_log('A', 3) is False
-    assert sampler.should_log('A', 3) is False
-    assert sampler.should_log('A', 3) is True
-
-    assert sampler.get_suppressed_count('A') == 2
-    assert sampler.get_suppressed_count('B') == 0, \
-        'B 路读到了 A 路的抑制数 —— 计数串台，日志里标注的"已抑制N条"是假的'
 
 
-def test_suppressed_total_is_sum_of_keys():
-    from core.log_sampler import LogSampler
-
-    sampler = LogSampler()
-    _seed_last_logged(sampler, 'A', 'B')
-    for _ in range(3):
-        sampler.should_log('A', 3)
-    for _ in range(3):
-        sampler.should_log('B', 3)
-
-    assert sampler.get_suppressed_count() == 4
-    assert sampler.get_suppressed_count() == \
-        sampler.get_suppressed_count('A') + sampler.get_suppressed_count('B')
 
 
-def test_sampled_logger_labels_suppressed_with_own_key(caplog):
-    """包装器必须按自己的 key 取抑制数，不能拿全局值。"""
-    from core.log_sampler import SampledLogger
-
-    logger = logging.getLogger('test.log_sampler.regression')
-    samp = SampledLogger(logger)
-
-    dev_key = f'{logging.WARNING}:设备断连: %s'
-    _seed_last_logged(samp._sampler, dev_key)
-
-    with caplog.at_level(logging.WARNING, logger=logger.name):
-        # 设备断连：3 次调用 → 第 3 次记录，标注"已抑制2条"
-        samp.warning('设备断连: %s', 'dev-1', sample_rate=3)
-        samp.warning('设备断连: %s', 'dev-1', sample_rate=3)
-        samp.warning('设备断连: %s', 'dev-1', sample_rate=3)
-        # 另一个 key 只调用 1 次 → 不应记录，也不该带上别人的抑制数
-        samp.warning('磁盘告警: %s', 'disk', sample_rate=3)
-
-    dev_msgs = [r.getMessage() for r in caplog.records if '设备断连' in r.getMessage()]
-    disk_msgs = [r.getMessage() for r in caplog.records if '磁盘告警' in r.getMessage()]
-    assert any('已抑制2条' in m for m in dev_msgs), f'设备断连的抑制数不对: {dev_msgs}'
-    for m in disk_msgs:
-        assert '已抑制' not in m, f'磁盘告警串到了设备断连的抑制数: {m}'
 
 
-def test_sampler_stats_expose_per_key_suppression():
-    from core.log_sampler import SampledLogger
-    import logging as _logging
-
-    samp = SampledLogger(_logging.getLogger('test.log_sampler.stats'))
-    key = f'{_logging.WARNING}:x %s'
-    _seed_last_logged(samp._sampler, key)
-    for _ in range(3):
-        samp.warning('x %s', 1, sample_rate=3)
-
-    stats = samp.get_stats()
-    assert stats['suppressed_by_key'].get(key) == 2
-    assert stats['suppressed_total'] == 2
 
 
 # ======================================================================
 # A-8  core/db_pool_enhanced.py：池满必须真的等待，不是静默 pass
 # ======================================================================
 
-def _tiny_pool(tmp_path, max_connections=1):
-    import paths  # noqa: F401  (确保仓库根在 sys.path 上)
-    from core.db_pool_enhanced import EnhancedConnectionPool
-
-    return EnhancedConnectionPool(
-        str(tmp_path / 'pool.db'), max_connections=max_connections,
-        min_connections=0, health_check_interval=3600, liveness_probe_interval=3600,
-    )
 
 
-def test_pool_full_waits_and_succeeds_when_released(tmp_path):
-    """旧实现池满时 `pass`（注释说等待，实际直接抛）—— 现在必须真的等到释放。"""
-    pool = _tiny_pool(tmp_path)
-
-    def holder():
-        with pool.acquire(timeout=5.0):
-            time.sleep(0.5)
-
-    t = threading.Thread(target=holder, daemon=True)
-    t.start()
-
-    with pool.acquire(timeout=5.0) as conn:
-        assert conn is not None
-    t.join(timeout=5)
 
 
-def test_pool_full_timeout_raises_with_context(tmp_path, caplog):
-    """等不到连接时：抛错必须带上下文，且 WARNING/ERROR 留痕 + 计数。"""
-    pool = _tiny_pool(tmp_path)
-
-    def holder():
-        with pool.acquire(timeout=5.0):
-            time.sleep(2.0)
-
-    t = threading.Thread(target=holder, daemon=True)
-    t.start()
-    time.sleep(0.2)                       # 确保占位线程先拿到连接
-
-    with caplog.at_level(logging.WARNING):
-        with pytest.raises(RuntimeError) as exc:
-            with pool.acquire(timeout=0.3):
-                pass
-
-    assert '连接池已满' in str(exc.value)
-    assert '0.3' in str(exc.value), '错误信息没有带上等待时长'
-    assert pool._stats['pool_full_timeouts'] >= 1
-    assert any('已满' in r.message for r in caplog.records), '池满没有留痕'
-    t.join(timeout=5)
 
 
-def test_pool_acquire_release_success_unchanged(tmp_path):
-    pool = _tiny_pool(tmp_path, max_connections=2)
-    with pool.acquire(timeout=1.0) as conn:
-        assert conn.execute('SELECT 1').fetchone()[0] == 1
-    with pool.acquire(timeout=1.0) as conn:
-        assert conn.execute('SELECT 1').fetchone()[0] == 1
-    assert pool._stats['acquired'] >= 2
 
 
-def test_is_alive_failure_is_logged(tmp_path, caplog):
-    """连接探活失败返回 False 是安全侧，但原因必须可查。"""
-    from core.db_pool_enhanced import PooledConnection
-
-    class BadConn:
-        def execute(self, *a, **kw):
-            raise RuntimeError('数据库忙')
-
-    with caplog.at_level(logging.DEBUG):
-        assert PooledConnection(BadConn(), 'c1').is_alive() is False
-    assert any('存活探测失败' in r.message for r in caplog.records)
 
 
 # ======================================================================
 # A-9  core/config_validator_startup.py：非法 WEB_PORT 不得崩启动
 # ======================================================================
 
-@pytest.mark.parametrize('bad_port', ['abc', '', '70000', '50.5', '0x10'])
-def test_invalid_web_port_does_not_crash_startup_validation(monkeypatch, bad_port):
-    """`int(os.environ[...])` 曾写在 try 之外 → 环境变量非法直接把进程打挂。"""
-    from core.config_validator_startup import validate_startup_config
-
-    monkeypatch.setenv('WEB_PORT', bad_port)
-    is_valid, errors = validate_startup_config()      # 不得抛 ValueError
-
-    port_errors = [e for e in errors if e.key == 'port:web']
-    assert port_errors, f'非法 WEB_PORT={bad_port!r} 没有被报出来'
-    assert port_errors[0].severity == 'error'
-    assert is_valid is False
 
 
-def test_valid_web_port_is_accepted(monkeypatch):
-    from core.config_validator_startup import validate_startup_config
-
-    monkeypatch.setenv('WEB_PORT', '5099')
-    _, errors = validate_startup_config()
-    assert not [e for e in errors if e.key == 'port:web']
 
 
 # ======================================================================
@@ -802,30 +492,6 @@ def test_response_parse_failure_is_logged(api_cache_env, caplog):
 # A-11  core/token_bucket_limiter.py：装饰器 import 的是不存在的 api_error
 # ======================================================================
 
-def test_token_bucket_decorator_works_instead_of_importerror(monkeypatch):
-    """`from core.service_response import api_error` → 一旦启用即 ImportError（500）。"""
-    from flask import Flask
-    import core.token_bucket_limiter as tbl
-
-    local = tbl.TokenBucketLimiter(capacity=1, refill_rate=0.0)
-    monkeypatch.setattr(tbl, 'token_bucket_limiter', local)
-
-    app = Flask(__name__)
-    app.config['TESTING'] = True
-
-    @app.route('/limited')
-    @tbl.token_bucket_required(tokens=1, key_func=lambda: 'k')
-    def limited():
-        return {'ok': True}
-
-    client = app.test_client()
-    first = client.get('/limited')
-    assert first.status_code == 200, '第一次请求不应被限流'
-
-    second = client.get('/limited')
-    assert second.status_code == 429, \
-        f'超限时没有返回 429（可能是 ImportError 被打成 500）：{second.status_code}'
-    assert second.get_json()
 
 
 def test_service_response_has_error_response_not_api_error():
@@ -841,152 +507,32 @@ def test_service_response_has_error_response_not_api_error():
 # C-1  core/masking_rule_engine.py：正则出错不得返回未脱敏原文
 # ======================================================================
 
-def test_bad_regex_is_rejected_at_add_rule_time():
-    """脱敏是安全控制：坏正则必须在配置那一刻就被拒绝，而不是运行时报错。"""
-    from core.masking_rule_engine import MaskingRuleEngine
-
-    engine = MaskingRuleEngine()
-    with pytest.raises(ValueError) as exc:
-        engine.add_rule('bad', pattern='([unclosed')
-    assert '不是合法正则' in str(exc.value)
 
 
-def test_pattern_failure_fails_closed_and_never_leaks_plaintext(caplog):
-    """旧实现 `except re.error: return text` → 直接漏出未脱敏的密码/卡号。"""
-    from core.masking_rule_engine import MaskingRuleEngine
-    from core.masking_rule_engine import MaskingRule, MaskStrategy
-
-    engine = MaskingRuleEngine()
-    # 绕过 add_rule 的校验，模拟"历史上已经注册进去的坏规则"
-    engine._rules.insert(0, MaskingRule(
-        name='broken', strategy=MaskStrategy.FULL_MASK, pattern='([unclosed', priority=999))
-
-    with caplog.at_level(logging.ERROR):
-        out = engine.mask_text('password=hunter2')
-
-    assert out == MaskingRuleEngine.FAILSAFE_MASK, \
-        f'正则失败时返回了非遮蔽值，存在明文泄漏: {out!r}'
-    assert 'hunter2' not in out
-    assert engine.get_stats()['rule_errors'] == 1
-    assert any(r.levelno >= logging.ERROR and '整段遮蔽' in r.message for r in caplog.records)
 
 
-def test_masking_normal_path_unchanged():
-    from core.masking_rule_engine import MaskingRuleEngine
-
-    engine = MaskingRuleEngine()
-    masked = engine.mask_text('卡号 1234 5678 9012 3456')
-    assert '1234 5678 9012 3456' not in masked
-    assert engine.get_stats()['rule_errors'] == 0
 
 
-def test_reset_stats_keeps_rule_errors_key():
-    from core.masking_rule_engine import MaskingRuleEngine
-
-    engine = MaskingRuleEngine()
-    engine.reset_stats()
-    assert engine.get_stats()['rule_errors'] == 0
 
 
 # ======================================================================
 # C-2  core/startup_checker.py：检查不了 ≠ 检查通过
 # ======================================================================
 
-def test_disk_space_check_does_not_fail_open(monkeypatch, caplog):
-    """旧实现 `except Exception: return True  # 无法检查时假设通过` —— 纯 fail-open。"""
-    import shutil
-
-    from core.startup_checker import StartupChecker
-
-    monkeypatch.setattr(shutil, 'disk_usage',
-                        lambda p: (_ for _ in ()).throw(OSError('stat 失败')))
-    checker = StartupChecker()
-    with caplog.at_level(logging.WARNING):
-        assert checker._check_disk_space(100) is False, '检查不出来却报告"通过"'
-    assert any('disk_space' in r.message for r in caplog.records), '没有留痕'
 
 
-def test_port_check_does_not_fail_open(monkeypatch, caplog):
-    import socket
-
-    from core.startup_checker import StartupChecker
-
-    def boom(*a, **kw):
-        raise OSError('socket 用不了')
-
-    monkeypatch.setattr(socket, 'socket', boom)
-    checker = StartupChecker()
-    with caplog.at_level(logging.WARNING):
-        assert checker._check_port_available(5000) is False
-    assert any('port_available' in r.message for r in caplog.records)
 
 
-def test_database_check_failure_is_logged(monkeypatch, caplog, tmp_path):
-    import sqlite3
-
-    from core.startup_checker import StartupChecker
-
-    def boom(*a, **kw):
-        raise sqlite3.OperationalError('database is locked')
-
-    monkeypatch.setattr(sqlite3, 'connect', boom)
-    checker = StartupChecker()
-    # 让 Path('data/scada.db').exists() 为真
-    (pathlib.Path('data')).mkdir(exist_ok=True)
-    with caplog.at_level(logging.WARNING):
-        result = checker._check_database()
-    if result is False:
-        assert any('database_file' in r.message for r in caplog.records)
 
 
-def test_non_critical_check_failure_becomes_startup_warning(monkeypatch):
-    """fail-closed 之后，non-critical 检查失败只产生启动 WARNING，不阻止启动。"""
-    import shutil
-
-    from core.startup_checker import StartupChecker
-
-    monkeypatch.setattr(shutil, 'disk_usage',
-                        lambda p: (_ for _ in ()).throw(OSError('stat 失败')))
-    results = StartupChecker().run_all()
-
-    assert any(w['name'] == 'disk_space' for w in results['warnings']), \
-        '磁盘检查失败既没进 warnings 也没进 failed —— 又变成静默了'
 
 
 # ======================================================================
 # C-3  core/memory_usage_monitor.py：采样失败必须可见
 # ======================================================================
 
-def test_memory_sample_failure_is_logged_and_counted(caplog):
-    from core.memory_usage_monitor import MemoryUsageMonitor
-
-    class BadProc:
-        def memory_info(self):
-            raise RuntimeError('读不到内存信息')
-
-    monitor = MemoryUsageMonitor()
-    monitor._process = BadProc()
-
-    with caplog.at_level(logging.WARNING):
-        assert monitor._take_sample() == {}
-
-    assert monitor._sample_errors == 1
-    assert any('内存样本采集失败' in r.message for r in caplog.records)
 
 
-def test_memory_stats_distinguish_no_process_from_sampling_failure():
-    from core.memory_usage_monitor import MemoryUsageMonitor
-
-    class BadProc:
-        def memory_info(self):
-            raise RuntimeError('boom')
-
-    monitor = MemoryUsageMonitor()
-    monitor._process = BadProc()
-    stats = monitor.get_stats()
-    if not stats.get('available'):
-        assert stats.get('reason') in ('sample failed', 'psutil not installed')
-        assert 'sample_errors' in stats
 
 
 # ======================================================================
@@ -1088,11 +634,14 @@ _TEST_DIRS = ('tests/', '测试/')
 
 _MARKER_HEAD = '# 接线状态：未接线（WIRED = False）'
 
-# 抽样钉子：这些必须一直被判为"未接线"（防扫描器退化）
-_MUST_BE_UNWIRED = {
-    'tracing', 'sql_cache', 'query_optimizer', 'masking_rule_engine',
-    'token_bucket_limiter', 'db_pool_enhanced', 'log_sanitizer',
-}
+# 抽样钉子（**2026-10-08 · D4 死代码清理后已清空**）：
+# 原先这里钉着 7 个 core 模块（tracing / sql_cache / query_optimizer /
+# masking_rule_engine / token_bucket_limiter / db_pool_enhanced / log_sanitizer），
+# 它们都已按 D4 决策**备份后删除**
+# （备份：`C:\Users\cxx\scada-dead-modules-backup-20261008\`，含 MANIFEST.json 与 git blob）。
+# 模块不存在了，"它有没有被判为未接线"也就无从谈起 —— 集合清空。
+# 防扫描器退化的职责改由下面的**反向钉子 `_MUST_BE_WIRED`** + 模块数下限承担。
+_MUST_BE_UNWIRED: set = set()
 # 反向钉子：这些确实已接线，绝不能被标成未接线
 _MUST_BE_WIRED = {
     'connection_pool', 'config_manager', 'di_container', 'event_bus',
@@ -1197,13 +746,36 @@ def _module_has_wired_false(src: str) -> bool:
 
 
 def test_unwired_detector_is_not_vacuous():
-    """先证明扫描器真的在扫东西，防止 exclude 写错导致"扫了 0 个"的假绿。"""
+    """先证明扫描器真的在扫东西，防止 exclude 写错导致"扫了 0 个"的假绿。
+
+    ⚠️ 2026-10-08（D4 清理）后口径变了：原先这里断言「至少判定出 40 个未接线模块」
+    作为「扫描器没退化」的证据 —— 那等于**拿"仓库里恰好有一堆死代码"当分析有效的证明**，
+    死代码清完就假红。现在 core/ 下应当**一个未接线模块都没有**，
+    防退化改由两条承担：① 扫到的模块数下限（证明没扫空）；
+    ② `_MUST_BE_WIRED` 反向钉子（证明不会把已接线的误判成未接线）。
+    """
     importers = _production_importers()
-    assert len(importers) >= 70, f'只扫到 {len(importers)} 个 core 模块'
+    # 自适应的防退化判据（**不再用写死的阈值**）：
+    # 原先写 `>= 70`，那是按清理前的数量定的 —— 2026-10-08 D4 删掉 40+ 个死 core 模块后
+    # 只剩 35 个，阈值立刻假红。改成"必须覆盖当前存在的每一个 core 模块"，
+    # 既能防"扫了 0 个"的假绿，又不会随模块增删而失效。
+    expected = set(_core_modules())
+    # 只断言**单向**：每个存在的 core 模块都必须被扫到（防"漏扫"的假绿）。
+    # 不要求反向相等 —— 扫描器的键可能包含 `_core_modules()` 口径之外的东西
+    # （实测它多出一个 `generate_certs`），多出来无害，漏掉才是问题。
+    missing = sorted(expected - set(importers))
+    assert not missing, f'扫描器漏了这些 core 模块：{missing}'
 
     unwired = {m for m, v in importers.items() if not v}
-    assert len(unwired) >= 40, f'只判定出 {len(unwired)} 个未接线模块，扫描器可能退化了'
-
+    # ⚠️ 这里**不断言** `unwired == set()`。第一版这么写，立刻假红：
+    # `core/generate_certs.py` 是一个**独立可执行脚本**（有 `if __name__ == '__main__'`），
+    # 没有任何生产代码引用它 —— 按本扫描器的口径它就是"未接线"，
+    # 而它**本来就带着 `接线状态：未接线` 标注**（属原有 52 个之一），完全正确。
+    # 「未接线必须带标注」这条不变量由下面的 `test_unwired_marker_matches_reality`
+    # 专门守 —— 在别处再断言一遍是重复，而且会与"独立脚本算不算接线"这种口径分歧打架。
+    # 本用例只负责**防扫描器退化**：
+    #   ① 每个存在的 core 模块都被扫到（上面那条，防漏扫的假绿）
+    #   ② 已接线的模块不得被误判成未接线（下面这条，防误报）
     for m in _MUST_BE_UNWIRED:
         assert m in unwired, f'{m} 应被判为未接线，扫描器判定错了'
     for m in _MUST_BE_WIRED:

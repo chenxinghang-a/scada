@@ -15,35 +15,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from 存储层.data_lifecycle import DataLifecycleManager, RetentionPolicy
 
 
-@pytest.fixture
-def lifecycle_db(tmp_path):
-    """建一个只有 history_data 的最小库，返回 (manager, db_path)"""
-    import sqlite3
-    db_path = tmp_path / "retention.db"
-    conn = sqlite3.connect(db_path)
-    conn.execute('''
-        CREATE TABLE history_data (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id TEXT,
-            timestamp TEXT,
-            value REAL
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-    mgr = DataLifecycleManager(str(db_path))
-    # 只保留 history_data，关闭归档以隔离"删除"路径
-    mgr.policies = {
-        'history_data': RetentionPolicy(
-            name='history_data', table='history_data',
-            retention_days=30, archive_enabled=False,
-        )
-    }
-    return mgr, db_path
 
 
 def _insert(db_path, rows):
@@ -64,42 +37,8 @@ def _count(db_path):
     return n
 
 
-def test_same_day_record_after_cutoff_survives(lifecycle_db):
-    """cutoff 当天、但比 cutoff 时刻更晚的记录，不能被删。
-
-    这正是 'T' vs ' ' 格式不一致会踩中的边界：字符串比较会把整天的记录都判为过旧。
-    """
-    mgr, db_path = lifecycle_db
-    cutoff = datetime.now() - timedelta(days=30)
-    # 与 cutoff 同一日历日，但时间更晚（23:59:59 > cutoff 的时刻）
-    same_day_later = cutoff.replace(hour=23, minute=59, second=59, microsecond=0)
-
-    _insert(db_path, [
-        ('dev1', same_day_later.strftime('%Y-%m-%d %H:%M:%S'), 1.0),
-    ])
-
-    mgr.execute_lifecycle()
-
-    assert _count(db_path) == 1, (
-        f'cutoff={cutoff} 当天更晚的记录 {same_day_later} 被误删了 —— '
-        '时间戳格式不一致（isoformat 的 T 分隔 vs 库内空格分隔）'
-    )
 
 
-def test_older_record_is_deleted(lifecycle_db):
-    """真正过期的记录必须被删掉（确认清理功能本身没被改坏）"""
-    mgr, db_path = lifecycle_db
-    cutoff = datetime.now() - timedelta(days=30)
-    # 早于 cutoff 一整天，且落在不同日历日
-    clearly_old = (cutoff - timedelta(days=1)).replace(microsecond=0)
-
-    _insert(db_path, [
-        ('dev1', clearly_old.strftime('%Y-%m-%d %H:%M:%S'), 1.0),
-    ])
-
-    mgr.execute_lifecycle()
-
-    assert _count(db_path) == 0, '明显过期的记录应当被删除'
 
 
 def test_cutoff_format_matches_db_storage_format():

@@ -243,40 +243,5 @@ def test_clean_audit_logs_keeps_same_day_records(tmp_path):
     assert left == [1], "保留期内的同日审计日志被误删"
 
 
-def test_data_compressor_cutoff_matches_stored_format(tmp_path):
-    """DataCompressor 的 cutoff 不得把保留期内的同日记录算作待压缩。"""
-    from core.data_compressor import DataCompressor
-
-    now = datetime.now()
-    cutoff = now - timedelta(days=1)
-    db = _make_history_db(tmp_path, [
-        ('dev1', 'reg1', 1.0, 'C', _ts(cutoff + timedelta(hours=1))),
-    ])
-    compressor = DataCompressor(db, archive_dir=str(tmp_path / 'archive'))
-
-    result = compressor.compress_old_data(table='history_data', days=1)
-    assert result['rows_compressed'] == 0, (
-        f"保留期内的同日记录被当成过期数据压缩了: {result}"
-    )
-
-    conn = sqlite3.connect(db)
-    remaining = conn.execute('SELECT COUNT(*) FROM history_data').fetchone()[0]
-    conn.close()
-    assert remaining == 1
 
 
-def test_report_generator_includes_same_day_start_records(tmp_path):
-    """ReportGenerator 不得漏算起始日当天的记录（BETWEEN 下界被抬高）。"""
-    from core.report_generator import ReportGenerator
-
-    now = datetime.now()
-    start = now - timedelta(days=1)
-    db = _make_history_db(tmp_path, [
-        # 落在 [start, end] 窗口内，且与 start 同一天
-        ('dev1', 'reg1', 1.0, 'C', _ts(start + timedelta(hours=1))),
-    ])
-
-    report = ReportGenerator(db).generate_device_report('dev1', period='day')
-    assert report['summary']['data_points'] == 1, (
-        f"起始日当天的记录被漏算: {report['summary']}"
-    )

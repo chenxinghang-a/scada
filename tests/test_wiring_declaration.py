@@ -50,11 +50,42 @@ UNREACHABLE = REPORT.unreachable
 
 
 def test_analysis_is_sane():
-    """守卫自身的前置对照：分析必须真的在跑，且结论不是"全都可达/全都不可达"。"""
-    assert len(PATH_OF) > 100, f"只扫到 {len(PATH_OF)} 个模块，分析口径可能坏了"
+    """守卫自身的前置对照：分析必须真的在跑，且结论不是"全都不可达"。"""
+    assert len(PATH_OF) > 80, f"只扫到 {len(PATH_OF)} 个模块，分析口径可能坏了"
     assert "run" in PATH_OF, "入口 run.py 没被扫到"
-    assert UNREACHABLE, "一个不可达模块都没有 —— 分析口径可能坏了（假绿）"
     assert len(UNREACHABLE) < len(PATH_OF), "全部不可达 —— 分析口径可能坏了"
+    # ⚠️ 这里**不能**再断言「不可达集非空」：round 188 把死模块清完后，
+    # 不可达 = 0 是**正确状态**。原来那条断言是拿"仓库里恰好有死代码"
+    # 当分析有效的证据 —— 清完就假红。分析本身是否有效改由下面这条
+    # **合成小仓库**自测来保证（不依赖本仓库的状态）。
+
+
+def test_analysis_works_on_synthetic_repos(tmp_path):
+    """前置对照（不依赖本仓库）：用合成小仓库验证可达性分析本身是对的。"""
+    # ① 基本判别：run 导入 a，b 没人用 → b 不可达且未声明
+    (tmp_path / "run.py").write_text("import a\n", encoding="utf-8")
+    (tmp_path / "a.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("Y = 2\n", encoding="utf-8")
+    r1 = analyse(tmp_path)
+    assert r1.unreachable == {"b"}, f"合成仓库 ① 判定错: {sorted(r1.unreachable)}"
+    assert r1.undeclared == ["b"], f"合成仓库 ① 未声明判定错: {r1.undeclared}"
+
+    # ② 补上接线声明 → 不再算「未声明」
+    (tmp_path / "b.py").write_text("# 接线状态：未接线（WIRED = False）\nY = 2\n", encoding="utf-8")
+    r2 = analyse(tmp_path)
+    assert r2.unreachable == {"b"} and r2.undeclared == [], f"合成仓库 ② 判定错: {r2.undeclared}"
+
+    # ③ 入口判定必须落在**语法**上：注释里提到 __main__ 不算入口
+    #    （踩过：给模块补声明时，声明文本里含这几个字 → 那批模块"变成可达" → 结论翻转）
+    (tmp_path / "c.py").write_text(
+        '"""doc: 这里提到 if __name__ == \'__main__\' 只是说明文字"""\nZ = 3\n', encoding="utf-8")
+    r3 = analyse(tmp_path)
+    assert "c" in r3.unreachable, "注释里提到 __main__ 被误判成入口 —— 入口判定又退回文本匹配了"
+
+    # ④ 真正的入口语句必须被认出来
+    (tmp_path / "d.py").write_text('if __name__ == "__main__":\n    pass\n', encoding="utf-8")
+    r4 = analyse(tmp_path)
+    assert "d" not in r4.unreachable, "真正的 __main__ 入口没被识别"
 
 
 def test_analysis_ignores_other_repos():

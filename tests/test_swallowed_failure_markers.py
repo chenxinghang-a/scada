@@ -23,46 +23,8 @@ import pytest
 
 # ---------------------------------------------------------------- 生命周期报告
 
-def test_lifecycle_report_failed_lookup_is_marked(tmp_path):
-    """查不到的表必须标明失败，且结构要与正常分支一致。"""
-    from 存储层.data_lifecycle import DataLifecycleManager
-
-    db = tmp_path / 'empty.db'
-    sqlite3.connect(str(db)).close()          # 空库：三张表都不存在
-
-    mgr = DataLifecycleManager(str(db))
-    report = mgr.generate_report()
-    stats = report['table_stats']
-
-    assert set(stats) == {'history_data', 'alarm_records', 'audit_log'}, \
-        f'应覆盖全部策略表，实际 {set(stats)}'
-
-    for name, info in stats.items():
-        assert info['count'] is None, \
-            f'{name} 查询失败却报了数字 {info["count"]} —— 看起来像"这张表是空的"'
-        assert info.get('error'), f'{name} 没带失败原因'
-        # 结构一致性：正常分支有的键，失败分支也必须有
-        assert 'earliest' in info and 'latest' in info, \
-            f'{name} 失败分支结构不完整，按正常结构读会 KeyError: {info}'
 
 
-def test_lifecycle_report_normal_path_unchanged(tmp_path):
-    """正常路径不受影响：真实表要能拿到真实行数。"""
-    from 存储层.data_lifecycle import DataLifecycleManager
-
-    db = tmp_path / 'real.db'
-    conn = sqlite3.connect(str(db))
-    conn.execute('CREATE TABLE history_data (id INTEGER, timestamp TEXT)')
-    conn.executemany('INSERT INTO history_data VALUES (?, ?)',
-                     [(1, '2026-01-01 00:00:00'), (2, '2026-01-02 00:00:00')])
-    conn.commit()
-    conn.close()
-
-    mgr = DataLifecycleManager(str(db))
-    stats = mgr.generate_report()['table_stats']
-
-    assert stats['history_data']['count'] == 2
-    assert 'error' not in stats['history_data']
 
 
 # ---------------------------------------------------------------- 诊断包配置

@@ -176,42 +176,8 @@ class TestRecipeSimulator:
 # ============================================================
 # DeviceManagerFactory Tests
 # ============================================================
-from 采集层.device_manager_factory import DeviceManagerFactory, get_device_manager
 
 
-class TestDeviceManagerFactory:
-
-    def test_create_simulated(self):
-        mgr = DeviceManagerFactory.create_simulated()
-        assert mgr.simulation_mode is True
-
-    def test_create_real(self):
-        mgr = DeviceManagerFactory.create_real()
-        assert mgr is not None
-
-    @patch('采集层.device_manager_factory.Path')
-    def test_create_default_simulated(self, mock_path):
-        mock_path.return_value.exists.return_value = False
-        mgr = DeviceManagerFactory.create(config_path='nonexistent.yaml')
-        assert mgr.simulation_mode is True
-
-    @patch('采集层.device_manager_factory.Path')
-    def test_create_with_config_simulated(self, mock_path_instance):
-        mock_file = MagicMock()
-        mock_file.exists.return_value = True
-        mock_path_instance.return_value = mock_file
-
-        import io
-        yaml_content = "system:\n  simulation_mode: true\n"
-        with patch('builtins.open', return_value=io.StringIO(yaml_content)):
-            with patch('采集层.device_manager_factory.yaml.safe_load',
-                       return_value={'system': {'simulation_mode': True}}):
-                mgr = DeviceManagerFactory.create()
-                assert mgr.simulation_mode is True
-
-    def test_get_device_manager_function(self):
-        mgr = get_device_manager(config_path='nonexistent.yaml')
-        assert mgr is not None
 
 
 # ============================================================
