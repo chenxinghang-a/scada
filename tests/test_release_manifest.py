@@ -540,10 +540,28 @@ class TestDependencyLockProvenance:
     「会静默变成 null —— 清单少了一个字段却没人报错」。
 
     为什么这些断言不会变成"依赖机器状态"的用例（本机绿 / CI 红）：
-      * `requirements.txt` 在**本仓库内** → 它的哈希是确定的，可以硬断言。
+      * `requirements.txt` 在**本仓库内** → 它的内容确定，可以硬断言。
       * 前端 lock 文件**可能不在**（后端-only 的检出场景）→ 用**条件不变量**
         （"前端版本读得到 ⇒ digest 必须读得到"）而不是写死"必须非空"。
+
+    ⚠️ **本组用例第一版就是「机器相关」的，被 CI 抓住了 —— 记在这里。**
+    第一版把清单里的 digest 与 `hashlib.sha256(path.read_bytes())` 比较，
+    理由是"文件在仓库里 → 哈希是确定的"。**这个理由只对内容成立，对字节不成立**：
+    行尾由各环境的 `core.autocrlf` 决定。
+    实测（同一 commit）：本机前端 lock 是 LF → `089557e1…`；
+    CI（windows runner）检出为 CRLF → `8ffd6568…`。于是 CI 的 `test` job 红：
+    `assert '089557e1…' == '8ffd6568…'`。
+    **根因不在测试，在生成器**：它当时对工作区**原始字节**做 sha256，
+    于是这个"来源证明"本身就不可复现 —— 同一个 commit 能算出两个值。
+    修法是让生成器**先把行尾归一化为 LF 再哈希**（见 `_lock_digest` 的 docstring），
+    本组用例随之改成同一口径比较，并新增一条
+    `test_lock_digest_is_line_ending_agnostic` 把这个口径钉住。
     """
+
+    @staticmethod
+    def _lf_sha256(path: Path) -> str:
+        """按生成器的口径算依赖锁哈希：**行尾归一化为 LF 后再 sha256**。"""
+        return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
     def test_lock_digest_returns_none_for_missing_file(self, manifest_module, tmp_path):
         """正向对照：缺失文件必须返回 None。
@@ -558,6 +576,23 @@ class TestDependencyLockProvenance:
         f = tmp_path / "lock.txt"
         f.write_bytes(b"hello\n")
         assert manifest_module._lock_digest(f) == hashlib.sha256(b"hello\n").hexdigest()
+
+    def test_lock_digest_is_line_ending_agnostic(self, manifest_module, tmp_path):
+        """**跨环境可复现性**：同一内容用 CRLF / LF 写，digest 必须相同。
+
+        这条是 CI 红过一次之后补的。没有它，`core.autocrlf` 取值不同的两个环境
+        会对"同一个 commit"算出两个不同的 digest —— 清单只记一个值，
+        于是必然有一边红。行尾对依赖锁文件没有语义差别，所以必须归一化。
+        """
+        lf = tmp_path / "lf.txt"
+        crlf = tmp_path / "crlf.txt"
+        lf.write_bytes(b"a==1.0\nb==2.0\n")
+        crlf.write_bytes(b"a==1.0\r\nb==2.0\r\n")
+
+        assert manifest_module._lock_digest(lf) == manifest_module._lock_digest(crlf), (
+            "行尾不同导致 digest 不同 —— 这个字段将无法跨环境复现"
+            "（本机绿 / CI 红）。请在 _lock_digest 里把 CRLF 归一化为 LF。"
+        )
 
     def test_generated_manifest_backend_digest_is_not_null(self, manifest_module):
         """生成器在当前仓库里跑，后端锁文件必然存在 → digest 不得为 null。"""
@@ -589,7 +624,7 @@ class TestDependencyLockProvenance:
             "已提交的 release-manifest.json 缺少 backend_deps_lock_digest（或为 null），"
             "请重新运行 tools/gen_release_manifest.py"
         )
-        actual = hashlib.sha256(req.read_bytes()).hexdigest()
+        actual = self._lf_sha256(req)
         assert recorded == actual, (
             "已提交清单的 backend_deps_lock_digest 已过期：\n"
             f"  清单记录 = {recorded}\n"
@@ -646,7 +681,7 @@ class TestDependencyLockProvenance:
             pytest.skip("本机解析不到前端 package-lock.json")
         data = json.loads(path.read_text(encoding="utf-8"))
 
-        actual = hashlib.sha256(lock.read_bytes()).hexdigest()
+        actual = self._lf_sha256(lock)
         assert data.get("frontend_deps_lock_digest") == actual, (
             "已提交清单的 frontend_deps_lock_digest 与 "
             f"{lock} 的实际 sha256 不一致，请重新运行 tools/gen_release_manifest.py"

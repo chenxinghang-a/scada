@@ -6,8 +6,10 @@
     build_time              - 构建时间（UTC，ISO8601）
     python_version          - 运行环境 Python 版本
     node_version            - 运行环境 Node 版本（不可用时 unknown）
-    backend_deps_lock_digest  - requirements.txt 的 sha256（文件缺失则 null）
-    frontend_deps_lock_digest - scada-app/package-lock.json 的 sha256（缺失则 null）
+    backend_deps_lock_digest  - requirements.txt 的 sha256（文件缺失则 null；
+                                **行尾归一化为 LF 后再哈希**，保证跨环境可复现）
+    frontend_deps_lock_digest - scada-app/package-lock.json 的 sha256（缺失则 null；
+                                同样先归一化行尾）
     frontend_version        - 前端 package.json 的 version（读不到则 null）
     version_lockstep        - 前后端版本同步状态：synced / skewed / unknown
     artifacts               - 交付产物清单（路径 + sha256）；产物缺失记 null 并注明
@@ -92,8 +94,34 @@ def _sha256_of_file(path: Path) -> str | None:
 
 
 def _lock_digest(rel_path: Path) -> str | None:
-    """依赖锁文件 digest：存在则 sha256，缺失则 None（调用方据实记录）。"""
-    return _sha256_of_file(rel_path)
+    """依赖锁文件 digest：存在则 sha256，缺失则 None（调用方据实记录）。
+
+    **哈希前先把行尾统一成 LF** —— 这不是洁癖，是「可复现」的必要条件。
+
+    这两个字段是「这份清单对应哪一版依赖锁」的**来源证明**。同一 commit 在
+    两次检出上必须得到**同一个值**，否则这个证明不可复现。而对工作区**原始字节**
+    做 sha256 做不到这一点：行尾由各环境的 `core.autocrlf` 决定。
+
+    实测（2026-10-08，同一个 commit、同一个前端仓库）：
+      * 本机：`scada-app/package-lock.json` 是 LF   → sha256 = 089557e1…
+      * CI（windows runner 检出为 CRLF）           → sha256 = 8ffd6568…
+      两者是**同一份文件**，只差行尾 —— 而清单只记了一个值，
+      于是「本机绿、CI 红」。反证：把本机那份转成 CRLF 后哈希正好是 8ffd6568…。
+      （`requirements.txt` 那次侥幸没暴露：本机与 CI 恰好都是 CRLF。）
+
+    行尾对依赖锁文件没有语义差别（`requirements.txt` / `package-lock.json`
+    都是文本清单），所以归一化后哈希是安全且必要的。
+
+    ⚠️ **只在这里归一化**：`_sha256_of_file` 仍按原始字节计算，
+    交付产物（exe / zip）的哈希不能被改动 —— 那是在证明二进制本身。
+    """
+    if not rel_path.is_file():
+        return None
+    try:
+        data = rel_path.read_bytes().replace(b"\r\n", b"\n")
+    except OSError:
+        return None
+    return hashlib.sha256(data).hexdigest()
 
 
 def _frontend_version() -> str | None:
