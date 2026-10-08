@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-08T17:10:02+00:00",
+  "generated_at": "2026-10-08T17:50:02+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -20,7 +20,6 @@
     "frontend_api_dir": "C:\\Users\\cxx\\scada-app\\src\\api",
     "frontend_src_dir": "C:\\Users\\cxx\\scada-app\\src",
     "frontend_files": [
-      "Devices.vue",
       "alarms.ts",
       "auth.ts",
       "control.ts",
@@ -35,9 +34,9 @@
     "frontend_scanned_files": 52
   },
   "summary": {
-    "frontend_endpoints": 136,
+    "frontend_endpoints": 134,
     "backend_routes": 183,
-    "matched": 136,
+    "matched": 134,
     "missing_backend": 0,
     "prefixed_mismatch": 0,
     "param_mismatch": 0,
@@ -870,16 +869,6 @@
     },
     {
       "method": "POST",
-      "frontend_path": "/api/devices/presets/add",
-      "source_path": "/devices/presets/add",
-      "backend_path": "/api/devices/presets/add",
-      "status": "match",
-      "detail": "精确匹配 api_devices.py:1017",
-      "source_file": "Devices.vue",
-      "source_line": 430
-    },
-    {
-      "method": "POST",
       "frontend_path": "/api/devices/presets/add-all",
       "source_path": "/devices/presets/add-all",
       "backend_path": "/api/devices/presets/add-all",
@@ -887,16 +876,6 @@
       "detail": "精确匹配 api_devices.py:1073",
       "source_file": "devices.ts",
       "source_line": 101
-    },
-    {
-      "method": "POST",
-      "frontend_path": "/api/devices/presets/add-all",
-      "source_path": "/devices/presets/add-all",
-      "backend_path": "/api/devices/presets/add-all",
-      "status": "match",
-      "detail": "精确匹配 api_devices.py:1073",
-      "source_file": "Devices.vue",
-      "source_line": 444
     },
     {
       "method": "POST",
