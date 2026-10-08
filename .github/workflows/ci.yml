@@ -184,16 +184,17 @@ jobs:
         # 任何「测不出来」的情形（exe 不存在 / 进程提前退出 / 端口不开 /
         # 健康判定有负面信号）一律 exit 1，没有静默放行分支。
         #
-        # `--expect-version` 是 2026-10-08（round 191）补的第二道断言：
+        # `--expect-version-file` 是 2026-10-08（round 191）补的第二道断言：
         # 原先闸门只看「能不能起」，不看「起的是什么版本」。而 VERSION 长期不在
         # spec 的 datas 里 → 冻结产物恒报 `0.0.0-unknown`，**开发机完全看不出来**。
-        # 现在把源码 VERSION 传进去做硬比对，产物与源码不一致即失败。
-        run: |
-          EXPECT="$(tr -d '[:space:]' < VERSION)"
-          echo "源码 VERSION = $EXPECT"
-          python .github/scripts/smoke_packaged_backend.py \
-            --exe dist/scada-backend/scada-backend.exe \
-            --expect-version "$EXPECT"
+        # 现在把源码 VERSION 文件传进去做硬比对，产物与源码不一致即失败。
+        #
+        # ⚠️ 命令刻意写成**纯参数、不含任何 shell 语法**：本 job 跑在 windows-latest，
+        # 默认 shell 是 PowerShell。第一版写成
+        # `EXPECT="$(tr -d '[:space:]' < VERSION)"`（POSIX 语法、也没写
+        # `shell: bash`）→ 步骤在解析阶段就失败。改成从文件读之后，
+        # PowerShell / bash 下行为一致，这类坑不会再犯。
+        run: python .github/scripts/smoke_packaged_backend.py --exe dist/scada-backend/scada-backend.exe --expect-version-file VERSION
 
       - name: Clean-checkout verification
         # 本 job 本身就是 clean checkout 验证：runner 上只有 git 跟踪的文件，

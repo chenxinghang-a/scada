@@ -606,9 +606,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-tail", type=int, default=4000,
                         help="失败时打印日志尾部字符数（默认 4000）")
     parser.add_argument("--expect-version", default=None,
-                        help="期望产物自报的版本号（通常传源码 VERSION 文件内容）。"
-                             "给了就变成硬断言：不一致即闸门失败。"
-                             "不给则只打印自报版本，不判定。")
+                        help="期望产物自报的版本号。给了就变成硬断言：不一致即闸门失败。"
+                             "不给则只打印自报版本，不判定。"
+                             "与 --expect-version-file 二选一。")
+    parser.add_argument("--expect-version-file", default=None, metavar="PATH",
+                        help="从文件读期望版本（自动去掉首尾空白），例如 VERSION。"
+                             "**优先用它**：这样 CI 里的命令就是纯参数、不含任何"
+                             "shell 语法，PowerShell / bash 下都能跑。")
     args = parser.parse_args(argv)
 
     try:
@@ -624,9 +628,27 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--checks-timeout 必须为正数")
         return 2  # pragma: no cover
 
+    # 两个来源二选一。**fail-closed**：给了文件却读不到，直接报错退出，
+    # 绝不静默降级成「不判定」—— 那正是这个闸门要消灭的失败方式。
+    if args.expect_version and args.expect_version_file:
+        parser.error("--expect-version 与 --expect-version-file 只能给一个")
+        return 2  # pragma: no cover
+
+    expect_version = args.expect_version
+    if args.expect_version_file:
+        try:
+            expect_version = Path(args.expect_version_file).read_text(
+                encoding="utf-8").strip()
+        except OSError as exc:
+            parser.error(f"读不到 --expect-version-file {args.expect_version_file!r}: {exc}")
+            return 2  # pragma: no cover
+        if not expect_version:
+            parser.error(f"--expect-version-file {args.expect_version_file!r} 是空的")
+            return 2  # pragma: no cover
+
     return smoke(Path(args.exe).resolve(), ports, args.health_path,
                  args.timeout, args.checks_timeout, args.log_tail,
-                 expect_version=args.expect_version)
+                 expect_version=expect_version)
 
 
 if __name__ == "__main__":

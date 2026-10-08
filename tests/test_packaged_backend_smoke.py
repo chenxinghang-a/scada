@@ -768,6 +768,58 @@ class TestCiWiring:
             "期望值不是从源码 VERSION 文件取的"
         )
 
+    def test_smoke_step_command_is_shell_agnostic(self):
+        """冒烟步骤的命令**不得含 shell 专有语法** —— 本 job 的默认 shell 是 PowerShell。
+
+        ``build-backend`` 跑在 ``windows-latest``，GitHub Actions 在 Windows 上
+        默认用 **PowerShell**（本 workflow 里凡是需要 POSIX 的步骤都显式写了
+        ``shell: bash``，见 test job 与 Clean-checkout verification 步骤）。
+
+        踩过（2026-10-08，round 191）：第一版写成
+
+            EXPECT="$(tr -d '[:space:]' < VERSION)"
+            python .github/scripts/smoke_packaged_backend.py \\
+              --exe dist/scada-backend/scada-backend.exe \\
+              --expect-version "$EXPECT"
+
+        —— **POSIX 语法 + 没写 `shell: bash`** → 步骤在**解析阶段**就失败，
+        CI 红，而本机（Git Bash）一切正常。**又一次「本机绿 / CI 红」。**
+
+        修法不是补个 `shell: bash` 就完事，而是把命令改成**纯参数**
+        （`--expect-version-file VERSION`，从文件读期望值），
+        这样 PowerShell / bash 下行为完全一致，整类坑消失。
+
+        本守卫禁止的记号（无 `shell: bash` 时）：
+        ``$(`` 命令替换、``<`` / ``>`` 重定向、``&&`` / ``||`` 连接、
+        行尾 ``\\`` 续行 —— 这些在 PowerShell 下语义不同或直接报错。
+        """
+        ci = _CI_YML.read_text(encoding="utf-8")
+        step = _step_block(_job_block(ci, "build-backend"),
+                           "smoke_packaged_backend.py")
+        code = "\n".join(line for line in step.splitlines()
+                         if not line.lstrip().startswith("#"))
+
+        if re.search(r"^\s*shell:\s*bash\s*$", code, re.M):
+            return  # 显式声明了 bash，允许用 POSIX 语法
+
+        forbidden = {
+            "$(": "命令替换（PowerShell 用 $() 但语义/引号规则不同，易踩）",
+            "&&": "条件连接（PowerShell 5.1 不支持）",
+            "||": "条件连接（PowerShell 5.1 不支持）",
+            "<": "输入重定向（PowerShell 里是保留字）",
+            ">": "输出重定向",
+        }
+        found = sorted(tok for tok in forbidden if tok in code)
+        assert not found, (
+            f"冒烟步骤含 shell 专有记号 {found}，但没声明 `shell: bash` —— "
+            "Windows runner 默认 PowerShell，会在解析阶段失败。"
+            "改用纯参数形式（如 --expect-version-file VERSION）。"
+        )
+        # 行尾反斜杠续行是 POSIX 专有（PowerShell 用反引号）
+        assert not re.search(r"\\\s*$", code, re.M), (
+            "冒烟步骤用了 `\\` 续行（POSIX 专有），但没声明 `shell: bash`"
+        )
+
     def test_checks_timeout_covers_periodic_interval(self, smoke_mod):
         """``--checks-timeout`` 必须覆盖后台巡检的**至少两轮**。
 
