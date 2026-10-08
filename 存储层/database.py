@@ -39,6 +39,12 @@ ARCHIVE_TABLE = 'history_archive'
 #: 所以超过这个比例就要告警，提示执行 VACUUM。
 BLOAT_FREE_PAGE_RATIO_THRESHOLD = 0.30
 
+#: 取"真实数据字节"的 SQL（`dbstat` 虚表）。
+#: 抽成模块级常量是为了给测试一个**接缝**：把它 monkeypatch 成一条非法查询，
+#: 就能在**任何**机器上复现「dbstat 不可用」这条分支
+#: （CI 的 SQLite 本来就没有该虚表，本机有 —— 不接缝就没法在两种环境都测到）。
+_DBSTAT_DATA_BYTES_SQL = 'SELECT SUM(pgsize) FROM dbstat'
+
 #: 同一库的膨胀告警最小间隔（秒）。
 #: ``get_database_stats`` 会被健康检查接口和 WebSocket 状态推送周期性调用
 #: （最频繁 10 秒一次），没有节流的话膨胀库会每 10 秒刷一条同样的 warning，
@@ -1034,7 +1040,11 @@ class Database:
                 - ``page_size`` / ``page_count`` / ``free_page_count``。
                 - ``free_page_ratio``: 空闲页占比 0~1（核心膨胀指标，与 WAL 无关）。
                 - ``free_bytes_mb``: 空闲页对应的字节数（= 可回收空间）。
-                - ``data_bytes_mb``: dbstat 实测的数据字节；不可用为 None。
+                - ``data_bytes_mb``: 实测的数据字节。优先 ``dbstat``；不可用时退回
+                  "非空闲页 × 页大小"（可移植口径，略大于 dbstat），**不再为 None**。
+                - ``data_bytes_source``: 上面那个数来自哪个口径 ——
+                  ``'dbstat'`` / ``'page_count'`` / ``None``（没请求或算不出）。
+                  **口径必须可辨**，否则读者会以为是 dbstat 的精确值。
                 - ``size_to_data_ratio``: 磁盘占用 / 实际数据字节（1 表示没有空洞，
                   越大越膨胀；3.3GB/67MB 那次约 50）。数据量取不到时为 None。
                 - ``is_bloated``: 是否超过 ``BLOAT_FREE_PAGE_RATIO_THRESHOLD``。
@@ -1056,13 +1066,34 @@ class Database:
             free_pages = conn.execute('PRAGMA freelist_count').fetchone()[0] or 0
 
             data_bytes = None
+            data_bytes_source = None
             if include_dbstats:
                 try:
-                    data_bytes = conn.execute('SELECT SUM(pgsize) FROM dbstat').fetchone()[0]
+                    data_bytes = conn.execute(_DBSTAT_DATA_BYTES_SQL).fetchone()[0]
+                    if data_bytes is not None:
+                        data_bytes_source = 'dbstat'
                 except sqlite3.Error as e:
                     # dbstat 是编译期可选项；拿不到只是少一个更精确的口径，
                     # PRAGMA 口径（freelist 占比）仍然可用，所以降级而非报错。
                     logger.debug(f"dbstat 不可用，跳过真实数据量统计: {e}")
+
+            # 兜底：dbstat 不可用时改用**可移植**口径 —— 非空闲页 × 页大小。
+            #
+            # 为什么必须有兜底：`dbstat` 需要 SQLite 编译期开启
+            # `SQLITE_ENABLE_DBSTAT_VTAB`，**CI 的 runner 就没有**。
+            # 没有兜底时 `data_bytes_mb` / `size_to_data_ratio` 在 CI 上恒为 None，
+            # 于是依赖它们的断言只能写成 `if ... is not None:` 的**静默跳过** ——
+            # 那两条指标在 CI 上**永远没被校验过**（属"覆盖缺口"，不是"通过"）。
+            #
+            # 口径差异（**必须如实标注，不能让读者以为是 dbstat 口径**）：
+            #   非空闲页 = page_count - freelist_count，含 btree / 溢出 / pointer-map /
+            #   lock-byte 页；dbstat 只统计 btree 页 → 本口径**略大**。
+            #   用于 `size_to_data_ratio` 这种"量级判断"足够，精确值仍以 dbstat 为准。
+            if include_dbstats and data_bytes is None and page_count:
+                used_pages = max(page_count - free_pages, 0)
+                if used_pages:
+                    data_bytes = used_pages * page_size
+                    data_bytes_source = 'page_count'
 
         # 空闲页占比：膨胀的**唯一判据**。
         # 不能用"文件大小 / 数据量"当判据 —— WAL 未 checkpoint 时主库文件
@@ -1082,6 +1113,7 @@ class Database:
             'free_bytes_mb': round(free_pages * page_size / (1024 * 1024), 2),
             'data_bytes_mb': (round(data_bytes / (1024 * 1024), 2)
                               if data_bytes is not None else None),
+            'data_bytes_source': data_bytes_source,
             'size_to_data_ratio': round(size_to_data, 2) if size_to_data else None,
             'is_bloated': free_ratio >= BLOAT_FREE_PAGE_RATIO_THRESHOLD,
         }

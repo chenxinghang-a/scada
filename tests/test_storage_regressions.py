@@ -390,11 +390,20 @@ class TestBloatDetection:
         assert stats['is_bloated'] is True
         assert stats['free_page_count'] > 0
         assert stats['free_bytes_mb'] > 0
-        # 文件大小 vs 实际数据量：真实数据远小于磁盘占用
-        if stats['data_bytes_mb'] is not None:
-            assert stats['data_bytes_mb'] < stats['total_size_mb']
-            assert stats['size_to_data_ratio'] is not None
-            assert stats['size_to_data_ratio'] > 1
+        # 文件大小 vs 实际数据量：真实数据远小于磁盘占用。
+        #
+        # ⚠️ 这里原先是 `if stats['data_bytes_mb'] is not None:` —— **静默跳过**。
+        # 而 CI 的 SQLite 没有 `dbstat` 虚表 → 在 CI 上永远跳过 → 这两条断言
+        # **从未在 CI 上跑过**（属覆盖缺口，不是通过）。
+        # round 190 给 `data_bytes_mb` 加了可移植兜底（非空闲页 × 页大小，
+        # 并记录 `data_bytes_source`），于是这里可以改成**硬断言**。
+        assert stats['data_bytes_mb'] is not None, (
+            'data_bytes_mb 不该为 None —— 有 dbstat 就用它，没有就走 page_count 兜底'
+        )
+        assert stats['data_bytes_source'] in ('dbstat', 'page_count')
+        assert stats['data_bytes_mb'] < stats['total_size_mb']
+        assert stats['size_to_data_ratio'] is not None
+        assert stats['size_to_data_ratio'] > 1
 
         # 告警必须由 check_bloat 触发
         assert any('膨胀' in rec.message for rec in caplog.records), (
@@ -494,3 +503,54 @@ class TestBloatDetection:
         empty.touch()
         stats = Database(str(empty)).get_fragmentation_stats()
         assert stats['is_bloated'] is False
+
+
+class TestDataBytesPortableFallback:
+    """`data_bytes_mb` 在 dbstat 不可用时必须有**可移植兜底**（round 190）。
+
+    背景：`dbstat` 需要 SQLite 编译期开启 `SQLITE_ENABLE_DBSTAT_VTAB`，
+    **CI 的 runner 没有**（本机有）。没有兜底时 `data_bytes_mb` /
+    `size_to_data_ratio` 在 CI 上恒为 None，依赖它们的断言只能写成
+    `if ... is not None:` 的**静默跳过** —— 等于这两条指标在 CI 上
+    **从未被校验过**（属覆盖缺口，不是通过）。
+
+    这里用 `_DBSTAT_DATA_BYTES_SQL` 这个**接缝**把 dbstat 打成不可用，
+    于是这条分支在**任何机器上**都能被测到。
+    """
+
+    def test_falls_back_to_page_count_when_dbstat_unavailable(self, db, monkeypatch):
+        monkeypatch.setattr(db_module, '_DBSTAT_DATA_BYTES_SQL',
+                            'SELECT SUM(pgsize) FROM __no_such_vtab__')
+        db.insert_data('dev1', 'temp', 25.0, datetime.now(), 'C')
+
+        stats = db.get_fragmentation_stats()
+        assert stats['data_bytes_mb'] is not None, (
+            'dbstat 不可用时必须有兜底 —— 否则 CI 上这两条指标永远不被校验'
+        )
+        assert stats['data_bytes_source'] == 'page_count'
+        assert stats['size_to_data_ratio'] is not None
+        assert stats['size_to_data_ratio'] > 0
+
+    def test_source_is_declared_when_dbstat_available(self, db):
+        """本机有 dbstat 时来源是 'dbstat'；没有的机器走兜底 —— 两种都接受，
+        但**必须标注来源**（口径必须可辨，否则读者会以为是精确值）。"""
+        db.insert_data('dev1', 'temp', 25.0, datetime.now(), 'C')
+        stats = db.get_fragmentation_stats()
+        assert stats['data_bytes_source'] in ('dbstat', 'page_count')
+        assert stats['data_bytes_mb'] is not None
+
+    def test_no_dbstats_requested_keeps_none(self, db):
+        """显式不要 dbstat 时不该偷偷算 —— 来源为 None、值也为 None。"""
+        db.insert_data('dev1', 'temp', 25.0, datetime.now(), 'C')
+        stats = db.get_fragmentation_stats(include_dbstats=False)
+        assert stats['data_bytes_mb'] is None
+        assert stats['data_bytes_source'] is None
+
+    def test_fallback_value_is_not_larger_than_disk_usage(self, db, monkeypatch):
+        """兜底口径的合理性下界：数据字节不该超过磁盘占用（否则比值 < 1 无意义）。"""
+        monkeypatch.setattr(db_module, '_DBSTAT_DATA_BYTES_SQL',
+                            'SELECT SUM(pgsize) FROM __no_such_vtab__')
+        for i in range(50):
+            db.insert_data('dev1', f'reg{i}', float(i), datetime.now(), 'C')
+        stats = db.get_fragmentation_stats()
+        assert stats['data_bytes_mb'] <= stats['total_size_mb'] + 1e-6
