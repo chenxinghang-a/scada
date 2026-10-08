@@ -396,8 +396,13 @@ class TestFrontendVersionLockstep:
         """不同步 + 磁盘上**真有**同名文件 → 仍须标 stale（它不可能是本次源码的产物）。"""
         fe = self._fake_frontend(tmp_path, '1.0.0')
         (fe / 'release').mkdir()
-        # 注意文件名用的是**后端**版本（生成器的拼法），所以它会「找得到」
-        (fe / 'release' / 'SmartSCADA Setup 1.0.1.exe').write_bytes(b'MZ fake')
+        # 文件名用**生成器的拼法**（后端版本 + 前端配置推导出的形状）来造，
+        # 这样它才会被"找得到"。
+        # ⚠️ 这里**不能写死字面量**：本用例原先写死的是 `SmartSCADA Setup 1.0.1.exe`
+        # —— 那是已废弃的旧命名，于是它一边断言"找得到"，一边把错误的名字钉死，
+        # 让"清单永远找不到安装包"这个真 bug 活了下来（见 TestFrontendArtifactName）。
+        installer_name = manifest_module._frontend_artifact_paths('1.0.1')['installer'].name
+        (fe / 'release' / installer_name).write_bytes(b'MZ fake')
         monkeypatch.setattr(manifest_module, 'FRONTEND_ROOT', fe)
 
         artifacts = manifest_module._collect_artifacts('1.0.1', '1.0.0')
@@ -685,4 +690,116 @@ class TestDependencyLockProvenance:
         assert data.get("frontend_deps_lock_digest") == actual, (
             "已提交清单的 frontend_deps_lock_digest 与 "
             f"{lock} 的实际 sha256 不一致，请重新运行 tools/gen_release_manifest.py"
+        )
+
+
+class TestFrontendArtifactName:
+    """安装包文件名必须**由前端配置推导**，不能在这里写死。
+
+    背景（这就是本组用例的由来）：这里曾写死 ``SmartSCADA Setup {version}.exe``，
+    而前端 `build.nsis.artifactName` 是 ``${name}-Setup-${version}.${ext}``、
+    ``name = "smartscada"`` → 真实产物是 ``smartscada-Setup-<ver>.exe``。
+    结果：清单**永远**找不到安装包，却只显示一句
+    「artifact not built yet / not found」—— 看起来像"还没构建"，
+    实际是**名字根本对不上**。而前端 CI 明明每次都产出安装包
+    （`Upload NSIS installer` 传 `release/*.exe`，`if-no-files-found: error`）。
+
+    实测证据（2026-10-08）：前端 `release/` 里三次真实构建分别是
+    `smartscada-Setup-1.3.1031.exe` / `-1.3.1033.exe` / `-1.3.1037.exe`；
+    旧命名 `SmartSCADA Setup 1.3.1030.exe` 只出现在 `release.old/`，
+    且旁边留着改名时的 `.oldname` 标记 —— 说明改过命名，而清单没跟着改。
+    """
+
+    @staticmethod
+    def _frontend_dir(tmp_path, name="smartscada", artifact_name="${name}-Setup-${version}.${ext}"):
+        d = tmp_path / "scada-app"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "package.json").write_text(
+            json.dumps({
+                "name": name,
+                "version": "9.9.9",
+                "build": {"productName": "SmartSCADA", "nsis": {"artifactName": artifact_name}},
+            }),
+            encoding="utf-8",
+        )
+        return d
+
+    def test_expands_artifact_name_template(self, manifest_module, tmp_path, monkeypatch):
+        """按 electron-builder 的规则展开 ${name}/${version}/${ext}。"""
+        monkeypatch.setattr(manifest_module, "FRONTEND_ROOT", self._frontend_dir(tmp_path))
+        paths = manifest_module._frontend_artifact_paths("1.2.3")
+        assert paths["installer"].name == "smartscada-Setup-1.2.3.exe"
+        assert paths["archive"].name == "smartscada-1.2.3-x64.nsis.7z"
+
+    def test_respects_a_different_template(self, manifest_module, tmp_path, monkeypatch):
+        """换模板要跟着变 —— 证明不是把当前值抄成常量。"""
+        monkeypatch.setattr(
+            manifest_module, "FRONTEND_ROOT",
+            self._frontend_dir(tmp_path, name="foo",
+                               artifact_name="${productName} ${version}.${ext}"),
+        )
+        assert manifest_module._frontend_artifact_paths("2.0.0")["installer"].name == "foo 2.0.0.exe"
+
+    def test_falls_back_when_config_unreadable(self, manifest_module, tmp_path, monkeypatch):
+        """读不到配置时回退到**当前已知正确**的形状，且**不得**回退到旧命名。"""
+        empty = tmp_path / "no-such-frontend"
+        monkeypatch.setattr(manifest_module, "FRONTEND_ROOT", empty)
+        name = manifest_module._frontend_artifact_paths("1.2.3")["installer"].name
+        assert name == "smartscada-Setup-1.2.3.exe"
+        assert name != "SmartSCADA Setup 1.2.3.exe", "不得回退到已废弃的旧命名"
+
+    @staticmethod
+    def _expected_installer_name(frontend_root: Path, version: str) -> str:
+        """**独立**展开前端配置里的 `artifactName`（不复用被测函数）。
+
+        为什么必须独立算：第一版守卫是拿「清单里的名字」去比
+        `_frontend_artifact_paths()` 的返回值 —— 而那是**被测代码自己**。
+        变异验证立刻暴露：把 `_collect_artifacts` 改回写死旧命名，
+        守卫**照样全绿**（两边都还取自同一个正确来源，只是产物路径变了）。
+        **守卫要能抓住变异，期望值就必须来自被测代码之外。**
+        """
+        pkg = json.loads((frontend_root / "package.json").read_text(encoding="utf-8"))
+        template = ((pkg.get("build") or {}).get("nsis") or {}).get("artifactName")
+        assert template, "前端 package.json 应配置 build.nsis.artifactName"
+        return (
+            template.replace("${name}", pkg["name"])
+            .replace("${productName}", pkg["name"])
+            .replace("${version}", version)
+            .replace("${ext}", "exe")
+        )
+
+    def test_generated_manifest_installer_name_matches_frontend_config(self, manifest_module):
+        """**核心守卫**：生成器实际产出的安装包名，必须等于前端配置展开的结果。"""
+        pkg = manifest_module.FRONTEND_ROOT / "package.json"
+        if not pkg.is_file():
+            pytest.skip("前端仓库未检出")
+        manifest = manifest_module.generate_manifest()
+        entry = next(a for a in manifest["artifacts"] if a["name"] == "frontend_installer")
+
+        expected = self._expected_installer_name(manifest_module.FRONTEND_ROOT, manifest["version"])
+        actual = Path(entry["path"]).name
+        assert actual == expected, (
+            f"生成器写出的安装包名与前端配置不符：产出={actual} 期望={expected}。\n"
+            "这会让清单永远找不到安装包，却只显示「not built yet」"
+        )
+        assert actual != f"SmartSCADA Setup {manifest['version']}.exe", (
+            "产出的仍是已废弃的旧命名（`SmartSCADA Setup <ver>.exe`）"
+        )
+
+    def test_committed_manifest_installer_name_matches_frontend_config(self, manifest_module):
+        """已提交清单里的安装包名同样要等于前端配置展开的结果。"""
+        path = BACKEND_ROOT / "release-manifest.json"
+        if not path.is_file():
+            pytest.skip("release-manifest.json 尚未生成")
+        pkg = manifest_module.FRONTEND_ROOT / "package.json"
+        if not pkg.is_file():
+            pytest.skip("前端仓库未检出")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entry = next(a for a in data["artifacts"] if a["name"] == "frontend_installer")
+
+        expected = self._expected_installer_name(manifest_module.FRONTEND_ROOT, data["version"])
+        actual = Path(entry["path"]).name
+        assert actual == expected, (
+            f"清单里的安装包名与前端配置不符：清单={actual} 期望={expected}。\n"
+            "请重新运行 tools/gen_release_manifest.py"
         )

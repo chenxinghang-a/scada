@@ -127,12 +127,13 @@ def _lock_digest(rel_path: Path) -> str | None:
 def _frontend_version() -> str | None:
     """读前端仓库 package.json 的 version；读不到返回 None。
 
-    为什么必须读它：本清单里前端产物路径是用**后端 VERSION** 拼的
-    （``SmartSCADA Setup {version}.exe``，见 ``_collect_artifacts``），
-    而安装包名由前端自己的 package.json 决定。两端版本不同步时，
-    清单会记下一个实际构建**永远产生不了**的路径 —— 字段齐全、
-    看起来正常，但内容是错的。这类"静默失效"正是本清单要消灭的东西，
-    所以这里把前端真实版本也读出来，不同步就显式标注。
+    为什么必须读它：本清单里前端产物路径的**版本号**来自**后端 VERSION**
+    （文件名本身由前端的 `build.nsis.artifactName` 推导，
+    见 ``_frontend_artifact_paths``），而安装包名最终由前端自己的
+    package.json 决定。两端版本不同步时，清单会记下一个实际构建
+    **永远产生不了**的路径 —— 字段齐全、看起来正常，但内容是错的。
+    这类"静默失效"正是本清单要消灭的东西，所以这里把前端真实版本也读出来，
+    不同步就显式标注。
     """
     pkg = FRONTEND_ROOT / "package.json"
     if not pkg.is_file():
@@ -262,6 +263,55 @@ def _dir_digest(path: Path, max_files: int = 20000) -> dict | None:
     return result
 
 
+def _frontend_artifact_paths(version: str) -> dict[str, Path]:
+    """从前端**自己的构建配置**推导安装包路径，而不是在这里写死字符串。
+
+    为什么要推导：安装包名由前端 `package.json` 的 `build.nsis.artifactName`
+    决定（当前为 ``${name}-Setup-${version}.${ext}``，``name`` 取 package.json 的
+    ``name``）。在这里写死一个字面量，会在前端改配置时**静默过期** ——
+    清单于是永远找不到那个产物，却只显示一句「artifact not built yet / not found」，
+    看起来像"还没构建"，实际是**名字根本对不上**。
+
+    实测（2026-10-08，这就是本函数的由来）：
+      * 前端 `release/` 里三次真实构建都是
+        ``smartscada-Setup-1.3.1031.exe`` / ``-1.3.1033.exe`` / ``-1.3.1037.exe``；
+      * 而这里当时写的是 ``SmartSCADA Setup {version}.exe``（**旧命名**，
+        `release.old/` 里还留着改名时的 ``.oldname`` 标记）→ 恒为 null。
+      * 前端 CI 确实产出安装包（`Upload NSIS installer` 传 `release/*.exe`，
+        `if-no-files-found: error`）→ 所以这不是"还没构建"，是**名字错了**。
+
+    展开的宏与 electron-builder 一致：``${name}`` / ``${version}`` / ``${ext}``。
+    读不到配置时回退到当前已知的正确形状（`smartscada-Setup-<ver>.exe`），
+    并**不**回退到旧的 `SmartSCADA Setup <ver>.exe`。
+    """
+    name = "smartscada"
+    template = "${name}-Setup-${version}.${ext}"
+    pkg_path = FRONTEND_ROOT / "package.json"
+    if pkg_path.is_file():
+        try:
+            pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+            name = pkg.get("name") or name
+            nsis = (pkg.get("build") or {}).get("nsis") or {}
+            template = nsis.get("artifactName") or template
+        except (OSError, ValueError) as e:
+            logger.warning("读取前端 package.json 失败，安装包名回退到默认形状: %s", e)
+
+    installer = (
+        template.replace("${name}", name)
+        .replace("${productName}", name)
+        .replace("${version}", version)
+        .replace("${ext}", "exe")
+    )
+    return {
+        "installer": FRONTEND_ROOT / "release" / installer,
+        # 差分包：NSIS 的 7z 只在启用差分更新时才产出。当前前端没配
+        # `publish` / `differentialPackage`，所以它**本来就不会生成** ——
+        # 名字按 electron-builder 的规则推导（`<name>-<version>-<arch>.nsis.7z`），
+        # 但别把"没生成"误读成"名字不对"。
+        "archive": FRONTEND_ROOT / "release" / f"{name}-{version}-x64.nsis.7z",
+    }
+
+
 def _collect_artifacts(version: str, frontend_version: str | None = None) -> list[dict]:
     """收集交付产物。
 
@@ -275,6 +325,10 @@ def _collect_artifacts(version: str, frontend_version: str | None = None) -> lis
     额外做**版本同步校验**：前端产物路径是用后端 VERSION 拼的，
     若 ``frontend_version`` 与之不符，该路径不可能被构建出来，
     因此给前端产物条目加 ``stale`` + 说明（见 ``_frontend_version``）。
+
+    前端两条路径**从配置推导**（见 `_frontend_artifact_paths`）——
+    曾经这里写死过 `SmartSCADA Setup {version}.exe`，与前端实际产物名不符，
+    导致清单**永远**把安装包记成 null。
     """
     frontend_skewed = frontend_version is not None and frontend_version != version
     skew_note = (
@@ -283,6 +337,8 @@ def _collect_artifacts(version: str, frontend_version: str | None = None) -> lis
         f"实际构建不会产生该文件"
         if frontend_skewed else ""
     )
+    frontend_paths = _frontend_artifact_paths(version)
+
     # (展示名, 路径, 归属, 伴随目录)
     #
     # 主后端产物是 **onedir 布局的 dist/scada-backend/scada-backend.exe**，
@@ -302,13 +358,13 @@ def _collect_artifacts(version: str, frontend_version: str | None = None) -> lis
         ),
         (
             "frontend_installer",
-            FRONTEND_ROOT / "release" / f"SmartSCADA Setup {version}.exe",
+            frontend_paths["installer"],
             "frontend",
             None,
         ),
         (
             "frontend_archive",
-            FRONTEND_ROOT / "release" / f"smartscada-{version}-x64.nsis.7z",
+            frontend_paths["archive"],
             "frontend",
             None,
         ),
