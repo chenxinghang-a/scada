@@ -13,8 +13,10 @@ version/commit_sha 不对应。这类问题在人工核对时几乎必然漏掉�
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -523,4 +525,129 @@ class TestManifestFileOnDisk:
         assert data["version"] == get_version(), (
             "已提交的 release-manifest.json 版本号已过期，请重新运行 "
             "tools/gen_release_manifest.py"
+        )
+
+
+class TestDependencyLockProvenance:
+    """依赖锁文件的 digest 是清单的**来源证明** —— 必须真实，且必须被守住。
+
+    为什么单独立一组：这两个字段此前是「**算出来写进去、全库零读取**」——
+    `backend_deps_lock_digest` 只在生成器里出现，`frontend_deps_lock_digest`
+    只在 `_frontend_root_candidates()` 的一句 docstring 里被提到。
+    于是 `requirements.txt` 改了而清单没重生成时，清单会**静默记下一个陈旧哈希**：
+    字段齐全、sha256 形状正确、看起来正常，但内容是错的。
+    这正是本文件开头说的「字段齐全但撒谎」，也是那句 docstring 自己承认的
+    「会静默变成 null —— 清单少了一个字段却没人报错」。
+
+    为什么这些断言不会变成"依赖机器状态"的用例（本机绿 / CI 红）：
+      * `requirements.txt` 在**本仓库内** → 它的哈希是确定的，可以硬断言。
+      * 前端 lock 文件**可能不在**（后端-only 的检出场景）→ 用**条件不变量**
+        （"前端版本读得到 ⇒ digest 必须读得到"）而不是写死"必须非空"。
+    """
+
+    def test_lock_digest_returns_none_for_missing_file(self, manifest_module, tmp_path):
+        """正向对照：缺失文件必须返回 None。
+
+        少了这条，下面的"相等"断言有可能被一个**常量返回**的实现骗过 ——
+        那种实现会让所有相等断言同时假绿。
+        """
+        assert manifest_module._lock_digest(tmp_path / "nope.txt") is None
+
+    def test_lock_digest_matches_sha256_of_content(self, manifest_module, tmp_path):
+        """接线守卫：digest 必须真的来自文件内容，不是文件名/时间戳之类。"""
+        f = tmp_path / "lock.txt"
+        f.write_bytes(b"hello\n")
+        assert manifest_module._lock_digest(f) == hashlib.sha256(b"hello\n").hexdigest()
+
+    def test_generated_manifest_backend_digest_is_not_null(self, manifest_module):
+        """生成器在当前仓库里跑，后端锁文件必然存在 → digest 不得为 null。"""
+        req = BACKEND_ROOT / "requirements.txt"
+        if not req.is_file():
+            pytest.skip("requirements.txt 不在本仓库")
+        manifest = manifest_module.generate_manifest()
+        assert manifest["backend_deps_lock_digest"] is not None, (
+            "requirements.txt 就在仓库里，backend_deps_lock_digest 却是 null —— "
+            "来源证明丢了但没有任何报错"
+        )
+
+    def test_committed_backend_digest_matches_requirements(self, manifest_module):
+        """已提交清单里的后端 digest 必须等于 requirements.txt 的真实 sha256。
+
+        这条守的是「改了依赖却没重生成清单」：不守的话清单会一直举着一个
+        旧哈希，读起来完全正常。
+        """
+        req = BACKEND_ROOT / "requirements.txt"
+        if not req.is_file():
+            pytest.skip("requirements.txt 不在本仓库")
+        path = BACKEND_ROOT / "release-manifest.json"
+        if not path.is_file():
+            pytest.skip("release-manifest.json 尚未生成")
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        recorded = data.get("backend_deps_lock_digest")
+        assert recorded is not None, (
+            "已提交的 release-manifest.json 缺少 backend_deps_lock_digest（或为 null），"
+            "请重新运行 tools/gen_release_manifest.py"
+        )
+        actual = hashlib.sha256(req.read_bytes()).hexdigest()
+        assert recorded == actual, (
+            "已提交清单的 backend_deps_lock_digest 已过期：\n"
+            f"  清单记录 = {recorded}\n"
+            f"  requirements.txt 实际 = {actual}\n"
+            "requirements.txt 改过但清单没重生成，请重新运行 "
+            "tools/gen_release_manifest.py"
+        )
+
+    def test_committed_digest_fields_are_sha256_hex(self, manifest_module):
+        """字段必须存在；非 null 时必须是 64 位小写 hex（形状错误也算撒谎）。"""
+        path = BACKEND_ROOT / "release-manifest.json"
+        if not path.is_file():
+            pytest.skip("release-manifest.json 尚未生成")
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        for key in ("backend_deps_lock_digest", "frontend_deps_lock_digest"):
+            assert key in data, (
+                f"清单缺少字段 {key} —— 生成器新增字段后没重生成清单"
+            )
+            value = data[key]
+            if value is None:
+                continue
+            assert isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value), (
+                f"{key} 不是合法的 sha256 hex: {value!r}"
+            )
+
+    def test_frontend_digest_null_only_when_frontend_absent(self, manifest_module):
+        """条件不变量：前端**版本读得到** ⇒ 前端 lock digest 也必须读得到。
+
+        为什么是"条件"而不是"必须非空"：前端仓库可能压根没检出（后端-only 场景），
+        那时 `frontend_version` 与 digest **一起**为 null 是正常的。
+        但两者**不一致**（版本读到了、哈希没读到）说明解析路径半途而废 ——
+        正是 `_frontend_root_candidates()` 那句 docstring 担心的静默失效。
+        """
+        path = BACKEND_ROOT / "release-manifest.json"
+        if not path.is_file():
+            pytest.skip("release-manifest.json 尚未生成")
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        if data.get("frontend_version") is None:
+            pytest.skip("前端仓库未检出，frontend_* 字段整体为 null 属正常")
+        assert data.get("frontend_deps_lock_digest") is not None, (
+            "frontend_version 读到了（说明前端根已解析成功），"
+            "但 frontend_deps_lock_digest 是 null —— 同一解析路径不应半途而废"
+        )
+
+    def test_committed_frontend_digest_matches_lock_when_resolvable(self, manifest_module):
+        """前端 lock 在本机可解析时，清单记录的哈希必须等于它的真实 sha256。"""
+        path = BACKEND_ROOT / "release-manifest.json"
+        if not path.is_file():
+            pytest.skip("release-manifest.json 尚未生成")
+        lock = manifest_module.FRONTEND_ROOT / "package-lock.json"
+        if not lock.is_file():
+            pytest.skip("本机解析不到前端 package-lock.json")
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        actual = hashlib.sha256(lock.read_bytes()).hexdigest()
+        assert data.get("frontend_deps_lock_digest") == actual, (
+            "已提交清单的 frontend_deps_lock_digest 与 "
+            f"{lock} 的实际 sha256 不一致，请重新运行 tools/gen_release_manifest.py"
         )
