@@ -1,23 +1,26 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-08T14:40:40+00:00",
+  "generated_at": "2026-10-08T15:49:19+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
-  "method": "纯静态源码解析：解析前端 axios 调用的 (method, path) 与后端 @bp.route + url_prefix 解析出的真实路由后归一化比对；不启动 Flask、不连数据库、不依赖任何运行中的服务。",
+  "method": "纯静态源码解析：解析前端 HTTP 调用（axios 实例 / axios 原型 / **原生 fetch**）的 (method, path) 与后端 @bp.route + url_prefix 解析出的真实路由后归一化比对；不启动 Flask、不连数据库、不依赖任何运行中的服务。前端侧扫描范围是**整个 src/**（不只是 src/api/）—— 口径太窄会让「后端存在但前端从未调用」清单混入假阳性（2026-10-08 round 193 实测）。",
   "normalization": {
     "frontend_baseurl": "src/api/request.ts 中 axios 实例 baseURL 已含 /api，故源码内相对路径自动前置 /api；axios 原型直调（axios.get）不套 baseURL",
     "template_vars": "`${expr}` → `:expr`（模板变量归一为路径参数）",
     "query_string": "已剔除 `?a=1&b=2`，query 不影响路由匹配",
     "trailing_slash": "已统一去掉尾部斜杠（根路径除外）",
-    "backend_params": "Flask `<device_id>` 与前端 `:id` 归一为同一参数位"
+    "backend_params": "Flask `<device_id>` 与前端 `:id` 归一为同一参数位",
+    "fetch_url": "原生 fetch 的 URL 只认两种能确证的形状：`${base}/x`（base 在 dev 是 /api、prod 是 http://host:port/api，两者同构）与字面量里直接带 /api/；**解析不出来就跳过，不猜**"
   },
   "sources": {
     "backend_repo": "C:\\Users\\cxx\\WorkBuddy\\Claw\\industrial_scada",
     "backend_api_dir": "展示层/api",
     "backend_app_routes": "展示层/routes.py",
     "frontend_api_dir": "C:\\Users\\cxx\\scada-app\\src\\api",
+    "frontend_src_dir": "C:\\Users\\cxx\\scada-app\\src",
     "frontend_files": [
+      "Devices.vue",
       "alarms.ts",
       "auth.ts",
       "control.ts",
@@ -26,19 +29,21 @@
       "industry40.ts",
       "performance.ts",
       "request.ts",
-      "system.ts"
-    ]
+      "system.ts",
+      "useErrorLogger.ts"
+    ],
+    "frontend_scanned_files": 52
   },
   "summary": {
-    "frontend_endpoints": 133,
+    "frontend_endpoints": 136,
     "backend_routes": 183,
-    "matched": 133,
+    "matched": 136,
     "missing_backend": 0,
     "prefixed_mismatch": 0,
     "param_mismatch": 0,
     "unmatched": 0,
     "match_rate": "100.00%",
-    "unused_backend_endpoints": 43,
+    "unused_backend_endpoints": 42,
     "excluded_frontend_endpoints": 0,
     "result": "pass"
   },
@@ -865,6 +870,16 @@
     },
     {
       "method": "POST",
+      "frontend_path": "/api/devices/presets/add",
+      "source_path": "/devices/presets/add",
+      "backend_path": "/api/devices/presets/add",
+      "status": "match",
+      "detail": "精确匹配 api_devices.py:1017",
+      "source_file": "Devices.vue",
+      "source_line": 430
+    },
+    {
+      "method": "POST",
       "frontend_path": "/api/devices/presets/add-all",
       "source_path": "/devices/presets/add-all",
       "backend_path": "/api/devices/presets/add-all",
@@ -872,6 +887,16 @@
       "detail": "精确匹配 api_devices.py:1073",
       "source_file": "devices.ts",
       "source_line": 101
+    },
+    {
+      "method": "POST",
+      "frontend_path": "/api/devices/presets/add-all",
+      "source_path": "/devices/presets/add-all",
+      "backend_path": "/api/devices/presets/add-all",
+      "status": "match",
+      "detail": "精确匹配 api_devices.py:1073",
+      "source_file": "Devices.vue",
+      "source_line": 444
     },
     {
       "method": "POST",
@@ -1314,6 +1339,16 @@
       "source_line": 17
     },
     {
+      "method": "POST",
+      "frontend_path": "/api/system/client-errors",
+      "source_path": "/system/client-errors",
+      "backend_path": "/api/system/client-errors",
+      "status": "match",
+      "detail": "精确匹配 api_system.py:191",
+      "source_file": "useErrorLogger.ts",
+      "source_line": 45
+    },
+    {
       "method": "GET",
       "frontend_path": "/api/system/database",
       "source_path": "/system/database",
@@ -1626,12 +1661,6 @@
       "backend_path": "/api/resilience/rate-limiter/profiles",
       "source_file": "api_resilience.py",
       "source_line": 102
-    },
-    {
-      "method": "POST",
-      "backend_path": "/api/system/client-errors",
-      "source_file": "api_system.py",
-      "source_line": 191
     }
   ],
   "exclusions": {
@@ -1667,7 +1696,7 @@
     ]
   },
   "notes": [
-    "unused_backend_endpoints 为**只报告不失败**项：后端路由先于前端存在（如 resilience / ops 运维接口）是合理设计。",
+    "unused_backend_endpoints 按**前缀分类**（UNUSED_BACKEND_PREFIX_RULES）并受双向守卫约束：未分类的新端点会让测试失败，分类腐烂（无命中）也会失败。后端路由先于前端存在（resilience / ops 运维接口）是合理设计，但**必须是显式声明的**，不能靠一份没人看的清单兜着。",
     "本报告由测试运行自动覆盖重写，不手工编辑。"
   ]
 }
