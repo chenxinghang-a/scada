@@ -16,7 +16,10 @@
 产出：
     - `api-contract-report.json`（仓库根目录，见 `_report_location_rationale()`）
     - 正向断言：前端声明的每个端点都能在后端找到 (method, path) 路由，否则失败并列出
-    - 反向断言：后端存在但前端从未调用的端点，**只报告不失败**
+    - 反向断言：后端存在但前端从未调用的端点，**必须全部落进显式的前缀分类**
+      （`UNUSED_BACKEND_PREFIX_RULES`）；新出现的未分类端点 → 失败。
+      2026-10-08 round 193 从「只报告不失败」升级而来：一份没人看的清单不构成闸门，
+      而实测确实有本该被前端调用的端点躺在那份清单里（`/api/system/client-errors`）。
 """
 
 from __future__ import annotations
@@ -70,6 +73,45 @@ def _resolve_frontend_api_dir() -> Path:
         "未找到前端 api 目录，无法做前后端契约比对。已尝试：\n"
         + "\n".join(f"  - {p}" for p in _FRONTEND_API_DIR_CANDIDATES)
         + f"\n可通过环境变量 {_FRONTEND_API_DIR_ENV} 指定 scada-app/src/api 的绝对路径。"
+    )
+
+
+#: 前端源码根（`_resolve_frontend_api_dir()` 的上一级）。
+def _resolve_frontend_src_dir() -> Path:
+    return _resolve_frontend_api_dir().parent
+
+
+def _iter_frontend_source_files() -> list[Path]:
+    """前端**全部**源码文件（`src/**/*.{ts,vue}`），而不只是 `src/api/*.ts`。
+
+    为什么必须扫全（2026-10-08，round 193）
+    ------------------------------------
+    第一版只扫 `src/api/*.ts`，于是**在 `src/api/` 之外发起的调用对报告完全不可见**，
+    后果是「后端存在但前端从未调用」这份清单**混入假阳性**。实测漏掉两处：
+
+    * ``src/composables/useErrorLogger.ts`` —— 原生 ``fetch`` 调
+      ``/system/client-errors``（用 fetch 是因为要 ``keepalive``，**有意为之**）；
+    * ``src/views/Devices.vue`` —— ``api.post('/devices/presets/add')``
+      与 ``api.post('/devices/presets/add-all')``。
+
+    报告因此把 ``/api/system/client-errors`` 报成「前端从未调用」——
+    而它**明明在用**。这份清单是要当依据用的，**口径不收紧就不能用**。
+
+    ⚠️ 与 round 189 的教训同源：那次的 `path.endswith(...)` 没归一化反斜杠，
+    导致每个文件都算自己的引用者，报出「零引用 0 个」的假绿。
+    扫描类排查的第一件事永远是**确认口径覆盖了全部应当覆盖的对象**。
+    """
+    src = _resolve_frontend_src_dir()
+    files: list[Path] = []
+    for pattern in ("*.ts", "*.vue"):
+        files.extend(src.rglob(pattern))
+    # 排除类型声明与测试替身：它们不是「发起调用」的代码
+    return sorted(
+        f
+        for f in files
+        if f.name != "env.d.ts"
+        and "node_modules" not in f.parts
+        and not f.name.endswith(".d.ts")
     )
 
 
@@ -261,6 +303,52 @@ _FRONTEND_CALL_RE = re.compile(
     re.S,
 )
 
+#: 匹配原生 `fetch(<url>, { … })`。
+#:
+#: 为什么必须认它（2026-10-08，round 193）
+#: ------------------------------------
+#: `src/composables/useErrorLogger.ts` 用 **fetch 而不是 axios** 调
+#: `/system/client-errors` —— 因为需要 `keepalive: true`（页面卸载时也要发得出去），
+#: axios 没有这个能力，所以那是**有意为之**，不该改。
+#: 但第一版解析器只认 axios 调用，于是这条调用对报告**不可见**，
+#: 后端对应端点被误报成「前端从未调用」。
+#: 这正是「**口径不收紧，结果就不能用**」—— 一份带假阳性的清单没法拿来当依据。
+_FRONTEND_FETCH_RE = re.compile(
+    r"\bfetch\s*\(\s*"
+    r"(?P<quote>['\"`])(?P<url>.*?)(?P=quote)"
+    r"\s*,\s*\{(?P<opts>[\s\S]{0,400}?)\}\s*\)",
+    re.S,
+)
+
+#: `fetch(..., { method: 'POST' })` 里的 method；缺省按 HTTP 语义取 GET。
+_FETCH_METHOD_RE = re.compile(r"method\s*:\s*['\"](\w+)['\"]", re.I)
+
+
+def _resolve_fetch_url(raw_url: str) -> str | None:
+    """把 ``fetch()`` 的 URL 解析成**相对 /api 的路径**；解析不出来返回 ``None``。
+
+    只认两种**能确证**的形状（实测于 `useErrorLogger.ts`）：
+
+    1. ``${base}/system/client-errors`` —— ``base`` 在 dev 是 ``/api``、
+       prod 是 ``http://host:port/api``（两种同构），故 ``${…}`` 之后的部分
+       就是 API 相对路径；
+    2. 字面量里直接带 ``/api/``。
+
+    **解析不出来就返回 None 并跳过，绝不猜** —— 猜错会往报告里灌假数据，
+    而这份报告的用途正是「当依据」。
+    """
+    m = re.match(r"^\$\{[^}]*\}(/.*)$", raw_url)
+    if m:
+        return m.group(1)
+    if raw_url.startswith(API_BASE_PREFIX + "/"):
+        return raw_url[len(API_BASE_PREFIX):]
+    return None
+
+
+def _fetch_method(opts: str) -> str:
+    m = _FETCH_METHOD_RE.search(opts)
+    return m.group(1).upper() if m else "GET"
+
 
 def _parse_frontend_file(py_path: Path) -> list[FrontendEndpoint]:
     text = py_path.read_text(encoding="utf-8")
@@ -292,6 +380,25 @@ def _parse_frontend_file(py_path: Path) -> list[FrontendEndpoint]:
                 source_file=py_path.name,
                 line=text.count("\n", 0, m.start()) + 1,
                 via_instance=is_instance,
+            )
+        )
+
+    # --- 原生 fetch() ---
+    for m in _FRONTEND_FETCH_RE.finditer(text):
+        resolved = _resolve_fetch_url(m.group("url"))
+        if resolved is None:
+            continue  # 解析不出来就跳过，不猜
+        normalized = _normalize_path(resolved)
+        out.append(
+            FrontendEndpoint(
+                method=_fetch_method(m.group("opts")),
+                effective_path=_join_prefix(API_BASE_PREFIX, normalized),
+                source_path=normalized,
+                source_file=py_path.name,
+                line=text.count("\n", 0, m.start()) + 1,
+                # fetch 不套 baseURL，URL 里已经写全了；置 False 以免被
+                # 误判成 prefixed_mismatch（那条判定专治「实例 + 又写 /api」）
+                via_instance=False,
             )
         )
     return out
@@ -509,8 +616,8 @@ def load_contract() -> Contract:
     contract = Contract()
 
     # --- 前端 ---
-    frontend_dir = _resolve_frontend_api_dir()
-    for ts_file in sorted(frontend_dir.glob("*.ts")):
+    # 扫**整个 src/**，不只是 src/api/（见 _iter_frontend_source_files 的说明）
+    for ts_file in _iter_frontend_source_files():
         for ep in _parse_frontend_file(ts_file):
             if any(
                 ep.effective_path.startswith(p) or ep.effective_path == p.rstrip("/")
@@ -605,9 +712,11 @@ def build_report(contract: Contract) -> dict:
         "report_location": str(REPORT_PATH.relative_to(BACKEND_ROOT)).replace("\\", "/"),
         "report_location_rationale": _report_location_rationale(),
         "method": (
-            "纯静态源码解析：解析前端 axios 调用的 (method, path) 与后端 "
-            "@bp.route + url_prefix 解析出的真实路由后归一化比对；"
+            "纯静态源码解析：解析前端 HTTP 调用（axios 实例 / axios 原型 / **原生 fetch**）"
+            "的 (method, path) 与后端 @bp.route + url_prefix 解析出的真实路由后归一化比对；"
             "不启动 Flask、不连数据库、不依赖任何运行中的服务。"
+            "前端侧扫描范围是**整个 src/**（不只是 src/api/）—— 口径太窄会让"
+            "「后端存在但前端从未调用」清单混入假阳性（2026-10-08 round 193 实测）。"
         ),
         "normalization": {
             "frontend_baseurl": (
@@ -618,15 +727,22 @@ def build_report(contract: Contract) -> dict:
             "query_string": "已剔除 `?a=1&b=2`，query 不影响路由匹配",
             "trailing_slash": "已统一去掉尾部斜杠（根路径除外）",
             "backend_params": "Flask `<device_id>` 与前端 `:id` 归一为同一参数位",
+            "fetch_url": (
+                "原生 fetch 的 URL 只认两种能确证的形状：`${base}/x`（base 在 dev 是 /api、"
+                "prod 是 http://host:port/api，两者同构）与字面量里直接带 /api/；"
+                "**解析不出来就跳过，不猜**"
+            ),
         },
         "sources": {
             "backend_repo": str(BACKEND_ROOT),
             "backend_api_dir": str(BACKEND_API_DIR.relative_to(BACKEND_ROOT)).replace("\\", "/"),
             "backend_app_routes": str(BACKEND_APP_ROUTES_FILE.relative_to(BACKEND_ROOT)).replace("\\", "/"),
             "frontend_api_dir": str(_resolve_frontend_api_dir()),
+            "frontend_src_dir": str(_resolve_frontend_src_dir()),
             "frontend_files": sorted(
                 {ep.source_file for ep in contract.frontend}
             ),
+            "frontend_scanned_files": len(_iter_frontend_source_files()),
         },
         "summary": {
             "frontend_endpoints": total,
@@ -661,7 +777,10 @@ def build_report(contract: Contract) -> dict:
             ],
         },
         "notes": [
-            "unused_backend_endpoints 为**只报告不失败**项：后端路由先于前端存在（如 resilience / ops 运维接口）是合理设计。",
+            "unused_backend_endpoints 按**前缀分类**（UNUSED_BACKEND_PREFIX_RULES）"
+            "并受双向守卫约束：未分类的新端点会让测试失败，分类腐烂（无命中）也会失败。"
+            "后端路由先于前端存在（resilience / ops 运维接口）是合理设计，"
+            "但**必须是显式声明的**，不能靠一份没人看的清单兜着。",
             "本报告由测试运行自动覆盖重写，不手工编辑。",
         ],
     }
@@ -897,3 +1016,191 @@ def test_unused_backend_endpoints_are_reported_only(contract_report, capsys):
         for item in unused:
             print(f"  - {item['method']:6s} {item['backend_path']}  ({item['source_file']}:{item['source_line']})")
     assert isinstance(unused, list)
+
+
+# ---------------------------------------------------------------------------
+# 后端「无人调用」端点的**分类**守卫（round 193 新增）
+# ---------------------------------------------------------------------------
+
+#: 后端存在、前端不调用的端点，按**前缀**分类并给出理由。
+#:
+#: 为什么从「只报告」升级成「显式分类 + 守卫」
+#: ------------------------------------------
+#: 上面那条 `..._are_reported_only` 的理由（后端路由先行是合理设计）本身没错，
+#: 但它让**任何**新增的未调用端点都能静默溜进来 —— **包括本该被前端调用的那种**。
+#: 一份「只报告不失败」的清单没人会去看，于是它不构成闸门。
+#:
+#: 实测（2026-10-08，round 193）就抓到一个反例：`/api/system/client-errors`
+#: 明明是给前端上报错误用的，却躺在「前端从未调用」清单里。
+#: （那条其实是**扫描口径**的假阳性 —— 只扫 `src/api/` 且不认 `fetch`，已修。
+#:  但「清单不可信」这件事本身说明：只报告不失败是不够的。）
+#:
+#: 现在：每条未调用端点必须落进下面某个前缀规则；**新出现的**未分类端点 → 红。
+UNUSED_BACKEND_PREFIX_RULES: dict[str, str] = {
+    "/api/resilience/": (
+        "韧性工程接口（混沌实验 / 熔断器 / 降级 / 故障注入 / 限流配置），"
+        "供 SRE 与演练脚本使用，**不面向浏览器 UI**"
+    ),
+    "/api/ops/": (
+        "运维工具接口（数据库维护 / 配置中心 / 清理 / 诊断导出 / 维护任务 / 运维审计），"
+        "供运维脚本与运维人员使用，**不面向浏览器 UI**"
+    ),
+    "/api/alarms/escalation/": (
+        "告警升级规则接口（后端有真实的 AlarmEscalationManager，规则是**列表**模型）。"
+        "⚠️ 前端**没有**接它 —— 配置页的「报警升级」表单走了另一条**且是坏的**路径，见 D14"
+    ),
+    "/api/health/": (
+        "健康检查扩展接口（详情 / 异步任务状态），供探活与运维脚本使用；UI 只用 /status"
+    ),
+}
+
+
+def test_unused_backend_endpoints_are_all_classified(contract_report):
+    """后端未调用端点必须**全部**落进已声明的前缀分类里。
+
+    新出现一条没分类的未调用端点 → 红：要么把它接上前端，
+    要么在 `UNUSED_BACKEND_PREFIX_RULES` 里写清它为什么**不该**被前端调用。
+    """
+    unused = contract_report["unused_backend_endpoints"]
+    unclassified = [
+        f"{e['method']:6s} {e['backend_path']}  ({e['source_file']}:{e['source_line']})"
+        for e in unused
+        if not any(e["backend_path"].startswith(p) for p in UNUSED_BACKEND_PREFIX_RULES)
+    ]
+    assert not unclassified, (
+        "以下后端端点前端从不调用，且没有落进任何已声明的前缀分类 —— "
+        "要么接上前端，要么在 UNUSED_BACKEND_PREFIX_RULES 里说明原因：\n  "
+        + "\n  ".join(unclassified)
+    )
+
+
+def test_unused_backend_prefix_rules_are_not_stale(contract_report):
+    """分类规则不许腐烂：写了某前缀却一条端点都没命中 → 红。"""
+    unused = contract_report["unused_backend_endpoints"]
+    stale = [
+        p for p in UNUSED_BACKEND_PREFIX_RULES
+        if not any(e["backend_path"].startswith(p) for e in unused)
+    ]
+    assert not stale, (
+        f"UNUSED_BACKEND_PREFIX_RULES 里这些前缀已无对应端点，请删掉：{stale}"
+    )
+
+
+def test_unused_backend_prefix_rules_have_reasons():
+    """每条分类规则都必须写清理由（不能只写个前缀）。"""
+    thin = [p for p, r in UNUSED_BACKEND_PREFIX_RULES.items() if len(r.strip()) < 15]
+    assert not thin, f"以下前缀分类没写清理由：{thin}"
+
+
+# ---------------------------------------------------------------------------
+# 前端「写入一个不存在的配置段」守卫（round 193 新增）
+# ---------------------------------------------------------------------------
+
+#: 前端 `systemApi.saveConfig(<section>, …)` 里的 section 字面量。
+#:
+#: ⚠️ 必须带 `systemApi.` 前缀。第一版只写 `saveConfig(...)`，结果把
+#: **模板里按钮的本地包装调用**也算了进来 —— `@click="saveConfig('energy')"`
+#: 调的是 `Config.vue` 内部的同名函数，而那个函数对 `energy` 有**特判**
+#: （走 `industry40Api.setEnergyTariff`，不是 config 接口）。
+#: 于是一个正确的按钮被判成「保存到不存在的段」，守卫假红。
+#: **判据必须落在「真正发请求的那一层」**，不能落在同名的包装层上。
+_CONFIG_SECTION_CALL_RE = re.compile(
+    r"\bsystemApi\s*\.\s*saveConfig\s*\(\s*['\"]([^'\"]+)['\"]"
+)
+
+#: `PUT /api/config` 读写的那份配置文件（后端 `展示层/api/api_system.py` 硬编码的路径）。
+_SYSTEM_YAML_REL = Path("配置") / "system.yaml"
+
+#: 已知**当前就是坏的**配置段：前端在保存它们，而 `配置/system.yaml` 里没有这些段。
+#:
+#: 后端 `PUT /api/config` 的实现是：
+#:     section 存在且是 dict → 更新
+#:     否则（section 非空）  → **400**「配置段 X 不存在或不是字典」
+#: 所以写一个不存在的段**必然 400** —— 前端会弹一句「保存失败」，
+#: 用户根本不知道原因，而那个按钮等于装饰品。
+#:
+#: 进这张表 = 「已知且已判断过」，**不是**「允许」。
+#: 表是**双向**断言的：这里列了但已经修好 → 红（强制清理）；
+#: 没列但实际坏了 → 红（强制新增，不允许再出现隐性的）。
+KNOWN_MISSING_CONFIG_SECTIONS: dict[str, str] = {
+    "alarm_escalation": (
+        "配置页「报警升级」保存按钮。后端**有**专门的 /api/alarms/escalation/rules"
+        "（规则**列表**模型 + 真实的 AlarmEscalationManager），但前端表单是**扁平对象**，"
+        "形状不兼容 → 不是换个 URL 就完事。见 D14。"
+    ),
+    "archive": (
+        "配置页「保存归档策略」按钮。归档策略在前端是一份扁平配置，"
+        "后端没有对应配置段（归档由后台维护任务驱动）→ 需产品口径。见 D14。"
+    ),
+    "archive_trigger": (
+        "配置页「立即归档」按钮。它把一个**命令**（action=archive_now）当成配置段写，"
+        "方向就不对 —— 命令不该走配置接口。见 D14。"
+    ),
+}
+
+
+def _frontend_config_sections() -> dict[str, list[str]]:
+    """扫前端源码，取 `saveConfig('<字面量>', …)` 里的段名 → 出处列表。"""
+    out: dict[str, list[str]] = {}
+    for f in _iter_frontend_source_files():
+        text = f.read_text(encoding="utf-8")
+        for m in _CONFIG_SECTION_CALL_RE.finditer(text):
+            line = text.count("\n", 0, m.start()) + 1
+            out.setdefault(m.group(1), []).append(
+                f"{f.relative_to(_resolve_frontend_src_dir()).as_posix()}:{line}"
+            )
+    return out
+
+
+def _system_yaml_sections() -> set[str]:
+    import yaml  # 仅测试期依赖，仓库已依赖 PyYAML
+
+    path = BACKEND_ROOT / _SYSTEM_YAML_REL
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    assert isinstance(data, dict), f"{path} 顶层不是映射"
+    return set(data.keys())
+
+
+def test_frontend_config_sections_exist_in_system_yaml():
+    """前端 `saveConfig('<section>', …)` 的 section 必须真实存在于 `配置/system.yaml`。
+
+    这是一条**必然成立**的约束：后端对不存在的段一律 400（见
+    `KNOWN_MISSING_CONFIG_SECTIONS` 的说明）。写一个不存在的段没有任何意义。
+
+    实测（2026-10-08，round 193）：配置页有 **3 个按钮**踩了这个坑
+    —— 「报警升级」「保存归档策略」「立即归档」，点了必然报错。
+    """
+    sections = _frontend_config_sections()
+    assert sections, "没扫到任何 saveConfig('<段名>') 调用 —— 扫描口径可能坏了"
+
+    known = _system_yaml_sections()
+    missing = {s: src for s, src in sections.items() if s not in known}
+
+    undeclared = {s: src for s, src in missing.items() if s not in KNOWN_MISSING_CONFIG_SECTIONS}
+    assert not undeclared, (
+        "以下配置段前端在保存，但 system.yaml 里没有 → 后端必然 400。"
+        "要么补上该段，要么在 KNOWN_MISSING_CONFIG_SECTIONS 里登记原因：\n  "
+        + "\n  ".join(f"{s}  <- {', '.join(src)}" for s, src in undeclared.items())
+    )
+
+
+def test_known_missing_config_sections_are_still_missing():
+    """登记表不许腐烂：已登记的坏段若被修好 → 红，强制把它从表里删掉。"""
+    sections = _frontend_config_sections()
+    known = _system_yaml_sections()
+
+    fixed = [s for s in KNOWN_MISSING_CONFIG_SECTIONS if s in known]
+    assert not fixed, (
+        f"这些段已经在 system.yaml 里了，请从 KNOWN_MISSING_CONFIG_SECTIONS 删掉：{fixed}"
+    )
+
+    gone = [s for s in KNOWN_MISSING_CONFIG_SECTIONS if s not in sections]
+    assert not gone, (
+        f"这些段前端已经不再保存了，请从 KNOWN_MISSING_CONFIG_SECTIONS 删掉：{gone}"
+    )
+
+
+def test_known_missing_config_sections_have_reasons():
+    """每条登记都必须写清原因与处置方向。"""
+    thin = [s for s, r in KNOWN_MISSING_CONFIG_SECTIONS.items() if len(r.strip()) < 20]
+    assert not thin, f"以下坏段登记没写清原因：{thin}"
