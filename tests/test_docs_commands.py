@@ -1,29 +1,40 @@
 # -*- coding: utf-8 -*-
-"""文档里**可复制的 curl 端点**必须真实存在。
+"""文档里**可复制的命令**必须真的能跑：端点存在、引用的文件存在。
 
-缺陷类别：**给人复制运行的命令指向 404**
-----------------------------------------
-`docs/` 是给人看的，里面的 `curl …` 是**给人复制运行的** ——
-指向一个不存在的端点，读者会拿到 404，然后怀疑系统坏了。
+缺陷类别：**给人复制运行的命令指向 404 / No such file**
+-------------------------------------------------------
+`docs/` 是给人看的，里面的命令是**给人复制运行的** ——
+指向不存在的端点或文件，读者会拿到 404 / `No such file or directory`，
+然后怀疑系统坏了。
 
-实测（2026-10-09，round 203）：
+实测（2026-10-09）：
 
-    docs/final_summary.md:
-        curl http://localhost:5000/api/alarms/kpi?hours=24
-        curl http://localhost:5000/api/alarms/kpi/export?hours=24&format=text
+* round 203 —— `docs/final_summary.md` 里可复制的 curl 指向**不存在的端点**：
 
-**后端没有 `/api/alarms/kpi`** —— 承载它的 `报警层/alarm_kpi.py`
-已按 D4 死代码清理（`07a6e9c`）删除（它**生产不可达**，从未接线）。
-文档却仍把它写成"已实现的功能"。
+      curl http://localhost:5000/api/alarms/kpi?hours=24
+      curl http://localhost:5000/api/alarms/kpi/export?hours=24&format=text
+
+  后端没有 `/api/alarms/kpi` —— 承载它的 `报警层/alarm_kpi.py`
+  已按 D4 死代码清理（`07a6e9c`）删除（它**生产不可达**，从未接线）。
+
+* round 204 —— `docs/ICS_SECURITY.md` 的「自动化脚本」段给了 **3 个从未存在过**的脚本：
+
+      python tools/security_check.py       ← 无 git 历史，从未存在
+      python tools/vulnerability_scan.py   ← 同上
+      python tools/compliance_check.py     ← 同上
+
+  真身是 `tools/security_scan.py`（`full` / `quick` / `report`）。
 
 口径
 ----
-* 只抽 **`curl` 命令里**的 `/api/...` URL（不是正文里随便提到的路径 ——
+* 端点：只抽 **`curl` 命令里**的 `/api/...` URL（不是正文里随便提到的路径 ——
   正文里常把**具体实例**写出来，例如 `/api/health/modules/device_control`
   对应的是参数化路由 `/api/health/modules/<module_name>`，那是**合法**的）；
-* 匹配时把文档里的**具体段**与后端的**参数段**互相归一（见 `_structural`）；
-* 确实要写一个**不存在**的端点的（例如"历史遗留"章节），进 `ALLOWED_MISSING`
-  并写明理由（双向断言）。
+  匹配时把文档里的**具体段**与后端的**参数段**互相归一（见 `_structural`）；
+* 文件：只抽 **命令动词后面**的项目文件（`python xxx.py` / `bash xxx.sh` /
+  `node xxx.js` / `npm run xxx`），不抽正文里提到的文件名（那可能是在讲历史）；
+* 确实要写一个**不存在**的端点/文件的（例如"历史遗留"章节），进
+  `ALLOWED_MISSING` 并写明理由（双向断言）。
 """
 
 from __future__ import annotations
@@ -38,6 +49,12 @@ DOCS_DIR = BACKEND_ROOT / "docs"
 
 #: `curl [选项] <url>` —— 只认 curl 命令里的 URL
 _CURL_RE = re.compile(r"curl\s+(?:-[A-Za-z]+\s+)*['\"]?(https?://[^\s'\"]+|/[^\s'\"]+)")
+
+#: `python|bash|node … <项目文件>` —— 只认命令动词后面的文件参数
+_CMD_FILE_RE = re.compile(
+    r"\b(?:python3?|py|bash|sh|node)\s+['\"]?"
+    r"([\w\u4e00-\u9fff./\\-]+\.(?:py|sh|js|mjs|cjs|bat|ps1))\b"
+)
 
 #: 已确认**故意**指向不存在端点的（登记时必须写清理由）。
 ALLOWED_MISSING: dict[str, str] = {}
@@ -133,3 +150,58 @@ def test_allowlist_is_not_stale():
     route_structs = {_structural(p) for _, p in routes}
     stale = [p for p in ALLOWED_MISSING if _structural(p) in route_structs]
     assert not stale, f"以下端点已存在，请从 ALLOWED_MISSING 删掉：{stale}"
+
+
+# ---------------------------------------------------------------------------
+# 第二部分：文档里可复制的命令引用的**项目文件**必须存在
+# ---------------------------------------------------------------------------
+
+#: 已确认**故意**引用不存在文件的（登记时必须写清理由）。
+ALLOWED_MISSING_FILES: dict[str, str] = {}
+
+
+def _doc_cmd_files() -> dict[str, set[str]]:
+    """`docs/*.md`（含根 README / 启动说明）里命令动词后面的项目文件。"""
+    out: dict[str, set[str]] = {}
+    targets = list(DOCS_DIR.glob("*.md")) + [
+        BACKEND_ROOT / "README.md",
+        BACKEND_ROOT / "启动说明.md",
+    ]
+    for f in targets:
+        if not f.is_file():
+            continue
+        for m in _CMD_FILE_RE.finditer(f.read_text(encoding="utf-8", errors="replace")):
+            rel = m.group(1).replace("\\", "/").lstrip("./")
+            out.setdefault(f.name, set()).add(rel)
+    return out
+
+
+def test_doc_cmd_file_scan_is_effective():
+    """元守卫：一条都扫不到时，下面的断言会退化成空断言。"""
+    files = _doc_cmd_files()
+    total = sum(len(v) for v in files.values())
+    assert total > 3, f"只从文档里扫到 {total} 个命令引用的文件 —— 口径可能坏了"
+
+
+def test_every_doc_cmd_file_exists():
+    """文档里 `python xxx.py` 这类命令引用的文件必须真实存在。"""
+    bad: list[str] = []
+    for fname, files in sorted(_doc_cmd_files().items()):
+        for p in sorted(files):
+            if p in ALLOWED_MISSING_FILES:
+                continue
+            if not (BACKEND_ROOT / p).is_file():
+                bad.append(f"  {fname}: {p}")
+    assert not bad, (
+        "以下 `docs/` 里可复制的命令引用的文件**不存在** —— "
+        "读者会拿到 `No such file or directory`：\n"
+        + "\n".join(bad)
+        + "\n\n请改成真实文件（或真实的命令动词）；"
+        "确有理由保留的，登记进 ALLOWED_MISSING_FILES 并写明理由。"
+    )
+
+
+def test_missing_file_allowlist_is_not_stale():
+    """登记后文件又被补上的，应删掉登记。"""
+    stale = [p for p in ALLOWED_MISSING_FILES if (BACKEND_ROOT / p).is_file()]
+    assert not stale, f"以下文件已存在，请从 ALLOWED_MISSING_FILES 删掉：{stale}"

@@ -361,13 +361,23 @@ def detect_intrusion():
 - Fail2Ban: 暴力破解防护
 
 ### 自动化脚本
+
+> ⚠️ 本节原先给的三个脚本名（`tools/security_check.py`、
+> `tools/vulnerability_scan.py`、`tools/compliance_check.py`）
+> **在仓库里从未存在过**（无 git 历史），照着跑会是
+> `No such file or directory`。下面是**实际存在**的工具与用法
+> （2026-10-09 round 203 核对；守卫见 `tests/test_docs_curl_endpoints.py`）。
+
 ```bash
-# 安全加固检查脚本
-python tools/security_check.py
+# 安全扫描（含安全检查 + 漏洞模式扫描；这是本仓库唯一的安全扫描工具）
+python tools/security_scan.py full     # 完整扫描
+python tools/security_scan.py quick    # 快速扫描
+python tools/security_scan.py report   # 只生成报告
 
-# 漏洞扫描脚本
-python tools/vulnerability_scan.py
-
-# 合规检查脚本
-python tools/compliance_check.py
+# 审计证据收集（把机器可产出的合规证据收进 evidence/<version>/）
+python tools/collect_evidence.py
 ```
+
+合规项与国标条目的对应关系见 [`compliance_mapping.md`](./compliance_mapping.md)；
+**没有**独立的「合规检查脚本」——合规证据由上面的 `collect_evidence.py`
+收集、由 `compliance_mapping.md` 做条目映射。
