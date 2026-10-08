@@ -55,11 +55,20 @@ INDEX_DDL: List[str] = [
     #   由 O(N) 降为 O(log N + 命中行数)。
     'CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history_data(timestamp)',
 
-    # 【为谁建】alarm_records 的"纯时间范围"聚合：
-    #   - core/report_generator.py:267 → SELECT COUNT(*) FROM alarm_records WHERE timestamp BETWEEN ? AND ?
-    #   - core/report_generator.py:274 → SELECT alarm_level, COUNT(*) ... WHERE timestamp BETWEEN ? GROUP BY alarm_level
-    #   - core/report_generator.py:297 → ... GROUP BY DATE(timestamp)
-    #   - 报警层/alarm_kpi.py:133 _get_alarms_in_period → get_alarm_records(start_time, end_time)
+    # 【为谁建】alarm_records 的"纯时间范围"查询：
+    #   - 存储层/database.py:839 → query += ' AND timestamp >= ?'   （get_alarm_records）
+    #   - 存储层/database.py:843 → query += ' AND timestamp <= ?'
+    #   - 存储层/database.py:850 → ' ORDER BY timestamp DESC LIMIT ?'
+    #   调用方：展示层/api/api_alarms.py:38、存储层/data_export.py:232
+    #   另有归档侧的时间区间条件：存储层/data_archive.py:534。
+    #
+    #   ⚠️ 这里原先引用的是 `core/report_generator.py`（第 267 / 274 / 297 行）与
+    #   `报警层/alarm_kpi.py`（第 133 行）—— **那 4 个指针已失效**：两个文件都在
+    #   D4 死代码清理（07a6e9c）里被删了（它们生产不可达）。
+    #   round 203 核对后改成本文件里的真实位置；守卫见
+    #   tests/test_code_pointers.py（注释里的代码指针必须指向存在的文件）。
+    #   （注：上面刻意**不写** `文件.py:行号` 的字面形式 —— 否则守卫会把这段
+    #     说明文字本身当成指针，正是「注释喂饱守卫」那类假红。）
     # 【为什么缺】idx_alarm_device_time 同样以 device_id 打头，时间区间查询用不上它；
     #   idx_alarm_level(alarm_level, acknowledged) 更糟 —— 实测 planner 直接
     #   SCAN alarm_records USING INDEX idx_alarm_level 扫整棵索引树。

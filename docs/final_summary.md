@@ -68,7 +68,14 @@
 
 ### 5. 报警KPI监控（ISA-18.2标准）
 
-**实现的KPI指标**：
+> ⚠️ **本节描述的功能当前不在代码库里**（2026-10-09 round 203 核对）：
+> 承载它的 `报警层/alarm_kpi.py`（`AlarmKPI` 类 / `calculate_kpis` / `export_kpi_report`）
+> 在 **D4 死代码清理**（commit `07a6e9c`，删除 67 个**生产不可达**模块）里被删除了 ——
+> 也就是说它**从未接线进主流程**，下面列的 KPI 从来没有在界面上出现过。
+> 本文档保留原记录供追溯，**不要据此认为该功能可用**。
+> 若确需 ISA-18.2 报警 KPI，应作为**新功能**立项实现（而不是"恢复"）。
+
+**原设计的KPI指标**：
 
 | KPI | 目标值 | 说明 |
 |-----|--------|------|
@@ -78,7 +85,7 @@
 | 报警优先级分布 | 80%低, 15%中, 5%高 | 符合ISA-18.2标准 |
 | Top 10最频繁报警 | - | 识别"坏演员"报警 |
 
-**功能**：
+**原设计的功能**（均随该模块一并删除）：
 - 实时计算KPI指标
 - 评估KPI状态（理想/可接受/差）
 - 生成改进建议
@@ -226,14 +233,20 @@ curl http://localhost:5000/api/health/checks
 curl http://localhost:5000/api/health/checks/database
 ```
 
-### 4. 查看报警KPI
+### 4. 查看报警统计
+
+> ⚠️ 原先这里给的是 `/api/alarms/kpi` 与 `/api/alarms/kpi/export` 两个端点 ——
+> **后端没有它们**（承载它们的 KPI 模块已按 D4 删除，见上文第 5 节），照着跑会 **404**。
+> 下面是**实际存在**的端点。
+> （注：本节刻意**不写** `curl` 关键词去引用那两个不存在的端点 ——
+>   否则 `tests/test_docs_curl_endpoints.py` 会把这段说明文字本身当成命令。）
 
 ```bash
-# 获取报警KPI（过去24小时）
-curl http://localhost:5000/api/alarms/kpi?hours=24
+# 报警统计（含 by_level / by_device / 活动报警数）
+curl http://localhost:5000/api/alarms/statistics
 
-# 导出KPI报告
-curl http://localhost:5000/api/alarms/kpi/export?hours=24&format=text
+# 活动报警列表
+curl http://localhost:5000/api/alarms/active
 ```
 
 ### 5. 数据压缩
