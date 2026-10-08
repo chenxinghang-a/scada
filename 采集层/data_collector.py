@@ -449,7 +449,15 @@ class DataCollector:
             'successful_collections': 0,
             'failed_collections': 0,
             'last_collection_time': None,
-            'queue_size': 0,
+            # ⚠️ 这里**不能**放 'queue_size'。
+            #    get_stats() 的返回是 `{'queue_size': self.data_queue.qsize(), **self.stats}`，
+            #    而 `**self.stats` 在**后面** —— dict 字面量里后出现的键覆盖前面的，
+            #    所以 self.stats 里只要有 'queue_size'，实时算出来的那个就被丢掉，
+            #    返回的永远是这里的陈旧值（初始 0）。
+            #    实测（2026-10-08 round 194）：队列里放 5 条，
+            #    data_queue.qsize() == 5 而 get_stats()['queue_size'] == 0。
+            #    **队列深度是派生量，不该被存下来。**
+            #    由 tests/test_derived_metrics_not_shadowed.py 看着。
             # 队列满时被丢弃的数据项数（含"丢最旧"与被拒两种）
             'dropped_items': 0,
             # 写库失败后的重试相关计数。
@@ -1433,7 +1441,9 @@ class DataCollector:
                     self.data_queue.clear_persistence(batch)
 
                 with self._stats_lock:
-                    self.stats['queue_size'] = self.data_queue.qsize()
+                    # 不再往 self.stats 里写 'queue_size'：它是**派生量**，
+                    # 由 get_stats() 实时算（qsize()）。写进来只会把实时值覆盖掉
+                    # （`**self.stats` 展开在后面）—— 见 __init__ 里的说明。
                     self.stats['total_collections'] = self.stats.get('total_collections', 0) + len(batch)
 
             except Exception as e:
