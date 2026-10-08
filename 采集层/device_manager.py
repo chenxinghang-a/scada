@@ -436,6 +436,10 @@ class DeviceManager:
         if not device_config:
             return {'error': '设备配置不存在'}
 
+        # 局部导入：`采集层.interfaces` 与本模块存在循环引用风险，
+        # 本文件既有代码（`_get_brief_status`）也是这么做的，保持一致。
+        from 采集层.interfaces import IDeviceManager
+
         status = {
             'device_id': device_id,
             'name': device_config.get('name'),
@@ -445,6 +449,15 @@ class DeviceManager:
             'port': device_config.get('port'),
             'enabled': device_config.get('enabled', True),
             'connected': False,
+            # ⚠️ 这两个字段必须在这里就有 —— 前端读它们（见
+            # `tests/test_device_status_shape_contract.py` 的 FRONTEND_REQUIRED）：
+            #   * `device_category` 缺 → 「机械类」筛选/计数恒为 0，
+            #     且 Dashboard 的启停按钮（条件含 `device_category === 'mechanical'`）**永不显示**
+            #   * `stopped` 缺 → "已停止"状态永不出现、按钮文案永远错
+            # 本类的 `_get_brief_status` 早就给了它们，只有 `get_device_status` 漏了 ——
+            # 同一条接口两种形状，正是本仓库反复踩的坑。
+            'stopped': False,
+            'device_category': IDeviceManager.get_device_category(device_config),
             'registers': device_config.get('registers', []),
             'nodes': device_config.get('nodes', []),
             'topics': device_config.get('topics', []),
@@ -475,6 +488,7 @@ class DeviceManager:
                             logger.debug(f"设备 {device_id} 自动重连失败: {e}")
 
             status['connected'] = getattr(client, 'connected', False)
+            status['stopped'] = getattr(client, 'stopped', False)
             status['stats'] = getattr(client, 'stats', {})
 
         # 更新缓存
