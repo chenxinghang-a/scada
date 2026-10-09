@@ -489,3 +489,141 @@ class TestEnvVarsActuallyTakeEffect:
             "config.LogConfig.LOG_DIR 与 paths.LOG_DIR 分叉了 —— "
             "说明 config 又在自己读 SCADA_LOG_DIR，而不是委托 paths"
         )
+
+
+# ---------------------------------------------------------------------------
+# 反方向：配置里**引用了**、但任何声明源都没声明的环境变量（round 207）
+# ---------------------------------------------------------------------------
+
+class TestConfigRefsAreDeclared:
+    """`配置/*.yaml` 里真实存在的 `${VAR}`，必须在某个声明源里有对应声明。
+
+    为什么这是独立的一类缺陷
+    ------------------------
+    `expand_env_vars`（core/config_manager.py）对「未设置且无默认值」的占位符
+    是**保留原文 + 打 warning**。于是：
+
+      * 该配置项的值就是字面量 `${VAR}` —— **看着像配置、其实是坏的**；
+      * 而且**每次加载配置都打一条永远消除不掉的 warning**。
+        一条无法消除的告警会把所有告警一起训练成噪音（MEMORY 25）。
+
+    实测到的那个（round 207）：`配置/system.yaml` 有
+    `secret_key: ${SCADA_SECRET_KEY}`，而 `SCADA_SECRET_KEY` 在**整仓只出现在那两行** ——
+    `.env` / `.env.example` / README / docker-compose / Dockerfile / CI 全都没有它。
+    同时那个 `web.secret_key` 键**没有任何代码读它**
+    （唯一提及是 `api_system.py` 的**脱敏名单** —— 给一个没人读的键做脱敏）。
+    """
+
+    def test_no_undeclared_config_refs(self, scanner):
+        undeclared = scanner.find_undeclared_config_refs(BACKEND_ROOT)
+        if undeclared:
+            lines = [
+                f"  ${{{var}}}  <-  {', '.join(sorted(where))}"
+                for var, where in sorted(undeclared.items())
+            ]
+            pytest.fail(
+                "以下环境变量被**配置 YAML 引用**了，但**任何声明源里都没有** —— "
+                "部署方无从知道要设它，而配置项会停在字面量 `${VAR}` 上"
+                "（并且每次加载配置都打一条消除不掉的 warning）：\n"
+                + "\n".join(lines)
+                + "\n\n三选一：① 在 .env.example 里补上它；"
+                "② 给占位符写默认值 `${VAR:-默认}`；③ 若这个键根本没人读，直接删掉它。"
+            )
+
+    def test_config_corpus_is_not_trivially_empty(self, scanner):
+        """防瞎：真仓库里**确实**有一批 `${VAR}` 引用，解析器坏掉时不能平凡通过。"""
+        import re as _re
+        refs = set()
+        for p in (BACKEND_ROOT / "配置").glob("*.y*ml"):
+            txt = scanner.strip_comments(p.read_text(encoding="utf-8", errors="replace"))
+            refs.update(m.group(1) for m in scanner.CONFIG_REF_RE.finditer(txt))
+        assert len(refs) >= 5, (
+            f"只从 配置/ 解析出 {len(refs)} 个 ${{VAR}} 引用 —— "
+            "解析器多半坏了，此时「未声明集合为空」是平凡真"
+        )
+        # 抽查一个必然存在的真实引用（它在 .env.example 里有声明）
+        assert "PLC_HOST_01" in refs, "PLC_HOST_01 没被解析出来 —— 配置引用解析分支坏了"
+
+    # -- 合成夹具 ---------------------------------------------------------
+
+    def _refs(self, scanner, tmp_path, files: dict) -> dict:
+        for name, content in files.items():
+            p = tmp_path / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+        return scanner.find_undeclared_config_refs(tmp_path)
+
+    def test_undeclared_ref_detected(self, scanner, tmp_path):
+        out = self._refs(scanner, tmp_path, {
+            "配置/system.yaml": "web:/n  secret_key: ${SYNTH_NOT_DECLARED}\n",
+        })
+        assert "SYNTH_NOT_DECLARED" in out
+
+    def test_declared_ref_is_silent(self, scanner, tmp_path):
+        out = self._refs(scanner, tmp_path, {
+            "配置/system.yaml": "web:/n  secret_key: ${SYNTH_DECLARED}\n",
+            ".env.example": "SYNTH_DECLARED=CHANGE_ME\n",
+        })
+        assert "SYNTH_DECLARED" not in out
+
+    def test_ref_with_default_is_still_reported(self, scanner, tmp_path):
+        """写了 `${VAR:-默认}` 也**照样要报** —— 有默认值只说明不会停在字面量上，
+        部署方仍然不知道这个旋钮存在。要豁免就显式写进白名单，别靠「有没有默认值」猜。"""
+        out = self._refs(scanner, tmp_path, {
+            "配置/system.yaml": "web:/n  secret_key: ${SYNTH_WITH_DEFAULT:-x}\n",
+        })
+        assert "SYNTH_WITH_DEFAULT" in out
+
+    def test_yaml_comment_does_not_create_a_dependency(self, scanner, tmp_path):
+        """**注释里举例的 `${VAR}` 不是依赖。** 不剥注释就会多报。"""
+        out = self._refs(scanner, tmp_path, {
+            "配置/devices_real.yaml": (
+                "#   host   设备地址（建议 ${SYNTH_IN_COMMENT} 引用）\n"
+                "devices:/n  - host: 10.0.0.1\n"
+            ),
+        })
+        assert "SYNTH_IN_COMMENT" not in out, "注释里的示例被当成了真实依赖"
+
+    def test_comment_in_a_declaration_source_is_not_a_declaration(self, scanner, tmp_path):
+        """⚠️ **本轮自己踩到的那个坑**：解释性注释不能算「声明」。
+
+        我在 `.env.example` 里写了一句
+        「system.yaml 当时引用的是 ${SCADA_SECRET_KEY}」，
+        结果 `INTERP_RE` 把注释里的占位符当成了一条声明，
+        守卫立刻对刚刚修掉的真实缺陷**视而不见**（变异验证时才发现）。
+        """
+        out = self._refs(scanner, tmp_path, {
+            "配置/system.yaml": "web:/n  secret_key: ${SYNTH_ONLY_IN_PROSE}\n",
+            ".env.example": "# 这里解释一下：以前用过 ${SYNTH_ONLY_IN_PROSE}\nOTHER=1\n",
+        })
+        assert "SYNTH_ONLY_IN_PROSE" in out, (
+            "注释里的占位符被当成了声明 —— 一句解释就能让守卫瞎掉"
+        )
+
+
+class TestStripComments:
+    """剥注释本身也要验 —— 它是上面所有判据的地基。"""
+
+    def test_hash_style(self, scanner):
+        got = scanner.strip_comments("a: 1  # ${FOO}\nb: 2\n", "hash")
+        assert "${FOO}" not in got
+        assert "b: 2" in got
+
+    def test_js_block_and_line_style(self, scanner):
+        got = scanner.strip_comments(
+            "/* ${FOO} */\nconst x = 1 // ${BAR}\nconst y = 2\n", "code_js"
+        )
+        assert "${FOO}" not in got and "${BAR}" not in got
+        assert "const y = 2" in got
+
+    def test_does_not_eat_url_scheme(self, scanner):
+        """`https://…` 里的 `//` 不能被当成行注释（否则会把后面全吃掉）。"""
+        got = scanner.strip_comments("const u = 'https://x/y' // 注释\nconst v = 2\n", "code_js")
+        assert "https://x/y" in got
+        assert "const v = 2" in got
+
+    def test_kind_for_maps_extensions(self, scanner):
+        assert scanner._kind_for(Path("a.js")) == "code_js"
+        assert scanner._kind_for(Path("a.mjs")) == "code_js"
+        assert scanner._kind_for(Path("a.yaml")) == "hash"
+        assert scanner._kind_for(Path("a.py")) == "hash"

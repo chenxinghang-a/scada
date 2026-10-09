@@ -119,6 +119,38 @@ CONST_READER_PATTERNS = (
 
 #: 文档表格里的环境变量名：``| `VAR` | ... |``
 DOC_TABLE_VAR_RE = re.compile(r"^\|\s*`([A-Z][A-Z0-9_]{2,})`\s*\|", re.M)
+#: 配置 YAML 里的 ``${VAR}`` / ``${VAR:-默认}`` 引用。
+CONFIG_REF_RE = re.compile(r"\$\{([A-Z][A-Z0-9_]{2,})(?::[^}]*)?\}")
+
+
+def strip_comments(text: str, kind: str = "hash") -> str:
+    """按文件类型剥注释 —— **所有**声明源与引用源在解析前都必须过这一道。
+
+    为什么必须剥（round 207 又踩了一次，累计第 6 次）
+    -------------------------------------------------
+    我在 ``.env.example`` 里写了一句解释：
+    「system.yaml 当时引用的是 ``${SCADA_SECRET_KEY}``」。
+    结果 ``INTERP_RE`` 把**注释里的** ``${SCADA_SECRET_KEY}`` 当成了一条**声明** ——
+    于是守卫对刚刚修掉的那个真实缺陷**视而不见**（变异验证时发现的：
+    把死键加回 ``system.yaml``，扫描器报 0 个）。
+    **注释里的示例不是声明。** 同类坑此前踩过 5 次：
+    round 191 M4、192 的 ``saveConfig`` 判据、197、199、203。
+
+    kind：
+      * ``hash`` —— ``#`` 到行尾（YAML / .env / Dockerfile / Python）
+      * ``code_js`` —— ``/* */`` 与 ``//``（.js / .mjs / .ts）
+    刻意不处理「``#`` 或 ``//`` 出现在引号字符串里」：这些声明源里没有这种写法，
+    真出现也只会多报一条，不会静默漏报。
+    """
+    if kind == "code_js":
+        text = re.sub(r"/\*[\s\S]*?\*/", "", text)
+        return re.sub(r"(^|[^:])//.*$", r"\1", text, flags=re.M)
+    return re.sub(r"#.*$", "", text, flags=re.M)
+
+
+def _kind_for(path: pathlib.Path) -> str:
+    return "code_js" if path.suffix.lower() in {".js", ".mjs", ".ts"} else "hash"
+
 #: Dockerfile 的 ``ENV VAR=...``
 DOCKERFILE_ENV_RE = re.compile(r"^\s*ENV\s+([A-Z][A-Z0-9_]{2,})\s*=", re.M)
 #: ``- VAR=...`` / ``VAR=...`` 行（docker-compose / .env）
@@ -158,7 +190,12 @@ def _read(p: pathlib.Path) -> str:
 
 
 def collect_declared(root: pathlib.Path) -> dict[str, set[str]]:
-    """收集「谁声明了哪些环境变量」。"""
+    """收集「谁声明了哪些环境变量」。
+
+    ⚠️ **每个来源在解析前都先剥注释**（``strip_comments``）——
+    不剥的话，一句解释性注释就能凭空「声明」一个变量，让守卫对真实缺陷视而不见。
+    见 ``strip_comments`` 的 docstring（round 207 实测踩到）。
+    """
     declared: dict[str, set[str]] = collections.defaultdict(set)
 
     def add(var: str | None, where: str):
@@ -167,7 +204,7 @@ def collect_declared(root: pathlib.Path) -> dict[str, set[str]]:
 
     # --- Dockerfile* ---
     for p in root.glob("Dockerfile*"):
-        txt = _read(p)
+        txt = strip_comments(_read(p), _kind_for(p))
         for m in DOCKERFILE_ENV_RE.finditer(txt):
             add(m.group(1), p.name)
         for m in INTERP_RE.finditer(txt):
@@ -175,7 +212,7 @@ def collect_declared(root: pathlib.Path) -> dict[str, set[str]]:
 
     # --- docker-compose* / *.env 模板 ---
     for p in list(root.glob("docker-compose*")) + list(root.glob(".env*")):
-        txt = _read(p)
+        txt = strip_comments(_read(p), _kind_for(p))
         for m in ASSIGN_RE.finditer(txt):
             add(m.group(1), p.name)
         for m in YAML_KEY_RE.finditer(txt):
@@ -189,7 +226,7 @@ def collect_declared(root: pathlib.Path) -> dict[str, set[str]]:
     workflows = root / ".github" / "workflows"
     if workflows.is_dir():
         for p in _walk(workflows, YAML_EXTS):
-            txt = _read(p)
+            txt = strip_comments(_read(p), _kind_for(p))
             rel = str(p.relative_to(root)).replace("\\", "/")
             for m in ASSIGN_RE.finditer(txt):
                 add(m.group(1), rel)
@@ -200,7 +237,8 @@ def collect_declared(root: pathlib.Path) -> dict[str, set[str]]:
 
     # --- 脚本（tools/、.github/、根目录 *.py 里的 env[...] =）---
     for p in list(_walk(root / "tools", CODE_EXTS)) + list(_walk(root / ".github", CODE_EXTS)):
-        for m in SCRIPT_SET_RE.finditer(_read(p)):
+        txt = strip_comments(_read(p), _kind_for(p))
+        for m in SCRIPT_SET_RE.finditer(txt):
             add(next(g for g in m.groups() if g), str(p.relative_to(root)).replace("\\", "/"))
 
     # --- 文档表格 ---
@@ -250,6 +288,34 @@ def collect_indirectly_read(root: pathlib.Path) -> set[str]:
     return found
 
 
+def find_undeclared_config_refs(root: pathlib.Path) -> dict[str, set[str]]:
+    """配置 YAML 里引用了、但**任何声明源都没声明**的环境变量。
+
+    这是上面那个扫描的**反方向**，也是独立的一类缺陷（round 207）：
+    ``配置/system.yaml`` 曾有 ``secret_key: ${SCADA_SECRET_KEY}``，
+    而 ``SCADA_SECRET_KEY`` 在整仓**只出现在那两行** ——
+    ``.env`` / ``.env.example`` / README / docker-compose / Dockerfile / CI 全都没有。
+
+    为什么不能放过：``expand_env_vars`` 对「未设置且无默认值」的占位符是
+    **保留原文 + 打 warning**，于是
+      * 该配置项的值就是字面量 ``${VAR}``（看着像配置、其实是坏的），
+      * 而且**每次加载配置都打一条永远消除不掉的 warning** ——
+        一条无法消除的告警会把所有告警一起训练成噪音（见 MEMORY 25）。
+    """
+    declared = set(collect_declared(root))
+    out: dict[str, set[str]] = {}
+    cfg_dir = root / "配置"
+    if not cfg_dir.is_dir():
+        return out
+    for p in _walk(cfg_dir, YAML_EXTS):
+        txt = strip_comments(_read(p), _kind_for(p))
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        for m in CONFIG_REF_RE.finditer(txt):
+            if m.group(1) not in declared:
+                out.setdefault(m.group(1), set()).add(rel)
+    return out
+
+
 def find_unread(root: pathlib.Path) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     """返回 (无读取点的变量 -> 声明来源, 白名单放行的变量 -> 声明来源)。"""
     declared = collect_declared(root)
@@ -275,9 +341,13 @@ def find_unread(root: pathlib.Path) -> tuple[dict[str, set[str]], dict[str, set[
 def main() -> int:
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     unread, allowed = find_unread(root)
+    undeclared = find_undeclared_config_refs(root)
 
     print(f"=== 被声明、但没有任何读取点（{len(unread)} 个）===")
     for var, where in unread.items():
+        print(f"  {var:28s} <- {', '.join(sorted(where))}")
+    print(f"=== 配置里引用了、但任何声明源都没有（{len(undeclared)} 个）===")
+    for var, where in sorted(undeclared.items()):
         print(f"  {var:28s} <- {', '.join(sorted(where))}")
     print(f"=== 白名单放行（别的进程读，{len(allowed)} 个）===")
     for var, where in allowed.items():

@@ -83,5 +83,16 @@ web:
   debug: false
   host: 127.0.0.1
   port: 5000
-  # Web 会话密钥：禁止明文写入仓库，由环境变量 SCADA_SECRET_KEY 注入
-  secret_key: ${SCADA_SECRET_KEY}
+  # ⚠️ 这里**没有** web.secret_key —— 别再往这里加。
+  # Web 会话密钥的**唯一真源**是环境变量 `SECRET_KEY`
+  # （`config.FlaskConfig.SECRET_KEY`，见 config.py；部署清单见 .env.example）。
+  #
+  # 本文件原先有一行 `secret_key: ${SCADA_SECRET_KEY}`。实测（round 207）：
+  #   * `SCADA_SECRET_KEY` 在整仓只出现在那两行 —— 没有任何声明源会设置它；
+  #   * `web.secret_key` 没有任何代码读它（唯一提及是 api_system.py 的**脱敏名单**，
+  #     给一个没人读的键做脱敏，是这条死接线最讽刺的注脚）；
+  #   * `.env.example` 的 `SECRET_KEY` 旁还写着「同时供 web.secret_key 引用」——
+  #     两处散文互相矛盾，且都与代码不符；
+  #   * 且 `expand_env_vars` 对「未设置且无默认值」的占位符是**保留原文 + 告警**，
+  #     这行会让每次加载配置都打一条永远消除不掉的 warning。
+  # 已删除。守卫见 tests/test_env_vars_wired.py 的「引用了但无处声明」那组。
