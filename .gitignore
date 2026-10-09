@@ -26,6 +26,12 @@ dist-iso/
 build-iso/
 .pytest_tmp*/
 
+# 多实例部署的实例目录（tools/multi_instance.py 在运行时创建，
+# 里面是每个实例自己的 data/ logs/ 配置/ 副本）—— 不是源码。
+# ⚠️ 它在 round 206 之前一直没被忽略，且该工具的隔离环境变量当时**没人读**，
+# 所以这个目录一旦生成，里面装的其实是「和主实例共享资源的假隔离副本」。
+instances/
+
 # Virtual environments
 .venv/
 venv/

@@ -9,7 +9,10 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - SCADA_MODE=simulated
+      # 注意：没有 SCADA_MODE —— 运行模式由 run.py 的命令行开关决定
+      # （无参=模拟 / --simulator / --real），环境变量从未被读（round 206 删除）。
+      - SCADA_HOST=0.0.0.0
+      - SCADA_PORT=5000
       - MQTT_BROKER=emqx
       - MQTT_PORT=1883
       - TDENGINE_HOST=tdengine

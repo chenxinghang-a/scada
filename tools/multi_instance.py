@@ -25,7 +25,10 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 INSTANCES_DIR = project_root / 'instances'
-BASE_PORT = 5000
+#: 实例端口的起点。刻意从 5010 起跳，**避开 5000/5001** ——
+#: 那对端口是主实例的模拟/真实模式专用（config.FlaskConfig.PORT / REAL_PORT），
+#: 实例分到 5001 会和主实例的 ``--real`` 模式撞端口。
+BASE_PORT = 5010
 
 
 class MultiInstanceManager:
@@ -96,13 +99,20 @@ class MultiInstanceManager:
                 shutil.copy2(file, instance_dir / '配置' / file.name)
 
         # 创建实例配置
+        #
+        # ⚠️ 语义（2026-10-09，round 206 修正）：``data_dir`` 是**目录**，
+        #    不是数据库文件路径。后端用 ``paths._env_path`` 把 ``SCADA_DATA_DIR``
+        #    当作运行时目录基准，库文件名由 ``paths.get_db_path(模式)`` 派生
+        #    （模拟模式 → ``scada_simulated.db``）。此前这里传的是 ``data/scada.db``
+        #    这个**文件**路径，语义与后端不符；而更根本的问题是后端当时
+        #    **压根没读** 这些变量，所以「多实例」实际共享同一个库、同一份配置、同一个端口。
         config = {
             'name': name,
             'port': port,
             'created_at': datetime.now().isoformat(),
             'status': 'stopped',
             'pid': None,
-            'database': str(instance_dir / 'data' / 'scada.db'),
+            'data_dir': str(instance_dir / 'data'),
             'config_dir': str(instance_dir / '配置'),
             'log_dir': str(instance_dir / 'logs'),
         }
@@ -118,15 +128,19 @@ class MultiInstanceManager:
         return True
 
     def _create_start_script(self, name: str, config: Dict):
-        """创建实例启动脚本"""
+        """创建实例启动脚本。
+
+        这五个变量里，此前只有 ``SCADA_LOG_DIR`` 真正被读；
+        ``SCADA_INSTANCE`` / ``SCADA_PORT`` / ``SCADA_DATA_DIR`` / ``SCADA_CONFIG_DIR``
+        全是**写给空气**（round 206 已把后三个接上，``SCADA_INSTANCE`` 无用途已删除）。
+        """
         instance_dir = self.get_instance_dir(name)
 
         # Windows启动脚本
         bat_content = f'''@echo off
 cd /d "{project_root}"
-set SCADA_INSTANCE={name}
 set SCADA_PORT={config['port']}
-set SCADA_DATA_DIR={config['database']}
+set SCADA_DATA_DIR={config['data_dir']}
 set SCADA_CONFIG_DIR={config['config_dir']}
 set SCADA_LOG_DIR={config['log_dir']}
 python run.py
@@ -137,9 +151,8 @@ python run.py
         # Linux启动脚本
         sh_content = f'''#!/bin/bash
 cd "{project_root}"
-export SCADA_INSTANCE="{name}"
 export SCADA_PORT="{config['port']}"
-export SCADA_DATA_DIR="{config['database']}"
+export SCADA_DATA_DIR="{config['data_dir']}"
 export SCADA_CONFIG_DIR="{config['config_dir']}"
 export SCADA_LOG_DIR="{config['log_dir']}"
 python run.py
@@ -160,11 +173,10 @@ python run.py
             print(f"实例 '{name}' 已在运行中")
             return False
 
-        # 设置环境变量
+        # 设置环境变量（这四项后端现在都会读，见 paths._env_path / config.FlaskConfig）
         env = os.environ.copy()
-        env['SCADA_INSTANCE'] = name
         env['SCADA_PORT'] = str(config['port'])
-        env['SCADA_DATA_DIR'] = config['database']
+        env['SCADA_DATA_DIR'] = config['data_dir']
         env['SCADA_CONFIG_DIR'] = config['config_dir']
         env['SCADA_LOG_DIR'] = config['log_dir']
 

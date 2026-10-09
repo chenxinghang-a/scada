@@ -1,4 +1,4 @@
-# Industrial SCADA System v1.3.1076
+# Industrial SCADA System v1.3.1077
 
 工业级数据采集与监控系统 -- 符合中国国标等保2.0 (GB/T 22239)
 
@@ -241,6 +241,29 @@ docker-compose up -d
 
 ## 环境变量
 
+> ⚠️ **运行模式不是环境变量。** 它由 `run.py` 的**命令行开关**决定：
+>
+> | 启动方式 | 模式 | 配置 | 端口 |
+> |---|---|---|---|
+> | `python run.py` | 模拟 | `配置/devices_simulated.yaml` | 5000 |
+> | `python run.py --simulator` | 外部 Modbus TCP 模拟器（真实协议） | `配置/devices_modbus_sim.yaml` | 5001 |
+> | `python run.py --real` | 真实设备 | `配置/devices_real.yaml` | 5001 |
+>
+> 此处曾经列过一个 `SCADA_MODE` 环境变量 —— 它**从来没有被任何代码读取**，
+> 已于 2026-10-09 删除。凡「文档/容器/脚本里声明了、但代码从不读」的环境变量，
+> 都由 `tests/test_env_vars_wired.py` 拦住。
+
+### 运行环境与运行时目录
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SCADA_ENV` | `development` | 运行环境；设为 `production` 时密钥缺失/为默认值会升级为 CRITICAL 告警 |
+| `SCADA_HOST` | `127.0.0.1` | Web 服务绑定地址。**容器部署必须设为 `0.0.0.0`**，否则端口发布打不到容器内的回环 |
+| `SCADA_PORT` | `5000` | 模拟模式监听端口 |
+| `SCADA_REAL_PORT` | `5001` | 真实/模拟器模式监听端口（Chrome 拦截 6000/6666 等端口） |
+| `SCADA_DATA_DIR` | `data/` | 运行时数据目录（**目录**，不是库文件路径）。库文件名按模式派生 |
+| `SCADA_CONFIG_DIR` | `配置/` | 配置目录。多实例部署靠它与 `SCADA_DATA_DIR` 做隔离 |
+
 ### 安全密钥 (必须设置)
 
 | 变量 | 默认值 | 说明 |
@@ -316,14 +339,24 @@ docker-compose up -d
 | `SCADA_LOG_RETENTION` | `30 days` | 日志保留时间 |
 | `FLASK_DEBUG` | `0` | Flask调试模式 (1=启用) |
 
+### 服务与性能
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SCADA_REQUEST_TIMEOUT` | `30` | 单请求超时（秒），范围 5–300 |
+| `SCADA_MAX_CONTENT_MB` | `16` | 最大请求体（MB），范围 1–100 |
+| `SCADA_MAX_CONCURRENT` | `100` | 单进程最大并发请求数，范围 10–1000 |
+
 ### Docker Compose 专用
 
 | 变量 | docker-compose默认值 | 说明 |
 |------|---------------------|------|
-| `SCADA_MODE` | `simulated` | 运行模式 |
 | `GF_SECURITY_ADMIN_USER` | `admin` | Grafana管理员用户名 |
 | `GF_SECURITY_ADMIN_PASSWORD` | `admin123` | Grafana管理员密码 |
 | `GF_INSTALL_PLUGINS` | `tdengine-datasource` | Grafana插件 |
+
+> `GF_*` 是 **Grafana 自己的**环境变量（由 grafana 容器读取），本项目代码不读它们 ——
+> 所以它们不在上面的「代码要读」清单里，由守卫显式白名单放行。
 
 ## 浏览器端功能 (Dashboard)
 

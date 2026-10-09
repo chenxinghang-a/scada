@@ -122,9 +122,20 @@ class FlaskConfig:
     # 生产环境必须通过 SECRET_KEY 环境变量设置，否则使用随机值（重启失效）
     SECRET_KEY = _get_secret('SECRET_KEY', 'SECRET_KEY')
     DEBUG = os.environ.get('FLASK_DEBUG', '0') == '1'
-    HOST = '127.0.0.1'  # 默认绑定本地，生产环境可改为0.0.0.0
-    PORT = 5000          # 模拟模式
-    REAL_PORT = 5001     # 真实模式（Chrome 拦截 6000/6666 等端口）
+    # 绑定地址/端口：可用环境变量覆盖。
+    #
+    # ⚠️ 容器部署必须设 ``SCADA_HOST=0.0.0.0``（Dockerfile 的 ENV 已经设了）。
+    #    此前这里是**硬编码字面量**，环境变量被完全忽略 ——
+    #    于是容器里进程只监听 127.0.0.1，而 docker 的端口发布（DNAT 到容器 IP）
+    #    打不到 loopback，``docker compose up`` 起来之后**从宿主机根本连不上**，
+    #    而 HEALTHCHECK（容器内 curl localhost）却是绿的，故障因此长期不可见。
+    #    同一类缺陷还有 SCADA_MODE（从未被读，已删除）与多实例工具的
+    #    SCADA_DATA_DIR / SCADA_CONFIG_DIR（见 paths.py 的 _env_path）。
+    #    守卫：tests/test_env_vars_wired.py。
+    HOST = os.environ.get('SCADA_HOST', '127.0.0.1').strip() or '127.0.0.1'
+    PORT = _get_int('SCADA_PORT', 5000, min_val=1, max_val=65535)          # 模拟模式
+    # 真实模式（Chrome 拦截 6000/6666 等端口）
+    REAL_PORT = _get_int('SCADA_REAL_PORT', 5001, min_val=1, max_val=65535)
 
     # 请求超时控制（秒）
     REQUEST_TIMEOUT = _get_int('SCADA_REQUEST_TIMEOUT', 30, min_val=5, max_val=300)
@@ -212,8 +223,11 @@ class LogConfig:
     # 日志级别
     LEVEL = os.environ.get('SCADA_LOG_LEVEL', 'INFO')
 
-    # 日志文件路径
-    LOG_DIR = os.environ.get('SCADA_LOG_DIR', str(_LOG_DIR))
+    # 日志文件路径。**直接委托 paths**（paths.LOG_DIR 自己读 SCADA_LOG_DIR 并按
+    # PROJECT_ROOT 解析相对路径）—— 这里若再读一遍环境变量，就会在设置了
+    # SCADA_LOG_DIR 时出现「config 拿到相对串、paths 拿到绝对路径」的静默分叉，
+    # 正是 round 173 那条注释警告的「第二个真源」。
+    LOG_DIR = str(_LOG_DIR)
 
     # 是否输出JSON格式（用于SIEM集成）
     LOG_JSON = os.environ.get('SCADA_LOG_JSON', 'true').lower() == 'true'

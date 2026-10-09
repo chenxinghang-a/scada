@@ -53,9 +53,34 @@ elif (PROJECT_ROOT / '配置').exists():
 else:
     _BASE = PROJECT_ROOT
 
-DATA_DIR = _BASE / 'data'
-CONFIG_DIR = _BASE / '配置'
-LOG_DIR = _BASE / 'logs'
+def _env_path(var: str, default: Path) -> Path:
+    """运行时目录的环境变量覆盖；相对路径按 :data:`PROJECT_ROOT` 解析。
+
+    为什么需要（2026-10-09，round 206）
+    ----------------------------------
+    ``tools/multi_instance.py``（多实例部署工具）的实例启动脚本一直在设置
+    ``SCADA_DATA_DIR`` / ``SCADA_CONFIG_DIR`` / ``SCADA_PORT``，
+    但**此前没有任何代码读它们** —— 于是「多实例」实际全部落在同一个
+    ``data/scada_simulated.db`` 与同一份 ``配置/`` 上，实例之间互相污染
+    （SQLite 锁竞争 / 配置互相覆盖），且端口也全挤在 5000。
+    守卫见 ``tests/test_env_vars_wired.py``。
+
+    语义：``SCADA_DATA_DIR`` / ``SCADA_CONFIG_DIR`` 是**目录**，
+    不是数据库文件路径 —— 库文件名由 :func:`get_db_path` 按模式派生。
+
+    相对路径按 ``PROJECT_ROOT`` 解析（与 :func:`resolve` 一致），
+    **不按 CWD** —— 否则「从别处启动」又会静默指向别的目录。
+    """
+    raw = os.environ.get(var)
+    if raw is None or not raw.strip():
+        return default
+    p = Path(raw.strip())
+    return p if p.is_absolute() else (PROJECT_ROOT / p)
+
+
+DATA_DIR = _env_path('SCADA_DATA_DIR', _BASE / 'data')
+CONFIG_DIR = _env_path('SCADA_CONFIG_DIR', _BASE / '配置')
+LOG_DIR = _env_path('SCADA_LOG_DIR', _BASE / 'logs')
 EXPORT_DIR = _BASE / 'exports'
 
 #: 运行时端口文件。后端启动后把实际监听的 ``port/pid/mode/started_at`` 写入此文件，
