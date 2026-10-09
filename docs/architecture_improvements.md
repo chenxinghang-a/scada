@@ -84,8 +84,18 @@ function showAlarmNotification(alarm) {
 
 ## 4. 文件变更清单
 
+> ⚠️ **本文档是历史记录**（2026-10-09 round 205 核对）：下面「新增文件」里的
+> `采集层/device_manager_factory.py` **已不存在** ——
+> 它在 **D4 死代码清理**（commit `07a6e9c`，删除 69 个**生产不可达**模块）里被删除了。
+> 也就是说 `DeviceManagerFactory` 那套「模拟/真实完全分离」的工厂
+> **从未接线进主流程**（真实模式下走的是 `采集层/real_device_manager.py`）。
+> 保留本文档供追溯，**不要据此认为该工厂可用**。
+> 守卫见 `tests/test_docs_commands.py`。
+
 ### 新增文件
-- `采集层/device_manager_factory.py` - 设备管理器工厂
+- ~~`采集层/device_manager_factory.py` - 设备管理器工厂~~
+  （**已按 D4 删除**；现在的模拟/真实分离由
+  `采集层/device_manager.py` 与 `采集层/real_device_manager.py` 两个类承担）
 
 ### 修改文件
 - `模板/base.html` - 真实模式下隐藏模拟标识

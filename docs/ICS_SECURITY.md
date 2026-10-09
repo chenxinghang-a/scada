@@ -366,7 +366,7 @@ def detect_intrusion():
 > `tools/vulnerability_scan.py`、`tools/compliance_check.py`）
 > **在仓库里从未存在过**（无 git 历史），照着跑会是
 > `No such file or directory`。下面是**实际存在**的工具与用法
-> （2026-10-09 round 203 核对；守卫见 `tests/test_docs_curl_endpoints.py`）。
+> （2026-10-09 round 203 核对；守卫见 `tests/test_docs_commands.py`）。
 
 ```bash
 # 安全扫描（含安全检查 + 漏洞模式扫描；这是本仓库唯一的安全扫描工具）

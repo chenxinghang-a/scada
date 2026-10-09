@@ -239,7 +239,7 @@ curl http://localhost:5000/api/health/checks/database
 > **后端没有它们**（承载它们的 KPI 模块已按 D4 删除，见上文第 5 节），照着跑会 **404**。
 > 下面是**实际存在**的端点。
 > （注：本节刻意**不写** `curl` 关键词去引用那两个不存在的端点 ——
->   否则 `tests/test_docs_curl_endpoints.py` 会把这段说明文字本身当成命令。）
+>   否则 `tests/test_docs_commands.py` 会把这段说明文字本身当成命令。）
 
 ```bash
 # 报警统计（含 by_level / by_device / 活动报警数）

@@ -205,3 +205,90 @@ def test_missing_file_allowlist_is_not_stale():
     """登记后文件又被补上的，应删掉登记。"""
     stale = [p for p in ALLOWED_MISSING_FILES if (BACKEND_ROOT / p).is_file()]
     assert not stale, f"以下文件已存在，请从 ALLOWED_MISSING_FILES 删掉：{stale}"
+
+
+# ---------------------------------------------------------------------------
+# 第三部分：文档里**带目录的 `.py` 引用**必须存在
+# ---------------------------------------------------------------------------
+
+#: `目录/文件.py`（至少一个 `/`）—— 裸文件名不查：同名文件可能在不同目录，
+#: 裸名匹配会假阳性（实测：README 里的 `query_builder.py` 指的是
+#: `timeseries/query_builder.py`（存在），而 `core/query_builder.py` 已被 D4 删除）。
+_DOC_PY_PATH_RE = re.compile(
+    r"([\w\u4e00-\u9fff][\w\u4e00-\u9fff-]*(?:/[\w\u4e00-\u9fff-]+)+\.py)\b"
+)
+
+#: 已确认**故意**引用不存在文件的（都是「历史说明」段：写明某模块已删除 / 从未存在）。
+ALLOWED_MISSING_PY_PATHS: dict[str, str] = {
+    "tools/security_check.py":
+        "docs/ICS_SECURITY.md 的修复说明段：写明这三个脚本名**从未存在**，"
+        "故保留原名以便读者对照。",
+    "tools/vulnerability_scan.py": "同上（从未存在）。",
+    "tools/compliance_check.py": "同上（从未存在）。",
+    "报警层/alarm_kpi.py":
+        "docs/final_summary.md 的修复说明段：写明该模块**已按 D4 删除**、"
+        "且从未接线。",
+    "采集层/device_manager_factory.py":
+        "docs/architecture_improvements.md 的修复说明段：写明该文件**已按 D4 删除**。",
+}
+
+
+def _doc_py_paths() -> dict[str, set[str]]:
+    out: dict[str, set[str]] = {}
+    targets = list(DOCS_DIR.glob("*.md")) + [
+        BACKEND_ROOT / "README.md",
+        BACKEND_ROOT / "启动说明.md",
+    ]
+    for f in targets:
+        if not f.is_file():
+            continue
+        for m in _DOC_PY_PATH_RE.finditer(f.read_text(encoding="utf-8", errors="replace")):
+            out.setdefault(f.name, set()).add(m.group(1).replace("\\", "/").lstrip("./"))
+    return out
+
+
+def test_doc_py_path_scan_is_effective():
+    """元守卫：一条都扫不到时，下面的断言会退化成空断言。"""
+    paths = _doc_py_paths()
+    total = sum(len(v) for v in paths.values())
+    assert total > 10, f"只从文档里扫到 {total} 个带目录的 .py 引用 —— 口径可能坏了"
+
+
+def test_every_doc_py_path_exists():
+    """文档里带目录的 `.py` 引用必须真实存在。
+
+    D4 删了 69 个生产不可达模块 —— 文档里对它们的**声明式**引用会随之失效
+    （实测：`docs/architecture_improvements.md` 的「新增文件」清单里
+    列着 `采集层/device_manager_factory.py`，而它已按 D4 删除）。
+    """
+    bad: list[str] = []
+    for fname, paths in sorted(_doc_py_paths().items()):
+        for p in sorted(paths):
+            if p in ALLOWED_MISSING_PY_PATHS:
+                continue
+            cands = [BACKEND_ROOT / p]
+            cands += [BACKEND_ROOT / d / p for d in
+                      ("采集层", "core", "展示层", "报警层", "存储层", "智能层",
+                       "用户层", "timeseries", "gateway", "tools", "tests")]
+            if not any(c.is_file() for c in cands):
+                bad.append(f"  {fname}: {p}")
+    assert not bad, (
+        "以下 `docs/` 里带目录的 `.py` 引用**不存在** —— "
+        "文档在描述一个已被删除（或从未存在）的文件：\n"
+        + "\n".join(bad)
+        + "\n\n请改成真实路径；确有理由保留的（例如「历史说明」段），"
+        "登记进 ALLOWED_MISSING_PY_PATHS 并写明理由。"
+    )
+
+
+def test_missing_py_path_allowlist_is_not_stale():
+    """登记后文件又被补上的，应删掉登记。"""
+    stale = []
+    for p in ALLOWED_MISSING_PY_PATHS:
+        cands = [BACKEND_ROOT / p]
+        cands += [BACKEND_ROOT / d / p for d in
+                  ("采集层", "core", "展示层", "报警层", "存储层", "智能层",
+                   "用户层", "timeseries", "gateway", "tools", "tests")]
+        if any(c.is_file() for c in cands):
+            stale.append(p)
+    assert not stale, f"以下文件已存在，请从 ALLOWED_MISSING_PY_PATHS 删掉：{stale}"
