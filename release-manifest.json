@@ -1,10 +1,10 @@
 {
-  "version": "1.3.1080",
-  "commit_sha": "b071c0387caba3b3a4374b4c64ea2fe9aed0b95c",
-  "build_time": "2026-10-09T03:27:50.266351+00:00",
+  "version": "1.3.1081",
+  "commit_sha": "be9bd92df9e22396420fb47a23f3d87bfad28703",
+  "build_time": "2026-10-09T03:58:13.414459+00:00",
   "python_version": "3.13.14",
   "node_version": "v22.22.2",
-  "frontend_version": "1.3.1080",
+  "frontend_version": "1.3.1081",
   "version_lockstep": "synced",
   "backend_deps_lock_digest": "29dca48fd15e6417c322fa4e67a930793c8e39e3b4f1c3fa55d1e73e19ae9f3a",
   "frontend_deps_lock_digest": "51c2b502f17d4c02ae3b9b690d130efe88c84f1179d6b83336b919a27f21e22c",
@@ -19,19 +19,21 @@
         "files": 1990,
         "bytes": 94251987,
         "sha256": "39f0970df44dec54de3659569ff3c97906647940f3b035f36ccdc1d79700de1f"
-      }
+      },
+      "stale": true,
+      "note": "STALE: artifact mtime (2026-10-09T10:24:34.208049) predates HEAD commit (2026-10-09T11:28:12); must rebuild from current source before release"
     },
     {
       "name": "frontend_installer",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-Setup-1.3.1080.exe",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-Setup-1.3.1081.exe",
       "sha256": null,
       "note": "artifact not built yet / not found"
     },
     {
       "name": "frontend_archive",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1080-x64.nsis.7z",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1081-x64.nsis.7z",
       "sha256": null,
       "note": "artifact not built yet / not found"
     }
