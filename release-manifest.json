@@ -1,10 +1,10 @@
 {
-  "version": "1.3.1079",
-  "commit_sha": "07fbea1b071a00ea4ebec611f5145170cf004ac4",
-  "build_time": "2026-10-09T02:08:33.803266+00:00",
+  "version": "1.3.1080",
+  "commit_sha": "b071c0387caba3b3a4374b4c64ea2fe9aed0b95c",
+  "build_time": "2026-10-09T03:27:50.266351+00:00",
   "python_version": "3.13.14",
   "node_version": "v22.22.2",
-  "frontend_version": "1.3.1079",
+  "frontend_version": "1.3.1080",
   "version_lockstep": "synced",
   "backend_deps_lock_digest": "29dca48fd15e6417c322fa4e67a930793c8e39e3b4f1c3fa55d1e73e19ae9f3a",
   "frontend_deps_lock_digest": "51c2b502f17d4c02ae3b9b690d130efe88c84f1179d6b83336b919a27f21e22c",
@@ -13,25 +13,25 @@
       "name": "backend_windows_onedir",
       "owner": "backend",
       "path": "C:\\Users\\cxx\\WorkBuddy\\Claw\\industrial_scada\\dist\\scada-backend\\scada-backend.exe",
-      "sha256": "d2f7c721a86a9c17d154b414389af7f994405591a650642769e912effc1ecbef",
+      "sha256": "9a8c3f0520b38463d238ba355ed429a34dd4746bad09b279d45b94ecd759c541",
       "companion_dir": {
         "path": "C:\\Users\\cxx\\WorkBuddy\\Claw\\industrial_scada\\dist\\scada-backend\\_internal",
         "files": 1990,
-        "bytes": 94247353,
-        "sha256": "4b72607f5bec55346b3d9960ba91e918b1a822d76dfa95b9cb70d523dbb3e1b0"
+        "bytes": 94251987,
+        "sha256": "39f0970df44dec54de3659569ff3c97906647940f3b035f36ccdc1d79700de1f"
       }
     },
     {
       "name": "frontend_installer",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-Setup-1.3.1079.exe",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-Setup-1.3.1080.exe",
       "sha256": null,
       "note": "artifact not built yet / not found"
     },
     {
       "name": "frontend_archive",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1079-x64.nsis.7z",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1080-x64.nsis.7z",
       "sha256": null,
       "note": "artifact not built yet / not found"
     }
