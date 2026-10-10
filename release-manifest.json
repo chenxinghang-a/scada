@@ -1,10 +1,10 @@
 {
-  "version": "1.3.1081",
-  "commit_sha": "be9bd92df9e22396420fb47a23f3d87bfad28703",
-  "build_time": "2026-10-09T03:58:13.414459+00:00",
+  "version": "1.3.1082",
+  "commit_sha": "043ad5ca5b08f0390f7ce8702f92e652e244f7ef",
+  "build_time": "2026-10-10T08:02:40.906375+00:00",
   "python_version": "3.13.14",
   "node_version": "v22.22.2",
-  "frontend_version": "1.3.1081",
+  "frontend_version": "1.3.1082",
   "version_lockstep": "synced",
   "backend_deps_lock_digest": "29dca48fd15e6417c322fa4e67a930793c8e39e3b4f1c3fa55d1e73e19ae9f3a",
   "frontend_deps_lock_digest": "51c2b502f17d4c02ae3b9b690d130efe88c84f1179d6b83336b919a27f21e22c",
@@ -13,27 +13,25 @@
       "name": "backend_windows_onedir",
       "owner": "backend",
       "path": "C:\\Users\\cxx\\WorkBuddy\\Claw\\industrial_scada\\dist\\scada-backend\\scada-backend.exe",
-      "sha256": "9a8c3f0520b38463d238ba355ed429a34dd4746bad09b279d45b94ecd759c541",
+      "sha256": "507ca7e54dafae431f1b435a13c4b7b8bdb2729ad620d9b7264068bfc7d76a93",
       "companion_dir": {
         "path": "C:\\Users\\cxx\\WorkBuddy\\Claw\\industrial_scada\\dist\\scada-backend\\_internal",
         "files": 1990,
         "bytes": 94251987,
-        "sha256": "39f0970df44dec54de3659569ff3c97906647940f3b035f36ccdc1d79700de1f"
-      },
-      "stale": true,
-      "note": "STALE: artifact mtime (2026-10-09T10:24:34.208049) predates HEAD commit (2026-10-09T11:28:12); must rebuild from current source before release"
+        "sha256": "6d6e7b7f4ece39a418905b14d2d7920481e697f1b33730d22f0a1580384d1300"
+      }
     },
     {
       "name": "frontend_installer",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-Setup-1.3.1081.exe",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-Setup-1.3.1082.exe",
       "sha256": null,
       "note": "artifact not built yet / not found"
     },
     {
       "name": "frontend_archive",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1081-x64.nsis.7z",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1082-x64.nsis.7z",
       "sha256": null,
       "note": "artifact not built yet / not found"
     }
