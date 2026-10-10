@@ -25,6 +25,18 @@ database:
     method: average
   path: data/scada.db
   retention:
+    # 数据保留策略的**唯一真源**（core/retention_scheduler.py 每 6 小时按它执行一次）。
+    #
+    # ⚠️ 2026-10-10（round 209）之前，这三个窗口**没有任何代码读、也没有任何调度器**
+    #    调用过 `enforce_retention_policy` —— 实测 679 MB 的 scada_simulated.db 里
+    #    **105,028 条报警全部是 5 月的（约 150 天前）**，配置说只留 90 天却一行没删；
+    #    按当时增速约 34 MB/天 ≈ 12 GB/年，而系统里有 disk 健康检查。
+    #
+    # `enabled` 是**显式开关**，且默认为假：删数据不可逆，所以
+    # 「配置段读不到 / 没写 enabled / enabled 不为真」时**什么都不删**（fail-safe）。
+    # 不要用 core/ops_tools.py 的 RuntimeConfigManager.data_retention_days 来配这个 ——
+    # 那是单数字旋钮，表达不了按表分粒度，而且会变成第二个真源。
+    enabled: true
     alarm_days: 90
     compressed_data_days: 365
     raw_data_days: 30

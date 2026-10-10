@@ -1336,6 +1336,36 @@ class Database:
 
         return results
 
+    def enforce_archive_retention(self, days: int = 365) -> int:
+        """按天聚合归档表（``history_archive``）的时间保留策略。
+
+        为什么单独一个方法而不是塞进 ``enforce_retention_policy``
+        ----------------------------------------------------------
+        ``enforce_retention_policy`` 的签名与返回结构**有测试钉着**
+        （``tests/test_database_operations.py``），
+        而归档表的保留窗口与主表**不同量级**（主表 30/90 天、归档 365 天），
+        混进同一个返回字典会让「哪一项对应哪个窗口」变得含糊。
+        两者都由 ``core/retention_scheduler.py`` 统一按配置调用。
+
+        判据用 ``archive_date``（``DATE`` 列，按天聚合的自然键），
+        不是 ``timestamp`` —— 归档表没有逐条时间戳，只有聚合日期。
+
+        Args:
+            days: 归档保留天数（默认 365，与 ``配置/system.yaml`` 的
+                ``database.retention.compressed_data_days`` 一致）。
+
+        Returns:
+            int: 删除的行数。
+        """
+        cutoff = (datetime.now() - timedelta(days=days)).date().isoformat()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f'DELETE FROM {ARCHIVE_TABLE} WHERE archive_date < ?', (cutoff,))
+            deleted = cursor.rowcount
+        if deleted > 0:
+            logger.info(f"归档表保留策略执行完成: {ARCHIVE_TABLE} 删除 {deleted} 行（保留 {days} 天）")
+        return deleted
+
     def backup_database(self, backup_dir: str = 'data/backups') -> str | None:
         """
         备份数据库

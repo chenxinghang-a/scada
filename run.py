@@ -136,6 +136,20 @@ def main():
         data_cleaner.set_db_path(str(db_path))
         logger.info("运维清理工具已接线: %s", db_path)
 
+        # 数据保留策略调度接线（round 209）。
+        #
+        # `配置/system.yaml` 的 `database.retention`（历史 30 / 报警 90 / 归档 365 天）
+        # 与 `存储层/database.py` 的 `enforce_retention_policy` 此前**生产路径零调用、
+        # 全仓零调度器** —— 实测 679 MB 的 scada_simulated.db 里 105,028 条报警
+        # 全是 5 月的（约 150 天前），配置说只留 90 天却一行没删。
+        #
+        # 刻意**不在这里判「配置是否启用」**：判断放在每轮里（`enforce_once`），
+        # 这样「跑起来之后运维才去配置里打开」也能生效，不需要重启。
+        # 也刻意**不阻塞启动**：daemon 线程 + 首次延迟 60s（启动阶段要建索引、
+        # 起采集，此时做大批量 DELETE 会争 IO）。
+        from core.retention_scheduler import start_retention_scheduler
+        start_retention_scheduler(database)
+
         # 初始化设备管理器（根据模式选择不同的管理器）
         logger.info("加载设备配置...")
         if simulation_mode:

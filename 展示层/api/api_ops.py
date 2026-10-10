@@ -10,6 +10,10 @@ from core.ops_tools import (
     ops_audit, runtime_config_manager, db_maintainer,
     data_cleaner, diagnostic_exporter,
 )
+#: 保留天数的**唯一真源**读取器（round 209）。手动清理端点的默认值必须与
+#: `配置/system.yaml` 的 `database.retention.raw_data_days` 一致 ——
+#: 此前这里写死 `retention_days=90`，而配置里是 30：同一个系统里两个口径。
+from core.retention_scheduler import read_retention_config
 from core.service_response import success_response, error_response
 from 用户层.auth import jwt_required, role_required
 from ._common import clamp_limit
@@ -302,7 +306,10 @@ def cleanup_history():
     """清理过期历史数据"""
     try:
         data = request.get_json() or {}
-        days = data.get('retention_days', 90)
+        # 默认保留天数取自配置（唯一真源）；配置不可用时回退 90（历史默认）。
+        # 手动清理是**运维的显式动作**，所以即使自动保留被关掉也照常执行。
+        _cfg = read_retention_config() or {}
+        days = data.get('retention_days', _cfg.get('history_days', 90))
         result = data_cleaner.clean_history_data(days)
         _log_ops('cleanup_history', result, details={'retention_days': days, **(result if isinstance(result, dict) else {})})
         return _cleanup_response(result)

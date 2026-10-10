@@ -37,6 +37,16 @@ ALLOWED_HITS = {
         "gzip 归档文件的注释头，不参与任何 SQL 比较",
     ('core/report_generator.py', '默认产出'):
         "本文件 _sql_ts() 的 docstring，说明的就是这个坑",
+    # ⚠️ 口径刻意收窄到 `.date().isoformat()`（**日期**转换），
+    #    不是「database.py 里的 isoformat 都放行」——
+    #    后者会把真正的 `datetime.isoformat()` 违规一起放掉。
+    ('存储层/database.py', '.date().isoformat()'):
+        "归档表 history_archive 的 archive_date 是 **DATE 列**"
+        "（由 `DATE(timestamp)` 生成，格式 YYYY-MM-DD），"
+        "与 get_archive_data 的既有约定一致（其 docstring 与测试都用 '2024-01-01' 这种）。"
+        "这里**不能**改成 isoformat(sep=' ')：date 对象根本没有 sep 参数，"
+        "而带时间的字符串反而永远匹配不上 DATE 列（那样保留策略会一行都删不掉）。"
+        "（round 209 新增 enforce_archive_retention 时实测撞到本守卫。）",
 }
 
 _SQL_RE = re.compile(
