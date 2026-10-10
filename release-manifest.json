@@ -1,10 +1,10 @@
 {
-  "version": "1.3.1083",
-  "commit_sha": "c07afc5afd23bdc36fd4daa8f4b7b39127f10e14",
-  "build_time": "2026-10-10T08:52:35.920022+00:00",
+  "version": "1.3.1084",
+  "commit_sha": "256c4dfe002f62406a5ed4830a8b87c470394a50",
+  "build_time": "2026-10-10T10:13:17.645137+00:00",
   "python_version": "3.13.14",
   "node_version": "v22.22.2",
-  "frontend_version": "1.3.1083",
+  "frontend_version": "1.3.1084",
   "version_lockstep": "synced",
   "backend_deps_lock_digest": "29dca48fd15e6417c322fa4e67a930793c8e39e3b4f1c3fa55d1e73e19ae9f3a",
   "frontend_deps_lock_digest": "51c2b502f17d4c02ae3b9b690d130efe88c84f1179d6b83336b919a27f21e22c",
@@ -13,25 +13,25 @@
       "name": "backend_windows_onedir",
       "owner": "backend",
       "path": "C:\\Users\\cxx\\WorkBuddy\\Claw\\industrial_scada\\dist\\scada-backend\\scada-backend.exe",
-      "sha256": "37ff71c18684b873d583adba5134c2e7ca14e3a68aa54d6abec4cc77d2b1c651",
+      "sha256": "328761ac52ee68939a9352600e9427b5e1aaa8784d44cec66e6a8dd55348b423",
       "companion_dir": {
         "path": "C:\\Users\\cxx\\WorkBuddy\\Claw\\industrial_scada\\dist\\scada-backend\\_internal",
-        "files": 1990,
-        "bytes": 94251987,
-        "sha256": "820f310a0e81195a8d12cbf125edcad58e5e6a1b9dd0ffe7937cd9e2417edc0f"
+        "files": 1991,
+        "bytes": 94271113,
+        "sha256": "dbb9b1aff5c34f43f6c21ea81260040d72b1f1b8d14bb9e846370568558958a9"
       }
     },
     {
       "name": "frontend_installer",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-Setup-1.3.1083.exe",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-Setup-1.3.1084.exe",
       "sha256": null,
       "note": "artifact not built yet / not found"
     },
     {
       "name": "frontend_archive",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1083-x64.nsis.7z",
+      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1084-x64.nsis.7z",
       "sha256": null,
       "note": "artifact not built yet / not found"
     }

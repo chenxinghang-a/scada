@@ -12,12 +12,30 @@ alarm:
   confirm_timeout: 300
   escalation_time: 600
 collection:
+  # ⚠️ 2026-10-10（round 210）：这一段此前**整段是装饰品** —— 生产代码零读取点，
+  #    而且 `max_concurrent` 与代码里的硬编码值**对不上**（这里 10 / 代码 20）。
+  #    现在 `default_interval` 与 `max_concurrent` 已接到
+  #    `core/config_manager.py::load_collection_settings()`，
+  #    由 `采集层/data_collector.py` 真正使用。
+  #    本段现在是**闭集**：新增键必须同时接上读取点，否则
+  #    `tests/test_system_config_knobs.py` 会红。
+  #
+  # 采集间隔（秒）：**设备配置没写 `collection_interval` 时**用的兜底默认值。
+  # 每台设备的实际间隔在 `配置/devices*.yaml` 的 `collection_interval` 里，
+  # 那个优先级更高（本项只是缺省）。
   default_interval: 5
-  max_concurrent: 10
-  retry:
-    interval_seconds: 5
-    max_attempts: 3
-  timeout: 10
+  # 采集线程池上限（并发采集连接数）。
+  # ⚠️ 值从 10 改成 20 是**对齐现状**：代码里此前硬编码 `max_workers=20`，
+  #    而这里写 10 —— 两边对不上（配置那侧零读取点，所以一直没人发现）。
+  #    现在这个值**真的生效**了：要调并发就改这里。
+  max_concurrent: 20
+  # 已删除的键（它们描述的策略在代码里并不存在，round 210）：
+  #   retry.interval_seconds / retry.max_attempts
+  #     —— 实际退避是**指数退避** `min(2 ** failures, BACKOFF_CEILING_S=60)`，
+  #        不是「每 5 秒重试、最多 3 次」。
+  #   timeout
+  #     —— 实际超时在**设备/客户端**配置里（如 `采集层/fins_client.py` 读
+  #        `config.get('timeout', 10)`），不是系统级旋钮。
 database:
   compression:
     enabled: true

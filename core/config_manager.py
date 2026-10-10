@@ -233,3 +233,73 @@ class ConfigManager:
             cls._configs.clear()
             cls._watchers.clear()
         logger.debug("清除所有配置缓存")
+
+
+#: 系统级配置文件的相对路径（`配置/system.yaml`）。
+SYSTEM_CONFIG_REL = '配置/system.yaml'
+
+#: `collection` 段的兜底默认值。
+#:
+#: ⚠️ 这些默认值**必须与 `配置/system.yaml` 里的值一致** ——
+#: 它们是「配置读不到时」的兜底，不是第二套真源。
+#: `tests/test_system_config_knobs.py` 会断言这一点。
+COLLECTION_DEFAULTS = {
+    #: 采集线程池上限（并发采集连接数）。2026-10-10（round 210）之前这里
+    #: 是 `ThreadPoolExecutor(max_workers=20)` 的**硬编码 20**，而
+    #: `配置/system.yaml` 写的是 10 —— 两边对不上，而配置那侧**零读取点**。
+    'max_concurrent': 20,
+    #: 设备配置**没写** `collection_interval` 时用的采集间隔（秒）。
+    #: 此前是 `device_config.get('collection_interval', 5)` 的硬编码 5。
+    'default_interval': 5,
+}
+
+
+def load_system_config(reload: bool = True) -> Dict[str, Any]:
+    """读取 `配置/system.yaml`。
+
+    为什么单独一个助手：`配置/system.yaml` 此前**只被「读来展示/改写」**
+    （API 的 GET/PUT 配置端点、启动期 schema 校验），**没有任何模块把它当
+    运行时设置读**。于是它里面那一堆旋钮（`collection.*` / `alarm.*` …）
+    全是装饰品 —— 改了不起作用，甚至与代码里的硬编码值**对不上**
+    （实测：`collection.max_concurrent: 10` vs 代码 `max_workers=20`）。
+    round 210 开始把真正需要的旋钮接到这里，口径见
+    `tests/test_system_config_knobs.py`。
+
+    Args:
+        reload: 是否强制重新读盘（默认 True —— 改配置不用重启）。
+
+    Returns:
+        配置字典；读不到时返回 `{}`（调用方用自己的兜底默认值）。
+    """
+    try:
+        import paths
+        return ConfigManager.load_yaml(paths.resolve(SYSTEM_CONFIG_REL), reload=reload) or {}
+    except Exception as e:  # noqa: BLE001 —— 配置读不到不能把调用方搞死
+        logger.warning("读取 %s 失败（用兜底默认值）：%s", SYSTEM_CONFIG_REL, e)
+        return {}
+
+
+def load_collection_settings() -> Dict[str, int]:
+    """读取 `配置/system.yaml` 的 `collection` 段（采集参数）。
+
+    Returns:
+        `{'max_concurrent': int, 'default_interval': int}`；
+        配置缺失/非法时逐项回退 :data:`COLLECTION_DEFAULTS`。
+    """
+    cfg = load_system_config()
+    section = cfg.get('collection') if isinstance(cfg, dict) else None
+    out = dict(COLLECTION_DEFAULTS)
+    if not isinstance(section, dict):
+        return out
+    for key, fallback in COLLECTION_DEFAULTS.items():
+        raw = section.get(key)
+        try:
+            val = int(raw)
+        except (TypeError, ValueError):
+            logger.warning("collection.%s=%r 非法，回退默认 %d", key, raw, fallback)
+            continue
+        if val <= 0:
+            logger.warning("collection.%s=%r 不是正数，回退默认 %d", key, raw, fallback)
+            continue
+        out[key] = val
+    return out

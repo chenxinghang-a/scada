@@ -412,7 +412,20 @@ class DataCollector:
         self._tracking_lock = threading.Lock()
 
         # 线程池（限制并发采集连接数，支持100+设备）
-        self._pool = ThreadPoolExecutor(max_workers=20, thread_name_prefix="collector")
+        #
+        # ⚠️ 上限来自 `配置/system.yaml` 的 `collection.max_concurrent`（round 210）。
+        #    此前是**硬编码 20**，而配置里写的是 **10** —— 两边对不上，且配置那侧
+        #    **零读取点**，所以一直没人发现。现在这个旋钮真的生效了。
+        #    `load_collection_settings()` 读不到配置时回退 `COLLECTION_DEFAULTS`
+        #    （其值必须与配置文件一致，有守卫钉着）。
+        from core.config_manager import load_collection_settings
+        _coll = load_collection_settings()
+        self._max_concurrent = _coll['max_concurrent']
+        #: 设备配置**没写** `collection_interval` 时的兜底间隔（秒）。
+        #: 此前是 `device_config.get('collection_interval', 5)` 的硬编码 5。
+        self._default_interval = _coll['default_interval']
+        self._pool = ThreadPoolExecutor(max_workers=self._max_concurrent,
+                                        thread_name_prefix="collector")
 
         # 数据队列（磁盘持久化，崩溃恢复）
         #
@@ -735,10 +748,13 @@ class DataCollector:
     def _start_device_collection(self, device_id: str, device_config: dict[str, Any]):
         """启动单个设备的轮询采集任务（Modbus / REST），含失败退避。
 
-        采集工作提交到线程池执行（max_workers=20），避免100设备创建
+        采集工作提交到线程池执行（上限见 `self._max_concurrent`，来自
+        `配置/system.yaml` 的 `collection.max_concurrent`），避免100设备创建
         100+线程。调度延迟仍用 threading.Timer，但实际采集在池中运行。
         """
-        base_interval = device_config.get('collection_interval', 5)
+        # 设备自己没写间隔时，用 `配置/system.yaml` 的 `collection.default_interval`
+        # （此前是硬编码 5，而配置里恰好也是 5，所以这个旋钮是死的也没人发现）。
+        base_interval = device_config.get('collection_interval', self._default_interval)
         protocol = device_config.get('protocol', 'modbus_tcp')
 
         def _run_collection():
