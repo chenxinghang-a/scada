@@ -12,6 +12,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request, current_app
 from 用户层.auth import jwt_required
 from core.service_response import error_response
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +69,46 @@ class PerformanceCollector:
 
         return metrics
 
+    def _resolve_db_path(self):
+        """定位**当前进程实际在用**的库 —— 唯一真源是 `paths.get_active_db_path()`。
+
+        为什么不能写死文件名（2026-10-11，round 212 实测）
+        --------------------------------------------------
+        此前这里写死 `self._data_dir / 'scada.db'`，而**模拟模式实际用的是
+        `data/scada_simulated.db`** → `exists()` 为假 → 性能页永远显示
+        `0.0MB / 0 条`（wb 在部署版上实测到的「数据库 0.0MB」）。
+
+        ⚠️ 也不能「取第一个存在的」：实测 `data/` 下 **`scada.db`（旧，495MB）
+        与 `scada_simulated.db`（在用，712MB）同时存在** —— 猜文件名会**静默指错**，
+        而错的那份看起来完全正常（有大小、有表、有行数）。
+        所以路径由入口（`展示层/routes.py::create_app`）登记，这里只读。
+
+        Returns:
+            `Path`；**没登记过返回 `None`**（调用方显式降级为 unknown，不猜）。
+        """
+        active = paths.get_active_db_path()
+        return Path(active) if active is not None else None
+
     def _collect_database_metrics(self) -> dict:
-        """采集数据库指标"""
-        db_path = self._data_dir / 'scada.db'
+        """采集数据库指标。
+
+        ⚠️ 拿不到库路径时返回 `status='unknown'`，**不回退到任何猜测路径** ——
+        「读不到真源」要显式降级，绝不能编一个可能不是当前库的数字出来。
+        """
+        db_path = self._resolve_db_path()
+        if db_path is None:
+            return {
+                'status': 'unknown',
+                'size_mb': 0,
+                'detail': '未登记当前库路径（paths.set_active_db_path 未被调用）',
+            }
         if not db_path.exists():
-            return {'status': 'missing', 'size_mb': 0}
+            # 只回文件名，不回绝对路径（避免把服务器目录结构暴露给前端）
+            return {'status': 'missing', 'size_mb': 0, 'db_file': db_path.name}
 
         metrics = {
+            'status': 'ok',
+            'db_file': db_path.name,
             'size_mb': round(db_path.stat().st_size / (1024 * 1024), 2),
         }
 
@@ -91,19 +125,22 @@ class PerformanceCollector:
                 try:
                     cursor.execute(f"SELECT COUNT(*) FROM [{table}]")
                     table_counts[table] = cursor.fetchone()[0]
-                except Exception:
+                except Exception as e:  # noqa: BLE001 —— 单表失败不该让整块指标消失
+                    logger.debug("统计表 %s 行数失败: %s", table, e)
                     table_counts[table] = -1
 
             metrics['tables'] = table_counts
             metrics['total_records'] = sum(v for v in table_counts.values() if v > 0)
 
-            # WAL大小
-            wal_path = self._data_dir / 'scada.db-wal'
+            # WAL大小（SQLite 的 -wal 是**库文件同目录同名** + 后缀，
+            # 不能再用写死的 'scada.db-wal'）
+            wal_path = Path(str(db_path) + '-wal')
             if wal_path.exists():
                 metrics['wal_size_mb'] = round(wal_path.stat().st_size / (1024 * 1024), 2)
 
             conn.close()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 —— 采集失败要把原因带回前端
+            logger.warning("采集数据库指标失败: %s", e)
             metrics['error'] = str(e)
 
         return metrics

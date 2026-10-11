@@ -49,6 +49,93 @@ def clear_log_context():
             delattr(_log_context, key)
 
 
+class InterceptHandler(logging.Handler):
+    """把**标准 logging** 的记录转发进 loguru。
+
+    为什么必须有它（2026-10-10，round 212）
+    --------------------------------------
+    `setup_logging()` 只配置了 **loguru** 自己的 sink；而仓库里**大量模块**用的是
+    **标准 logging**（`logging.getLogger(__name__)`）—— 两者之间**没有任何桥**。
+    那些日志落进标准 logging 的 root logger，而 root **没有 handler**
+    → Python 退回 `logging.lastResort`，它**只输出 WARNING 及以上**
+    → **所有 INFO/DEBUG 被静默丢弃**。
+
+    实测证据（wb 在**部署版**上查的）：`scada_2026-10-10.log` 305 行里
+    `module` 字段只有 `[run×300, structured_logging×5]` ——
+    连 `config_manager` 的「加载配置文件」（标准 logging INFO）都 **0 命中**。
+
+    最严重的后果：**数据保留策略（会删数据）的日志全部不可见** ——
+    「调度已启动」/「执行：…删除 {…}」/「未启用」一个都看不到，
+    跑没跑、删了什么、删了多少，运维**无从审计**（高危行为必须可审计）。
+
+    实现用 loguru 官方推荐姿势：从标准 logging 的 record 取真实调用点（`depth`），
+    保留异常信息；**自身绝不抛**（日志桥把应用搞挂是最糟的结果）。
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: D102
+        try:
+            from loguru import logger as _loguru
+
+            try:
+                level = _loguru.level(record.levelname).name
+            except (ValueError, AttributeError, KeyError):
+                level = record.levelno
+
+            # 调用点**直接取自标准 logging 的 record**，不猜 depth。
+            #
+            # ⚠️ loguru 官方那套 `depth` 算术在这里不可靠 —— 实测两种写法都错过：
+            #    `depth=2` 起手（官方版本）→ 日志指向 logging 包内部（实测落在其
+            #    `__init__.py` 的第 1737 行）；「一路 f_back 直到走出 logging」
+            #    → 指向 `<unknown>` 第 0 行。
+            #    原因是中间隔了几层 logging 内部帧（Logger.info → _log → handle →
+            #    callHandlers → Handler.handle）会随调用方式变化。
+            #    而标准 record 里 `module` / `funcName` / `lineno` **本来就是准的** ——
+            #    直接 patch 上去，零算术、零猜测。
+            _loguru.patch(lambda r: r.update(
+                name=record.name,
+                module=record.module,
+                function=record.funcName,
+                line=record.lineno,
+            )).opt(exception=record.exc_info).log(level, record.getMessage())
+        except Exception as e:  # noqa: BLE001 —— 日志桥自己绝不能抛
+            # 兜底：桥接失败**不能**让「被桥接的那条日志调用」炸掉业务代码。
+            # 但也**不能静默** —— 本仓库最忌「静默假成功」（`tests/test_silent_exception_guard.py`
+            # 就是钉这条的守卫，它抓到过这里的第一版）。
+            # 留痕走 loguru 原始 sink（不经桥接，不会递归）；loguru 自己也挂了
+            # 才退到 stderr。两级都失败才会真的没有痕迹，而那已经不属于「静默」。
+            try:
+                from loguru import logger as _lg
+                _lg.opt(exception=e).debug("标准 logging 桥接失败，该条日志已丢弃: {}", e)
+            except Exception as inner:  # noqa: BLE001
+                print(f"[structured_logging] 桥接失败（loguru 亦不可用）: {inner}",
+                      file=sys.stderr)
+
+
+#: 噪声较大的第三方 logger：桥接后只放 WARNING 及以上。
+#: 不设的话 werkzeug（每个 HTTP 请求一行）、engineio/socketio（每条心跳）等
+#: 会把 INFO 刷满日志，把真正有价值的行淹掉 —— 那就等于又不可读了。
+_NOISY_STDLIB_LOGGERS = (
+    'werkzeug', 'engineio', 'socketio', 'urllib3', 'pika',
+    'apscheduler', 'asyncio', 'matplotlib', 'PIL',
+)
+
+
+def _install_stdlib_logging_bridge(log_level: str = 'INFO') -> None:
+    """把标准 logging 桥接进 loguru（**幂等**）。
+
+    重复调用不会叠加 handler —— 否则一条日志会被输出多次。
+    """
+    root = logging.getLogger()
+    root.handlers = [h for h in root.handlers if not isinstance(h, InterceptHandler)]
+    root.addHandler(InterceptHandler())
+    try:
+        root.setLevel(str(log_level).upper())
+    except (ValueError, TypeError):
+        root.setLevel(logging.INFO)
+    for name in _NOISY_STDLIB_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def setup_logging(
     log_dir: str = "logs",
     log_level: str = "INFO",
@@ -153,6 +240,10 @@ def setup_logging(
         encoding="utf-8",
         enqueue=True
     )
+
+    # ⚠️ 必须放在**所有 sink 配好之后**：桥接进来的记录要走上面这些 sink 落盘。
+    #    没有这一步，**标准 logging 的 INFO 会被静默丢弃**（见 InterceptHandler 的说明）。
+    _install_stdlib_logging_bridge(log_level)
 
     logger.info(f"日志系统初始化完成: level={log_level}, json={json_format}, dir={log_dir}")
     return logger

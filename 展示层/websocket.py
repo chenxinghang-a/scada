@@ -49,8 +49,15 @@ def _load_cors_origins():
                 return origins
     except Exception as e:
         logger.warning(f"加载CORS配置失败: {e}")
-    # 默认只允许本地开发
-    return ['http://localhost:5000', 'http://127.0.0.1:5000']
+    # 默认只允许本地开发 + **桌面版**
+    #
+    # ⚠️ `'file://'` 不能漏：桌面版（Electron）页面是 file:// 加载的，
+    #    Origin 就是字符串 'file://'。少了它 engine.io 回
+    #    「file:// is not an accepted origin.」→ 实时通道（性能监控/数据大屏/
+    #    报警输出）**全废**。这条**降级路径**尤其危险：配置一旦读不到，
+    #    功能会静默消失，而日志里只有一句「加载CORS配置失败」。
+    #    守卫：tests/test_websocket_cors_origins.py
+    return ['file://', 'http://localhost:5000', 'http://127.0.0.1:5000']
 
 
 def _payload(data):

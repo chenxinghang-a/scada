@@ -15,6 +15,7 @@
 import sys
 import os
 from pathlib import Path
+from typing import Optional
 
 
 def _get_project_root():
@@ -161,3 +162,46 @@ def get_db_path(mode: str = 'simulated') -> str:
 def get_config_path(filename: str) -> str:
     """获取配置文件路径"""
     return str(CONFIG_DIR / filename)
+
+
+# ---------------------------------------------------------------------------
+# 当前进程**实际在用**的库路径（唯一真源）
+# ---------------------------------------------------------------------------
+#
+# 为什么需要它
+# ------------
+# ``DB_PATHS`` 只是「按模式应该用哪个库」的**候选表**；真正在用的是哪一个，
+# 由入口（``run.py`` 的 ``--simulator`` / ``--real`` / 默认模拟）决定。
+# 任何「想知道当前库在哪」的模块（性能指标、运维工具…）如果自己去猜模式，
+# 就会造出**第二套真源** —— 而实测 ``data/`` 下 ``scada.db``（旧，495MB）
+# 与 ``scada_simulated.db``（在用，712MB）**同时存在**，「取第一个存在的」
+# 这种猜法会静默指错。
+#
+# 所以：**入口登记、别人只读**。
+_ACTIVE_DB_PATH: Optional[Path] = None
+
+
+def set_active_db_path(path) -> None:
+    """登记当前进程实际在用的库路径（由 ``create_app`` 调用）。
+
+    Args:
+        path: 库文件路径（相对路径会按 :func:`resolve` 解析）。
+            ``None`` / 空值时**清空**登记（不要用猜测值填充）。
+    """
+    global _ACTIVE_DB_PATH
+    if path in (None, ''):
+        _ACTIVE_DB_PATH = None
+        return
+    try:
+        _ACTIVE_DB_PATH = resolve(path)
+    except Exception:  # noqa: BLE001 —— 登记失败不该把建应用流程搞死
+        _ACTIVE_DB_PATH = None
+
+
+def get_active_db_path() -> Optional[Path]:
+    """返回当前进程实际在用的库路径；**没登记过就返回 ``None``**。
+
+    刻意**不**回退到 ``DB_PATHS['default']`` —— 「读不到真源」时调用方应当
+    显式降级（报告 unknown），而不是拿到一个可能不是当前库的路径去展示。
+    """
+    return _ACTIVE_DB_PATH

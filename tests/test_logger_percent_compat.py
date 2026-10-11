@@ -24,11 +24,37 @@ import pytest
 
 
 @pytest.fixture
-def cap():
-    """收集日志文本的探针。"""
-    from core.structured_logging import setup_logging, get_logger
+def cap(tmp_path):
+    """收集日志文本的探针。
 
-    setup_logging(log_dir='logs', log_level='DEBUG')
+    ⚠️ **本 fixture 有全局副作用，必须还原**（2026-10-11，round 212 踩到）
+    ------------------------------------------------------------------
+    `setup_logging()` 会：
+      ① 给 root logger 装 `InterceptHandler`（stdlib → loguru 桥）；
+      ② 把 root level 设成 `log_level`；
+      ③ 把 `_NOISY_STDLIB_LOGGERS` 里那批压到 WARNING。
+
+    此前这里**调用完不还原**，于是同一进程里**后面**的用例都活在
+    「桥已装 + root=DEBUG」的状态下。按文件名排序，
+    `test_performance_stress.py::TestAlarmPerformance::test_alarm_check_performance`
+    正好在后面 —— 报警触发日志（WARNING 级）**真的落盘**，
+    100 次检查从 **46ms 涨到 250ms**，撞破它的 1.0s 墙钟阈值。
+    **看起来像被测对象变慢了，其实是本 fixture 泄漏的全局状态。**
+
+    修法：快照 → 还原（handlers / root level / 那批噪声 logger 的 level）；
+    日志目录改用 `tmp_path`（别再往仓库 `logs/` 里写）。
+    """
+    import logging as _logging
+
+    from core.structured_logging import setup_logging, get_logger
+    from core.structured_logging import _NOISY_STDLIB_LOGGERS
+
+    root = _logging.getLogger()
+    saved_root_handlers = list(root.handlers)
+    saved_root_level = root.level
+    saved_noisy = {n: _logging.getLogger(n).level for n in _NOISY_STDLIB_LOGGERS}
+
+    setup_logging(log_dir=str(tmp_path), log_level='DEBUG')
 
     collected = []
 
@@ -39,6 +65,10 @@ def cap():
         yield get_logger('probe'), collected
     finally:
         _lg.remove(sink_id)
+        root.handlers[:] = saved_root_handlers
+        root.setLevel(saved_root_level)
+        for _name, _lvl in saved_noisy.items():
+            _logging.getLogger(_name).setLevel(_lvl)
 
 
 def test_percent_args_are_formatted(cap):

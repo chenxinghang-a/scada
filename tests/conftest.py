@@ -562,3 +562,48 @@ def auth_manager():
         os.unlink(tmp_path)
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# 全局日志状态的「每用例自动还原」（round 212，2026-10-11）
+# ---------------------------------------------------------------------------
+#
+# 为什么放在 conftest 而不是各用例自己管
+# --------------------------------------
+# `core/structured_logging.py::setup_logging()` 有**全局副作用**：
+#   ① 给 root logger 装 `InterceptHandler`（stdlib → loguru 桥）；
+#   ② 把 root level 设成传入的 `log_level`；
+#   ③ 把 `_NOISY_STDLIB_LOGGERS` 里那批 logger 压到 WARNING。
+#
+# 任何用例调用它而不还原，都会改变**同进程里后面所有用例**的日志行为 ——
+# 而后果会出现在**被污染的那个用例**上，看起来与被调用者完全无关。
+#
+# 实测（round 212，一次真实的红）
+# -----------------------------
+#   `test_logger_percent_compat.py` 的 fixture 调了 `setup_logging()` 却不还原
+#   → 按文件名排序，后面的 `test_performance_stress.py::TestAlarmPerformance::
+#     test_alarm_check_performance`（断言「100 次报警检查 < 1.0s」）就在
+#     「桥已装」的状态下跑：报警触发日志（WARNING 级）**真的落盘**，
+#     100 次检查从 **46 ms 涨到 250 ms**，撞破阈值。
+#   **看起来像被测对象变慢了，其实是上游用例泄漏的全局状态。**
+#
+# 修法分两层（都在，互不替代）：
+#   * 本 fixture —— **系统性根治**：每个用例前后还原，消灭这一类污染；
+#   * `test_performance_stress.py` 的计时窗口内 `logging.disable(CRITICAL)` ——
+#     **让测量与「环境日志配置」解耦**，不依赖用例执行顺序。
+@pytest.fixture(autouse=True)
+def _restore_global_logging_state():
+    """每个用例前后还原 stdlib 全局日志状态（root handlers/level + disable 计数）。"""
+    import logging as _logging
+
+    root = _logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+    saved_disable = _logging.root.manager.disable
+
+    yield
+
+    root.handlers[:] = saved_handlers
+    if root.level != saved_level:
+        root.setLevel(saved_level)
+    _logging.disable(saved_disable)

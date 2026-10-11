@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-10T10:08:33+00:00",
+  "generated_at": "2026-10-11T09:30:05+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -613,7 +613,7 @@
       "source_path": "/api/csrf-token",
       "backend_path": "/api/csrf-token",
       "status": "match",
-      "detail": "精确匹配 routes.py:274",
+      "detail": "精确匹配 routes.py:291",
       "source_file": "request.ts",
       "source_line": 54
     },
@@ -1293,7 +1293,7 @@
       "source_path": "/performance/metrics/history",
       "backend_path": "/api/performance/metrics/history",
       "status": "match",
-      "detail": "精确匹配 api_performance.py:194",
+      "detail": "精确匹配 api_performance.py:231",
       "source_file": "performance.ts",
       "source_line": 12
     },
@@ -1303,7 +1303,7 @@
       "source_path": "/performance/metrics/realtime",
       "backend_path": "/api/performance/metrics/realtime",
       "status": "match",
-      "detail": "精确匹配 api_performance.py:183",
+      "detail": "精确匹配 api_performance.py:220",
       "source_file": "performance.ts",
       "source_line": 7
     },
@@ -1313,7 +1313,7 @@
       "source_path": "/performance/metrics/summary",
       "backend_path": "/api/performance/metrics/summary",
       "status": "match",
-      "detail": "精确匹配 api_performance.py:210",
+      "detail": "精确匹配 api_performance.py:247",
       "source_file": "performance.ts",
       "source_line": 17
     },

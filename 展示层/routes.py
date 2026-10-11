@@ -54,6 +54,23 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     from config import FlaskConfig, SecurityConfig
     app.config['SECRET_KEY'] = FlaskConfig.SECRET_KEY
 
+    # 登记「当前进程实际在用的库路径」（唯一真源）—— 入口在这里登记一次，
+    # 别的模块（性能指标、运维工具…）只读，避免各自去猜模式。
+    # 实测背景（2026-10-11，round 212）：api_performance 写死 data/scada.db，
+    # 而模拟模式实际用 data/scada_simulated.db → 性能页永远显示 0.0MB / 0 条。
+    # 而 data/ 下两个库**同时存在**，「取第一个存在的」这种猜法会静默指错，
+    # 所以必须由入口登记。
+    try:
+        import paths as _paths
+        _paths.set_active_db_path(getattr(database, 'db_path', None))
+        if _paths.get_active_db_path() is not None:
+            logger.debug("已登记当前库路径: %s", _paths.get_active_db_path())
+        else:
+            logger.warning("无法登记当前库路径（database 未暴露 db_path）—— "
+                           "性能指标将报告 unknown 而非猜测值")
+    except Exception as e:  # noqa: BLE001 —— 登记失败不该让建应用失败
+        logger.warning("登记当前库路径失败（非致命）: %s", e)
+
     # 初始化认证管理器
     auth_manager = AuthManager(database)
 

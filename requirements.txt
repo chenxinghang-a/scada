@@ -43,6 +43,13 @@ requests>=2.31.0
 # Prometheus metrics
 prometheus_client>=0.19.0
 
+# System metrics (性能监控页的 CPU/内存)
+# ⚠️ 2026-10-11（round 212）补声明：此前 `展示层/api/api_performance.py` 里
+#    `import psutil` 是**懒导入 + except ImportError → cpu_percent=-1**，
+#    而 venv 与 requirements 里都没有 psutil → 部署版性能页 CPU/内存恒为 -1.0%。
+#    漏声明的依赖不会报错，只会**静默降级** —— 所以它必须显式写在这里。
+psutil>=5.9.0
+
 # Development
 python-dotenv>=1.0.0
 

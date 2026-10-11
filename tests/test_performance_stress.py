@@ -3,6 +3,7 @@
 验证系统在高负载下的稳定性
 """
 import gc
+import logging
 import os
 import tempfile
 import time
@@ -250,19 +251,38 @@ class TestAlarmPerformance:
             })
 
         # 批量检查
-        start = time.time()
-        for i in range(100):
-            manager.check_alarm(
-                device_id=f'device_{i % 10}',
-                register_name=f'register_{i % 5}',
-                value=60.0,
-                timestamp=datetime.now()
-            )
-        elapsed = time.time() - start
+        #
+        # ⚠️ 计时窗口内**关掉日志**（2026-10-11，round 212）
+        # -------------------------------------------------
+        # 本用例测的是「**报警规则匹配**的性能」，但 `check_alarm` 每命中一条规则
+        # 就打一条 `报警触发: …`（WARNING 级）。而「这条日志写到哪、写多慢」
+        # 取决于**环境里的日志配置** —— 那是别的东西，不该进这个计时窗口。
+        #
+        # 实测（同一台机器）：
+        #   * 无 stdlib→loguru 桥（stdlib 的 lastResort 只往 stderr 写一行）：**46 ms**
+        #   * 装了桥（loguru 文件 sink + 格式化）：**250 ms**（5.4x）
+        # 于是本用例的结论会被「同进程里之前有没有别的用例调用过 setup_logging()」
+        # 左右 —— 那是**测试顺序**决定的，不是被测代码。
+        # （round 212 就是这样红的：`test_logger_percent_compat.py` 泄漏了全局
+        #   日志状态；那边已修根因，这里再加一层，免得以后重蹈。）
+        _saved_disable = logging.root.manager.disable
+        logging.disable(logging.CRITICAL)
+        try:
+            start = time.time()
+            for i in range(100):
+                manager.check_alarm(
+                    device_id=f'device_{i % 10}',
+                    register_name=f'register_{i % 5}',
+                    value=60.0,
+                    timestamp=datetime.now()
+                )
+            elapsed = time.time() - start
+        finally:
+            logging.disable(_saved_disable)
 
         # 确认检查真的命中了规则并触发报警，否则耗时断言无意义
         assert manager.alarm_states, "报警检查未命中任何规则，性能断言无意义"
-        # 100次检查应在1秒内完成
+        # 100次检查应在1秒内完成（规则匹配本身；日志 I/O 已排除，见上）
         assert elapsed < 1.0, f"报警检查耗时 {elapsed:.2f}s"
 
 
