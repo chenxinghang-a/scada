@@ -93,6 +93,11 @@ omit = [
     "legacy/*",
     "dist/*",
     "build/*",
+    # 示例/演示脚本：按设计**不参与生产链路**（`run.py` 不 import 它们），
+    # 与 `tests/` 同理不该进覆盖率分母 —— 否则「示例没被测」会稀释真实数字。
+    # 它们的存在性/性质由 tests/test_wiring_declaration.py 的 ENTRY_TOOLS 登记表管。
+    "*/integration_example.py",
+    "*_example.py",
 ]
 
 [tool.coverage.report]
