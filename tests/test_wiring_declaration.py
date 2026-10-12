@@ -31,10 +31,31 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-from wiring_analysis import MARKER_RE, analyse  # noqa: E402
+from wiring_analysis import MARKER_RE, analyse, analyse_strict  # noqa: E402
 
 # 静态分析看不见接线方式的模块（登记时必须写理由）。
 ALLOWLIST: dict[str, str] = {}
+
+#: 「**只靠 `__main__` 才可达**」的模块登记表（2026-10-13 新增）。
+#:
+#: 默认口径把「含模块级 `__main__` 的文件」当作入口根 —— 于是任何自带 `__main__`
+#: 的模块永远"可达"，哪怕生产链路里零调用。本仓有 17 个这样的文件。
+#: 实测：默认口径下 `unreachable == 0`（round 188 清完死模块后的正确状态），
+#: **这个盲区因此完全不可见** —— 本轮正是靠严格口径才发现
+#: `timeseries.mqtt_to_tsdb` 生产零调用（159 行、0% 覆盖）。
+#:
+#: 登记不等于放行：写清它是 CLI 工具还是示例，以及为什么不该算「未接线」。
+ENTRY_TOOLS: dict[str, str] = {
+    "core.generate_certs": "CLI 工具：手动运行生成自签证书，不被 run.py 引用",
+    "gateway.run_gateway": "网关独立部署入口：按设计以独立进程运行（`python -m gateway.run_gateway`）",
+    "gateway.integration_example": "示例：演示网关组合，供人阅读 / 手动运行",
+    "timeseries.integration_example": "示例：演示 MQTT→TDengine 链路，供人阅读 / 手动运行",
+    "timeseries.mqtt_to_tsdb": (
+        "⚠️ **生产零调用**：只被 timeseries/integration_example.py 导入。"
+        "MQTT→TDengine 这条链路实际由 智能层/tsdb_adapter.py 承担，本模块是另一份实现。"
+        "待主人裁决：接线 / 删除 / 明确保留为示例。"
+    ),
+}
 
 # 「**可达**却仍标着未接线」的已知历史遗留。
 # 这类通常意味着：模块能被 import（例如被某个包的 __init__ 顺带导入），
@@ -45,6 +66,8 @@ REACHABLE_BUT_MARKED_KNOWN = {
 }
 
 REPORT = analyse(ROOT)
+#: 严格口径（不把 `__main__` 文件当入口根）—— 见 analyse_strict 的说明。
+STRICT_REPORT = analyse_strict(ROOT)
 PATH_OF = REPORT.path_of
 UNREACHABLE = REPORT.unreachable
 
@@ -158,3 +181,71 @@ def test_reachable_but_marked_known_entries_are_still_valid():
         elif not reason.strip():
             bad.append(f"{m}: 没写理由")
     assert not bad, "REACHABLE_BUT_MARKED_KNOWN 需要清理：\n" + "\n".join(f"  {b}" for b in bad)
+
+
+# ---------------------------------------------------------------------------
+# 严格口径：堵住「自带 __main__ ⇒ 永远可达」的盲区（2026-10-13 新增）
+# ---------------------------------------------------------------------------
+
+def test_strict_analysis_works_on_synthetic_repos(tmp_path):
+    """严格口径的前置对照：自带 `__main__` 但无人 import 的模块**必须**被判不可达。
+
+    这条同时证明两个口径的差异确实存在 —— 若严格口径也把 `__main__` 当根，
+    整条新守卫就是空转（正是本轮要修的那个盲区）。
+    """
+    (tmp_path / "run.py").write_text("import a\n", encoding="utf-8")
+    (tmp_path / "a.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "cli.py").write_text(
+        'if __name__ == "__main__":\n    pass\n', encoding="utf-8")
+
+    strict = analyse_strict(tmp_path)
+    assert "cli" in strict.unreachable, (
+        "严格口径仍把 `__main__` 当入口根 —— 口径没生效，本守卫会空转"
+    )
+    assert "a" not in strict.unreachable
+
+    # 反向对照：默认口径必须把它当入口（差异本身就是这条守卫的价值）
+    assert "cli" not in analyse(tmp_path).unreachable
+
+
+def test_entry_only_modules_are_registered():
+    """⚠️ 只靠 `__main__` 撑着的模块必须**显式登记**，不能白拿一个「可达」。
+
+    默认口径下这类模块永远可达，所以**默认守卫看不见它们**。
+    本轮实测：严格口径只揪出 5 个 —— 4 个合法 CLI/示例 + 1 个生产零调用的
+    `timeseries.mqtt_to_tsdb`。
+    """
+    unregistered = sorted(m for m in STRICT_REPORT.unreachable if m not in ENTRY_TOOLS)
+    assert not unregistered, (
+        "以下模块**只靠 `__main__` 才可达**（生产链路里没有任何调用方），"
+        "却不在 ENTRY_TOOLS 登记表里：\n"
+        + "\n".join(f"  {m}  ({STRICT_REPORT.path_of[m].relative_to(ROOT)})"
+                    for m in unregistered)
+        + "\n二选一：① 它确实是 CLI 工具 / 示例 → 登记进 ENTRY_TOOLS 并写明用途；"
+          "② 它本该被生产调用 → 那是**未接线**，请接线或删除。"
+    )
+
+
+def test_entry_tools_registry_has_no_stale_entries():
+    """登记表不能腐烂：模块变成可达（或不存在）时必须删掉。"""
+    stale = []
+    for m, reason in ENTRY_TOOLS.items():
+        if m not in PATH_OF:
+            stale.append(f"{m}: 模块已不存在")
+        elif m not in STRICT_REPORT.unreachable:
+            stale.append(
+                f"{m}: 严格口径下已可达（有人真的 import 它了）—— 请从 ENTRY_TOOLS 删除")
+        elif not reason.strip():
+            stale.append(f"{m}: 没写理由")
+    assert not stale, "ENTRY_TOOLS 需要清理：\n" + "\n".join(f"  {s}" for s in stale)
+
+
+def test_entry_tools_registry_is_not_empty():
+    """元守卫：登记表若被清空，说明口径又退化了（或模块都被接线了）。
+
+    两种情形都要**有意识地**处理，而不是让守卫静默变成空转。
+    """
+    assert ENTRY_TOOLS, (
+        "ENTRY_TOOLS 空了 —— 若确实是「所有 `__main__` 模块都已接线」，"
+        "请删掉这条守卫并说明；否则说明严格口径又退化了"
+    )

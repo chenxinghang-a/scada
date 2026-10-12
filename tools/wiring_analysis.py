@@ -172,14 +172,15 @@ class WiringReport:
         return dup_rows, orphan_rows
 
 
-def analyse(root: pathlib.Path) -> WiringReport:
+def _analyse(root: pathlib.Path, *, entry_roots: bool) -> WiringReport:
     files = [p for p in root.rglob("*.py") if _included(root, p)]
     path_of = {_modname(root, p): p for p in files}
     known = set(path_of)
     graph = {m: _imports_of(root, p, known) for m, p in path_of.items()}
 
     roots = ["run", "launcher"]
-    roots += [m for m, p in path_of.items() if is_entry_point(p)]
+    if entry_roots:
+        roots += [m for m, p in path_of.items() if is_entry_point(p)]
     # 包名进队列（见模块 docstring 第 2 条）
     for m in path_of:
         parts = m.split(".")
@@ -201,3 +202,33 @@ def analyse(root: pathlib.Path) -> WiringReport:
         for m in unreachable
     }
     return WiringReport(path_of=path_of, unreachable=unreachable, declared=declared)
+
+
+def analyse(root: pathlib.Path) -> WiringReport:
+    """**默认口径**：含「`__main__` 即入口根」。
+
+    用途：找「真·库模块」里生产不可达的（要求声明 `接线状态：未接线`）。
+    """
+    return _analyse(root, entry_roots=True)
+
+
+def analyse_strict(root: pathlib.Path) -> WiringReport:
+    """**严格口径**：**不把** `__main__` 文件当入口根。
+
+    ⚠️ 为什么需要第二个口径（2026-10-13 实测）：
+    默认口径把「含模块级 `__main__` 的文件」当作根。本仓有 **17 个**这样的文件
+    （CLI 工具、示例、网关脚本……），于是**只要一个模块自带 `__main__`，
+    它就永远"可达"** —— 哪怕生产里零调用。
+    实测：默认口径下 `unreachable == 0`，**守卫的主断言恒真（空转）**；
+    而它自己的 `test_analysis_is_sane` 只检查「扫到 >80 个模块」，发现不了这件事。
+
+    严格口径把这类模块暴露出来：实测只有 5 个 ——
+    4 个是合法的 CLI/示例（`core.generate_certs` / `gateway.run_gateway` /
+    两个 `*_integration_example`），1 个是**生产零调用**的
+    `timeseries.mqtt_to_tsdb`（只被示例导入）。
+    它们应当由守卫**显式登记**（见 tests/test_wiring_declaration.py 的 ENTRY_TOOLS），
+    而不是靠 `__main__` 白拿一个"可达"。
+
+    用途：找「只靠 `__main__` 撑着」的模块 —— 新增一个必须**有意识地登记**。
+    """
+    return _analyse(root, entry_roots=False)
