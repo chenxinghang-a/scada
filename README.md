@@ -9,6 +9,10 @@
 ### 核心能力
 
 - **多协议采集**: Modbus TCP/RTU、OPC UA、S7、FINS、MC、REST HTTP、IEC 104
+  > ⚠️ **两条接入路径别混**：写进 `配置/devices*.yaml` 的协议以**内嵌采集层**支持集为准
+  > （Modbus TCP/RTU、OPC UA、MQTT、REST、MC、FINS）；**S7 / IEC 104 / DNP3 只能经
+  > `gateway/` 独立部署接入** —— 写进设备配置会被拒（`不支持的协议类型`），
+  > 现象只是「设备不出现」，不会给出明确报错。
 - **实时数据流**: 设备 -> 采集层 -> 数据库 -> WebSocket -> 浏览器，端到端延迟 <1s
 - **智能分析**: OEE综合效率、SPC统计过程控制、预测性维护、振动分析、能源管理、边缘决策
 - **工业输出**: 声光报警器(Modbus DO控制)、PA广播系统(MQTT)、TDengine时序存储
@@ -476,19 +480,29 @@ python run.py --real
 
 网关模块可独立部署在边缘节点, 负责协议转换并上报到MQTT Broker:
 
+所有协议共用**同一份配置** `gateway/config.yaml`（`gateways:` 下列出各协议条目），
+用 `--type` / `--protocol` 选中要跑的那条；`--all` 跑全部条目：
+
 ```bash
 # Modbus网关
-python -m gateway.run_gateway --protocol modbus --config 配置/gateway_modbus.yaml
+python -m gateway.run_gateway --protocol modbus --config gateway/config.yaml
 
 # OPC UA网关
-python -m gateway.run_gateway --protocol opcua --config 配置/gateway_opcua.yaml
+python -m gateway.run_gateway --protocol opcua --config gateway/config.yaml
 
 # S7网关
-python -m gateway.run_gateway --protocol s7 --config 配置/gateway_s7.yaml
+python -m gateway.run_gateway --protocol s7 --config gateway/config.yaml
 
 # IEC 104网关
-python -m gateway.run_gateway --protocol iec104 --config 配置/gateway_iec104.yaml
+python -m gateway.run_gateway --protocol iec104 --config gateway/config.yaml
+
+# 一次起全部条目
+python -m gateway.run_gateway --all --config gateway/config.yaml
 ```
+
+> ⚠️ `--protocol X` 是**按 type 筛选** `gateways:` 里的条目（可能匹配到多条），
+> 配置里没有该 type 时会**报错退出**并列出可用 type —— 不会退而用别的条目硬跑。
+> 新增协议（如 IEC 104 / DNP3）需要在 `gateway/config.yaml` 的 `gateways:` 下补对应条目。
 
 网关将设备数据转换为统一物模型 (ThingModel), 通过MQTT发布到 `scada/{device_id}/telemetry` 主题。
 

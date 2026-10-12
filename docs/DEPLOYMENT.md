@@ -47,6 +47,40 @@ SCADA_TLS_CERT=certs/server.crt
 SCADA_TLS_KEY=certs/server.key
 ```
 
+> ⚠️ **生产环境（`SCADA_ENV=production`）下 `SECRET_KEY` / `JWT_SECRET` 缺失、为空、
+> 或仍是 `change-me-in-production` / `CHANGE_ME` 之类的弱默认值时，进程会直接
+> **拒绝启动**（抛 `RuntimeError`）。**不要**留空或照抄模板值。
+> 生成方式：`python -c "import secrets;print(secrets.token_hex(32))"`。
+> 开发环境（默认 `development`）不设密钥只会告警并随机生成，不影响本地跑。
+
+### 3.1 高可用（主备）部署
+
+启用 HA 需要两个节点，并**必须**满足：
+
+```env
+# 两节点都设，且**值必须完全相同**
+HA_SHARED_SECRET=<强随机串，两节点一致>
+# 对端地址（A 填 B 的 IP，B 填 A 的 IP）
+HA_PEER_ADDRESS=192.168.1.11
+HA_PEER_PORT=9999
+HA_NODE_ID=node-a          # 两节点不能重名
+HA_PRIORITY=100            # 数值大者优先当主
+```
+
+- **`HA_SHARED_SECRET` 是硬性要求**：配置了 `HA_PEER_ADDRESS` 却没给密钥，
+  进程会在构造 `HAManager` 时**直接报错**，不会启动。
+- **两节点密钥必须一致**。密钥不一致时心跳 HMAC 互验失败、双方各自判定对端失联，
+  结果是**双主**（两台同时采集并写 PLC）—— 这是最危险的失效模式。
+  启动日志会打印**密钥指纹**（SHA-256 前 8 位），两节点比对即可确认：
+
+  ```
+  HA 共享密钥指纹: 3f9a1c02 —— 主备两节点必须一致
+  ```
+
+- **角色决定采集**：只有 `PRIMARY` 启动数据采集；`STANDBY` 只监听、不采集不写。
+  切换（主故障/恢复）时采集器自动启停，无需人工干预。
+- 单机部署（不设 `HA_PEER_ADDRESS`）不需要 `HA_SHARED_SECRET`，节点直接以 PRIMARY 运行。
+
 ### 4. 初始化数据库
 ```bash
 python -c "from 存储层.database import Database; db = Database(); db._init_database()"

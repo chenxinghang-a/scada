@@ -407,6 +407,17 @@ class HAManager:
                 'stats': dict(self.stats),
             }
 
+    def secret_fingerprint(self) -> str:
+        """共享密钥指纹（SHA-256 前 8 位十六进制）。
+
+        用途：运维核对「主备两节点是否配了**同一个** HA_SHARED_SECRET」。
+
+        ⚠️ 构造期的 fail-closed 只消除了「**不配**密钥」这一种双主成因；
+        **配了不同密钥**仍会双方互丢心跳 → 各自判定对端失联 → 双主。
+        指纹由密钥单向派生，不含密钥本身，可安全写进日志供两节点比对。
+        """
+        return hashlib.sha256(self._shared_secret).hexdigest()[:8]
+
     def force_role(self, role: HARole):
         """强制切换角色（运维用）"""
         with self._lock:

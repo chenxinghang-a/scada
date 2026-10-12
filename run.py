@@ -384,6 +384,14 @@ def main():
         ha_manager.start()
         app.ha_manager = ha_manager
 
+        # 打印密钥指纹供运维核对。构造期已挡住「不配密钥」，但**两节点配了不同密钥**
+        # 仍会互丢心跳 → 各判对端失联 → 双主。指纹是单向派生，不含密钥本身。
+        if ha_manager.peer_address:
+            logger.info(
+                "HA 共享密钥指纹: %s —— 主备两节点必须一致（不一致会各判对端失联，导致双主）",
+                ha_manager.secret_fingerprint(),
+            )
+
         # ---- 后台连接设备 + 启动采集（不阻塞Web服务启动） ----
         def _background_start():
             """后台线程：连接设备 → 启动采集。

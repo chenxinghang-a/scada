@@ -1074,8 +1074,15 @@ class DeviceControlSafety:
     def _is_simulation(self) -> bool:
         """当前是否运行在模拟模式（无真实 PLC）。
 
-        用设备管理器上的标记判断；拿不到标记时保守按「真实设备」处理
-        （fail-closed —— 宁可拒绝，也不要在现场误判为模拟而放行写操作）。
+        ⚠️ **语义决策（2026-10-13 复核后明确）**：拿不到标记
+        （``device_manager is None``）时**按「真实设备」处理**，即 fail-closed。
+
+        为什么不是「没有设备管理器 = 没有真实设备，当模拟放行」：
+        本类是**写操作的安全闸门**，判定不了运行环境时必须拒绝；
+        把 None 当模拟，会让「忘了接设备管理器」从一处显式错误变成**静默放行**
+        （联锁也会同时为空 → 一路绿灯写下去）。
+        代价可控：生产只有一处构造点（``run.py`` 始终传真实 ``device_manager``），
+        None 实际只会出现在纯单元测试里。
         """
         return bool(getattr(self.device_manager, 'simulation_mode', False))
 

@@ -68,6 +68,45 @@ def create_gateway(gateway_type: str, config: dict[str, Any]):
     return gateway_class(config)
 
 
+def select_gateway_configs(config: dict[str, Any], gateway_type: str,
+                           run_all: bool) -> list[dict[str, Any]]:
+    """从配置文件里挑出要启动的网关条目。
+
+    * ``run_all=True`` → 配置里**所有**带 type 的条目；
+    * 否则 → 按 ``gateway_type`` **筛选**出全部匹配条目（可能多条）。
+
+    ⚠️ 历史实现是「取 ``gateways[0]``，再把它的 type 改成 ``--type``」，
+    有两个后果（2026-10-13 实测复刻）：
+      1. **拿错连接参数**：`--protocol s7` 会带着 ``modbus_gateway_01`` 的
+         host/port 去建 S7 网关 —— 连到错误设备，且不报错；
+      2. **原地改写配置**：`gw_config['type'] = args.type` 直接改了
+         ``config['gateways'][0]``，后续再遍历该列表会二次踩到。
+    改为「只读筛选 + 返回副本」，两个问题一起消失。
+    """
+    entries = config.get('gateways')
+    if entries:
+        if run_all:
+            return [e for e in entries if isinstance(e, dict) and e.get('type')]
+        return [e for e in entries
+                if isinstance(e, dict) and e.get('type') == gateway_type]
+
+    # 老格式：配置文件本身就是单个网关条目（可能没有 type 字段，由 --type 指定）。
+    # 复制一份再补 type，绝不动入参。
+    single = dict(config)
+    single.setdefault('type', gateway_type)
+    if run_all or single.get('type') == gateway_type:
+        return [single]
+    return []
+
+
+def _declared_gateway_types(config: dict[str, Any]) -> str:
+    """列出配置里声明过的 type，供「找不到条目」时给出可行动的提示。"""
+    entries = config.get('gateways') or []
+    types = sorted({str(e.get('type')) for e in entries
+                    if isinstance(e, dict) and e.get('type')})
+    return ', '.join(types) if types else '（无）'
+
+
 def main():
     parser = argparse.ArgumentParser(description='工业SCADA协议网关服务')
     # `--protocol` 是 `--type` 的兼容别名：README 一直写的是 `--protocol modbus`，
@@ -100,25 +139,30 @@ def main():
     gateways = []
 
     if args.all:
-        # 启动所有网关
-        for gw_config in config.get('gateways', []):
+        # 启动所有网关（单条创建失败不阻断其余）
+        for gw_config in select_gateway_configs(config, args.type, True):
             gw_type = gw_config.get('type')
-            if gw_type:
-                try:
-                    gateway = create_gateway(gw_type, gw_config)
-                    gateways.append(gateway)
-                except Exception as e:
-                    logger.error(f"创建{gw_type}网关失败: {e}")
+            try:
+                gateway = create_gateway(gw_type, gw_config)
+                gateways.append(gateway)
+            except Exception as e:
+                logger.error(f"创建{gw_type}网关失败: {e}")
     else:
-        # 启动指定类型的网关
-        gw_config = config.get('gateways', [{}])[0] if config.get('gateways') else config
-        gw_config['type'] = args.type
-        try:
-            gateway = create_gateway(args.type, gw_config)
-            gateways.append(gateway)
-        except Exception as e:
-            logger.error(f"创建{args.type}网关失败: {e}")
+        # 启动指定类型的网关 —— 按 type 筛选，而不是「取第 0 条再改它的 type」
+        selected = select_gateway_configs(config, args.type, False)
+        if not selected:
+            logger.error(
+                "配置 %s 里没有 type=%s 的网关条目（配置里可用: %s）",
+                args.config, args.type, _declared_gateway_types(config),
+            )
             sys.exit(1)
+        for gw_config in selected:
+            try:
+                gateway = create_gateway(args.type, gw_config)
+                gateways.append(gateway)
+            except Exception as e:
+                logger.error(f"创建{args.type}网关失败: {e}")
+                sys.exit(1)
 
     if not gateways:
         logger.error("没有可用的网关配置")

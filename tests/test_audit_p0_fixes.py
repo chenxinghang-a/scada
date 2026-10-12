@@ -67,12 +67,45 @@ class TestHASharedSecret:
         assert b._verify_hmac(payload, a._compute_hmac(payload))
 
     def test_run_py_reads_secret_from_env(self):
-        """接线守卫：run.py 必须把 HA_SHARED_SECRET 传给 HAManager"""
-        src = RUN_PY.read_text(encoding='utf-8')
-        assert "HA_SHARED_SECRET" in src, \
-            "run.py 没有读 HA_SHARED_SECRET —— 两节点仍会各自随机生成密钥"
-        assert re.search(r"shared_secret\s*=\s*os\.environ\.get\(\s*['\"]HA_SHARED_SECRET",
-                         src), "HA_SHARED_SECRET 读了但没传给 HAManager"
+        """接线守卫（AST）：run.py 必须把 HA_SHARED_SECRET 作为**关键字实参**传给 HAManager。
+
+        ⚠️ 判据刻意走 AST 而不是「源码里出现这个字符串」：后者会被注释点亮 ——
+        把真行删掉、留一行 `# shared_secret=os.environ.get('HA_SHARED_SECRET', '')`，
+        字符串判据仍为绿，但功能已经没了（本仓 Bug 15「约束只活在注释里」同源）。
+        """
+        tree = ast.parse(RUN_PY.read_text(encoding='utf-8'))
+        calls = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name) and n.func.id == 'HAManager']
+        assert calls, "run.py 里没有 HAManager(...) 调用"
+
+        node = None
+        for c in calls:
+            for k in c.keywords:
+                if k.arg == 'shared_secret':
+                    node = k.value
+        assert node is not None, "HAManager(...) 没有 shared_secret 关键字实参"
+
+        # 期望形态：os.environ.get('HA_SHARED_SECRET', '')
+        assert isinstance(node, ast.Call), f"shared_secret 实参形态不对: {ast.dump(node)[:90]}"
+        assert isinstance(node.func, ast.Attribute) and node.func.attr == 'get', \
+            f"shared_secret 不是 os.environ.get(...) 调用: {ast.dump(node)[:90]}"
+        assert isinstance(node.func.value, ast.Attribute) and node.func.value.attr == 'environ'
+        assert node.args and isinstance(node.args[0], ast.Constant) \
+            and node.args[0].value == 'HA_SHARED_SECRET', \
+            "shared_secret 读的不是 HA_SHARED_SECRET"
+
+    def test_ha_key_fingerprint_is_logged(self):
+        """运维可核对性：启用 HA 时必须打印密钥指纹（配了不同密钥仍会双主）"""
+        from core.ha_manager import HAManager
+        a = HAManager(node_id='A', peer_address='10.0.0.2', shared_secret='same')
+        b = HAManager(node_id='B', peer_address='10.0.0.1', shared_secret='same')
+        c = HAManager(node_id='C', peer_address='10.0.0.1', shared_secret='other')
+        assert a.secret_fingerprint() == b.secret_fingerprint()
+        assert a.secret_fingerprint() != c.secret_fingerprint()
+        assert len(a.secret_fingerprint()) == 8
+        assert 'same' not in a.secret_fingerprint()      # 不得泄漏密钥本身
+        assert 'secret_fingerprint' in RUN_PY.read_text(encoding='utf-8')
 
 
 class TestHARoleClosure:
@@ -94,14 +127,63 @@ class TestHARoleClosure:
                 out.add(n.attr)
         return out
 
-    def test_apply_ha_role_starts_and_stops_collector(self):
+    def test_apply_ha_role_branches_on_role(self):
+        """`start` 必须在「role == PRIMARY」分支里，`stop` 在另一分支。
+
+        ⚠️ 只断言「函数体里同时出现过 .start 和 .stop」判别力不足：
+        把 `if role == PRIMARY: start() else: stop()` 改成
+        `start(); if False: stop()` 仍然为绿，但角色闭环已经退化。
+        所以这里断言的是**结构**：存在一个以角色比较为条件、一支 start 一支 stop 的 if。
+        """
         tree = ast.parse(RUN_PY.read_text(encoding='utf-8'))
         fn = self._func(tree, '_apply_ha_role')
         assert fn is not None, "run.py 里没有 _apply_ha_role —— HA 角色没有接到采集器上"
-        calls = {n.func.attr for n in ast.walk(fn)
-                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
-        assert 'start' in calls and 'stop' in calls, \
-            f"_apply_ha_role 必须按角色启停采集器，实际调用: {sorted(calls)}"
+
+        def attrs(stmts):
+            """收集一组语句里出现过的属性调用名（入参是语句**列表**）"""
+            found = set()
+            for stmt in stmts:
+                for c in ast.walk(stmt):
+                    if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute):
+                        found.add(c.func.attr)
+            return found
+
+        guarded = None
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.If):
+                continue
+            test_src = ast.dump(node.test)
+            if 'PRIMARY' not in test_src and 'role' not in test_src:
+                continue
+            if 'start' in attrs(node.body) and 'stop' in attrs(node.orelse):
+                guarded = node
+                break
+        assert guarded is not None, (
+            "_apply_ha_role 里没有「按角色分支：一支 start、另一支 stop」的结构 —— "
+            "角色闭环可能已退化成无条件启动采集"
+        )
+
+    def test_role_change_callback_is_a_real_function(self):
+        """角色回调必须是**真实存在的具名函数**，而不是只打日志的 lambda 或被注释掉的调用。
+
+        判据走 AST：`ast.parse` 天然不含注释，注释里的 `set_on_role_change(...)`
+        不会出现在语法树里，所以「删掉真行、留个注释」会立刻变红。
+        """
+        tree = ast.parse(RUN_PY.read_text(encoding='utf-8'))
+        args = []
+        for n in ast.walk(tree):
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == 'set_on_role_change'):
+                args.extend(n.args)
+        assert args, "run.py 里没有 set_on_role_change(...) 调用"
+
+        names = {a.id for a in args if isinstance(a, ast.Name)}
+        assert '_on_ha_role_change' in names, (
+            f"set_on_role_change 的实参必须是有函数体的具名回调（会启停采集），实际: "
+            f"{[ast.dump(a)[:60] for a in args]}"
+        )
+        assert self._func(tree, '_on_ha_role_change') is not None, \
+            "_on_ha_role_change 只有名字没有函数定义"
 
     def test_background_start_does_not_start_collector_unconditionally(self):
         """_background_start 不得无条件启动采集器（备节点会因此也采集）"""
@@ -117,13 +199,6 @@ class TestHARoleClosure:
             and n.func.value.id == 'data_collector'
         ]
         assert not direct, "data_collector.start() 仍在 _background_start 里无条件调用"
-
-    def test_role_change_callback_is_a_real_function(self):
-        """角色回调必须是有函数体（会启停采集）的具名函数，而不是只打日志的 lambda"""
-        src = RUN_PY.read_text(encoding='utf-8')
-        assert '_on_ha_role_change' in src
-        assert re.search(r"set_on_role_change\(\s*_on_ha_role_change\s*\)", src), \
-            "set_on_role_change 没有接到 _on_ha_role_change"
 
 
 # ===========================================================================
@@ -294,3 +369,69 @@ class TestGatewayCli:
             f"choices 与实现不一致：choices={sorted(declared)} "
             f"实现={sorted(GATEWAY_TYPES)}"
         )
+
+
+class TestGatewayConfigSelection:
+    """`--protocol X` 必须按 type 挑条目，而不是「取第 0 条再改它的 type」。
+
+    历史缺陷（2026-10-13 复刻证实）：用默认 `gateway/config.yaml`（4 个条目）跑
+    `--protocol s7`，会拿 **modbus_gateway_01** 的 host/port 去建 S7 网关 ——
+    连错设备且不报错；同时 `gw_config['type'] = args.type` 会**原地改写**配置。
+    """
+
+    CONFIG = {
+        'gateways': [
+            {'type': 'modbus', 'gateway_id': 'modbus_gateway_01', 'host': '192.168.1.10', 'port': 502},
+            {'type': 's7', 'gateway_id': 's7_gateway_01', 'host': '192.168.1.20', 'port': 102},
+            {'type': 'opcua', 'gateway_id': 'opcua_gateway_01', 'host': '192.168.1.30', 'port': 4840},
+        ]
+    }
+
+    def test_selects_by_type_not_first_entry(self):
+        from gateway.run_gateway import select_gateway_configs
+        sel = select_gateway_configs(self.CONFIG, 's7', run_all=False)
+        assert len(sel) == 1
+        assert sel[0]['gateway_id'] == 's7_gateway_01'
+        assert sel[0]['host'] == '192.168.1.20'
+
+    def test_does_not_mutate_input_config(self):
+        from gateway.run_gateway import select_gateway_configs
+        before = [dict(e) for e in self.CONFIG['gateways']]
+        select_gateway_configs(self.CONFIG, 'opcua', run_all=False)
+        assert self.CONFIG['gateways'] == before, "select_gateway_configs 原地改写了配置"
+
+    def test_missing_type_returns_empty(self):
+        from gateway.run_gateway import select_gateway_configs
+        assert select_gateway_configs(self.CONFIG, 'iec104', run_all=False) == []
+
+    def test_run_all_returns_every_declared_entry(self):
+        from gateway.run_gateway import select_gateway_configs
+        sel = select_gateway_configs(self.CONFIG, 'modbus', run_all=True)
+        assert {e['type'] for e in sel} == {'modbus', 's7', 'opcua'}
+
+    def test_legacy_single_entry_config_still_works(self):
+        """老格式（配置文件本身就是单个网关条目、无 gateways 键）不能被改坏"""
+        from gateway.run_gateway import select_gateway_configs
+        legacy = {'gateway_id': 'only_one', 'host': '10.0.0.1', 'port': 502}
+        sel = select_gateway_configs(legacy, 'modbus', run_all=False)
+        assert len(sel) == 1 and sel[0]['type'] == 'modbus'
+        assert 'type' not in legacy, "老格式分支不应把 type 写回入参"
+
+    def test_cli_reports_missing_type_instead_of_using_wrong_one(self, tmp_path):
+        """端到端：配置里没有该 type 时必须**报错退出**，而不是拿别的条目硬跑"""
+        cfg = tmp_path / 'gw.yaml'
+        cfg.write_text(
+            'gateways:\n'
+            '  - type: modbus\n'
+            '    gateway_id: modbus_gateway_01\n'
+            '    host: 192.168.1.10\n'
+            '    port: 502\n',
+            encoding='utf-8',
+        )
+        r = subprocess.run(
+            [_python_exe(), str(GATEWAY_RUN), '--protocol', 'iec104', '--config', str(cfg)],
+            cwd=str(BACKEND_ROOT), capture_output=True, text=True, timeout=180,
+        )
+        assert r.returncode != 0
+        combined = r.stdout + r.stderr
+        assert '没有 type=iec104 的网关条目' in combined, combined
