@@ -10,6 +10,48 @@ DNP3广泛用于北美电力/水务/燃气公用事业的SCADA系统，是IEC 60
 - 对象组：BI(0x01遥信)、AI(0x1E遥测)、BO(0x0C遥控)、AO(0x29遥调)
 - TCP通信（默认端口20000）
 - 自动重连、多设备支持
+
+⚠️ 现状与已知缺口（2026-10-13 核实，**这是「简化实现」，不能对真实从站工作**）
+------------------------------------------------------------------------------
+本模块是教学/演示级的**简化** DNP3，**未**通过一致性测试。逐条列清，避免被误读成
+「DNP3 已支持」：
+
+0. ✅ **已修（2026-10-13）**：起始字节曾写成小端 `64 05`（标准是 `05 64`）→
+   真实从站丢帧、本模块也认不出真实从站的帧；`LENGTH` 曾写成 `len(app)+8`
+   （标准是 `len(app)+5`，不含 CRC）。两条都只影响链路层字段，已按标准改正。
+
+1. **发送侧 CRC 是假的**：`build_read_request` / `build_direct_operate` 用
+   ``crc = sum(header) & 0xFFFF``（代码里自称「简化CRC」）。
+   标准要求 CRC-16/DNP（多项式 0x3D65、refin/refout、xorout 0xFFFF）。
+   → **真实从站会丢弃本模块发出的每一个帧**。
+
+2. **发送侧缺用户数据 CRC**：帧尾只有 ``header + crc + app_data``，
+   而标准在每 16 字节用户数据后还要跟一个 CRC。
+   → 帧长比标准少 2 字节（可用 `DNP3Parser._frame_size` 对照验证）。
+
+3. **接收侧不校验任何 CRC**：`parse_frame` 把帧头 CRC 解析出来但**从不比对**，
+   返回值里明确标 ``'crc_verified': False``。
+   → 线路噪声造成的位翻转不会被发现，损坏帧会带着 ``valid: True`` 一路往上走。
+   （**未顺手加上校验**：算错就会拒掉合法帧，比不校验更危险 ——
+   需要按 8 字节块 + 多项式 0x3D65 重算，属独立改动。）
+
+4. **对象头限定符与范围不匹配**：`build_read_request` 用限定符 ``0x06``
+   （= all objects，**不带范围字段**），却又紧跟了 4 字节 start/stop。
+   → 要么用 0x06 且去掉范围，要么用 0x01（16 位 start/stop）。
+
+5. **二进制输入的取值位与 variation 无关**：`parse_response` 用
+   ``data[offset] & 0x01``。DNP3 Group 1 的 Var 1 是**打包位**（1 字节装 8 个点）、
+   Var 2 的**状态位是 bit7**，而本函数不看 variation。
+
+6. **`parse_response` 只处理 ``qualifier == 0x00``**，其余限定符直接返回空列表。
+
+已修（2026-10-13）：**接收侧原本没有帧重组** —— `_recv_loop` 把每次 `recv()` 的
+一包直接丢给 `parse_frame`，于是「粘包」时丢掉同一包里的后续帧、
+「半包」时被判 `Frame too short` 静默丢弃（TCP 是字节流，这两种都必然发生）。
+现在有 `_recv_buffer` + `_process_buffer()` 按标准帧长切帧。
+
+要真正接入现场 DNP3 从站，第 1–5 条都要按 IEEE 1815 补齐，并用一致性测试向量验证。
+在那之前，本模块只应在**模拟/演示**场景使用。
 """
 
 import socket
@@ -64,7 +106,38 @@ class DNP3ObjectGroup:
 class DNP3Parser:
     """DNP3协议解析器"""
 
-    START_BYTES = 0x0564
+    #: 起始字节：标准是 **0x05 0x64 这两个字节**（不是 0x0564 的小端形式）。
+    #:
+    #: ⚠️ 历史实现用 ``struct.pack('<H', 0x0564)`` 写到线上变成 ``64 05`` ——
+    #: **两个字节反了**。后果是双向的：真实从站因起始字节不合法直接丢帧，
+    #: 本模块也认不出真实从站发来的帧（``parse_frame`` 同样按小端比对）。
+    #: 已改为按标准字节序处理（2026-10-13）。
+    START_BYTES = b'\x05\x64'
+
+    @staticmethod
+    def _frame_size(length_byte: int) -> int | None:
+        """按 DNP3 数据链路层格式算出**整帧字节数**。
+
+        格式（IEEE 1815 / DL/T 634.5101）：
+
+            起始(2) + LENGTH(1) + 控制(1) + 目的(2) + 源(2) + CRC(2)
+            + 用户数据(≤16 字节) + CRC(2) + [每再满 16 字节数据块，追加一段 CRC]
+
+        ``LENGTH`` 从**控制字节**数到用户数据末尾、**不含任何 CRC**，
+        所以 ``LENGTH = 5 + 用户数据长度``。
+
+        ⚠️ 因此整帧长度**不是** ``LENGTH + 2``：还要加上「每 16 字节数据块一个」的
+        CRC。按 ``LENGTH + 2`` 切帧会把第 2 帧的起始字节当成数据吃掉，
+        表现为「第 1 帧正常、之后全部丢帧」（帧边界一旦错位就再也对不齐）。
+
+        Returns:
+            int: 整帧字节数；``LENGTH < 5``（装不下控制+地址字段）时返回 None
+        """
+        if length_byte < 5:
+            return None
+        user_data = length_byte - 5
+        crc_blocks = (user_data + 15) // 16
+        return 2 + 1 + length_byte + 2 + 2 * crc_blocks
 
     @staticmethod
     def parse_frame(data: bytes) -> dict:
@@ -72,8 +145,7 @@ class DNP3Parser:
         if len(data) < 10:
             return {'valid': False, 'error': 'Frame too short'}
 
-        start = struct.unpack('<H', data[0:2])[0]
-        if start != DNP3Parser.START_BYTES:
+        if data[0:2] != DNP3Parser.START_BYTES:
             return {'valid': False, 'error': 'Invalid start bytes'}
 
         length = data[2]
@@ -133,15 +205,16 @@ class DNP3Parser:
 
         # 数据链路层
         control = 0xC0  # DIR + PRM
-        length = len(app_data) + 8
+        # LENGTH 从**控制字节**数到用户数据末尾、**不含任何 CRC** → 5 + 用户数据长度。
+        # 历史实现写的是 +8（把起始字节与 CRC 也算进去了）→ 帧长字段偏大 3。
+        length = len(app_data) + 5
 
         # DNP3 链路层头固定 8 字节：起始(2) + 长度(1) + 控制(1) + 目的地址(2) + 源地址(2)。
         # 原实现在这里多传了一个 `0`（格式串只有 5 个格式符却给了 6 个值），
         # struct.pack 必抛 "pack expected 5 items for packing (got 6)"，
         # 而 request_data() 的 except 把它吞掉 —— DNP3 从未真正发出过报文。
-        header = struct.pack('<HBBHH',
-                             DNP3Parser.START_BYTES, length,
-                             control, destination, source)
+        header = DNP3Parser.START_BYTES + struct.pack('<BBHH',
+                             length, control, destination, source)
 
         # 简化CRC（实际DNP3使用CRC-16/CCITT）
         crc = sum(header) & 0xFFFF
@@ -163,12 +236,11 @@ class DNP3Parser:
         app_data = struct.pack('BB', app_control, function_code) + obj_data
 
         control = 0xC0
-        length = len(app_data) + 8
+        length = len(app_data) + 5     # 同 build_read_request：LENGTH = 5 + 用户数据长度
 
         # 同 build_read_request：链路层头 8 字节，不能多传参数
-        header = struct.pack('<HBBHH',
-                             DNP3Parser.START_BYTES, length,
-                             control, destination, source)
+        header = DNP3Parser.START_BYTES + struct.pack('<BBHH',
+                             length, control, destination, source)
 
         crc = sum(header) & 0xFFFF
         return header + struct.pack('<H', crc) + app_data
@@ -262,6 +334,9 @@ class DNP3Client:
         self._last_data: dict[int, dict] = {}  # index -> {value, quality, group, time}
         self._running = False
         self._recv_thread: threading.Thread | None = None
+        # 接收缓冲区：TCP 是字节流，DNP3 帧会**跨包/粘包**，
+        # 必须自己重组（见 _process_buffer 的说明）。
+        self._recv_buffer = b''
 
     # ── 连接管理 ──────────────────────────────
 
@@ -340,7 +415,10 @@ class DNP3Client:
                     if self._running:
                         self.logger.warning("连接被对端关闭")
                     break
-                self._handle_response(data)
+                # ⚠️ 必须先进缓冲区再切帧：直接把这一包丢给 parse_frame 会
+                # ① 丢掉粘在同一包里的后续帧；② 把跨包的半帧当成「Frame too short」静默丢弃。
+                self._recv_buffer += data
+                self._process_buffer()
             except socket.timeout:
                 continue
             except OSError:
@@ -352,6 +430,33 @@ class DNP3Client:
                     self.logger.error(f"接收异常: {e}")
                 break
         self.connected = False
+
+    def _process_buffer(self):
+        """处理接收缓冲区 — 帧分割（DNP3 帧可能跨 TCP 包或粘包）"""
+        while len(self._recv_buffer) >= 10:
+            if self._recv_buffer[:2] != DNP3Parser.START_BYTES:
+                idx = self._recv_buffer.find(DNP3Parser.START_BYTES)
+                if idx < 0:
+                    # 保留最后 1 字节：它可能是被截断的起始字节 0x05
+                    self._recv_buffer = self._recv_buffer[-1:]
+                    break
+                self._recv_buffer = self._recv_buffer[idx:]
+                continue
+
+            size = DNP3Parser._frame_size(self._recv_buffer[2])
+            if size is None:
+                # LENGTH 非法（< 5，装不下控制/地址字段）→ 丢掉这对起始字节，继续重同步
+                self.logger.warning("DNP3 帧 LENGTH 非法(%d)，丢弃起始字节重新同步",
+                                    self._recv_buffer[2])
+                self._recv_buffer = self._recv_buffer[2:]
+                continue
+
+            if len(self._recv_buffer) < size:
+                break   # 不完整帧，等待更多数据
+
+            frame = self._recv_buffer[:size]
+            self._recv_buffer = self._recv_buffer[size:]
+            self._handle_response(frame)
 
     def _handle_response(self, data: bytes):
         """处理DNP3响应"""
