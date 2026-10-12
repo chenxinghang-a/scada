@@ -38,6 +38,16 @@ class RealDeviceManager(IDeviceManager):
     RETRY_BACKOFF_BASE = 30   # 退避基数（秒）
     MAX_RETRY_INTERVAL = 300  # 最大退避间隔（5分钟）
 
+    #: 启停动作 → 历史扁平键名（写法 B：`control.stop_coil` / `control.start_register`）。
+    #: 保留是为了兼容既有配置；**新配置建议用写法 A**（与 `智能层/device_control.py`
+    #: 的 `control` 段同形，避免「同一个概念两种字段名」）。
+    _LEGACY_ACTION_KEYS = {
+        'start': ('start_coil', 'start_register'),
+        'stop': ('stop_coil', 'stop_register'),
+    }
+    #: 未显式给出 value 时各动作的缺省写入值（与 device_control 保持一致）
+    _DEFAULT_ACTION_VALUES = {'start': True, 'stop': False}
+
     def __init__(self, config_path: str | None = None):
         """
         初始化真实设备管理器
@@ -180,10 +190,102 @@ class RealDeviceManager(IDeviceManager):
         if active:
             logger.info("[真实] 紧急停机已激活")
 
+    def _resolve_control_action(self, config: dict[str, Any], action: str):
+        """解析启停点位，返回 ``(kind, address, value)``；解析不出返回 ``None``。
+
+        ⚠️ **真实模式绝不猜点位**（2026-10-13 修）。历史实现在找不到
+        ``control.stop_coil`` / ``control.start_coil`` 时会**回退写 coil 0**：
+        - 本仓自己的注释已指出「地址 0 是 relay_1（输出线圈）与 di_1 共用的地址」
+          （见 `智能层/device_control.py` 的联锁说明）—— 盲写就是**误动作**；
+        - 而且 `device_control.batch_control` 会**先按配置点位写一次**，再调用本类
+          的 `start_device()`/`stop_device()`，于是每次启停都会**额外多写一次 coil 0**。
+
+        支持的写法（A/C 与 `智能层/device_control.py` 的 `control` 段同形）：
+
+            control:                                   # A：按动作声明（推荐）
+              start: {type: coil, address: 7, value: true}
+              stop:  {type: coil, address: 9, value: false}
+
+            control: {type: coil, address: 3,          # C：扁平共用点位
+                      start_value: true, stop_value: false}
+
+            control: {start_coil: 7, stop_coil: 9}     # B：本模块历史写法（兼容）
+            control: {start_register: 321, stop_register: 322}
+        """
+        ctrl = config.get('control') or {}
+        if not isinstance(ctrl, dict):
+            return None
+
+        default_value = self._DEFAULT_ACTION_VALUES.get(action)
+        spec = None
+
+        candidate = ctrl.get(action)
+        if isinstance(candidate, dict):
+            spec = dict(candidate)                                   # 写法 A
+        elif ctrl.get('type') is not None and ctrl.get('address') is not None:
+            spec = {                                                 # 写法 C
+                'type': ctrl.get('type'),
+                'address': ctrl.get('address'),
+                'value': ctrl.get(f'{action}_value', default_value),
+            }
+        else:                                                        # 写法 B
+            coil_key, reg_key = self._LEGACY_ACTION_KEYS[action]
+            if ctrl.get(coil_key) is not None:
+                spec = {'type': 'coil', 'address': ctrl[coil_key], 'value': default_value}
+            elif ctrl.get(reg_key) is not None:
+                spec = {'type': 'register', 'address': ctrl[reg_key],
+                        'value': 1 if action == 'start' else 0}
+
+        if spec is None:
+            logger.error(
+                "[真实] 设备 %s 未配置启停点位 control.%s —— 拒绝执行"
+                "（真实模式不猜点位、不回退 coil0）。请在设备配置里声明 control 段，"
+                "例如 control.%s: {type: coil, address: <现场地址>, value: %s}",
+                config.get('id'), action, action, default_value,
+            )
+            return None
+
+        kind = str(spec.get('type', 'coil')).lower()
+        if kind not in ('coil', 'register'):
+            logger.error("[真实] 设备 %s 启停点位类型非法: %r",
+                         config.get('id'), spec.get('type'))
+            return None
+        try:
+            address = int(spec.get('address'))
+        except (TypeError, ValueError):
+            logger.error("[真实] 设备 %s 启停点位地址非法: %r",
+                         config.get('id'), spec.get('address'))
+            return None
+
+        value = spec.get('value', default_value)
+        return kind, address, value
+
+    @staticmethod
+    def _write_control(client, kind: str, address: int, value) -> bool:
+        """按点位类型写入；客户端不支持该写法时返回 False（不静默当成功）。"""
+        if kind == 'coil':
+            if hasattr(client, 'write_single_coil'):
+                return bool(client.write_single_coil(address, bool(value)))
+            if hasattr(client, 'write_single_register'):
+                return bool(client.write_single_register(address, int(bool(value))))
+            return False
+        if hasattr(client, 'write_single_register'):
+            return bool(client.write_single_register(address, int(value)))
+        if hasattr(client, 'write_single_coil'):
+            return bool(client.write_single_coil(address, bool(value)))
+        return False
+
     def stop_device(self, device_id: str) -> bool:
-        """停止指定设备（仅限机械类设备）"""
+        """停止指定设备（仅限机械类设备）。
+
+        ⚠️ 返回 False 的**每一种**情形都必须明确（历史实现有两处会静默返回 True，
+        调用方（`/api/devices/{id}/stop`）会把"什么都没做"报成"停止成功"）：
+        ① 设备不存在；② 非机械类设备；③ 未配置启停点位（真实模式不猜点位）；
+        ④ 客户端不存在；⑤ 写入失败。
+        """
         config = self.devices.get(device_id)
         if not config:
+            logger.error("[真实] 停止失败：设备 %s 不存在", device_id)
             return False
 
         category = IDeviceManager.get_device_category(config)
@@ -191,33 +293,29 @@ class RealDeviceManager(IDeviceManager):
             logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
             return False
 
-        self._stopped_devices.add(device_id)
+        resolved = self._resolve_control_action(config, 'stop')
+        if resolved is None:
+            return False
+
         client = self.get_client(device_id)
-        if client:
-            # 从配置读取控制地址，而非硬编码
-            ctrl = config.get('control', {})
-            stop_coil = ctrl.get('stop_coil')      # 线圈地址
-            stop_register = ctrl.get('stop_register')  # 寄存器地址
+        if not client:
+            logger.error("[真实] 停止失败：设备 %s 客户端不存在（配置或协议不支持）", device_id)
+            return False
 
-            if stop_coil is not None and hasattr(client, 'write_single_coil'):
-                success = client.write_single_coil(stop_coil, False)
-            elif stop_register is not None and hasattr(client, 'write_single_register'):
-                success = client.write_single_register(stop_register, 0)
-            else:
-                # 无控制配置时降级：coil 0 = False
-                success = client.write_single_coil(0, False) if hasattr(client, 'write_single_coil') else False
+        if not self._write_control(client, *resolved):
+            logger.error(f"[真实] 设备 {device_id} 停止命令发送失败")
+            return False
 
-            if success:
-                logger.info(f"[真实] 设备 {device_id} 已停止")
-            else:
-                logger.error(f"[真实] 设备 {device_id} 停止命令发送失败")
-                return False
+        # 只有**写成功**才标记为已停止（原来在写之前就标记，失败也会显示"已停止"）
+        self._stopped_devices.add(device_id)
+        logger.info(f"[真实] 设备 {device_id} 已停止")
         return True
 
     def start_device(self, device_id: str) -> bool:
-        """启动指定设备（仅限机械类设备）"""
+        """启动指定设备（仅限机械类设备）。失败情形同 `stop_device`。"""
         config = self.devices.get(device_id)
         if not config:
+            logger.error("[真实] 启动失败：设备 %s 不存在", device_id)
             return False
 
         category = IDeviceManager.get_device_category(config)
@@ -225,25 +323,21 @@ class RealDeviceManager(IDeviceManager):
             logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
             return False
 
-        self._stopped_devices.discard(device_id)
+        resolved = self._resolve_control_action(config, 'start')
+        if resolved is None:
+            return False
+
         client = self.get_client(device_id)
-        if client:
-            ctrl = config.get('control', {})
-            start_coil = ctrl.get('start_coil')
-            start_register = ctrl.get('start_register')
+        if not client:
+            logger.error("[真实] 启动失败：设备 %s 客户端不存在（配置或协议不支持）", device_id)
+            return False
 
-            if start_coil is not None and hasattr(client, 'write_single_coil'):
-                success = client.write_single_coil(start_coil, True)
-            elif start_register is not None and hasattr(client, 'write_single_register'):
-                success = client.write_single_register(start_register, 1)
-            else:
-                success = client.write_single_coil(0, True) if hasattr(client, 'write_single_coil') else False
+        if not self._write_control(client, *resolved):
+            logger.error(f"[真实] 设备 {device_id} 启动命令发送失败")
+            return False
 
-            if success:
-                logger.info(f"[真实] 设备 {device_id} 已启动")
-            else:
-                logger.error(f"[真实] 设备 {device_id} 启动命令发送失败")
-                return False
+        self._stopped_devices.discard(device_id)
+        logger.info(f"[真实] 设备 {device_id} 已启动")
         return True
 
     def adjust_device(self, device_id: str, register_name: str, value: float) -> dict:

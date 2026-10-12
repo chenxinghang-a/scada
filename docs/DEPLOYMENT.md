@@ -120,6 +120,27 @@ plc_reactor_01:
     reset: {type: register, address: 321, value: 0}
 ```
 
+`control` 段支持三种写法（**两种入口都认**：`智能层/device_control.py` 的批量启停，
+以及 `采集层/real_device_manager.py` 的单设备启停 / `/api/devices/{id}/start|stop`）：
+
+```yaml
+control:                                        # A：按动作声明（推荐）
+  start: {type: coil, address: 7, value: true}
+  stop:  {type: coil, address: 9, value: false}
+
+control: {type: coil, address: 3,               # C：扁平共用点位
+          start_value: true, stop_value: false}
+
+control: {start_coil: 7, stop_coil: 9}          # B：历史写法（兼容保留）
+control: {start_register: 321, stop_register: 322}
+```
+
+> ⚠️ **两种入口的「不配点位」行为现在一致**：都**拒绝执行**，
+> 都不会回退到 `coil 0`。
+> （2026-10-13 修：`real_device_manager` 原先在找不到点位时会**盲写 coil 0**，
+> 而本仓注释已指出「地址 0 是 `relay_1` 输出线圈与 `di_1` 共用的地址」——
+> 盲写就是误动作；且批量启停会因此**多写一次 coil 0**。）
+
 模拟模式（`run.py` 无参 / `--simulator`）不受这两条限制：无物理风险，
 仍可回退到默认点位，但会打 warning 说明用的是回退点位。
 

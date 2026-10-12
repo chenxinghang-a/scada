@@ -90,11 +90,13 @@ jobs:
         # 若 CI 首次跑出来低于 60，先降回 55 并记录 CI 与本机的差异来源。
         #
         # 当前短板（≥80 行的文件里覆盖最低的一批，供后续补测参考）：
-        #   采集层/real_device_manager.py   0%（350 行，**真实设备模式的唯一管理器**，
-        #                                     仅被 run.py --real 使用，无行为测试）
         #   timeseries/tdengine_client.py  12.9%   gateway/modbus_gateway.py 12.2%
         #   gateway/s7_gateway.py          13.0%   gateway/opcua_gateway.py  14.7%
         #   gateway/iec104_gateway.py      18.0%   采集层/modbus_client.py   42.9%
+        # 已补：采集层/real_device_manager.py 原为 **0%**（350 行、真实设备模式唯一
+        #   管理器、零行为测试），2026-10-13 加 tests/test_real_device_manager.py
+        #   后该模块 ~60%。补测时顺带修了两个真缺陷（未配点位时盲写 coil0、
+        #   客户端不存在时假成功返回 True）—— 见该测试文件头注。
         run: |
           set -o pipefail
           pytest tests/ -q --cov --cov-report=term-missing --cov-report=xml \
