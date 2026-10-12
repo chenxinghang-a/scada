@@ -2,8 +2,8 @@
 系统配置文件
 
 安全说明:
-- SECRET_KEY 和 JWT_SECRET 在生产环境中必须通过环境变量设置。
-- 未设置时会生成随机密钥并打印警告（重启后密钥会变，导致已有会话/令牌失效）。
+- SECRET_KEY 和 JWT_SECRET 在生产环境（SCADA_ENV=production）必须通过环境变量设置，
+  否则**拒绝启动**（fail-closed）；非生产环境会生成随机密钥并打印警告。
 - 部署时请复制 .env.example 为 .env 并填入真实值。
 """
 
@@ -21,28 +21,42 @@ SCADA_ENV = os.environ.get('SCADA_ENV', 'development').lower()
 IS_PRODUCTION = SCADA_ENV == 'production'
 
 
+#: 部署模板/文档里的占位弱值。等于这些值的密钥一律视为「未配置」——
+#: docker-compose.yml 的历史默认就是 change-me-in-production，照抄上线等于没有密钥。
+_WEAK_SECRET_VALUES = frozenset({
+    'change-me-in-production', 'change_me', 'changeme', 'change-me',
+    'secret', 'password', 'test', 'admin',
+})
+
+
 def _get_secret(name: str, env_var: str) -> str:
     """
-    从环境变量获取密钥；未设置时生成随机值并警告。
-    生产环境必须通过环境变量提供，否则重启后密钥会变化。
-    SCADA_ENV=production 时未设置会打印 CRITICAL 告警（不改变行为，
-    仅确保生产部署能立刻发现密钥缺失）。
+    从环境变量获取密钥。
+
+    * 生产环境（SCADA_ENV=production）：缺失 / 为空 / 等于部署模板里的弱默认值时
+      **抛 RuntimeError 拒绝启动**。用随机密钥会让重启后所有会话与令牌失效，
+      用弱默认值等于没有密钥 —— 两者都不该被静默放行。
+    * 非生产环境：生成随机密钥并告警（本地开发/测试无需配置密钥）。
     """
-    value = os.environ.get(env_var)
-    if not value:
-        value = secrets.token_hex(32)
-        if IS_PRODUCTION:
-            logger.critical(
-                "【生产环境密钥缺失】%s 未通过环境变量 %s 设置，本次使用随机密钥，"
-                "重启后所有会话/令牌将失效！请立即在部署环境中配置 %s。",
-                name, env_var, env_var,
-            )
-        else:
-            logger.warning(
-                "%s not set via %s, using random key (will change on restart!)",
-                name, env_var,
-            )
-    return value
+    value = (os.environ.get(env_var) or '').strip()
+    if value and value.lower() not in _WEAK_SECRET_VALUES:
+        return value
+
+    if IS_PRODUCTION:
+        raise RuntimeError(
+            f"{name} 未配置或使用了弱默认值：生产环境（SCADA_ENV=production）必须"
+            f"通过环境变量 {env_var} 提供强随机密钥，已拒绝启动。"
+            f'生成方式：python -c "import secrets;print(secrets.token_hex(32))"'
+        )
+
+    if value:
+        logger.warning("%s 使用了弱默认值 %r，已改用随机密钥（重启后失效）", name, value)
+    else:
+        logger.warning(
+            "%s not set via %s, using random key (will change on restart!)",
+            name, env_var,
+        )
+    return secrets.token_hex(32)
 
 
 def _get_int(env_var: str, default: int, min_val: int = None, max_val: int = None) -> int:

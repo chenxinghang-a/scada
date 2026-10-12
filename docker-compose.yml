@@ -11,14 +11,21 @@ services:
     environment:
       # 注意：没有 SCADA_MODE —— 运行模式由 run.py 的命令行开关决定
       # （无参=模拟 / --simulator / --real），环境变量从未被读（round 206 删除）。
+      #
+      # SCADA_ENV=production：容器部署即生产。它会让 config.py 在密钥缺失/为弱默认值时
+      # **拒绝启动**（fail-closed），而不是悄悄生成一个重启就失效的随机密钥。
+      - SCADA_ENV=production
       - SCADA_HOST=0.0.0.0
       - SCADA_PORT=5000
       - MQTT_BROKER=emqx
       - MQTT_PORT=1883
       - TDENGINE_HOST=tdengine
       - TDENGINE_PORT=6041
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      # 密钥必须由部署者显式注入。`:?` 语法让 `docker compose up` 在未设置时**直接报错**，
+      # 而不是回退到 `change-me-in-production` 这种公开弱值（等于没有密钥）。
+      # 生成方式：python -c "import secrets;print(secrets.token_hex(32))"
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY 未设置：请在 .env 或部署环境中提供强随机值}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 未设置：请在 .env 或部署环境中提供强随机值}
     volumes:
       - scada-data:/app/data
       - scada-logs:/app/logs
@@ -97,8 +104,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
+      # 不再写死 admin123（公开弱口令）。必须由部署者显式注入。
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:?GF_SECURITY_ADMIN_PASSWORD 未设置：请提供强口令}
       - GF_INSTALL_PLUGINS=tdengine-datasource
     volumes:
       - grafana-data:/var/lib/grafana

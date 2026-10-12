@@ -346,8 +346,41 @@ def main():
             heartbeat_timeout=float(os.environ.get('HA_HEARTBEAT_TIMEOUT', '10')),
             peer_address=os.environ.get('HA_PEER_ADDRESS', ''),
             peer_port=int(os.environ.get('HA_PEER_PORT', '9999')),
+            # 主备心跳 HMAC 共享密钥。两节点必须一致；启用 HA（HA_PEER_ADDRESS 非空）
+            # 却没给密钥时 HAManager 会直接报错，而不是各自随机生成 —— 随机密钥会让
+            # 心跳验签永远失败、进而演变成「双主」。
+            shared_secret=os.environ.get('HA_SHARED_SECRET', ''),
         )
-        ha_manager.set_on_role_change(lambda old, new: logger.info(f"HA角色: {old.value} -> {new.value}"))
+
+        # 后台设备连接是否已完成。角色回调要等它置位后才动采集器，否则单机模式下
+        # start() 会**同步**触发 PRIMARY 回调，在设备还没连上时就把采集线程拉起来。
+        _bg_ready = threading.Event()
+
+        def _apply_ha_role(role):
+            """把 HA 角色真正接到采集器上（角色闭环）。
+
+            只有 PRIMARY 才允许采集：备节点若也跑采集/写控制，两台机器会同时向
+            同一个 PLC 写入 —— 这就是「双主」并发操作冲突。历史实现里 HA 角色
+            只用于打日志，采集器无条件启动，闭环完全没接上。
+            """
+            if not _bg_ready.is_set():
+                # 后台尚未完成设备连接：初始启停交给 _background_start，避免抢跑。
+                return
+            if role == HARole.PRIMARY:
+                logger.info("HA 角色=主节点：启动数据采集")
+                data_collector.start()
+            else:
+                logger.info("HA 角色=备节点：停止数据采集（只监听，不采集/不写）")
+                data_collector.stop()
+
+        def _on_ha_role_change(old_role, new_role):
+            logger.info(f"HA角色: {old_role.value} -> {new_role.value}")
+            try:
+                _apply_ha_role(new_role)
+            except Exception as e:
+                logger.error(f"HA 角色变更后启停采集失败: {e}", exc_info=True)
+
+        ha_manager.set_on_role_change(_on_ha_role_change)
         ha_manager.start()
         app.ha_manager = ha_manager
 
@@ -371,9 +404,10 @@ def main():
                 # 启动断线自动重连（每30秒检查一次）
                 device_manager.start_reconnect_loop(interval=30)
 
-                # 启动数据采集
-                logger.info("启动数据采集...")
-                data_collector.start()
+                # 启动数据采集 —— 仅主节点。备节点保持只读监听，
+                # 晋升为主节点后由 HA 角色回调 _apply_ha_role 自动启动。
+                _bg_ready.set()
+                _apply_ha_role(ha_manager.role)
 
                 # 启动智能层模块
                 logger.info("启动智能层模块...")

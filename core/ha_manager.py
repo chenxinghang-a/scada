@@ -86,6 +86,20 @@ class HAManager:
         self.peer_address = peer_address
         self.peer_port = peer_port
         # HMAC 共享密钥（主备节点必须一致）
+        #
+        # ⚠️ 配置了对端（= 真正启用 HA）却没给密钥时必须 **fail-closed 拒绝启动**。
+        #    历史实现是 `shared_secret or secrets.token_hex(16)`：两节点各自随机，
+        #    于是心跳 HMAC 永远验不过 → 对端心跳全被 `_handle_heartbeat` 丢弃
+        #    （只有 debug 级日志）→ 备机「从未见过对端」→ 超时后接管，
+        #    而原主进程还在跑 → **双主**，两台同时向 PLC 采集/写控制。
+        #    这类失败完全静默，所以必须在构造期就炸出来。
+        #    单机模式（peer_address 为空）不做心跳认证，无需密钥，保持原行为。
+        if peer_address and not shared_secret:
+            raise ValueError(
+                "HA_SHARED_SECRET 未配置：启用高可用（HA_PEER_ADDRESS 非空）时必须通过"
+                "环境变量 HA_SHARED_SECRET 提供共享密钥，且主备两个节点必须使用同一个值。"
+                "（单机模式不需要该密钥。）"
+            )
         self._shared_secret = (shared_secret or secrets.token_hex(16)).encode('utf-8')
 
         self.role = HARole.UNKNOWN

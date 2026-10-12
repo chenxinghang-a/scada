@@ -848,6 +848,18 @@ class DeviceControlSafety:
         """
         result = {'allowed': True, 'reason': '', 'warnings': []}
 
+        # 0. 联锁配置缺失 → fail-closed（仅真实设备模式）
+        #    「没有任何联锁规则」= 一条永不触发的保护。历史实现只在加载时打
+        #    warning，写操作照放 —— 等于无保护地操作现场设备。真实设备模式下
+        #    必须拒绝；模拟模式没有物理风险，保持可演示。
+        if not self._interlock_rules and not self._is_simulation():
+            result['allowed'] = False
+            result['reason'] = (
+                '未加载到任何安全联锁规则，真实设备模式下拒绝所有写操作'
+                f'（请配置 {INTERLOCK_CONFIG_PATH} 或设备的 interlocks 段）'
+            )
+            return result
+
         # 1. 紧急停机检查
         if self._estop_active:
             result['allowed'] = False
@@ -1059,6 +1071,14 @@ class DeviceControlSafety:
             'affected_devices': self._estop_devices
         }
 
+    def _is_simulation(self) -> bool:
+        """当前是否运行在模拟模式（无真实 PLC）。
+
+        用设备管理器上的标记判断；拿不到标记时保守按「真实设备」处理
+        （fail-closed —— 宁可拒绝，也不要在现场误判为模拟而放行写操作）。
+        """
+        return bool(getattr(self.device_manager, 'simulation_mode', False))
+
     def _resolve_control_point(self, device_id: str, action: str) -> dict[str, Any] | None:
         """
         解析批量控制（start/stop/reset）要写入的点位
@@ -1107,14 +1127,23 @@ class DeviceControlSafety:
                     }
 
         if spec is None:
+            # 真实设备模式下**不允许**回退到猜测点位：coil0 / reg100 只是历史默认，
+            # 未必对应现场任何真实线圈/寄存器，写错点位就是误操作。
+            # 只有模拟模式才允许回退（无物理风险，且保证演示链路可用）。
+            if not self._is_simulation():
+                logger.error(
+                    "设备 %s 未配置控制点位 control.%s，真实设备模式下拒绝回退到默认点位"
+                    "（请在该设备配置中显式声明 control 段）",
+                    device_id, action,
+                )
+                return None
             fallback = LEGACY_FALLBACK_CONTROL_POINTS.get(action)
             if fallback is None:
                 logger.error("设备 %s 的批量动作 %s 无可用点位（无回退值）", device_id, action)
                 return None
             spec = dict(fallback)
             logger.warning(
-                "设备 %s 未配置控制点位 control.%s，使用旧版回退点位 %s#%s —— "
-                "请在该设备配置中显式声明 control 段，避免写错点位",
+                "设备 %s 未配置控制点位 control.%s，模拟模式下使用回退点位 %s#%s",
                 device_id, action, spec['type'], spec['address'],
             )
 

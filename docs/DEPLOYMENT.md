@@ -10,7 +10,7 @@
 
 ### 软件要求
 - 操作系统: Windows 10/11 或 Windows Server 2019+
-- Python: 3.11+
+- Python: 3.12+（`pyproject.toml` 的 `requires-python = ">=3.12"`；此处原写 3.11+ 与 README/Dockerfile 不一致）
 - Node.js: 18+（前端构建）
 
 ---
@@ -101,7 +101,7 @@ cp -r dist/scada-backend/_internal ../scada-app/backend/
 ### 方案3: Docker部署
 
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 COPY . .

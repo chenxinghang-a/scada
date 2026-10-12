@@ -69,6 +69,9 @@ DOC_EXTS = {".md"}
 #: 给**别的进程 / 别的解释器**读的变量，本项目代码不读它们是正常的。
 #: 理由必须可复核（点名「谁」在读）。
 EXTERNAL_ALLOW: dict[str, str] = {
+    # 注：docker-compose.yml 现在用 `${VAR:?…}` 把宿主环境**透传**给 Grafana 容器
+    # （不再写死 admin/admin123），但读它的仍是 Grafana 容器自己，本仓代码不读；
+    # 且扫描语料只含源码 + 配置/*.yaml，不含根目录 compose，所以仍挂白名单。
     "GF_SECURITY_ADMIN_USER": "Grafana 容器自己读（grafana 镜像），本项目代码不读",
     "GF_SECURITY_ADMIN_PASSWORD": "Grafana 容器自己读（grafana 镜像），本项目代码不读",
     "GF_INSTALL_PLUGINS": "Grafana 容器自己读（grafana 镜像），本项目代码不读",

@@ -384,15 +384,32 @@ class TestControlPointConfig:
         assert client.write_single_coil.call_args_list[0][0] == (3, True)
         assert client.write_single_coil.call_args_list[1][0] == (3, False)
 
-    def test_missing_control_falls_back_with_warning(self, caplog):
-        """未配置 control 时使用显式回退点位，并且必须告警（不再静默硬编码）"""
+    def test_missing_control_in_real_mode_is_refused(self, caplog):
+        """真实设备模式下未配置 control 必须**拒绝**写入 —— 不得猜测 coil0/reg100。
+
+        行为变更（2026-10 审计整改）：旧行为是回退到写死的 coil0/reg100 并只打
+        warning；真实设备上猜点位就是误操作，现改为 fail-closed。
+        """
+        import logging
+        devices = {'plc_a': {'protocol': 'modbus_tcp'}}
+        dc, client = _make_dc(devices)          # _make_dc 里 simulation_mode = False
+        with caplog.at_level(logging.ERROR):
+            result = dc.batch_control('start', 'op')
+        client.write_single_coil.assert_not_called()
+        client.write_single_register.assert_not_called()
+        assert result['success'] is False
+        assert '拒绝回退到默认点位' in caplog.text
+
+    def test_missing_control_in_simulation_falls_back_with_warning(self, caplog):
+        """模拟模式（无物理风险）仍可回退到显式命名的默认点位，但必须告警"""
         import logging
         devices = {'plc_a': {'protocol': 'modbus_tcp'}}
         dc, client = _make_dc(devices)
+        dc.device_manager.simulation_mode = True
         with caplog.at_level(logging.WARNING):
             dc.batch_control('start', 'op')
         client.write_single_coil.assert_called_once_with(0, True)
-        assert '未配置控制点位' in caplog.text
+        assert '模拟模式下使用回退点位' in caplog.text
 
     def test_invalid_control_type_rejected(self):
         """非法点位类型必须拒绝写入，而不是猜一个点位写下命令"""

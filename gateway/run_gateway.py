@@ -24,8 +24,21 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from gateway import ModbusGateway, S7Gateway, OPCUAGateway
+from gateway import (
+    ModbusGateway, S7Gateway, OPCUAGateway, IEC104Gateway, DNP3Gateway,
+)
 import paths
+
+#: 网关类型 → 实现类。**唯一真源**：argparse 的 choices 与 --all 的分发都用它，
+#: 避免出现「choices 里列了 mqtt、但 map 里没有 → 一选就报『不支持的网关类型』」
+#: 这种幽灵选项。新增网关时只改这一处。
+GATEWAY_TYPES: dict[str, Any] = {
+    'modbus': ModbusGateway,
+    's7': S7Gateway,
+    'opcua': OPCUAGateway,
+    'iec104': IEC104Gateway,
+    'dnp3': DNP3Gateway,
+}
 
 
 def setup_logging(log_level: str = "INFO"):
@@ -48,13 +61,7 @@ def load_config(config_path: str) -> dict[str, Any]:
 
 def create_gateway(gateway_type: str, config: dict[str, Any]):
     """根据类型创建网关实例"""
-    gateway_map = {
-        'modbus': ModbusGateway,
-        's7': S7Gateway,
-        'opcua': OPCUAGateway,
-    }
-
-    gateway_class = gateway_map.get(gateway_type)
+    gateway_class = GATEWAY_TYPES.get(gateway_type)
     if not gateway_class:
         raise ValueError(f"不支持的网关类型: {gateway_type}")
 
@@ -63,9 +70,11 @@ def create_gateway(gateway_type: str, config: dict[str, Any]):
 
 def main():
     parser = argparse.ArgumentParser(description='工业SCADA协议网关服务')
-    parser.add_argument('--type', type=str, default='modbus',
-                        choices=['modbus', 's7', 'opcua', 'mqtt'],
-                        help='网关类型')
+    # `--protocol` 是 `--type` 的兼容别名：README 一直写的是 `--protocol modbus`，
+    # 而代码只认 `--type` —— 照文档执行会直接报「unrecognized arguments」。
+    parser.add_argument('--type', '--protocol', dest='type', type=str, default='modbus',
+                        choices=sorted(GATEWAY_TYPES),
+                        help='网关类型（--protocol 为兼容别名）')
     parser.add_argument('--config', type=str, default='gateway/config.yaml',
                         help='配置文件路径')
     parser.add_argument('--all', action='store_true',
