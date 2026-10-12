@@ -193,6 +193,9 @@ class DiskBackedQueue:
         # 此刻进程崩溃 → 这条数据在内存与磁盘上**同时消失**。
         self._pending: list[Dict[str, Any]] = []
         self._pending_ids: set[int] = set()
+        # 落盘失败计数：>0 表示「崩溃保护已失效」（数据只在内存里）。
+        # 必须可观测 —— 见 _persist_item 的说明。
+        self._persist_failures = 0
         # 启动时恢复
         self._recover_from_disk()
 
@@ -223,24 +226,47 @@ class DiskBackedQueue:
     def full(self) -> bool:
         return self._queue.full()
 
-    def _persist_item(self, item: Dict[str, Any]) -> None:
-        """持久化单条数据（幂等）。
+    def _persist_item(self, item: Dict[str, Any]) -> bool:
+        """持久化单条数据（幂等）。返回**是否已确认落盘**。
 
         幂等的必要性：写库失败后 `_process_data` 会把整批 `put_nowait()` 重新入队。
         若不去重，文件里会留下同一批数据的**第二份**，崩溃恢复时就会重复入库
         （history_data 出现重复行，聚合/报表随之偏大）。同一条数据的对象身份
         在 `_pending` 里已经存在时直接跳过。
+
+        ⚠️ 落盘失败**必须可见**（2026-10-13 修）：
+        历史实现只打 `logger.debug`（默认 INFO 级别下完全隐形），也不计数。
+        后果是磁盘满 / 权限错误 / 只读挂载时，每一条数据的**崩溃保护静默消失**
+        —— 数据只在内存队列里，进程一崩就真丢，而日志上什么也看不到。
+        现在：返回 False + 计数（`persist_failures`，经 `DataCollector.get_stats()`
+        暴露给 /api/system/status 与健康检查）+ ERROR 日志（按 1/每100 条限流，
+        避免磁盘满时刷爆日志把别的线索淹掉）。
         """
         try:
             with self._lock:
                 if id(item) in self._pending_ids:
-                    return
+                    return True
                 with open(self._persist_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(item, default=str, ensure_ascii=False) + '\n')
                 self._pending.append(item)
                 self._pending_ids.add(id(item))
+                return True
         except Exception as e:
-            logger.debug(f"数据持久化失败: {e}")  # 持久化失败不影响主流程
+            with self._lock:
+                self._persist_failures += 1
+                n = self._persist_failures
+            if n == 1 or n % 100 == 0:
+                logger.error(
+                    "数据持久化失败（累计 %d 条未落盘，目录 %s）：%s —— "
+                    "这些数据在进程崩溃时会丢失，请检查磁盘空间/权限",
+                    n, self._persist_dir, e,
+                )
+            return False
+
+    @property
+    def persist_failures(self) -> int:
+        """累计落盘失败条数（>0 说明崩溃保护已失效，数据只在内存里）。"""
+        return self._persist_failures
 
     def _recover_from_disk(self) -> None:
         """从磁盘恢复未处理的数据。
@@ -1553,8 +1579,14 @@ class DataCollector:
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         with self._stats_lock:
-            return {
+            stats = {
                 'running': self.running,
                 'queue_size': self.data_queue.qsize(),
                 **self.stats
             }
+        # 落盘失败计数必须从这里出去（/api/system/status 的 collector 段 +
+        # 健康检查 _check_collector 都读 get_stats）—— 只算不报等于没算。
+        failures = getattr(self.data_queue, 'persist_failures', 0)
+        if failures:
+            stats['queue_persist_failures'] = failures
+        return stats

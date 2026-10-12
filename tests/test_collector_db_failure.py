@@ -12,6 +12,7 @@
 数据本身还在磁盘上（不是丢失），但**账目不准**比数据丢失更难发现。
 """
 import ast
+import logging
 import threading
 from pathlib import Path
 
@@ -28,6 +29,7 @@ def _bare_collector(queue_maxsize: int, tmp_path, monkeypatch):
     collector.data_queue = DiskBackedQueue(maxsize=queue_maxsize)
     collector.stats = {}
     collector._stats_lock = threading.Lock()
+    collector.running = True
     return collector
 
 
@@ -150,7 +152,92 @@ def test_requeue_does_not_duplicate_disk_lines(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 4. 接线守卫（AST）
+# 5. 落盘失败（磁盘满 / 权限 / 只读挂载）—— 崩溃保护失效必须可见
+# ---------------------------------------------------------------------------
+
+def _break_persistence(queue, tmp_path):
+    """把持久化文件指到一个**父目录不存在**的路径 —— 等价于磁盘满/目录不可用"""
+    queue._persist_file = tmp_path / 'no_such_dir' / 'pending_data.jsonl'
+
+
+def test_persist_failure_returns_false_and_counts(tmp_path, monkeypatch):
+    """落盘失败必须返回 False、计数 +1，且**不得**把条目当已落盘记进 _pending"""
+    c = _bare_collector(10, tmp_path, monkeypatch)
+    _break_persistence(c.data_queue, tmp_path)
+    item = _item(1)
+
+    ok = c.data_queue._persist_item(item)
+
+    assert ok is False, '落盘失败却返回成功 —— 调用方无法得知崩溃保护已失效'
+    assert c.data_queue.persist_failures == 1
+    assert id(item) not in c.data_queue._pending_ids, '失败的条目被错误地标记为已落盘'
+
+
+def test_persist_failure_is_logged_at_error_level(tmp_path, monkeypatch, caplog):
+    """⚠️ 回归：落盘失败曾只打 logger.debug —— 默认 INFO 级别下完全隐形。
+
+    磁盘满时这是**静默的数据丢失路径**：数据只在内存里，一崩就没，日志上什么也看不到。
+    """
+    c = _bare_collector(10, tmp_path, monkeypatch)
+    _break_persistence(c.data_queue, tmp_path)
+
+    with caplog.at_level(logging.DEBUG):
+        c.data_queue._persist_item(_item(1))
+
+    records = [r for r in caplog.records if '持久化失败' in r.getMessage()]
+    assert records, '落盘失败没有任何日志'
+    assert any(r.levelno >= logging.ERROR for r in records), \
+        f'落盘失败只打了低级别日志（{records[0].levelname}）—— 生产环境看不见'
+
+
+def test_persist_failure_log_is_rate_limited(tmp_path, monkeypatch, caplog):
+    """限流：不能每失败一条就刷一行 ERROR（磁盘满时会把别的线索淹掉）"""
+    c = _bare_collector(10, tmp_path, monkeypatch)
+    _break_persistence(c.data_queue, tmp_path)
+
+    with caplog.at_level(logging.ERROR):
+        for i in range(50):
+            c.data_queue._persist_item(_item(i))
+
+    logged = [r for r in caplog.records if '持久化失败' in r.getMessage()]
+    assert c.data_queue.persist_failures == 50, '计数不能被限流影响'
+    assert len(logged) == 1, f'50 条失败打了 {len(logged)} 行日志 —— 未限流'
+
+
+def test_persist_failure_is_visible_in_get_stats(tmp_path, monkeypatch):
+    """计数必须从 get_stats() 出去（/api/system/status 的 collector 段读它）"""
+    c = _bare_collector(10, tmp_path, monkeypatch)
+    assert 'queue_persist_failures' not in c.get_stats(), '无失败时不应出现该字段'
+
+    _break_persistence(c.data_queue, tmp_path)
+    c.data_queue._persist_item(_item(1))
+
+    assert c.get_stats()['queue_persist_failures'] == 1
+
+
+def test_health_check_degrades_on_persist_failure():
+    """健康检查必须因落盘失败而降级 —— 只算不报等于没算"""
+    from core.health_checker import _check_collector
+
+    healthy = _check_collector(_FakeCollector({'running': True, 'queue_size': 5}))
+    assert healthy['status'] == 'healthy'
+
+    degraded = _check_collector(
+        _FakeCollector({'running': True, 'queue_size': 5, 'queue_persist_failures': 7}))
+    assert degraded['status'] == 'degraded', '落盘失败却仍报健康'
+    assert '落盘失败' in degraded['message']
+
+
+class _FakeCollector:
+    def __init__(self, stats):
+        self._stats = stats
+
+    def get_stats(self):
+        return dict(self._stats)
+
+
+# ---------------------------------------------------------------------------
+# 6. 接线守卫（AST）
 # ---------------------------------------------------------------------------
 
 def _process_data_fn():

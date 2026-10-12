@@ -191,8 +191,34 @@ class TestConnectionPoolPerformance:
 class TestDataCollectorPerformance:
     """数据采集器性能测试"""
 
+    @staticmethod
+    def _per_item_append_baseline(tmpdir, n):
+        """裸 IO 基线：与 DiskBackedQueue 相同的「每条 open/append/close + json.dumps」，
+        但不经过任何队列逻辑（无锁、无 _pending 记账）。
+
+        ⚠️ 为什么必须有基线（2026-10-13 修）：
+        原断言是**绝对阈值** `< 1.0s`。在本机（IndexProtect 驱动拦 IO）上，
+        纯 IO 基线就已经约 0.89s —— 只剩 11% 余量，于是**同一份代码**
+        （提交 3698168）一边 0 failed、另一边 1 failed。
+        绝对阈值把「机器 IO 快不快」当成了「代码有没有变慢」。
+        改成相对阈值后，测试意图（队列逻辑不应显著慢于裸 IO）保留，环境差异被消掉。
+        """
+        import json as _json
+        path = os.path.join(tmpdir, 'io_baseline.jsonl')
+        start = time.time()
+        for i in range(n):
+            payload = {
+                'device_id': f'device_{i % 10}',
+                'register_name': f'register_{i % 5}',
+                'value': float(i),
+                'timestamp': time.time(),
+            }
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(_json.dumps(payload, default=str, ensure_ascii=False) + '\n')
+        return time.time() - start
+
     def test_batch_processing_performance(self):
-        """测试批处理性能"""
+        """测试批处理性能（阈值相对裸 IO 基线，而不是绝对秒数）"""
         from 采集层.data_collector import DiskBackedQueue
         import tempfile
         import os
@@ -217,9 +243,19 @@ class TestDataCollectorPerformance:
                 queue.get_nowait()
             elapsed_get = time.time() - start
 
-            # 性能断言
-            assert elapsed_put < 1.0, f"批量入队耗时 {elapsed_put:.2f}s"
-            assert elapsed_get < 1.0, f"批量出队耗时 {elapsed_get:.2f}s"
+            # 性能断言：相对同一台机器上的裸 IO 基线
+            baseline = self._per_item_append_baseline(tmpdir, 1000)
+            budget_put = max(0.5, baseline * 4)
+            budget_get = max(0.5, baseline * 2)
+
+            assert elapsed_put < budget_put, (
+                f"批量入队耗时 {elapsed_put:.2f}s 超过预算 {budget_put:.2f}s "
+                f"（裸 IO 基线 {baseline:.2f}s × 4）—— 队列逻辑本身变慢了"
+            )
+            assert elapsed_get < budget_get, (
+                f"批量出队耗时 {elapsed_get:.2f}s 超过预算 {budget_get:.2f}s "
+                f"（裸 IO 基线 {baseline:.2f}s × 2）"
+            )
 
 
 class TestAlarmPerformance:

@@ -81,6 +81,21 @@ HA_PRIORITY=100            # 数值大者优先当主
   切换（主故障/恢复）时采集器自动启停，无需人工干预。
 - 单机部署（不设 `HA_PEER_ADDRESS`）不需要 `HA_SHARED_SECRET`，节点直接以 PRIMARY 运行。
 
+#### HA 链路验收（半端到端，单机可跑）
+
+完整双机演练需要**两台机器或两个 netns** —— 本协议的心跳端口模型是
+「发送目标端口 = 自己 bind 的端口」（`peer_port` 同一字段两用），同机双实例会 bind 冲突
+（`0.0.0.0` 使 127.0.0.2 隔离也无效）。单机可跑的半端到端步骤：
+
+1. 只起 `_listen_loop`（**不调** `start()`，避免心跳发送线程「自收」污染断言）；
+2. **先发一个合法签名包并等到被接受** —— 证明监听真的 bind 上（否则负向断言会是空绿）；
+3. 发错误密钥包 / 无 `signature` 包 → 断言 `heartbeats_received` 不增；
+4. 接管链：`role=STANDBY` + `_started_at` 回拨 + `_send_heartbeat` 打桩为 no-op →
+   真跑 `_heartbeat_loop` → 断言超时后晋升 `PRIMARY`；反向对照：心跳新鲜时不接管。
+
+以上四条已固化为 `tests/test_ha_protocol.py`（真 UDP + 真线程 + 真 HMAC），
+可直接 `pytest tests/test_ha_protocol.py` 验证部署环境。
+
 ### 4. 初始化数据库
 ```bash
 python -c "from 存储层.database import Database; db = Database(); db._init_database()"

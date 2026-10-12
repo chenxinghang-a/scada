@@ -16,9 +16,37 @@ def mock_db():
 
 @pytest.fixture
 def device_control(mock_db):
-    """DeviceControlSafety 实例"""
+    """DeviceControlSafety 实例（**不带 device_manager**）。
+
+    ⚠️ 语义提示（2026-10-13 加，防后人踩）：
+    没有 device_manager 时 ``_is_simulation()`` 返回 False → 按**真实设备**处理，
+    于是「零联锁规则 → 拒绝一切写操作」的 fail-closed 会生效。
+    本 fixture 因此**只适用于不触写路径**的用例（联锁装载/旁路审批、急停、
+    健康摘要、审计日志等）。
+
+    要测写路径（validate_write / batch_control）请用：
+    * ``device_control_simulated`` —— 模拟模式，写操作可放行（纯单元场景）；
+    * 或本文件下方的 ``_make_dc(devices)`` —— 自带 devices 与真实模式标记。
+    """
     from 智能层.device_control import DeviceControlSafety
     return DeviceControlSafety(mock_db)
+
+
+@pytest.fixture
+def device_control_simulated(mock_db):
+    """模拟模式的 DeviceControlSafety —— 供写路径的纯单元用例使用。
+
+    （模拟模式没有物理风险，所以「零联锁 → 拒写」的 fail-closed 不生效，
+    可以单独验证量程白名单、互斥锁、审计等与联锁无关的行为。）
+    """
+    from unittest.mock import MagicMock
+    from 智能层.device_control import DeviceControlSafety
+
+    dm = MagicMock()
+    dm.simulation_mode = True
+    dm.devices = {}
+    dm.get_all_devices.return_value = {}
+    return DeviceControlSafety(mock_db, device_manager=dm)
 
 
 class TestDeviceControlInit:

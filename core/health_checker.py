@@ -560,6 +560,15 @@ def _check_collector(dc):
         queue_size = stats.get('queue_size', 0)
         if not running:
             return {'status': HealthStatus.UNHEALTHY, 'message': '采集器未运行'}
+        # 落盘失败 = 崩溃保护失效（数据只剩内存副本）→ 必须降级告警。
+        # 不能只说"采集正常"：磁盘满时采集确实在跑，但一崩就真丢数据。
+        persist_failures = stats.get('queue_persist_failures', 0)
+        if persist_failures:
+            return {
+                'status': HealthStatus.DEGRADED,
+                'message': (f'{persist_failures} 条数据落盘失败 —— 崩溃保护失效'
+                            f'（请检查磁盘空间/权限），队列: {queue_size}'),
+            }
         if queue_size > 10000:
             return {'status': HealthStatus.DEGRADED, 'message': f'数据队列积压: {queue_size}'}
         return {'status': HealthStatus.HEALTHY, 'message': f'采集正常, 队列: {queue_size}'}
