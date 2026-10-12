@@ -151,6 +151,57 @@ def test_requeue_does_not_duplicate_disk_lines(tmp_path, monkeypatch):
     assert len(lines) == 3, f'出现重复落盘：{len(lines)} 行（应为 3）'
 
 
+def test_dropped_items_are_recoverable_after_restart(tmp_path, monkeypatch):
+    """⚠️ `dropped` 只表示「**本进程**放弃重试」，**不是永久丢失**。
+
+    对端复核指出：原注释写「这是真正的数据丢失点」，与 commit message、
+    文件头注三处互相矛盾。这里用真跑把正确语义钉死：
+    写库失败时生产代码不会调 clear_persistence → 磁盘副本仍在 → 重启必恢复。
+    """
+    monkeypatch.setenv('SCADA_QUEUE_PERSIST_DIR', str(tmp_path / 'q'))
+    from 采集层.data_collector import DataCollector, DiskBackedQueue
+
+    q = DiskBackedQueue(maxsize=10)
+    for i in range(3):
+        q.put(_item(i))                      # 先落盘再入队（崩溃保护已建立）
+
+    taken = [q.get_nowait() for _ in range(3)]
+    for it in taken:
+        it['_db_retry'] = True               # 本进程内已重试过一次
+
+    c = DataCollector.__new__(DataCollector)
+    c.data_queue = q
+    c.stats = {}
+    c._stats_lock = threading.Lock()
+
+    counts = c._requeue_failed_batch(taken)
+    assert counts['dropped'] == 3
+
+    # 等价于「进程重启」：同一个持久化目录再建一个队列
+    q2 = DiskBackedQueue(maxsize=10)
+    assert q2.qsize() == 3, \
+        '本进程放弃重试的条目重启后无法恢复 —— 那才是真丢失（与注释语义不符）'
+    assert sorted(q2.get_nowait()['value'] for _ in range(3)) == [0, 1, 2]
+
+
+def test_item_never_persisted_is_truly_lost(tmp_path, monkeypatch):
+    """反向对照：**落盘也失败**的条目才是真丢失（重启恢复不出来）。
+
+    与上一条构成正反互证：区分「本进程放弃重试」与「真的没了」。
+    """
+    monkeypatch.setenv('SCADA_QUEUE_PERSIST_DIR', str(tmp_path / 'q'))
+    from 采集层.data_collector import DiskBackedQueue
+
+    q = DiskBackedQueue(maxsize=10)
+    _break_persistence(q, tmp_path)          # 落盘不可用（磁盘满 / 目录不可写）
+    for i in range(3):
+        q.put(_item(i))                      # 入队成功，但磁盘上一行都没有
+
+    assert q.persist_failures == 3
+    q2 = DiskBackedQueue(maxsize=10)
+    assert q2.qsize() == 0, '从未落盘的数据竟然被恢复了？'
+
+
 # ---------------------------------------------------------------------------
 # 5. 落盘失败（磁盘满 / 权限 / 只读挂载）—— 崩溃保护失效必须可见
 # ---------------------------------------------------------------------------

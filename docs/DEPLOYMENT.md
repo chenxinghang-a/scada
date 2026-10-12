@@ -96,7 +96,39 @@ HA_PRIORITY=100            # 数值大者优先当主
 以上四条已固化为 `tests/test_ha_protocol.py`（真 UDP + 真线程 + 真 HMAC），
 可直接 `pytest tests/test_ha_protocol.py` 验证部署环境。
 
+### 3.2 设备控制的安全前置条件（fail-closed）
+
+**真实设备模式**（`run.py --real`）下，控制写入有两道 fail-closed 前置条件，
+任一不满足即**拒绝执行**（不会「无保护地放行」）：
+
+1. **必须能加载到安全联锁规则** —— `配置/interlocks.yaml`，或设备配置里的 `interlocks` 段。
+   一条都加载不到时，`validate_write()` 直接拒绝所有写操作。
+   （零联锁 = 一条永不触发的保护，等于没有保护。）
+2. **必须显式声明控制点位** —— 设备配置里的 `control:` 段，为 `start` / `stop` / `reset`
+   给出 `type`（`coil`/`register`）与 `address`。
+   未声明的设备在批量启停时被**拒绝**，**不会**回退到历史默认点位 `coil0` / `register100`
+   —— 真实设备上猜点位就是误操作。
+
+```yaml
+# 配置/devices_real.yaml 片段
+plc_reactor_01:
+  protocol: modbus_tcp
+  host: 192.168.1.10
+  control:                       # ← 不写这段，批量启停会被拒绝
+    start: {type: coil, address: 7,  value: true}
+    stop:  {type: coil, address: 9,  value: false}
+    reset: {type: register, address: 321, value: 0}
+```
+
+模拟模式（`run.py` 无参 / `--simulator`）不受这两条限制：无物理风险，
+仍可回退到默认点位，但会打 warning 说明用的是回退点位。
+
+> **前端提示**：控制被拒时前端会显示具体原因（联锁缺失 / 急停中 / 无可用控制点位），
+> 不再统一显示「指令已发送」。排查时也可直接看后端响应的 `reason` 字段，
+> 或日志中的「无可用控制点位，拒绝写入」。
+
 ### 4. 初始化数据库
+
 ```bash
 python -c "from 存储层.database import Database; db = Database(); db._init_database()"
 ```

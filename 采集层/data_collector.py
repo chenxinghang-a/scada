@@ -1403,12 +1403,13 @@ class DataCollector:
                         self._inc_stat('requeued_db_retry', retried)
                         logger.info(f"已重新入队 {retried} 条数据等待重试")
                     if dropped:
-                        # 计数落进 stats，让「丢了多少」在 /api/metrics 之类
+                        # 计数落进 stats，让「本进程放弃了多少条」在 /api/metrics 之类
                         # 的地方可查 —— 光有日志不足以做监控告警。
                         self._inc_stat('dropped_db_retry', dropped)
                         logger.error(
-                            f"丢弃 {dropped} 条重试后仍写库失败的数据"
-                            f"（device/reg 见上一条告警；这是数据丢失，请检查数据库状态）"
+                            f"本进程放弃重试 {dropped} 条写库失败的数据"
+                            f"（磁盘副本仍在 pending_data.jsonl，重启会再恢复一次；"
+                            f"若同时有落盘失败，那部分才不可恢复）请检查数据库状态"
                         )
                     if requeue_full:
                         self._inc_stat('requeue_full_db_retry', requeue_full)
@@ -1488,6 +1489,12 @@ class DataCollector:
         也没进任何计数 —— 日志只说「1 条未能重新入队」，实际可能是几百条。
         账目不准比数据丢失更难发现（数据还在磁盘上，但运维看不出规模）。
         不变式：``retried + dropped + requeue_full == len(batch)``。
+
+        ⚠️ **`dropped` 的准确语义（2026-10-13 对端复核后修正）**：它是
+        「**本进程内**放弃重试」，**不等于永久丢失**。写库失败时不会调用
+        `clear_persistence`，这些条目的磁盘副本仍在 `pending_data.jsonl` 里，
+        重启后 `_recover_from_disk` 会重新恢复（跳过条件只有「损坏行」与「value 为 None」）。
+        真正不可恢复的只有**落盘也失败**的那部分 —— 那由 `persist_failures` 单独计数并告警。
         """
         retried = 0
         dropped = 0
@@ -1495,8 +1502,9 @@ class DataCollector:
 
         for item in batch:
             if item.get('_db_retry'):
-                # 已重试过一次仍失败 → 丢弃。**必须计数并报出来**：
-                # 这是真正的数据丢失点，原实现直接 continue，运维看不到丢了什么、丢了多少。
+                # 本进程内已重试过一次仍失败 → 放弃在本进程内重试。
+                # 磁盘副本仍在（未 clear_persistence）→ 重启会再恢复一次，**不是永久丢失**。
+                # 仍然必须计数：原实现直接 continue，运维看不到「本进程放弃了多少条」。
                 dropped += 1
                 continue
 
