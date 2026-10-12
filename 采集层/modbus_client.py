@@ -29,11 +29,33 @@ _TRANSIENT_EXCEPTIONS = {0x04, 0x06, 0x08, 0x0A, 0x0B}  # Device Failure/Busy/Pa
 
 
 class ByteOrder(Enum):
-    """Modbus字节序（32/64位浮点数的寄存器排列方式）"""
-    ABCD = 'ABCD'  # Big-endian（西门子S7-1200/1500默认）
-    BADC = 'BADC'  # Big-endian，字交换（部分Allen-Bradley）
-    CDAB = 'CDAB'  # Little-endian字序（西门子S7-300/400）
-    DCBA = 'DCBA'  # Little-endian（部分三菱）
+    """Modbus字节序（32/64位浮点数的寄存器排列方式）
+
+    ⚠️ 命名按「字节在 4 字节里的排列」读，**不要按"字交换/字节交换"的俗称读**
+    （2026-10-13 修：原注释把 BADC 写成"字交换"、CDAB 写成"Little-endian字序"，
+    与实现**正好相反** —— 现场照注释配 byte_order 会配错）。
+
+    以 32 位值 ABCD 四字节为例（A=最高字节）：
+      * ``ABCD`` —— 字节序不变：``A B C D``（西门子 S7-1200/1500 默认）
+      * ``BADC`` —— **每个 16 位字内部字节交换**：``B A D C``（部分 Allen-Bradley）
+      * ``CDAB`` —— **两个 16 位字交换**：``C D A B``（西门子 S7-300/400）
+      * ``DCBA`` —— 四字节完全反转：``D C B A``（部分三菱）
+
+    对应的寄存器写法（w1/w2 为两个 16 位寄存器）：
+      * ``ABCD`` → ``(w1 << 16) | w2``
+      * ``BADC`` → 对 w1、w2 各做字内字节交换后 ``(w1' << 16) | w2'``
+      * ``CDAB`` → ``(w2 << 16) | w1``
+      * ``DCBA`` → 四字节全反转
+
+    ⚠️ 64 位（4 寄存器）时这四个名字**没有统一行业定义**，
+    本实现的具体映射见 ``decode_float64``，并在
+    ``tests/test_modbus_client_decode.py`` 里逐条钉住（其中 BADC 的语义与 32 位不同，
+    已在报告里列为待现场确认项）。
+    """
+    ABCD = 'ABCD'  # 字节序不变（西门子S7-1200/1500默认）
+    BADC = 'BADC'  # 字内字节交换（部分Allen-Bradley）
+    CDAB = 'CDAB'  # 两字交换（西门子S7-300/400）
+    DCBA = 'DCBA'  # 四字节全反转（部分三菱）
 
 
 class ModbusClient:
