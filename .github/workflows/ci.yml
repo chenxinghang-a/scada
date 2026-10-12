@@ -81,8 +81,8 @@ jobs:
         # （显式列出源码包，排除 dist/ 里那份约 248 MB 的重复源码 ——
         # 旧写法 `--cov=.` 会把整份 PyInstaller 产物统计进去，既慢又严重失真）。
         #
-        # --cov-fail-under=60：2026-10-13 实测 **66.0%**（2672 用例 / 112 文件 /
-        # 21373 语句；未排除 `*_example.py` 时为 ~65.5%），留 ~6 个点余量吸收跨平台差异。
+        # --cov-fail-under=60：2026-10-13 实测 **66.6%**（2718 用例 / 112 文件 /
+        # 21390 语句；未排除 `*_example.py` 时为 ~66.1%），留 ~6 个点余量吸收跨平台差异。
         #
         # ⚠️ 原先写的是 45（依据是当时的 46.72%）—— 到 2026-10-13 实际已涨到 ~65%，
         # 于是闸门**比现实低 19+ 个点，等于永远不会触发**（同「守卫恒真」那一类）。
@@ -92,12 +92,13 @@ jobs:
         # 当前短板（≥80 行的文件里覆盖最低的一批，供后续补测参考）：
         #   timeseries/tdengine_client.py  12.9%   gateway/modbus_gateway.py 12.2%
         #   gateway/s7_gateway.py          13.0%   gateway/opcua_gateway.py  14.7%
-        #   gateway/iec104_gateway.py      18.0%   gateway/base_gateway.py   21.1%
+        #   gateway/mqtt_subscriber.py     17.0%   gateway/base_gateway.py   21.1%
         # 已补（2026-10-13）：
         #   采集层/real_device_manager.py  0% → 61%（tests/test_real_device_manager.py）
-        #   采集层/modbus_client.py     42.9% → 47%（tests/test_modbus_client_decode.py，
-        #     纯函数层：解码/标度变换/地址校验/缓存语义；读写路径仍需真模拟器）
-        #   补测时顺带修了真缺陷，见各测试文件头注。
+        #   采集层/modbus_client.py     42.9% → 47%（tests/test_modbus_client_decode.py）
+        #   gateway/iec104_gateway.py      18% → 55%（tests/test_iec104_protocol.py）
+        #   补测时顺带修了多个真缺陷（IEC104 的 U 帧控制码错导致握手建不起来、
+        #   real_device_manager 盲写 coil0 等），见各测试文件头注。
         run: |
           set -o pipefail
           pytest tests/ -q --cov --cov-report=term-missing --cov-report=xml \

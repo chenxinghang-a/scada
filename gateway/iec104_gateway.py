@@ -24,6 +24,10 @@ from .thing_model import (
     ProtocolType, DataQuality
 )
 
+#: 模块级 logger —— 供 `@staticmethod`（如 `IEC104ASDU.build_command`）使用，
+#: 那些方法没有 `self`，拿不到实例 logger。
+logger = logging.getLogger(__name__)
+
 
 # ──────────────────────────────────────────────
 # IEC 104 常量定义
@@ -56,6 +60,27 @@ class TypeID:
 
     # 系统命令
     C_IC_NA_1 = 100     # 总召唤
+
+
+class UFrame:
+    """U 帧控制码（IEC 60870-5-104 §5.3）
+
+    ⚠️ 位分配（**别凭直觉写**）：
+    ``bit0, bit1 = 1, 1``（U 帧标志）；``bit2``=STARTDT act、``bit3``=STARTDT con、
+    ``bit4``=STOPDT act、``bit5``=STOPDT con、``bit6``=TESTFR act、``bit7``=TESTFR con。
+
+    历史缺陷（2026-10-13 修）：`connect()` 发的是 **0x04**、`disconnect()` 发的是 **0x08** ——
+    这两个值的 bit0/bit1 都是 0，**不符合 U 帧标志**，对端（`parse_frame` 的
+    ``control & 0x03`` 判据同理）会把它解析成 **I 帧**（还把 0x04 当成发送序号 2）。
+    后果：**STARTDT 握手永远建不起来**，连接随后因超时被对端关闭 ——
+    现场表现是「连上了又马上掉」，而日志里只有一句「连接成功」。
+    """
+    STARTDT_ACT = 0x07
+    STARTDT_CON = 0x0B
+    STOPDT_ACT = 0x13
+    STOPDT_CON = 0x23
+    TESTFR_ACT = 0x43
+    TESTFR_CON = 0x83
 
 
 # ──────────────────────────────────────────────
@@ -200,7 +225,25 @@ class IEC104ASDU:
 
         ASDU结构:
           TypeID(1) + VSQ(1) + COT(1) + Originator(1) + CommonAddr(2) + IOA(3) + Data
+
+        Returns:
+            bytes: ASDU 字节串；**类型不支持或越界时返回 b''**（调用方据此报错，
+            不得发出空 ASDU）。
+
+        ⚠️ 历史缺陷（2026-10-13 修）：type_id 越界（如 999）会先撞进
+        ``struct.pack('B', ...)`` 抛 ``struct.error`` —— 与「返回 b''」的契约不符，
+        且异常会穿过 `send_command` 冒到 API 层。现在先校验再打包。
         """
+        if not isinstance(type_id, int) or not (0 <= type_id <= 0xFF):
+            logger.error(f"非法 TypeID: {type_id!r}（必须是 0-255 的整数）")
+            return b''
+        if type_id not in (TypeID.C_SE_NC_1, TypeID.C_SC_NA_1, TypeID.C_IC_NA_1):
+            logger.error(f"不支持的 TypeID: {type_id}")
+            return b''
+        if not (0 <= ioa <= 0xFFFFFF):
+            logger.error(f"IOA 越界: {ioa}（3 字节，合法范围 0-16777215）")
+            return b''
+
         ioa_lo = ioa & 0xFF
         ioa_mid = (ioa >> 8) & 0xFF
         ioa_hi = (ioa >> 16) & 0xFF
@@ -210,11 +253,9 @@ class IEC104ASDU:
 
         if type_id == TypeID.C_SE_NC_1:            # 设定命令-短浮点
             return header + struct.pack('<fB', value, qual)
-        elif type_id == TypeID.C_SC_NA_1:          # 单命令
+        if type_id == TypeID.C_SC_NA_1:            # 单命令
             return header + struct.pack('<B', int(value) & 0x01)
-        elif type_id == TypeID.C_IC_NA_1:          # 总召唤
-            return header + struct.pack('<B', 0x14)   # QOI = 20 (全体)
-        return b''
+        return header + struct.pack('<B', 0x14)    # 总召唤：QOI = 20 (全体)
 
 
 # ──────────────────────────────────────────────
@@ -263,8 +304,8 @@ class IEC104Client:
             self.send_seq = 0
             self.recv_seq = 0
 
-            # 发送STARTDT激活
-            self._send_u_frame(0x0004)
+            # 发送STARTDT激活（0x07 —— 见 UFrame 的位分配说明；历史上误写成 0x04）
+            self._send_u_frame(UFrame.STARTDT_ACT)
 
             # 启动接收线程
             self._running = True
@@ -283,7 +324,7 @@ class IEC104Client:
         self._running = False
         if self.socket:
             try:
-                self._send_u_frame(0x0008)   # STOPDT
+                self._send_u_frame(UFrame.STOPDT_ACT)   # STOPDT（0x13，历史误写成 0x08）
             except Exception as e:
                 # 发送停止帧失败通常因连接已断开，属预期内且无副作用
                 self.logger.debug("发送STOPDT失败 %s:%s: %s", self.host, self.port, e)
@@ -371,12 +412,25 @@ class IEC104Client:
 
         if parsed['type'] == 'U':
             ctrl = parsed['control']
-            if ctrl & 0x10:
+            # U 帧控制位见 UFrame 的说明（bit2..bit7 依次为
+            # STARTDT act/con、STOPDT act/con、TESTFR act/con）。
+            # 历史实现用 0x10 判「STARTDT con」、0x40 判「TESTFR con」——两者都错位：
+            # 0x10 是 STOPDT act、0x40 是 TESTFR act，日志会把现场调试带偏。
+            if ctrl & 0x08:
                 self.logger.info("收到 STARTDT con")
             if ctrl & 0x20:
                 self.logger.info("收到 STOPDT con")
-            if ctrl & 0x40:
+            if ctrl & 0x80:
                 self.logger.info("收到 TESTFR con")
+            if ctrl == UFrame.TESTFR_ACT:
+                # 标准要求：收到 TESTFR act **必须**回 TESTFR con，
+                # 否则对端在测试超时后判定链路失效并断开。
+                #
+                # ⚠️ 必须用**相等**而不是 `ctrl & UFrame.TESTFR_ACT`：
+                # 后者是把「值常量」当位掩码用 —— 0x43 本身含 bit0/bit1，
+                # 于是 TESTFR_CON(0x83) & 0x43 == 0x03 非零，**con 也会被应答**，
+                # 两端会无限对答。（这个错我第一版就犯了，被反向对照用例当场抓住。）
+                self._send_u_frame(UFrame.TESTFR_CON)
 
         elif parsed['type'] == 'S':
             pass   # S帧仅确认，无需处理
