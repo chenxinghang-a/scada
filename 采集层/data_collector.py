@@ -1367,28 +1367,12 @@ class DataCollector:
                 except Exception as e:
                     db_write_ok = False
                     logger.warning(f"批量写入数据库失败 ({len(batch)} 条): {e}")
-                    # 失败数据重新入队（标记 _db_retry 防止无限重试）
-                    retried = 0
-                    dropped = 0
-                    requeue_full = 0
-                    for item in batch:
-                        if item.get('_db_retry'):
-                            # 已重试过一次仍失败 → 丢弃。
-                            # **必须计数并报出来** —— 这是真正的数据丢失点，
-                            # 原实现直接 continue，运维完全看不到丢了什么、丢了多少。
-                            dropped += 1
-                            continue
-                        item['_db_retry'] = True
-                        try:
-                            if not self.data_queue.full():
-                                self.data_queue.put_nowait(item)
-                                retried += 1
-                            else:
-                                requeue_full += 1
-                                break
-                        except queue.Full:
-                            requeue_full += 1
-                            break
+                    # 失败数据重新入队（标记 _db_retry 防止无限重试）。
+                    # 计数不变式：retried + dropped + requeue_full == len(batch)
+                    counts = self._requeue_failed_batch(batch)
+                    retried = counts['retried']
+                    dropped = counts['dropped']
+                    requeue_full = counts['requeue_full']
                     if retried:
                         self._inc_stat('requeued_db_retry', retried)
                         logger.info(f"已重新入队 {retried} 条数据等待重试")
@@ -1465,6 +1449,44 @@ class DataCollector:
             except Exception as e:
                 if self.running:
                     logger.error(f"批量数据处理异常: {e}")
+
+    def _requeue_failed_batch(self, batch: list[Dict[str, Any]]) -> Dict[str, int]:
+        """写库失败后把整批重新入队，返回 ``{'retried','dropped','requeue_full'}``。
+
+        规则：
+        * 已带 ``_db_retry``（本次进程内已经重试过一次）→ 记为 **dropped**（真丢失点）；
+        * 其余按**原顺序**尝试重新入队；队列满则记 **requeue_full**（数据仍留在磁盘，
+          下次启动可恢复，不是丢失）。
+
+        ⚠️ 这里刻意**不 break**：队列一满就跳出循环，会让「本批剩余条目」既没入队、
+        也没进任何计数 —— 日志只说「1 条未能重新入队」，实际可能是几百条。
+        账目不准比数据丢失更难发现（数据还在磁盘上，但运维看不出规模）。
+        不变式：``retried + dropped + requeue_full == len(batch)``。
+        """
+        retried = 0
+        dropped = 0
+        requeue_full = 0
+
+        for item in batch:
+            if item.get('_db_retry'):
+                # 已重试过一次仍失败 → 丢弃。**必须计数并报出来**：
+                # 这是真正的数据丢失点，原实现直接 continue，运维看不到丢了什么、丢了多少。
+                dropped += 1
+                continue
+
+            if self.data_queue.full():
+                # 队列满：本条与后续都进不去。数据仍在磁盘持久化文件里，下次启动恢复。
+                requeue_full += 1
+                continue
+
+            item['_db_retry'] = True
+            try:
+                self.data_queue.put_nowait(item)
+                retried += 1
+            except queue.Full:
+                requeue_full += 1
+
+        return {'retried': retried, 'dropped': dropped, 'requeue_full': requeue_full}
 
     def _dispatch_intelligence(self, data: dict):
         """智能层数据分发（在独立线程中运行）"""
