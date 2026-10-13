@@ -194,12 +194,21 @@ class ModbusGateway(BaseGateway):
     @staticmethod
     def _parse_byte_order(byte_order_str: str) -> tuple:
         """
-        将字节序字符串转换为pymodbus的(byteorder, wordorder)元组
+        将字节序字符串转换为 pymodbus 的 (byteorder, wordorder) 元组。
 
-        ABCD: Big-endian bytes, Big-endian words
-        BADC: Big-endian bytes, Little-endian words
-        CDAB: Big-endian bytes, Little-endian words (same as BADC for pymodbus)
-        DCBA: Little-endian bytes, Little-endian words
+        ⚠️ **原 docstring 把 CDAB 写成 "same as BADC for pymodbus"—— 那是错的**：
+        本实现里两者是**不同的两个组合**（BADC = (LITTLE, BIG)、
+        CDAB = (BIG, LITTLE)）。现场照原注释理解会把两种字序混为一谈，
+        配置 byte_order 时选错 → 浮点数整体错位。
+
+        四种映射（按 Modbus 四字母约定 + pymodbus 的 (byteorder, wordorder)）：
+          ABCD = (BIG,    BIG)     整块大端
+          BADC = (LITTLE, BIG)     字内小端、字序大端
+          CDAB = (BIG,    LITTLE)  字内大端、字序小端
+          DCBA = (LITTLE, LITTLE)  整块小端
+        未知值一律回退 (BIG, BIG)（与 pymodbus 默认一致）。
+
+        行为由 tests/test_modbus_gateway_decode.py 钉住（四种解出的值两两不同）。
         """
         order_map = {
             'ABCD': (Endian.BIG, Endian.BIG),
