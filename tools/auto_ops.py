@@ -24,15 +24,20 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
 
 class AutoOps:
     """自动化运维"""
 
-    def __init__(self):
+    def __init__(self, db_mode: str = None):
         self.project_root = project_root
         self.log_dir = project_root / 'logs'
         self.data_dir = project_root / 'data'
         self.backup_dir = project_root / 'backups'
+        # round 213：库路径走单一真源（原先 6 处写死 scada.db，全指旧库）
+        self.db_mode = paths.resolve_cli_db_mode(db_mode)
+        self.db_path = Path(paths.get_db_path(self.db_mode))
 
         # 确保目录存在
         self.log_dir.mkdir(exist_ok=True)
@@ -47,7 +52,7 @@ class AutoOps:
         }
 
         # 1. 检查数据库
-        db_path = self.data_dir / 'scada.db'
+        db_path = self.db_path
         if db_path.exists():
             try:
                 conn = sqlite3.connect(str(db_path))
@@ -121,13 +126,13 @@ class AutoOps:
         }
 
         # 1. 备份数据库
-        db_path = self.data_dir / 'scada.db'
+        db_path = self.db_path
         if db_path.exists():
             import shutil
-            dest = backup_path / 'scada.db'
+            dest = backup_path / self.db_path.name
             shutil.copy2(db_path, dest)
             result['files'].append({
-                'file': 'scada.db',
+                'file': self.db_path.name,
                 'size_mb': round(dest.stat().st_size / (1024 * 1024), 2),
             })
 
@@ -191,7 +196,7 @@ class AutoOps:
         result['cleaned']['backups'] = backup_cleaned
 
         # 3. 清理旧数据（如果数据库存在）
-        db_path = self.data_dir / 'scada.db'
+        db_path = self.db_path
         if db_path.exists():
             try:
                 conn = sqlite3.connect(str(db_path))
@@ -230,7 +235,7 @@ class AutoOps:
         report['health'] = self.health_check()
 
         # 数据库统计
-        db_path = self.data_dir / 'scada.db'
+        db_path = self.db_path
         if db_path.exists():
             try:
                 conn = sqlite3.connect(str(db_path))
@@ -288,10 +293,13 @@ def main():
     parser.add_argument('command', choices=['health-check', 'backup', 'cleanup', 'report', 'all'],
                        help='执行的命令')
     parser.add_argument('--days', type=int, default=30, help='清理天数')
+    parser.add_argument('--db-mode', default=None,
+                        choices=['simulated', 'real', 'simulator', 'default'],
+                        help='数据库模式（默认读 SCADA_DB_MODE env，再回退 simulated）')
 
     args = parser.parse_args()
 
-    ops = AutoOps()
+    ops = AutoOps(db_mode=args.db_mode)
 
     if args.command == 'health-check':
         result = ops.health_check()

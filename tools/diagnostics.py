@@ -25,15 +25,20 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
 
 class SystemDiagnostics:
     """系统诊断工具"""
 
-    def __init__(self):
+    def __init__(self, db_mode: str = None):
         self.project_root = project_root
         self.data_dir = project_root / 'data'
         self.log_dir = project_root / 'logs'
         self.config_dir = project_root / '配置'
+        # round 213：库路径走单一真源（原先写死 scada.db，诊断全查的旧库）
+        self.db_mode = paths.resolve_cli_db_mode(db_mode)
+        self.db_path = Path(paths.get_db_path(self.db_mode))
 
     def run_full_diagnostics(self) -> Dict[str, Any]:
         """运行完整诊断"""
@@ -77,7 +82,7 @@ class SystemDiagnostics:
 
     def _check_database(self) -> Dict[str, Any]:
         """检查数据库状态"""
-        db_path = self.data_dir / 'scada.db'
+        db_path = self.db_path
 
         if not db_path.exists():
             return {'status': 'error', 'message': '数据库文件不存在'}
@@ -239,7 +244,7 @@ class SystemDiagnostics:
     def _check_performance(self) -> Dict[str, Any]:
         """检查性能指标"""
         # 测试数据库写入性能
-        db_path = self.data_dir / 'scada.db'
+        db_path = self.db_path
         if not db_path.exists():
             return {'status': 'error', 'message': '数据库不存在'}
 
@@ -341,10 +346,13 @@ def main():
     parser = argparse.ArgumentParser(description='SCADA系统诊断工具')
     parser.add_argument('command', choices=['full', 'connectivity', 'performance', 'memory'],
                        help='诊断类型')
+    parser.add_argument('--db-mode', default=None,
+                        choices=['simulated', 'real', 'simulator', 'default'],
+                        help='数据库模式（默认读 SCADA_DB_MODE env，再回退 simulated）')
 
     args = parser.parse_args()
 
-    diagnostics = SystemDiagnostics()
+    diagnostics = SystemDiagnostics(db_mode=args.db_mode)
 
     if args.command == 'full':
         results = diagnostics.run_full_diagnostics()

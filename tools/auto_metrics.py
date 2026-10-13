@@ -23,15 +23,21 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
 
 class MetricsCollector:
     """性能指标采集器"""
 
-    def __init__(self):
+    def __init__(self, db_mode: str = None):
         self.project_root = project_root
-        self.data_dir = project_root / 'data'
         self.metrics_dir = project_root / 'metrics'
         self.metrics_dir.mkdir(exist_ok=True)
+
+        # round 213：库路径走单一真源解析（原先写死 data/scada.db，
+        # 指向 4.5 个月没人用的旧库，指标全采错了还不报错）
+        self.db_mode = paths.resolve_cli_db_mode(db_mode)
+        self.db_path = Path(paths.get_db_path(self.db_mode))
 
         # 指标存储
         self.metrics_file = self.metrics_dir / 'metrics.jsonl'
@@ -80,7 +86,7 @@ class MetricsCollector:
 
     def collect_database_metrics(self) -> Dict[str, Any]:
         """采集数据库指标"""
-        db_path = self.data_dir / 'scada.db'
+        db_path = self.db_path
 
         if not db_path.exists():
             return {'timestamp': datetime.now().isoformat(), 'type': 'database', 'status': 'missing'}
@@ -110,7 +116,7 @@ class MetricsCollector:
             metrics['total_records'] = sum(v for v in table_counts.values() if v > 0)
 
             # WAL大小
-            wal_path = self.data_dir / 'scada.db-wal'
+            wal_path = self.db_path.with_name(self.db_path.name + '-wal')
             if wal_path.exists():
                 metrics['wal_size_mb'] = round(wal_path.stat().st_size / (1024 * 1024), 2)
 
@@ -286,10 +292,17 @@ def main():
     parser.add_argument('command', choices=['collect', 'report', 'alert'],
                        help='执行的命令')
     parser.add_argument('--hours', type=int, default=24, help='报告时间范围（小时）')
+    # round 213：显式选库（原先写死 scada.db，指到旧库还不报错）。
+    # 不传则读 SCADA_DB_MODE env，再没有回退 simulated（与 run.py 无参默认一致）。
+    parser.add_argument('--db-mode', default=None,
+                        choices=['simulated', 'real', 'simulator', 'default'],
+                        help='数据库模式（默认读 SCADA_DB_MODE env，再回退 simulated）')
 
     args = parser.parse_args()
 
-    collector = MetricsCollector()
+    collector = MetricsCollector(db_mode=args.db_mode)
+    # 把「这次分析的是哪个库」打到明面上 —— 静默选库正是这类缺陷的温床
+    print(f"[db] {paths.describe_db_choice(collector.db_mode)}", file=sys.stderr)
 
     if args.command == 'collect':
         metrics = collector.collect_all()

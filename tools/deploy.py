@@ -23,16 +23,23 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
 
 class Deployer:
     """部署管理器"""
 
-    def __init__(self):
+    def __init__(self, db_mode: str = None):
         self.project_root = project_root
         self.deploy_dir = project_root / '.deploy'
         self.backup_dir = self.deploy_dir / 'backups'
         self.deploy_dir.mkdir(exist_ok=True)
         self.backup_dir.mkdir(exist_ok=True)
+        # round 213：库路径走单一真源。原实现 5 处写死 data/scada.db ——
+        # 完整性检查、备份、**rollback** 全都在操作那份没人用的旧库
+        # （「rollback 把旧库拷回去当生产库」就是这么来的）。
+        self.db_mode = paths.resolve_cli_db_mode(db_mode)
+        self.db_path = Path(paths.get_db_path(self.db_mode))
 
     def check_environment(self) -> Dict[str, Any]:
         """检查部署环境"""
@@ -95,7 +102,7 @@ class Deployer:
             })
 
         # 4. 检查数据库
-        db_path = self.project_root / 'data' / 'scada.db'
+        db_path = self.db_path
         if db_path.exists():
             import sqlite3
             try:
@@ -166,12 +173,13 @@ class Deployer:
                 result['files'].append('配置')
 
             # 备份数据库
-            db_path = self.project_root / 'data' / 'scada.db'
+            db_path = self.db_path
             if db_path.exists():
                 data_backup = backup_path / 'data'
                 data_backup.mkdir(exist_ok=True)
-                shutil.copy2(db_path, data_backup / 'scada.db')
-                result['files'].append('data/scada.db')
+                # round 213：备份文件名跟随真实库名（备份的是哪个库就叫什么）
+                shutil.copy2(db_path, data_backup / db_path.name)
+                result['files'].append(f'data/{db_path.name}')
 
             # 保存版本信息
             version_info = {
@@ -322,9 +330,17 @@ class Deployer:
                 shutil.copytree(config_backup, dest_config)
 
             # 恢复数据库
-            db_backup = latest_backup / 'data' / 'scada.db'
+            # round 213：备份名跟随真源库名；**兼容旧格式备份**（早先写死 scada.db）
+            db_backup = latest_backup / 'data' / self.db_path.name
+            if not db_backup.exists():
+                legacy = latest_backup / 'data' / 'scada.db'
+                if legacy.exists():
+                    logger.warning(
+                        "备份目录里没有 %s，回退到旧格式备份 %s",
+                        self.db_path.name, legacy.name)
+                    db_backup = legacy
             if db_backup.exists():
-                dest_db = self.project_root / 'data' / 'scada.db'
+                dest_db = self.db_path
                 shutil.copy2(db_backup, dest_db)
 
             result['status'] = 'success'
@@ -374,10 +390,13 @@ def main():
     parser = argparse.ArgumentParser(description='自动化部署脚本')
     parser.add_argument('command', choices=['check', 'backup', 'deploy', 'rollback'], help='命令')
     parser.add_argument('--tag', help='版本标签')
+    parser.add_argument('--db-mode', default=None,
+                        choices=['simulated', 'real', 'simulator', 'default'],
+                        help='数据库模式（默认读 SCADA_DB_MODE env，再回退 simulated）')
 
     args = parser.parse_args()
 
-    deployer = Deployer()
+    deployer = Deployer(db_mode=args.db_mode)
 
     if args.command == 'check':
         result = deployer.check_environment()

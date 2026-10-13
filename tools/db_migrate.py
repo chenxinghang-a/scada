@@ -22,15 +22,22 @@ from typing import List, Dict, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
 MIGRATIONS_DIR = project_root / 'migrations'
-DB_PATH = project_root / 'data' / 'scada.db'
+
+
+def default_db_path(db_mode: str = None) -> Path:
+    """默认库路径 —— round 213 起走单一真源（原先模块级写死 scada.db）。"""
+    return Path(paths.get_db_path(paths.resolve_cli_db_mode(db_mode)))
 
 
 class MigrationManager:
     """数据库迁移管理器"""
 
-    def __init__(self, db_path: str = None):
-        self.db_path = db_path or str(DB_PATH)
+    def __init__(self, db_path: str = None, db_mode: str = None):
+        self.db_mode = paths.resolve_cli_db_mode(db_mode)
+        self.db_path = db_path or str(default_db_path(self.db_mode))
         self.migrations_dir = MIGRATIONS_DIR
         self.migrations_dir.mkdir(parents=True, exist_ok=True)
         self._init_migrations_table()
@@ -249,6 +256,12 @@ def downgrade(conn: sqlite3.Connection):
 
 def main():
     parser = argparse.ArgumentParser(description='数据库迁移管理工具')
+    # ⚠️ 这是主 parser 的选项，**要放在子命令前**：
+    #   python tools/db_migrate.py --db-mode simulated status
+    # 或者用 env（无需记位置）：SCADA_DB_MODE=simulated python tools/db_migrate.py status
+    parser.add_argument('--db-mode', default=None,
+                        choices=['simulated', 'real', 'simulator', 'default'],
+                        help='数据库模式（放子命令前；或设 SCADA_DB_MODE env；再回退 simulated）')
     subparsers = parser.add_subparsers(dest='command', help='命令')
 
     # create命令
@@ -271,7 +284,8 @@ def main():
         parser.print_help()
         return
 
-    manager = MigrationManager()
+    # round 213：库路径走单一真源（显式 --db-mode > SCADA_DB_MODE env > simulated）
+    manager = MigrationManager(db_mode=args.db_mode)
 
     if args.command == 'create':
         manager.create_migration(args.name)

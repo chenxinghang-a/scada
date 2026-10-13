@@ -22,14 +22,19 @@ from typing import Dict, List, Any, Optional
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
 
 class AlertRuleGenerator:
     """告警规则生成器"""
 
-    def __init__(self):
+    def __init__(self, db_mode: str = None):
         self.project_root = project_root
         self.data_dir = project_root / 'data'
         self.config_dir = project_root / '配置'
+        # round 213：库路径走单一真源（原先写死 scada.db，指到旧库还不报错）
+        self.db_mode = paths.resolve_cli_db_mode(db_mode)
+        self.db_path = Path(paths.get_db_path(self.db_mode))
 
         # 默认告警阈值模板
         self.threshold_templates = {
@@ -313,7 +318,7 @@ class AlertRuleGenerator:
 
     def _get_register_stats(self, device_id: str, register_name: str) -> Optional[Dict[str, float]]:
         """获取寄存器历史统计"""
-        db_path = self.data_dir / 'scada.db'
+        db_path = self.db_path
 
         if not db_path.exists():
             return None

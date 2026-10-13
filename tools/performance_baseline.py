@@ -22,11 +22,17 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
 
 class PerformanceBaseline:
     """性能基线管理器"""
 
-    def __init__(self, baseline_file: str = None):
+    def __init__(self, baseline_file: str = None, db_mode: str = None):
+        # round 213：库路径走单一真源（原先采样里写死 scada.db，
+        # 测的是那份没人用的旧库的查询性能）
+        self.db_mode = paths.resolve_cli_db_mode(db_mode)
+        self.db_path = Path(paths.get_db_path(self.db_mode))
         self.baseline_file = baseline_file or str(project_root / '.performance_baseline.json')
         self.baseline = self._load_baseline()
 
@@ -136,7 +142,7 @@ class PerformanceBaseline:
 
         # 测试数据库查询性能
         try:
-            db_path = project_root / 'data' / 'scada.db'
+            db_path = self.db_path
             if db_path.exists():
                 start = time.time()
                 conn = sqlite3.connect(str(db_path), timeout=5)
@@ -288,10 +294,13 @@ def main():
     parser = argparse.ArgumentParser(description='性能基线工具')
     parser.add_argument('command', choices=['establish', 'compare', 'report'], help='命令')
     parser.add_argument('--duration', type=int, default=5, help='基线建立时长（分钟）')
+    parser.add_argument('--db-mode', default=None,
+                        choices=['simulated', 'real', 'simulator', 'default'],
+                        help='数据库模式（默认读 SCADA_DB_MODE env，再回退 simulated）')
 
     args = parser.parse_args()
 
-    baseline = PerformanceBaseline()
+    baseline = PerformanceBaseline(db_mode=args.db_mode)
 
     if args.command == 'establish':
         result = baseline.establish_baseline(args.duration)

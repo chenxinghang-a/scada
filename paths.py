@@ -159,6 +159,40 @@ def get_db_path(mode: str = 'simulated') -> str:
     return str(DB_PATHS.get(mode, DB_PATHS['default']))
 
 
+def resolve_cli_db_mode(mode: str | None = None) -> str:
+    """CLI 工具（`tools/` 下）的库模式解析 —— **单一真源，禁止自己拼库名**。
+
+    为什么需要它
+    ------------
+    `tools/` 下的工具原先各自写死 `data/scada.db`（round 213 实测 20 处 / 9 文件）。
+    后果不是报错，而是**静默指错**：这些工具去读那份 4.5 个月没人用的旧库，
+    诊断会报「正常」、迁移会「成功」、备份会忠实地备下错的库 ——
+    **不报错、结果看起来合理，只是答案是关于另一个库的**。
+
+    优先级（从高到低）
+    ----------------
+    1. 调用方显式传入的 `mode`（CLI `--db-mode`）；
+    2. 环境变量 `SCADA_DB_MODE`（无人值守场景的显式通道）；
+    3. 回退 `'simulated'` —— 与 `run.py` 无参默认（模拟模式）一致。
+
+    ⚠️ 回退到 `'simulated'` 是**有意的默认**，但它不是「悄悄」的：
+    调用方应当在启动时打印实际选用的模式与路径（`describe_db_choice`），
+    让操作者一眼看见「这次分析的是哪个库」。
+    """
+    if mode:
+        return mode
+    env = os.environ.get('SCADA_DB_MODE')
+    if env:
+        return env
+    return 'simulated'
+
+
+def describe_db_choice(mode: str | None = None) -> str:
+    """给人看的一行说明：当前 CLI 工具用的是哪个模式、哪个库文件。"""
+    m = resolve_cli_db_mode(mode)
+    return f"库模式: {m} -> {get_db_path(m)}"
+
+
 def get_config_path(filename: str) -> str:
     """获取配置文件路径"""
     return str(CONFIG_DIR / filename)

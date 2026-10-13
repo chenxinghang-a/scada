@@ -21,13 +21,17 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
 
 class CapacityPlanner:
     """容量规划器"""
 
-    def __init__(self):
+    def __init__(self, db_mode: str = None):
         self.project_root = project_root
-        self.db_path = project_root / 'data' / 'scada.db'
+        # round 213：库路径走单一真源（原先写死 scada.db，规划算的是旧库的账）
+        self.db_mode = paths.resolve_cli_db_mode(db_mode)
+        self.db_path = Path(paths.get_db_path(self.db_mode))
         self.thresholds = {
             'disk_warning': 80,      # 磁盘使用率警告阈值 (%)
             'disk_critical': 90,     # 磁盘使用率严重阈值 (%)

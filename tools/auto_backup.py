@@ -18,16 +18,21 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
 
 class AutoBackup:
     """自动备份管理器"""
 
-    def __init__(self, backup_dir: str = None):
+    def __init__(self, backup_dir: str = None, db_mode: str = None):
         self.project_root = project_root
         self.backup_dir = Path(backup_dir) if backup_dir else project_root / 'backups'
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
-        self.db_path = project_root / 'data' / 'scada.db'
+        # round 213：库路径走单一真源。原实现写死 data/scada.db ——
+        # 而模拟模式在用 scada_simulated.db → 备份忠实地备下**没人用的旧库**。
+        self.db_mode = paths.resolve_cli_db_mode(db_mode)
+        self.db_path = Path(paths.get_db_path(self.db_mode))
         self.config_dir = project_root / '配置'
 
         self._running = False
@@ -301,10 +306,13 @@ def main():
     parser.add_argument('command', choices=['backup', 'auto', 'cleanup', 'list'], help='命令')
     parser.add_argument('--interval', type=int, default=24, help='自动备份间隔（小时）')
     parser.add_argument('--days', type=int, default=30, help='保留天数')
+    parser.add_argument('--db-mode', default=None,
+                        choices=['simulated', 'real', 'simulator', 'default'],
+                        help='数据库模式（默认读 SCADA_DB_MODE env，再回退 simulated）')
 
     args = parser.parse_args()
 
-    backup = AutoBackup()
+    backup = AutoBackup(db_mode=args.db_mode)
 
     if args.command == 'backup':
         result = backup.run_backup()

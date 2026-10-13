@@ -275,12 +275,17 @@ def test_performance_baseline_db_failure_is_marked_not_zero(tmp_path, monkeypatc
     """
     import tools.performance_baseline as perf_mod
 
-    monkeypatch.setattr(perf_mod, 'project_root', tmp_path)
-
     data_dir = tmp_path / 'data'
     data_dir.mkdir()
     # 一个不是 sqlite 库的文件 → connect 能过，execute 会抛 sqlite3.DatabaseError
-    (data_dir / 'scada.db').write_text('这不是一个 sqlite 数据库', encoding='utf-8')
+    bad_db = data_dir / 'scada.db'
+    bad_db.write_text('这不是一个 sqlite 数据库', encoding='utf-8')
+
+    # round 213 起库路径走 paths 单一真源（__init__ 时解析），
+    # 所以夹具必须注入 paths.get_db_path —— monkeypatch project_root
+    # 已不再影响库解析（那正是本轮修复的语义）。
+    monkeypatch.setattr(perf_mod.paths, 'get_db_path',
+                        lambda mode='simulated': str(bad_db))
 
     pb = perf_mod.PerformanceBaseline(baseline_file=str(tmp_path / 'bl.json'))
     sample = pb._take_sample()
