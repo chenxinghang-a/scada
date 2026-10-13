@@ -82,6 +82,9 @@ def _env_path(var: str, default: Path) -> Path:
 DATA_DIR = _env_path('SCADA_DATA_DIR', _BASE / 'data')
 CONFIG_DIR = _env_path('SCADA_CONFIG_DIR', _BASE / '配置')
 LOG_DIR = _env_path('SCADA_LOG_DIR', _BASE / 'logs')
+#: 性能指标目录（tools/auto_metrics.py 写、展示层/api/api_performance.py 读 ——
+#: 两侧必须用同一个常量，否则「写的没人读、读的没人写」又会出现）
+METRICS_DIR = PROJECT_ROOT / 'metrics'
 EXPORT_DIR = _BASE / 'exports'
 
 #: 运行时端口文件。后端启动后把实际监听的 ``port/pid/mode/started_at`` 写入此文件，
@@ -196,6 +199,46 @@ def describe_db_choice(mode: str | None = None) -> str:
 def get_config_path(filename: str) -> str:
     """获取配置文件路径"""
     return str(CONFIG_DIR / filename)
+
+
+def resolve_config_file(p) -> Path:
+    """配置区文件的 **env-aware** 解析（round 213：修 round 206 没修完的那一半）。
+
+    背景
+    ----
+    round 206「多实例隔离」把**库**那一半边修了（``get_db_path`` 吃 env），
+    但**配置**那一半边没修：``展示层/api/_common.py`` 的 ``load_yaml_config`` /
+    ``save_yaml_config`` 用 ``resolve()`` 解析，而 ``resolve`` 按 **BASE_DIR**
+    （不吃 env）→ 设了 ``SCADA_CONFIG_DIR`` 后，接口读/写的仍是**仓库那份**
+    配置。实测 25 处调用点全中招（api_alarms 15 / api_system 4 / vacuum_db 2 /
+    retention_scheduler / run.py / websocket / device_control），
+    运行时反向对照：隔离配置里把 cors.origins 改成 marker.invalid 后，
+    打包产物读到的还是仓库那份 → 多实例「配置互相覆盖」照旧存在。
+
+    语义
+    ----
+    * 相对路径且以 **配置目录名开头**（``配置/...``，兼容反斜杠）→ 映射到
+      ``CONFIG_DIR``（**吃 SCADA_CONFIG_DIR env**）；
+    * 绝对路径、临时文件、其它形态 → 原样交给 ``resolve()``
+      （向后兼容：测试用 tmp 绝对路径，行为不变）。
+    """
+    text = str(p).replace('\\', '/')
+    # ⚠️ 前缀是**源路径形态**（固定字符串 '配置/'），不是 CONFIG_DIR.name ——
+    # 隔离目录可以叫任何名字（SCADA_CONFIG_DIR=/tmp/iso_cfg 完全合法），
+    # 用 CONFIG_DIR.name 做前缀会让真实隔离场景永远匹配不上（2026-10-13 测试抓出）。
+    prefix = '配置/'
+    if text.startswith(prefix):
+        rest = text[len(prefix):].lstrip('/')
+        if rest:
+            if os.environ.get('SCADA_CONFIG_DIR'):
+                # env 显式隔离（多实例）：走 CONFIG_DIR（import 时按 env 算好）
+                return CONFIG_DIR / rest
+            # 未设 env：按 BASE_DIR **动态**解析（与 CONFIG_DIR 的默认值等价，
+            # 但保留 monkeypatch BASE_DIR 的能力 —— test_path_resolution 的
+            # CWD 独立性用例依赖这一点；第一版直接走 CONFIG_DIR 时它是失真的，
+            # 而且会往真实仓库写文件，2026-10-13 抓出）
+            return (BASE_DIR / prefix) / rest
+    return resolve(p)
 
 
 # ---------------------------------------------------------------------------

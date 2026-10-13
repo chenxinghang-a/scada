@@ -31,7 +31,8 @@ class MetricsCollector:
 
     def __init__(self, db_mode: str = None):
         self.project_root = project_root
-        self.metrics_dir = project_root / 'metrics'
+        # round 213：目录走 paths 单一真源（与展示层 api_performance.py 的读取侧同源）
+        self.metrics_dir = paths.METRICS_DIR
         self.metrics_dir.mkdir(exist_ok=True)
 
         # round 213：库路径走单一真源解析（原先写死 data/scada.db，

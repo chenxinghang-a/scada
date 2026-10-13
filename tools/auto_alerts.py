@@ -6,6 +6,27 @@
     python tools/auto_alerts.py generate   # 生成告警规则
     python tools/auto_alerts.py validate   # 验证现有规则
     python tools/auto_alerts.py optimize   # 优化告警规则
+
+⚠️⚠️ **产物是死胡同 —— 生成即用不了（2026-10-13 round 213 核实）**
+----------------------------------------------------------------
+本工具写出的 `配置/alarms_generated.yaml` **没有任何代码读它**，
+而且**光改文件名也接不上**，差三样东西（逐层核实）：
+
+  1. **文件名**：生成 `alarms_generated.yaml`，而告警引擎
+     （`报警层/alarm_manager.py`，默认 config_path `配置/alarms.yaml`）读的是
+     `alarms.yaml`；
+  2. **顶层键**：`save_rules()` 写的是 ``{'rules': [...], 'generated_at',
+     'total_rules'}``，而加载端读的是 ``config['alarm_rules']``；
+  3. **合并策略**：`配置/alarms.yaml` 里已有人工维护的 `alarm_rules` +
+     `alarm_output`（声光继电器映射）+ `dedup` —— 自动生成物**不能直接覆盖**，
+     否则丢声光输出与去重配置。
+
+→ **当前定位：仅供预览 / 手动合并**（这也是本轮选定的处置，见
+`tests/test_auto_alerts_product_is_dead_end.py` 的反向对照）。
+要把它接进生产，三条路（都会动告警加载主路径，需主人拍板）：
+  A. `AlarmManager` 支持合并加载两个文件（生成物作补充源、人工优先）；
+  B. `save_rules()` 输出时合并进 alarms.yaml（有覆盖人维护内容的风险）；
+  C.（当前）保持死胡同，文档写清，防止后人误以为「规则自动在跑」。
 """
 
 import os

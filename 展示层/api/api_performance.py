@@ -189,7 +189,8 @@ class PerformanceCollector:
 
     def get_history(self, hours: int = 24) -> list:
         """获取历史指标"""
-        metrics_file = self._project_root / 'metrics' / 'metrics.jsonl'
+        # round 213：目录走 paths 单一真源（与 tools/auto_metrics.py 的写入侧同源）
+        metrics_file = paths.METRICS_DIR / 'metrics.jsonl'
         if not metrics_file.exists():
             return []
 
