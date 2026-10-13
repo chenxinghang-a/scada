@@ -41,6 +41,10 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/queue/
+
+# 性能指标采集产物（tools/auto_metrics.py 写、api_performance 读）——
+# 运行期文件，与 data/ logs/ 同理不进仓库
+metrics/
 # 运行时发现文件（run.py 每次启动写入实际端口/pid/mode）
 data/runtime.json
 # 运行期标准输出/错误转储（历史误跟踪，建议 git rm --cached 清理）
