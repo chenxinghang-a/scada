@@ -45,6 +45,27 @@ Web展示层 (Dashboard / 数据大屏 / 报警面板)
 智能分析层 (OEE / SPC / 预测性维护 / 振动分析 / 能源管理 / 边缘决策)
 ```
 
+### 数据队列与数据丢失语义（round 214 补齐）
+
+采集链路是「采集 → 有界内存队列 → 落盘 → 批量写库」，**队列满与写库失败时的行为**是
+现场最需要知道的一件事（数据会不会丢、丢哪条、怎么查）：
+
+| 场景 | 行为 | 可观测 |
+|---|---|---|
+| **队列满**（默认上限 200000 条） | **非阻塞**：淘汰**最旧一条**以接纳新数据；连淘汰都腾不出位置时**拒绝本条**。**绝不阻塞采集线程**（阻塞 = 该设备从此不再采集且不报错） | `dropped_items`（总数）、`dropped_oldest`（淘汰的最旧）、`dropped_rejected`（被拒的本条）；三者满足 `总数 = 最旧 + 被拒` |
+| **写库失败** | **保留**落盘文件、整批重新入队重试（`if db_write_ok` 守卫：写库没成功就不清持久化） | `requeued_db_retry` / `dropped_db_retry`（**真实丢失量**）/ `requeue_full_db_retry` |
+| **进程崩溃重启** | 从 `data/queue/pending_data.jsonl` **自动恢复**；确认写库成功前**不清空**该文件 | `queue_persist_failures`（落盘失败 = 崩溃保护失效，最该告警的一项） |
+
+**恢复语义是「至少一次」**：写库成功与移除磁盘记录之间若崩溃，重启后**可能重复入库一条**
+—— 下游按需做幂等（如按 `(device_id, timestamp)` 去重）。
+
+**队列深度不是缓存值**：`queue_size` 由 `qsize()` 实时派生（历史上曾把它存下来，
+导致 `qsize()==5` 而 `get_stats()['queue_size']==0` 的假象）。
+
+> 以上计数经 `/api/system/status` 的 `collector` 段与 Prometheus 暴露。
+> 阈值告警建议：`dropped_items` 持续增长 = 采集频率超出消费能力，需扩容或降采样；
+> `queue_persist_failures > 0` = 磁盘写不进去，崩溃保护已失效。
+
 ## 目录结构
 
 ```
@@ -220,7 +241,8 @@ python run.py --real       # 真实模式 (连接真实PLC设备)
 # 4. 访问系统
 # 模拟模式: http://localhost:5000
 # 真实模式: http://localhost:5001
-# 默认账号: admin / admin123 (首次登录强制修改密码)
+# 登录账号: admin（密码见环境变量 SCADA_ADMIN_PASSWORD；首次登录会强制修改密码）
+#           生产环境必须显式设置强口令，否则拒绝启动；开发环境有内置默认值
 ```
 
 ### 方式二: 启动器 (自动开浏览器)
@@ -239,7 +261,7 @@ docker-compose up -d
 # 访问地址
 # SCADA系统:    http://localhost:80    (nginx反向代理)
 # EMQX控制台:   http://localhost:18083 (MQTT Broker管理)
-# Grafana面板:  http://localhost:3000  (密码由 .env 的 GF_SECURITY_ADMIN_PASSWORD 提供)
+# Grafana面板:  http://localhost:3000  (密码由 .env 的 GF_SECURITY_ADMIN_PASSWORD 提供，生产必须显式注入)
 # TDengine:     localhost:6030         (原生) / localhost:6041 (REST)
 ```
 
@@ -250,7 +272,7 @@ docker-compose up -d
 >   仅本机可达（如 `"127.0.0.1:3000:3000"`）。
 > - **口令**：`GF_SECURITY_ADMIN_PASSWORD` 必须显式注入（未设置会**拒绝启动**）；
 >   `SECRET_KEY` / `JWT_SECRET` 同理（`${VAR:?}` 强制）。
-> - SCADA 首次登录会**强制修改初始密码**（admin/admin123 仅用于首次进入）。
+> - SCADA 首次登录会**强制修改初始密码**（初始口令来自 `SCADA_ADMIN_PASSWORD`，文档不写明文；生产必须显式设置强口令）。
 
 ## 环境变量
 
@@ -283,7 +305,7 @@ docker-compose up -d
 |------|--------|------|
 | `SECRET_KEY` | 随机生成 (重启失效) | Flask会话密钥, 生产环境必须设置固定值 |
 | `JWT_SECRET` | 随机生成 (重启失效) | JWT签名密钥, 生产环境必须设置固定值 |
-| `SCADA_ADMIN_PASSWORD` | `admin123` | 首次创建admin账户的默认密码 |
+| `SCADA_ADMIN_PASSWORD` | 开发环境有内置默认值 | 首次创建 admin 账户的密码。**生产环境必须显式设置强口令**，否则拒绝启动（与 `SECRET_KEY` 同款 fail-closed；弱默认值视同未配置） |
 | `CSRF_SECRET` | 随机生成 | CSRF令牌HMAC密钥 |
 
 ### 数据库与时序存储
@@ -365,7 +387,7 @@ docker-compose up -d
 | 变量 | docker-compose默认值 | 说明 |
 |------|---------------------|------|
 | `GF_SECURITY_ADMIN_USER` | `admin` | Grafana管理员用户名 |
-| `GF_SECURITY_ADMIN_PASSWORD` | `admin123` | Grafana管理员密码 |
+| `GF_SECURITY_ADMIN_PASSWORD` | **必填**（compose 用 `${VAR:?}` 强制注入） | Grafana管理员密码 |
 | `GF_INSTALL_PLUGINS` | `tdengine-datasource` | Grafana插件 |
 
 > `GF_*` 是 **Grafana 自己的**环境变量（由 grafana 容器读取），本项目代码不读它们 ——
@@ -548,7 +570,7 @@ python run.py
 
 # 4. 浏览器访问
 # http://localhost:5000
-# 账号: admin / admin123
+# 账号: admin（密码见 SCADA_ADMIN_PASSWORD）
 ```
 
 ### 打包构建

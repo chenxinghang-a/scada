@@ -208,7 +208,8 @@ class TestHARoleClosure:
 def _import_config_env(extra_env: dict) -> subprocess.CompletedProcess:
     """在受控环境里 import config（_get_secret 在类体里执行，导入即触发）"""
     env = {k: v for k, v in os.environ.items()
-           if k not in ('SCADA_ENV', 'SECRET_KEY', 'JWT_SECRET')}
+           if k not in ('SCADA_ENV', 'SECRET_KEY', 'JWT_SECRET',
+                        'SCADA_ADMIN_PASSWORD')}
     env.update(extra_env)
     return subprocess.run(
         [_python_exe(), '-c', 'import config; print("IMPORT_OK")'],
@@ -237,12 +238,93 @@ class TestProductionSecretFailClosed:
         assert r.returncode == 0, r.stderr
         assert 'IMPORT_OK' in r.stdout
 
+    #: 生产启动所需的**全部** env（round 214 起含 SCADA_ADMIN_PASSWORD）。
+    #: 这个常量是**单一真源**：新增一项安全配置时改这里，下面的元守卫会提醒
+    #: 把它加进所有「生产启动」用例，免得像 214 那次一样打破既有用例。
+    PROD_REQUIRED_ENV = {
+        'SCADA_ENV': 'production',
+        'SECRET_KEY': 'a' * 64,
+        'JWT_SECRET': 'b' * 64,
+        'SCADA_ADMIN_PASSWORD': 'Zq7!strong-passphrase-2026',
+    }
+
     def test_production_with_strong_secret_starts(self):
+        r = _import_config_env(dict(self.PROD_REQUIRED_ENV))
+        assert r.returncode == 0, r.stderr
+        assert 'IMPORT_OK' in r.stdout
+
+    def test_prod_required_env_covers_every_fail_closed_item(self):
+        """元守卫：生产启动所需 env 清单必须与 config.py 里的 fail-closed 项一致。
+
+        做法：把清单逐项**拿掉一个**，每次都应当启动失败（证明那一项确实是必需的）。
+        若哪天有人加了一个新的 fail-closed 项却没进清单，本用例不会直接红 ——
+        但下面 test_new_fail_closed_item_is_covered 会（扫 config.py 的 raise 数）。
+        """
+        for key in self.PROD_REQUIRED_ENV:
+            if key == 'SCADA_ENV':
+                continue
+            env = {k: v for k, v in self.PROD_REQUIRED_ENV.items() if k != key}
+            r = _import_config_env(env)
+            assert r.returncode != 0, (
+                f"拿掉 {key} 后生产环境竟然还能启动 —— 它应当是必需的")
+
+
+class TestFailClosedInventory:
+    """round 214 元守卫：config.py 里「生产环境 raise」的项数必须与测试清单一致。"""
+
+    def test_fail_closed_item_count_matches_expected(self):
+        import ast
+        src = (BACKEND_ROOT / 'config.py').read_text(encoding='utf-8')
+        tree = ast.parse(src)
+        # 统计 `if IS_PRODUCTION:` 里带 raise RuntimeError 的分支
+        n = 0
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If):
+                cond = node.test
+                # IS_PRODUCTION 或包含它的布尔表达式
+                names = {x.id for x in ast.walk(cond) if isinstance(x, ast.Name)}
+                if 'IS_PRODUCTION' not in names:
+                    continue
+                if any(isinstance(s, ast.Raise) for s in ast.walk(node)):
+                    n += 1
+        assert n >= 2, (
+            f"生产 fail-closed 项只有 {n} 处 —— 期望至少 SECRET_KEY/JWT_SECRET 与 "
+            "SCADA_ADMIN_PASSWORD 两处；若新增了项，请同步 TestProductionSecretFailClosed"
+            ".PROD_REQUIRED_ENV 与 TestProductionAdminPasswordFailClosed 的用例")
+
+
+class TestProductionAdminPasswordFailClosed:
+    """round 214：管理员口令与密钥统一 fail-closed（原先只告警不拒绝）。
+
+    缺陷形态：同一份 config.py 里 SECRET_KEY 缺失 → 拒绝启动，
+    而 SCADA_ADMIN_PASSWORD 用开发默认值 → 只记 CRITICAL 日志、照常启动
+    → 生产环境用 `admin/admin123` 开门。**弱默认值 = 未配置**，
+    两套口径必须统一（本仓「口径不一致」家族的又一例）。
+    """
+
+    def test_production_without_admin_password_refuses_to_start(self):
         r = _import_config_env({
             'SCADA_ENV': 'production',
             'SECRET_KEY': 'a' * 64,
             'JWT_SECRET': 'b' * 64,
         })
+        assert r.returncode != 0, (
+            f"生产环境用默认管理员口令竟然启动成功: {r.stdout}")
+        assert 'RuntimeError' in r.stderr and 'SCADA_ADMIN_PASSWORD' in r.stderr
+
+    def test_production_with_strong_admin_password_starts(self):
+        r = _import_config_env({
+            'SCADA_ENV': 'production',
+            'SECRET_KEY': 'a' * 64,
+            'JWT_SECRET': 'b' * 64,
+            'SCADA_ADMIN_PASSWORD': 'Zq7!strong-passphrase-2026',
+        })
+        assert r.returncode == 0, f"设了强口令仍启动失败: {r.stderr}"
+        assert 'IMPORT_OK' in r.stdout
+
+    def test_development_without_admin_password_still_starts(self):
+        """反向对照：开发环境必须照常启动（否则本地开发全废）。"""
+        r = _import_config_env({'SCADA_ENV': 'development'})
         assert r.returncode == 0, r.stderr
         assert 'IMPORT_OK' in r.stdout
 

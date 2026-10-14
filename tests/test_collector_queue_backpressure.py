@@ -102,3 +102,72 @@ def test_no_blocking_put_on_data_queue():
         '该设备会静默停止采集且不报错。请改用 _enqueue_drop_oldest()：\n  '
         + '\n  '.join(offenders)
     )
+
+
+# ---------------------------------------------------------------------------
+# round 214：丢弃计数的**两个半边**都要算（原先只算被拒那一半）
+# ---------------------------------------------------------------------------
+
+def test_dropped_oldest_is_counted(tmp_path, monkeypatch):
+    """丢最旧那条（真实数据丢失）也必须计数。
+
+    round 214 前的缺陷：`_enqueue_drop_oldest` 只在「连丢最旧都腾不出位置、
+    本条被拒」时计数；**被淘汰的最旧一条完全没计数** —— 而 stats 注释写的是
+    「含丢最旧与被拒两种」。结果：监控上「丢了多少数据」是**少报**的
+    （正常背压下丢的几乎全是"最旧"那半边，被拒那半边极少触发）。
+    """
+    monkeypatch.setenv('SCADA_QUEUE_PERSIST_DIR', str(tmp_path / 'q'))
+    collector = _bare_collector(queue_maxsize=2)
+    collector.stats.update({'dropped_oldest': 0, 'dropped_rejected': 0})
+
+    for i in range(2):
+        assert collector._enqueue_drop_oldest({'i': i}) is True
+    assert collector.stats['dropped_items'] == 0, '塞满但不溢出时不该有丢弃'
+
+    # 第 3 条：队列满 → 淘汰最旧（i=0）→ 本条入队成功
+    assert collector._enqueue_drop_oldest({'i': 2}) is True
+    assert collector.stats['dropped_items'] == 1, (
+        '被淘汰的最旧一条必须计入 dropped_items')
+    assert collector.stats['dropped_oldest'] == 1
+    assert collector.stats['dropped_rejected'] == 0
+
+
+def test_dropped_rejected_is_counted_separately(tmp_path, monkeypatch):
+    """被拒那一半进 `dropped_rejected` 细分键（与既有用例同场景，但看细分）。"""
+    monkeypatch.setenv('SCADA_QUEUE_PERSIST_DIR', str(tmp_path / 'q'))
+    collector = _bare_collector(queue_maxsize=2)
+    collector.stats.update({'dropped_oldest': 0, 'dropped_rejected': 0})
+
+    for i in range(2):
+        collector._enqueue_drop_oldest({'i': i})
+
+    import queue as _q
+    original = collector.data_queue.get_nowait
+    collector.data_queue.get_nowait = lambda: (_ for _ in ()).throw(_q.Empty())
+    accepted = collector._enqueue_drop_oldest({'i': 99})
+    collector.data_queue.get_nowait = original
+
+    assert accepted is False
+    assert collector.stats['dropped_rejected'] == 1
+    assert collector.stats['dropped_oldest'] == 0
+
+
+def test_dropped_items_equals_sum_of_breakdown(tmp_path, monkeypatch):
+    """元守卫：`dropped_items` 必须恒等于两个细分之和（口径不得再分叉）。
+
+    这条是「改一处口径要检查它的读取点」的落地：`dropped_items` 是给
+    `/api/system/status` 看的**总数**，两个细分是给排障看的**构成**。
+    三者必须自洽，否则监控与排障会给出两个不同的故事。
+    """
+    monkeypatch.setenv('SCADA_QUEUE_PERSIST_DIR', str(tmp_path / 'q'))
+    collector = _bare_collector(queue_maxsize=2)
+    collector.stats.update({'dropped_oldest': 0, 'dropped_rejected': 0})
+
+    for i in range(2):
+        collector._enqueue_drop_oldest({'i': i})
+    collector._enqueue_drop_oldest({'i': 2})          # 丢最旧
+    collector._enqueue_drop_oldest({'i': 3})          # 丢最旧
+    s = collector.stats
+    assert s['dropped_items'] == s['dropped_oldest'] + s['dropped_rejected'], (
+        f"总数与细分不一致: {s}")
+    assert s['dropped_oldest'] == 2, f"两次背压应各丢一条最旧: {s}"

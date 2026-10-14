@@ -26,6 +26,8 @@ IS_PRODUCTION = SCADA_ENV == 'production'
 _WEAK_SECRET_VALUES = frozenset({
     'change-me-in-production', 'change_me', 'changeme', 'change-me',
     'secret', 'password', 'test', 'admin',
+    # round 214：管理员口令也走这张表（口径统一），而 admin123 是文档里的历史默认值
+    'admin123', 'admin_123', 'admin@123',
 })
 
 
@@ -291,12 +293,23 @@ class AuthConfig:
     # 生产环境必须通过 SCADA_ADMIN_PASSWORD 环境变量覆盖！
     # 开发默认值拆写以避免明文弱口令入库（拼接结果不变，行为不变）
     _DEV_DEFAULT_ADMIN_PW = 'admin' '123'
-    SCADA_ADMIN_PASSWORD = os.environ.get('SCADA_ADMIN_PASSWORD', _DEV_DEFAULT_ADMIN_PW)
-    if SCADA_ADMIN_PASSWORD == _DEV_DEFAULT_ADMIN_PW:
+    # ⚠️ 取值链是 **env → .env → 默认值**（load_dotenv 在 import 时就把 .env 灌进
+    # os.environ）。所以「只比 admin123 字面量」会漏掉 .env 里的 CHANGE_ME 这类
+    # 占位弱口令 —— 必须与密钥复用同一张 `_WEAK_SECRET_VALUES`（口径统一）。
+    SCADA_ADMIN_PASSWORD = (
+        (os.environ.get('SCADA_ADMIN_PASSWORD') or '').strip() or _DEV_DEFAULT_ADMIN_PW
+    )
+    if (SCADA_ADMIN_PASSWORD == _DEV_DEFAULT_ADMIN_PW
+            or SCADA_ADMIN_PASSWORD.lower() in _WEAK_SECRET_VALUES):
         if IS_PRODUCTION:
-            logger.critical(
-                "【生产环境弱口令】正在使用默认管理员密码！"
-                "请立即设置 SCADA_ADMIN_PASSWORD 环境变量为强口令。"
+            # round 214：与 SECRET_KEY / JWT_SECRET 统一为 **fail-closed**。
+            # 原先这里只记 CRITICAL 日志然后照常启动 —— 结果是生产环境用
+            # `admin/admin123` 开门迎客（弱口令 = 未配置，只是「响得比较大声」）。
+            # 同一份文件里两个安全配置项两套口径，就是本仓反复栽的「口径不一致」。
+            raise RuntimeError(
+                "【生产环境弱口令】SCADA_ADMIN_PASSWORD 未设置或等于开发默认值 —— "
+                "生产环境（SCADA_ENV=production）必须提供强口令，拒绝启动。"
+                "（与 SECRET_KEY/JWT_SECRET 同款 fail-closed 口径：弱默认值视同未配置）"
             )
         else:
             logger.warning("使用默认管理员密码！生产环境请设置 SCADA_ADMIN_PASSWORD 环境变量")

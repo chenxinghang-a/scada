@@ -497,8 +497,15 @@ class DataCollector:
             #    data_queue.qsize() == 5 而 get_stats()['queue_size'] == 0。
             #    **队列深度是派生量，不该被存下来。**
             #    由 tests/test_derived_metrics_not_shadowed.py 看着。
-            # 队列满时被丢弃的数据项数（含"丢最旧"与被拒两种）
+            # 队列满时被丢弃的数据项数（含"丢最旧"与被拒两种，两者都是**真实丢失**）。
+            # round 214 修正：原先只计"被拒的新数据"，**丢最旧那条（先丢的、
+            # 更旧的数据）根本没计数** —— 与这行注释说的"含两种"不符，
+            # 于是「到底丢了多少数据」在监控上是少报的。
             'dropped_items': 0,
+            #: 细分：为腾位置而淘汰的**最旧一条**（真实数据丢失）
+            'dropped_oldest': 0,
+            #: 细分：连丢最旧都腾不出位置、本条被拒
+            'dropped_rejected': 0,
             # 写库失败后的重试相关计数。
             # 这几个键让「数据有没有丢」在监控侧可查 ——
             # 光靠日志不足以做告警，而 `dropped_db_retry` 是**真实的数据丢失量**。
@@ -530,6 +537,10 @@ class DataCollector:
         if self.data_queue.full():
             try:
                 self.data_queue.get_nowait()
+                # ⚠️ 被淘汰的最旧一条同样是**真实的数据丢失**，必须计数。
+                # round 214 前这里不计数（只计"被拒"那一半）→ dropped_items 少报。
+                self._inc_stat('dropped_items')
+                self._inc_stat('dropped_oldest')
             except queue.Empty:
                 # 安全忽略：full() 与 get_nowait() 之间消费线程可能已把队列取空，
                 # 此时无需再丢弃，直接走下面的入队即可
@@ -539,6 +550,7 @@ class DataCollector:
             return True
         except queue.Full:
             self._inc_stat('dropped_items')
+            self._inc_stat('dropped_rejected')
             return False
 
     def start(self) -> None:
