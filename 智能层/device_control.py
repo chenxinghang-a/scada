@@ -56,6 +56,10 @@ INTERLOCK_CONFIG_PATH = '配置/interlocks.yaml'
 # 批量起停的**显式回退点位**（仅在设备未配置 control 段时使用，并记录告警）
 # 历史实现把 coil0 / reg100 直接写死在 batch_control 内且无任何提示；
 # 现改为"设备配置优先、回退值显式命名并告警"，避免把点位猜测静默写进现场设备。
+#
+# ⚠️ 真实模式**不经过**此回退（2026-10-14 外部审查 #3 响应，防"值存在"被误读为"会被用"）：
+#   真实设备模式下点位解析不出会**直接拒绝写入**（_resolve_control_point 返回 None →
+#   调用处记 success=False + 审计），本回退**只服务模拟模式**（无物理风险）。
 LEGACY_FALLBACK_CONTROL_POINTS = {
     'start': {'type': 'coil', 'address': 0},
     'stop': {'type': 'coil', 'address': 0},
