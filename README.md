@@ -220,7 +220,7 @@ python run.py --real       # 真实模式 (连接真实PLC设备)
 # 4. 访问系统
 # 模拟模式: http://localhost:5000
 # 真实模式: http://localhost:5001
-# 默认账号: admin / admin123
+# 默认账号: admin / admin123 (首次登录强制修改密码)
 ```
 
 ### 方式二: 启动器 (自动开浏览器)
@@ -239,9 +239,18 @@ docker-compose up -d
 # 访问地址
 # SCADA系统:    http://localhost:80    (nginx反向代理)
 # EMQX控制台:   http://localhost:18083 (MQTT Broker管理)
-# Grafana面板:  http://localhost:3000  (admin/admin123)
+# Grafana面板:  http://localhost:3000  (密码由 .env 的 GF_SECURITY_ADMIN_PASSWORD 提供)
 # TDengine:     localhost:6030         (原生) / localhost:6041 (REST)
 ```
+
+> ⚠️ **生产部署安全加固**（外部审查建议项，2026-10）：
+> - **端口暴露面**：Compose 为便于本地调试，默认把 SCADA(80) / EMQX(1883·8083·18083) /
+>   TDengine(6030·6041·6043) / Grafana(3000) 全部绑定在 `0.0.0.0`。**生产环境请勿直接暴露**——
+>   建议经防火墙/安全组只放行必要入口，或为各服务 ports 加 `127.0.0.1:` 前缀
+>   仅本机可达（如 `"127.0.0.1:3000:3000"`）。
+> - **口令**：`GF_SECURITY_ADMIN_PASSWORD` 必须显式注入（未设置会**拒绝启动**）；
+>   `SECRET_KEY` / `JWT_SECRET` 同理（`${VAR:?}` 强制）。
+> - SCADA 首次登录会**强制修改初始密码**（admin/admin123 仅用于首次进入）。
 
 ## 环境变量
 
