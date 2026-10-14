@@ -394,13 +394,27 @@ def main():
 
         # ---- 后台连接设备 + 启动采集（不阻塞Web服务启动） ----
         def _background_start():
-            """后台线程：连接设备 → 启动采集。
+            """后台线程：启动维护任务 → 连接设备 → 启动采集。
 
             整体包在 try/except 中：此前一旦 device_manager.start_reconnect_loop()
             等方法缺失或抛错，线程会静默崩溃，data_collector/报警/智能层全都不会启动，
             外部无任何提示。现在任何异常都会被明确记录，并写进 app.background_start_error
             以便运维查询（如 /api/system/status 读取）。
+
+            顺序说明：**后台维护任务排在最前且独占一个 try** —— 它只依赖
+            database/auth_manager（本地资源），不依赖设备连接；排在链尾时会被
+            connect_all 等异常拖累而不启动，而"数据保留策略自动触发"（归档任务）
+            正是靠它。由 tests/test_maintenance_ordering.py 钉住顺序与独立性。
             """
+            # ---- 1) 后台维护任务：先启动（不依赖设备连接）----
+            try:
+                from core.maintenance import start_maintenance
+                maintenance_started = start_maintenance(
+                    database=database, auth_manager=getattr(app, 'auth_manager', None))
+                logger.info(f"后台维护任务已启动: {', '.join(maintenance_started) or '（无）'}")
+            except Exception as _mt_err:
+                logger.error("后台维护任务启动失败: %s", _mt_err, exc_info=True)
+
             try:
                 # 连接所有设备（带20s超时，避免阻塞太久）
                 logger.info("后台连接设备...")
@@ -448,14 +462,9 @@ def main():
                     tsdb_adapter.start()
                     logger.info("TDengine智能层适配器已启动")
 
-                # 后台维护任务：数据归档 + WAL checkpoint + 各类缓存/黑名单清理。
-                # 统一交给 core.maintenance（基于 core.scheduled_tasks.task_manager），
-                # 取代原先手写的 while True: sleep(86400) 裸线程 —— 那种写法没有
-                # 停止路径，而且令牌黑名单/缓存等清理根本没被调度过，会无界增长。
-                from core.maintenance import start_maintenance
-                maintenance_started = start_maintenance(
-                    database=database, auth_manager=getattr(app, 'auth_manager', None))
-                logger.info(f"后台维护任务已启动: {', '.join(maintenance_started) or '（无）'}")
+                # 注：后台维护任务（数据归档 / WAL checkpoint / 缓存清理）已**上移**到
+                # 本函数开头（独立 try）—— 它不依赖设备连接，不该被 connect_all 的
+                # 异常拖累。见 tests/test_maintenance_ordering.py。
 
                 # 注入WebSocket推送函数到报警管理器
                 from 展示层.websocket import emit_alarm, emit_broadcast
