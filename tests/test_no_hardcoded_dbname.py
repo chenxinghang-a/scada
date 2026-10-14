@@ -45,23 +45,25 @@ EXCLUDE_PARTS = (".venv", "node_modules", "dist", "build", ".pytest_tmp",
 #: 库文件名形态（含 SQLite 的 -wal / -shm 旁路文件）
 DB_NAME_RE = re.compile(r"^scada[a-z_]*\.db(-wal|-shm)?$")
 
-#: ★ 豁免表：`(相对路径, 行号) -> 理由`。
+#: ★ 豁免表：`(相对路径, 语句文本) -> 理由`。
 #:
 #: 规矩（与仓库既有 `ALLOWED_HITS` 同款）：
 #:   ① 每条**必须写清理由**；
 #:   ② **修好了必须删掉** —— 下面的 `test_allowlist_has_no_stale_entries` 会强制这一点。
 #:
-#: ⚠️ **已知代价：行号会漂移**。豁免键是 `(文件, 行号)`，而本仓其他轮次
-#: （如 round 209+ 给 config.py 加过密钥 fail-closed 逻辑）会把行号往后推 ——
-#: 内容一个字没改，条目却会变成"陈旧"。2026-10-13 落地面试时就踩到：
-#: 草案记的 `config.py:106` 已漂到 `config.py:120`。
-#: 取行号而非 `id(node)` 仍是对的（后者只在单次解析内有效，更糟），
-#: 代价就是这种漂移要人工跟一次 —— 比"豁免表失去防腐能力"划算。
-ALLOWED_HARDCODED: dict[tuple[str, int], str] = {
-    ("config.py", 120):
+#: ⭐ **键为什么是「语句文本」而不是「行号」（round 214 根治）**
+#: 行号会因**任何无关改动**漂移：本仓实测两次 —— round 209 改 config.py 导致
+#: `config.py:106 → 120`；round 214 又在同文件顶部加了 3 行弱值 → `120 → 122`。
+#: 两次都让守卫**假红**（内容一个字没改，豁免却失效），而假红的守卫早晚被关掉。
+#: 语句文本只在**这行真的被改**时才变 —— 那正是我们**想**让豁免失效的时刻
+#: （改了就要重新审一遍理由）。归一化：去首尾空白 + 连续空白压成单空格。
+#: ⚠️ 已知代价：若给同一行改格式（如加括号、拆行），键也会失效 —— 但那同样
+#: 值得人工看一眼，比"改三行别的代码就假红"划算得多。
+ALLOWED_HARDCODED: dict[tuple[str, str], str] = {
+    ("config.py", "_DEFAULT_DB_PATH = _DATA_DIR / 'scada.db'"):
         "`except ImportError:` 兜底分支 —— paths 模块不可用时的最后手段；"
         "正常路径读的是 paths.DB_PATHS['default']（单一真源），不是第二套真源",
-    ("tools/deploy.py", 336):
+    ("tools/deploy.py", "legacy = latest_backup / 'data' / 'scada.db'"):
         "rollback 的**旧格式备份兼容**：早年 deploy 备份库时写死文件名 "
         "'scada.db'，已存在的备份目录里就是这个名字。新备份已改为跟随真源库名"
         "（`db_path.name`），但读旧备份时必须能认这个名字 —— 这是兼容入口，"
@@ -129,30 +131,61 @@ def _db_paths_exempt_lines(p: pathlib.Path) -> set[int]:
     return lines
 
 
+def _const_stmt_map(tree: ast.AST) -> dict[int, ast.stmt]:
+    """`{常量节点 id: 它所属的**最内层**语句}`。
+
+    用于把豁免键从「行号」升级为「语句文本」—— 行号会因**任何无关改动**漂移
+    （本仓实测两次：round 209 改 config.py 导致 106→120；round 214 又 +2 行 → 122），
+    而语句文本只在**这行真的被改**时才变，那正是我们想让豁免失效的时刻。
+    """
+    out: dict[int, ast.stmt] = {}
+    for stmt in ast.walk(tree):
+        if not isinstance(stmt, ast.stmt):
+            continue
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Constant):
+                out[id(sub)] = stmt        # 后访问的更内层 → 覆盖外层
+    return out
+
+
+def _stmt_key(source: str, stmt: ast.stmt) -> str:
+    """语句文本归一化（去首尾空白、把连续空白压成单空格），用作稳定豁免键。"""
+    seg = ast.get_source_segment(source, stmt) or ""
+    return " ".join(seg.split())
+
+
 def _collect_from_files(files: list[pathlib.Path],
                         exempt_lines: dict[str, set[int]] | None = None
-                        ) -> list[tuple[str, int, str]]:
+                        ) -> list[tuple[str, str, int, str]]:
     """在给定文件列表里找写死的库名。
+
+    Returns:
+        `[(文件, 语句文本, 行号, 字面量)]` —— 语句文本是**稳定豁免键**（抗行号漂移）。
 
     Args:
         files: 要扫的文件。
-        exempt_lines: `{文件名: {豁免行号}}` —— 用于豁免单一真源表。
+        exempt_lines: `{文件名: {豁免行号}}` —— 用于豁免单一真源表（按行号，因为
+            那张表本身就是「行号内的一块字面量」，行号语义更自然）。
     """
-    hits: list[tuple[str, int, str]] = []
+    hits: list[tuple[str, str, int, str]] = []
     exempt_lines = exempt_lines or {}
     for p in files:
         key = _key_of(p)
         skip = exempt_lines.get(key, set())
+        source = p.read_text(encoding="utf-8")
         try:
-            tree = ast.parse(p.read_text(encoding="utf-8"))
+            tree = ast.parse(source)
         except SyntaxError as e:            # pragma: no cover
             pytest.fail(f"{key} 语法错误: {e}")
         ds = _docstring_ids(tree)
+        stmt_of = _const_stmt_map(tree)
         for node in ast.walk(tree):
             if (isinstance(node, ast.Constant) and isinstance(node.value, str)
                     and id(node) not in ds and node.lineno not in skip
                     and DB_NAME_RE.match(node.value)):
-                hits.append((key, node.lineno, node.value))
+                stmt = stmt_of.get(id(node))
+                skey = _stmt_key(source, stmt) if stmt is not None else ""
+                hits.append((key, skey, node.lineno, node.value))
     return hits
 
 
@@ -164,8 +197,8 @@ def _key_of(p: pathlib.Path) -> str:
         return p.name
 
 
-def _collect_hardcoded_dbnames() -> list[tuple[str, int, str]]:
-    """返回 `[(相对路径, 行号, 字面量)]`（已排除 docstring 与单一真源表）。"""
+def _collect_hardcoded_dbnames() -> list[tuple[str, str, int, str]]:
+    """返回 `[(相对路径, 语句文本, 行号, 字面量)]`（已排除 docstring 与单一真源表）。"""
     files = _iter_production_py()
     exempt = {_key_of(p): _db_paths_exempt_lines(p) for p in files}
     return _collect_from_files(files, exempt)
@@ -187,9 +220,9 @@ def test_scan_covers_real_files():
 def test_no_hardcoded_db_filename_in_production_code():
     """★ 核心：生产代码里不得写死库文件名（必须走 paths 的解析）。"""
     bad = [
-        f"{rel}:{ln}  {val!r}"
-        for rel, ln, val in _collect_hardcoded_dbnames()
-        if (rel, ln) not in ALLOWED_HARDCODED
+        f"{rel}:{ln}  {val!r}   （语句: {skey!r}）"
+        for rel, skey, ln, val in _collect_hardcoded_dbnames()
+        if (rel, skey) not in ALLOWED_HARDCODED
     ]
     assert not bad, (
         "生产代码里出现了**写死的库文件名** —— 库名只能出现在 `paths.DB_PATHS` 那一张表里。\n"
@@ -210,8 +243,9 @@ def test_allowlist_entries_are_not_stale():
     没有这条，豁免表会慢慢变成垃圾桶 —— 修好的东西留在里面，
     下次真回归时守卫是绿的（因为它被豁免了）。
     """
-    live = {(rel, ln) for rel, ln, _ in _collect_hardcoded_dbnames()}
-    stale = [f"{rel}:{ln}" for (rel, ln) in ALLOWED_HARDCODED if (rel, ln) not in live]
+    live = {(rel, skey) for rel, skey, _ln, _v in _collect_hardcoded_dbnames()}
+    stale = [f"{rel} :: {skey!r}" for (rel, skey) in ALLOWED_HARDCODED
+             if (rel, skey) not in live]
     assert not stale, (
         "豁免表里有**已经不再命中**的条目 —— 说明那处已经修好了，请把它们删掉：\n  "
         + "\n  ".join(sorted(stale))
@@ -251,7 +285,7 @@ class TestMetaGuards:
             "WAL = 'scada_simulated.db-wal'\n",
             encoding="utf-8")
         hits = _collect_from_files([f])
-        vals = {v for _r, _l, v in hits}
+        vals = {v for _r, _s, _l, v in hits}
         assert "scada.db" in vals, f"没报出写死的 'scada.db'：{hits}"
         assert "scada_simulated.db-wal" in vals, f"没报出 -wal 变体：{hits}"
 
@@ -295,7 +329,7 @@ class TestMetaGuards:
             encoding="utf-8")
         exempt2 = {_key_of(f2): _db_paths_exempt_lines(f2)}
         hits2 = _collect_from_files([f2], exempt2)
-        assert [v for _r, _l, v in hits2] == ["scada.db"], (
+        assert [v for _r, _s, _l, v in hits2] == ["scada.db"], (
             f"豁免开得太大 —— 表外的写死也被放过了：{hits2}")
 
 
