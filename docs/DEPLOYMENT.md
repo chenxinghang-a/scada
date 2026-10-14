@@ -47,11 +47,20 @@ SCADA_TLS_CERT=certs/server.crt
 SCADA_TLS_KEY=certs/server.key
 ```
 
-> ⚠️ **生产环境（`SCADA_ENV=production`）下 `SECRET_KEY` / `JWT_SECRET` 缺失、为空、
-> 或仍是 `change-me-in-production` / `CHANGE_ME` 之类的弱默认值时，进程会直接
-> **拒绝启动**（抛 `RuntimeError`）。**不要**留空或照抄模板值。
-> 生成方式：`python -c "import secrets;print(secrets.token_hex(32))"`。
-> 开发环境（默认 `development`）不设密钥只会告警并随机生成，不影响本地跑。
+> ⚠️ **生产环境（`SCADA_ENV=production`）的 fail-closed 口径（三项同款）**：
+>
+> | 配置项 | 弱值/缺失时的行为 |
+> |---|---|
+> | `SECRET_KEY` / `JWT_SECRET` | 缺失、为空、或 `change-me-in-production` / `CHANGE_ME` 等弱默认值 → **拒绝启动**（`RuntimeError`） |
+> | `SCADA_ADMIN_PASSWORD` | **同上**（round 214 起与密钥复用**同一张弱值表** `_WEAK_SECRET_VALUES`；`admin123` / `admin_123` / `admin@123` 已入表） |
+>
+> **不要**留空或照抄模板值。生成方式：`python -c "import secrets;print(secrets.token_hex(32))"`。
+> 开发环境（默认 `development`）不设密钥只会告警并随机生成，不影响本地跑；
+> **桌面版（Electron 打包分发）不设 `SCADA_ENV`，走 development 分支，不受此限制**。
+>
+> ⚠️ **部署侧警示**：若你的编排/启动脚本设置了 `SCADA_ENV=production`，就必须**同时**提供
+> `SECRET_KEY`、`JWT_SECRET`、`SCADA_ADMIN_PASSWORD` 三者（强随机值），否则进程**拒绝启动**——
+> 这是有意设计：弱默认值视同未配置。CI/镜像构建冒烟时如不带这三个变量，请显式使用 development。
 
 ### 3.1 高可用（主备）部署
 

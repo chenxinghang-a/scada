@@ -1,0 +1,49 @@
+# docker-compose.override.yml.example —— 生产向网络加固模板
+# （2026-10-14 外部《执行摘要》审查 #7「公开暴露外部服务端口」的响应）
+#
+# 用法：
+#   1) 复制本文件为 docker-compose.override.yml（与本目录 docker-compose.yml 同目录）
+#   2) 按实际拓扑调整（尤其 emqx/tdengine 是否要对外）
+#   3) 照常 `docker-compose up -d` —— Compose 会自动合并 override 文件，无需改本体
+#
+# 背景：默认 docker-compose.yml 为便于本地调试，把全部服务端口绑定在 0.0.0.0
+#      （SCADA 80/5000、EMQX 1883/8083/18083、TDengine 6030/6041/6043、Grafana 3000）。
+#      生产环境请勿直接暴露：本模板把管理面收进 127.0.0.1，对外只保留 nginx 入口。
+#
+# ⚠️ 上线前检查清单：
+#   - [ ] 必填变量已注入（compose 用 ${VAR:?} 强制，未设会直接报错）：
+#         SECRET_KEY / JWT_SECRET / SCADA_ADMIN_PASSWORD / GF_SECURITY_ADMIN_PASSWORD
+#   - [ ] 确认对外只开 nginx（80；启用 TLS 时 443），其余端口仅 127.0.0.1
+#   - [ ] 防火墙/安全组同步收紧（只放行 80/443 及必要运维通道）
+#   - [ ] 更彻底的做法：直接删掉不需要的 `ports:` 段——服务间经 Compose 内部网络互通，
+#         根本无需映射到宿主机（本模板保留 127.0.0.1 映射是为了方便本机运维排障）
+#   - [ ] TLS：由 nginx 终止（证书路径见 nginx 配置）；SCADA_TLS_* 相关见 docs/DEPLOYMENT.md
+
+services:
+  scada:
+    ports:
+      - "127.0.0.1:80:80"          # 仅本机可达（由 nginx 反代对外）
+      # 直连调试端口（5000）生产不需要，如保留则务必仅本机：
+      # - "127.0.0.1:5000:5000"
+
+  emqx:
+    ports:
+      - "127.0.0.1:18083:18083"    # Dashboard 管理面：仅本机
+      - "127.0.0.1:1883:1883"      # MQTT 设备接入：若外部设备需直连，
+                                   #   请改为经 nginx stream/网关转发后再封闭本端口
+      - "127.0.0.1:8083:8083"      # MQTT over WebSocket：同上
+
+  tdengine:
+    ports:
+      - "127.0.0.1:6030:6030"      # native：仅本机
+      - "127.0.0.1:6041:6041"      # REST：仅本机
+      - "127.0.0.1:6043:6043"      # taosAdapter：仅本机
+
+  grafana:
+    ports:
+      - "127.0.0.1:3000:3000"      # 面板：仅本机（经反代出网）
+
+  nginx:
+    ports:
+      - "80:80"                    # ★ 唯一对外入口
+      # - "443:443"                # 启用 TLS 后打开
