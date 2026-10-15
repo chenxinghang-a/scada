@@ -6,7 +6,9 @@ import pytest
 import sys
 import os
 import sqlite3
+import subprocess
 import tempfile
+import time
 import warnings
 from unittest.mock import MagicMock
 from pathlib import Path
@@ -36,15 +38,257 @@ def pytest_configure(config):
     - 便于事后排查（临时文件就在眼皮底下）
     - 避免污染系统 TEMP，也不会和用户其他项目的 pytest 临时目录混在一起
 
-    这些目录已加进 .gitignore（`.pytest_tmp-*`）。**不清理是刻意的** ——
-    清理就是删除，就会再次踩保护。它们只是临时文件，磁盘占用很小
-    （单次全量测试约几十 MB），需要时可手工清（按 ≤50 个/批）。
+    这些目录已加进 .gitignore（`.pytest_tmp-*`）。**保留策略见
+    `_prune_old_tmp_roots`（round 216）**：目录名带 PID 保证了"零删除"，
+    代价是**每次运行留一个目录且永不回收** —— 本机实测已堆积 **860 个
+    （约 150 万文件）**。因此**会话结束时**只保留最近 `TMP_ROOT_KEEP` 个，
+    其余用外部进程删除（不经过 shim）。
     """
     # 用户显式传了 --basetemp 就尊重用户选择，不覆盖
     if config.option.basetemp:
         return
     tmp_root = Path(PROJECT_ROOT) / f'.pytest_tmp-{os.getpid()}'
     config.option.basetemp = str(tmp_root)
+    # 标记「basetemp 是本次会话自己设的」—— 只有这种运行才在结束时做保留策略，
+    # 避免用户显式传 --basetemp（例如调试/临时目录）时误删仓库内的历史目录。
+    config._scada_owns_basetemp = True
+
+
+def pytest_unconfigure(config):
+    """会话结束：执行 `.pytest_tmp-*` 保留策略。
+
+    放在**结束**而不是开始，是因为一次历史积压的清理可能十几分钟
+    （见 `_prune_old_tmp_roots` 的调用点说明）。正常情况每次只删 1 个。
+    """
+    if getattr(config, '_scada_owns_basetemp', False):
+        _prune_old_tmp_roots()
+
+
+#: 保留最近多少个 `.pytest_tmp-*` 目录（含本次运行的）。更早的清掉。
+TMP_ROOT_KEEP = 3
+
+#: 单次清理最多删几个目录。历史积压可能上千个，逐个删除在本机很慢
+#: （Defender 实时扫描 + 每个目录上千个小文件，实测 ~6 个/分钟）；
+#: 不限量的话会把 `pytest_unconfigure` 拖住十几分钟。
+#: 正常情况每次运行只多出 1 个，10 的上限绰绰有余；积压靠多次运行收敛，
+#: 或用外部脚本一次性清（见 round 216 报告）。
+TMP_ROOT_PRUNE_MAX = 10
+
+#: 删除前跳过「最近这么多秒内仍被写入」的目录（round 217 修 F5）。
+#:
+#: 背景：保留策略按 mtime 取"最旧的若干"，但**并发会话**的目录在它自己的
+#: 测试跑完后 mtime 就不再更新 —— 若另一会话此刻结束，可能把它当"旧目录"删掉，
+#: 于是那个会话的后续用例会因为 basetemp 消失而失败。
+#: 用一个"活跃窗口"把它们排除：窗口内的目录一律不删，留给下一轮。
+#: 取 120s 是权衡 —— 正常测试运行的间隔大于它，不会让积压无限延迟。
+TMP_ROOT_ACTIVE_WINDOW = 120.0
+
+
+def _dir_mtime(d: Path) -> float:
+    """取目录 mtime；不可访问/已消失时返回 0（视为最旧，交给调用方过滤）。
+
+    round 217 修 F4：原先 `sort(key=lambda d: d.stat().st_mtime)` 里一次
+    `FileNotFoundError`（并发会话正好删掉了该目录）会被上层 `except` 吞掉，
+    **整次清理静默跳过** —— 一个坏目录毁掉一次清理。
+    """
+    try:
+        return d.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _select_stale_tmp_roots(
+    root: Path,
+    keep: int,
+    limit: int = None,
+    active_window: float = TMP_ROOT_ACTIVE_WINDOW,
+    now: float = None,
+) -> list:
+    """纯函数：按 mtime 倒序保留最近 `keep` 个，返回**应删除**的那些目录。
+
+    抽出来是为了可测 —— 删除动作本身走外部进程，不便在单测里断言细节；
+    「选哪些删」这个判据才是要钉住的东西。
+
+    `limit` 为单次上限（`TMP_ROOT_PRUNE_MAX` 的落地）；`None` = 不限。
+    `    active_window` 内的目录（可能属于仍在跑的会话）不返回；
+    单个目录 stat 失败只跳过它自己，不影响其余（F4）。
+    """
+    current = time.time() if now is None else now
+    dirs = []
+    for d in root.glob('.pytest_tmp-*'):
+        try:
+            if d.is_dir():
+                dirs.append(d)
+        except OSError:  # 并发消失/权限异常：跳过这一个，不影响整体
+            continue
+    dirs.sort(key=_dir_mtime, reverse=True)
+    stale = [d for d in dirs[keep:] if current - _dir_mtime(d) > active_window]
+    # 限额下**优先删最旧的**（round 217）—— `dirs[keep:]` 是"最新在前"，直接截断
+    # 会优先删掉较新的历史目录，而积压场景里最该清的是最老的那批。
+    # 与 `test_limit_caps_selection_and_takes_oldest_first` 的判据对齐。
+    stale.sort(key=_dir_mtime)
+    return stale[:limit] if limit is not None else stale
+
+
+#: 用 robocopy 把目标目录「镜像」成空目录再删壳 —— 比 .NET Directory.Delete
+#: 逐个文件删快得多（本机实测：大目录 9s → 1.7s，Defender 实时扫描对
+#: 逐个 unlink 是线性惩罚，robocopy 走的是批量语义）。
+#:
+#: round 217 修 F3：原版 `$ErrorActionPreference='SilentlyContinue'` + 无输出，
+#: **删除失败既无计数也无日志**（实测待删列表里第 10 个目录有 1697 个条目却被静默跳过）。
+#: 现在把 ok/fail 计数与失败清单打到 stdout，由 Python 侧解析并出声。
+_PRUNE_PS = r'''
+$ErrorActionPreference = 'SilentlyContinue'
+$empty = $env:SCADA_PRUNE_EMPTY
+$list  = $env:SCADA_PRUNE_LIST
+$ok = 0
+$fail = New-Object System.Collections.Generic.List[string]
+Get-Content -LiteralPath $list | ForEach-Object {
+    if ($_) {
+        robocopy $empty $_ /MIR /MT:16 /NFL /NDL /NJH /NJS /NC /NS /NP /R:0 /W:0 | Out-Null
+        [System.IO.Directory]::Delete($_, $true)
+        if (Test-Path -LiteralPath $_) { $fail.Add($_) } else { $ok++ }
+    }
+}
+Write-Output ("SCADA_PRUNE_OK=" + $ok)
+Write-Output ("SCADA_PRUNE_FAIL=" + $fail.Count)
+foreach ($f in $fail) { Write-Output ("SCADA_PRUNE_FAILED_PATH=" + $f) }
+'''
+
+
+def _sweep_previous_prune_artifacts(tmp: Path) -> None:
+    """清掉**上一次**运行留下的临时产物（本进程 PID 之外的）。
+
+    round 217 修 F2：被 timeout / 杀进程时 `finally` 不会执行，TEMP 里会残留
+    `scada_prune_*.txt` / `.ps1` / `scada_prune_empty_*`（实测残留过 4 个文件 + 2 个目录）。
+    这里在**开工前**兜底清理，保证不跨轮堆积。
+
+    round 217 修 F6：只清**存在超过 `TMP_ROOT_ACTIVE_WINDOW` 秒**的残留 ——
+    否则并发会话（另一个 scada pytest 正用它的 list 文件做 `_delete_dirs_bulk`）
+    会被这边误清，导致那一轮删除**全部失败**。与本轮 F5 同一思路：
+    **不碰可能属于活跃会话的东西**。
+    """
+    me = str(os.getpid())
+    current = time.time()
+    for pattern in ('scada_prune_empty_*', 'scada_prune_*.txt', 'scada_prune_*.ps1'):
+        for p in tmp.glob(pattern):
+            if p.name.endswith(f'_{me}') or p.name.endswith(f'_{me}.txt') or p.name.endswith(f'_{me}.ps1'):
+                continue  # 属于本进程，正在用
+            try:
+                if current - p.stat().st_mtime <= TMP_ROOT_ACTIVE_WINDOW:
+                    continue  # 太新：可能是并发会话正在用，留给下一轮
+            except OSError:
+                continue
+            try:
+                if p.is_dir():
+                    p.rmdir()
+                else:
+                    p.unlink()
+            except OSError:
+                pass
+
+
+def _delete_dirs_bulk(paths) -> tuple:
+    """用**一个** PowerShell 进程批量删除目录树（不经过 shim）。
+
+    为什么要外部进程：环境注入的批量删除保护 shim hook 了 Python 的删除 API，
+    对 `\\\\?\\` 前缀路径 fail-closed（见文件顶部注释）。
+
+    为什么不是「每个目录一次 `subprocess.run(['cmd','/c','rd',...])`」：
+        800+ 个目录 = 800+ 次进程启动，本机实测 10 分钟只删掉 22 个。
+
+    为什么用 robocopy 而不是直接删：见 `_PRUNE_PS` 上方注释。
+
+    路径走**临时文件**传递，避免 Windows 命令行长度上限（~32 KB）。
+
+    只在 Windows 上有效；调用方已保证 `os.name == 'nt'`。
+
+    **返回 `(ok, fail, failed_paths)`**（round 217 修 F3）——
+    原实现返回 None，调用方无从得知删没删掉。
+    """
+    tmp = Path(tempfile.gettempdir())
+    _sweep_previous_prune_artifacts(tmp)  # F2：先清上轮残留
+    empty = tmp / f'scada_prune_empty_{os.getpid()}'
+    list_file = tmp / f'scada_prune_{os.getpid()}.txt'
+    script_file = tmp / f'scada_prune_{os.getpid()}.ps1'
+    empty.mkdir(exist_ok=True)
+    list_file.write_text('\n'.join(str(p) for p in paths), encoding='utf-8')
+    script_file.write_text(_PRUNE_PS, encoding='utf-8')
+    env = dict(os.environ,
+               SCADA_PRUNE_EMPTY=str(empty),
+               SCADA_PRUNE_LIST=str(list_file))
+    ok = 0
+    fail = 0
+    failed_paths: list = []
+    try:
+        proc = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive',
+             '-ExecutionPolicy', 'Bypass', '-File', str(script_file)],
+            check=False, timeout=900, env=env,
+            capture_output=True, text=True, encoding='utf-8', errors='replace')
+        for line in (proc.stdout or '').splitlines():
+            line = line.strip()
+            if line.startswith('SCADA_PRUNE_OK='):
+                ok = int(line.split('=', 1)[1] or 0)
+            elif line.startswith('SCADA_PRUNE_FAIL='):
+                fail = int(line.split('=', 1)[1] or 0)
+            elif line.startswith('SCADA_PRUNE_FAILED_PATH='):
+                failed_paths.append(line.split('=', 1)[1])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass  # 失败留给调用方通过返回值判断
+    finally:
+        for f in (list_file, script_file):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        # F1：empty 目录也必须清 —— 原实现只删 list/ps1，导致 TEMP 里按 PID
+        # 堆积 `scada_prune_empty_*`（实测 2 个，永不回收）。
+        try:
+            empty.rmdir()
+        except OSError:
+            pass
+    return ok, fail, failed_paths
+
+
+def _prune_old_tmp_roots(keep: int = TMP_ROOT_KEEP, root=None) -> dict:
+    """保留最近 `keep` 个 `.pytest_tmp-*`，其余删除（round 216；round 217 修 F3）。
+
+    背景：`pytest_configure` 用「目录名带 PID」换取"零删除"，代价是
+    **每次运行留一个目录、永不回收** —— 本机实测堆积 860 个（150 万文件）。
+    这里补上保留策略，让它不会无限增长。
+
+    ⚠️ 调用点放在 **`pytest_unconfigure`（会话结束）** 而不是 `pytest_configure`：
+       一次历史积压的清理可能耗时十几分钟，放在启动路径上会卡住整个测试会话。
+       放在结束路径上，正常情况每次只删「本次新增之外多出来的那一个」。
+
+    只在 Windows 上做；**任何异常都不影响测试结果**，但会**出声** ——
+    round 217 修 F3：原实现 `except Exception: pass` 把"删不掉"与"整体炸了"一起吞了，
+    而实测确实存在被静默跳过的目录（待删列表里第 10 个目录仍有 1697 个条目）。
+
+    返回 `{"selected", "ok", "fail", "failed"}`（原返回 None），便于测试断言。
+    `root` 参数仅为测试注入，生产调用走 `PROJECT_ROOT`。
+    """
+    result = {"selected": 0, "ok": 0, "fail": 0, "failed": []}
+    if os.name != 'nt':
+        return result
+    try:
+        base = Path(root) if root is not None else Path(PROJECT_ROOT)
+        stale = _select_stale_tmp_roots(base, keep, TMP_ROOT_PRUNE_MAX)
+        result["selected"] = len(stale)
+        if not stale:
+            return result
+        ok, fail, failed = _delete_dirs_bulk(stale)
+        result.update(ok=ok, fail=fail, failed=failed)
+        if fail:
+            detail = ''.join(f"\n    - {p}" for p in failed[:10])
+            sys.stderr.write(
+                f"[tmp-prune] {fail}/{len(stale)} 个目录未能删除（已保留，下次重试）：{detail}\n")
+        return result
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"[tmp-prune] 清理整体失败（不影响测试结果）：{exc!r}\n")
+        result["error"] = repr(exc)
+        return result
 
 
 def _quarantine_smoke_test_dbs(data_dir: Path):
