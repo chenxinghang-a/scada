@@ -1,0 +1,92 @@
+#!/bin/sh
+# SCADA pre-commit 闸门（配合 tools/scada_preflight.py 使用）
+#
+# 区别：
+#   tools/scada_preflight.py  → 「开工前」核仓库实况（会检查工作区是否脏，提交时必然脏）
+#   本 hook                    → 「提交前」只挡真不该进库的东西
+#
+# 挡四类（全部只读，不改文件）：
+#   1) 未解决的合并冲突标记  <<<<<<< / >>>>>>>
+#   2) 敏感文件              .env / *.key / *.pem / *credentials* / id_rsa*
+#   3) 大文件                > 5 MB（二进制资产请走 Git LFS 或单独发布）
+#   4) 临时产物              .pytest_tmp*/ __pycache__ / *.pyc / *.log
+#
+# 用 core.hooksPath 安装（见 tools/git-hooks/README.md），不依赖 .git/hooks。
+# 应急跳过：git commit --no-verify
+
+fail=0
+say() { printf '  %s %s\n' "$1" "$2"; }
+
+files=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$files" ] && exit 0
+
+# ---------- 1) 合并冲突标记 ----------
+bad_conflict=""
+for f in $files; do
+    case "$f" in
+        *.png|*.jpg|*.jpeg|*.gif|*.webp|*.ico|*.pdf|*.zip|*.7z|*.exe|*.dll|*.so|*.db|*.pyc|*.woff*|*.ttf) continue ;;
+    esac
+    if git show ":$f" 2>/dev/null | grep -qE '^(<<<<<<< |>>>>>>> )'; then
+        bad_conflict="$bad_conflict $f"
+    fi
+done
+if [ -n "$bad_conflict" ]; then
+    say "FAIL" "有未解决的合并冲突标记:$bad_conflict"
+    fail=1
+fi
+
+# ---------- 2) 敏感文件 ----------
+bad_secret=""
+for f in $files; do
+    base=$(basename "$f" | tr 'A-Z' 'a-z')
+    case "$base" in
+        .env|.env.*|*.key|*.pem|id_rsa*|id_ed25519*|*credentials*|*secret*|*token*)
+            bad_secret="$bad_secret $f" ;;
+    esac
+done
+if [ -n "$bad_secret" ]; then
+    say "FAIL" "疑似敏感文件被暂存:$bad_secret"
+    fail=1
+fi
+
+# ---------- 3) 大文件 ----------
+LIMIT=5242880   # 5 MB
+bad_big=""
+for f in $files; do
+    sz=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+    if [ "$sz" -gt "$LIMIT" ] 2>/dev/null; then
+        bad_big="$bad_big $f($((sz/1024/1024))MB)"
+    fi
+done
+if [ -n "$bad_big" ]; then
+    say "FAIL" "文件超过 5MB，请改用 LFS 或单独发布:$bad_big"
+    fail=1
+fi
+
+# ---------- 4) 临时产物 ----------
+bad_tmp=""
+for f in $files; do
+    case "$f" in
+        .pytest_tmp*|*/.pytest_tmp*|__pycache__/*|*/__pycache__/*|*.pyc|*.log)
+            bad_tmp="$bad_tmp $f" ;;
+    esac
+done
+if [ -n "$bad_tmp" ]; then
+    say "FAIL" "临时产物不该入库:$bad_tmp"
+    fail=1
+fi
+
+# ---------- 附：空白错误只提示不拦 ----------
+if git diff --cached --check >/dev/null 2>&1; then
+    :
+else
+    say "WARN" "有行尾空白/空白错误（不拦，可用 git diff --cached --check 查看）"
+fi
+
+if [ "$fail" -ne 0 ]; then
+    printf '\n  → 提交已阻止。修好后重试；确认无误可 git commit --no-verify 跳过。\n\n'
+    exit 1
+fi
+
+printf '  [ OK ] pre-commit 检查通过\n'
+exit 0
