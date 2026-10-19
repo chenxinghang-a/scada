@@ -5,7 +5,6 @@
 
 from typing import Any
 import logging
-import re
 from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
@@ -64,11 +63,14 @@ def add_device():
     if not device_id or not device_id.replace('_', '').replace('-', '').isalnum():
         return api_error('设备ID只能包含字母、数字、下划线和连字符')
 
-    # 设备名称只允许纯文本，拒绝 HTML 标签，避免名称进入前端后形成 XSS
+    # 设备名称只允许纯文本，拒绝 HTML 标签，避免名称进入前端后形成 XSS。
+    # 用字符判断而不是正则 r'<[^>]*>'：那个正则在 '<' 重复很多的串上是**多项式**
+    # 回溯（每个 '<' 都要一路扫到结尾），可被构造输入拖慢（CodeQL py/polynomial-redos #45）。
+    # 这里只关心「有没有尖括号」，判断一次 O(n) 即可，语义还更严。
     device_name = data.get('name')
     if not isinstance(device_name, str) or not device_name.strip():
         return api_error('设备名称必须是非空文本')
-    if re.search(r'<[^>]*>', device_name):
+    if '<' in device_name or '>' in device_name:
         return api_error('设备名称不能包含HTML标签')
 
     protocol = data.get('protocol', 'modbus_tcp')

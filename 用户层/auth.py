@@ -531,9 +531,13 @@ class AuthManager:
                     # fail-closed：解析不出"密码变更时间"时，**不能假定密码没改过** ——
                     # 那等于让已改密用户的旧刷新令牌继续续期（静默放行）。
                     # 拒绝续期，并要求人工核查该用户的 password_changed_at 数据。
+                    # 不把 password_changed_at 的原始值写进日志：
+                    # 该字段名含 password，日志里出现它既容易被误当凭据收集，
+                    # 也会触发 CodeQL py/clear-text-logging-sensitive-data（告警 #50）。
+                    # 排障所需的信息由异常 e 提供（是格式错、还是类型错）。
                     logger.error(
                         "password_changed_at 非法，无法确认密码是否已变更，拒绝刷新 "
-                        "user=%s value=%r: %s", user.get('username'), password_changed, e)
+                        "user=%s: %s", user.get('username'), e)
                     return None
 
                 if pwd_time > token_iat:

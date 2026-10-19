@@ -1284,9 +1284,19 @@
         if (body) {
             var now = new Date().toLocaleTimeString();
             var cls = level === 'err' ? 'debug-err' : level === 'warn' ? 'debug-warn' : 'debug-ok';
+            // 用 textContent 而不是拼 HTML 字符串：msg 是外部文本，拼进 innerHTML
+            // 就是 DOM XSS（CodeQL js/xss-through-dom #10）。cls 只取三个固定值，安全。
             var entry = document.createElement('div');
             entry.className = 'debug-entry';
-            entry.innerHTML = '<span class="debug-time">[' + now + ']</span> <span class="' + cls + '">' + msg + '</span>';
+            var timeSpan = document.createElement('span');
+            timeSpan.className = 'debug-time';
+            timeSpan.textContent = '[' + now + ']';
+            var msgSpan = document.createElement('span');
+            msgSpan.className = cls;
+            msgSpan.textContent = msg;
+            entry.appendChild(timeSpan);
+            entry.appendChild(document.createTextNode(' '));
+            entry.appendChild(msgSpan);
             body.appendChild(entry);
             body.scrollTop = body.scrollHeight;
         }

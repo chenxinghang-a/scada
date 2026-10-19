@@ -1653,10 +1653,14 @@ function showAlert(message, type = 'info') {
     const alert = document.createElement('div');
     alert.className = `alert alert-${type} alert-dismissible fade show alert-floating`;
     alert.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 9999; min-width: 300px;';
-    alert.innerHTML = `
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
+    // 用 DOM 节点拼，不拼 HTML 字符串：message 可能来自服务端错误文本，
+    // 直接塞 innerHTML 就是 DOM XSS（CodeQL js/xss-through-dom #15）。
+    alert.appendChild(document.createTextNode(message));
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn-close';
+    closeBtn.setAttribute('data-bs-dismiss', 'alert');
+    alert.appendChild(closeBtn);
     
     document.body.appendChild(alert);
     
