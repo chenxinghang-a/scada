@@ -12,23 +12,23 @@
     {
       "name": "backend_windows_onedir",
       "owner": "backend",
-      "path": "C:\\Users\\cxx\\AppData\\Local\\Temp\\wt-1089\\dist\\scada-backend\\scada-backend.exe",
+      "path": "../../../AppData/Local/Temp/wt-1089/dist/scada-backend/scada-backend.exe",
       "sha256": null,
       "note": "artifact not built yet / not found"
     },
     {
       "name": "frontend_installer",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-Setup-1.3.1089.exe",
+      "path": "../../../scada-app/release/smartscada-Setup-1.3.1089.exe",
       "sha256": null,
-      "note": "artifact not built yet / not found；前后端版本不同步：后端 VERSION=1.3.1089，前端 package.json=1.3.1088；清单中的前端产物路径按**后端版本**拼出，实际构建不会产生该文件"
+      "note": "artifact not built yet / not found"
     },
     {
       "name": "frontend_archive",
       "owner": "frontend",
-      "path": "C:\\Users\\cxx\\scada-app\\release\\smartscada-1.3.1089-x64.nsis.7z",
+      "path": "../../../scada-app/release/smartscada-1.3.1089-x64.nsis.7z",
       "sha256": null,
-      "note": "artifact not built yet / not found；前后端版本不同步：后端 VERSION=1.3.1089，前端 package.json=1.3.1088；清单中的前端产物路径按**后端版本**拼出，实际构建不会产生该文件"
+      "note": "artifact not built yet / not found"
     }
   ],
   "manifest_generator": "tools/gen_release_manifest.py"

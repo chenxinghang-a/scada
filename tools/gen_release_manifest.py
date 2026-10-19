@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -77,6 +78,27 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from core.version import get_version, _git_commit_sha, _node_version  # noqa: E402
+
+
+def _display_path(p: Path) -> str:
+    """清单里记录的路径必须**可公开** —— 优先相对仓库根，其次用 ``~`` 抹掉用户目录。
+
+    为什么不用绝对路径：``release-manifest.json`` 是提交进**公开**仓库的，
+    绝对路径会把本机用户名一起写进去（实测提交过 ``C:\\Users\\<name>\\...`` 三条）。
+    消费方只用 ``Path(entry["path"]).name`` 比文件名，换相对路径不影响任何断言。
+    """
+    try:
+        return p.resolve().relative_to(BACKEND_ROOT).as_posix()
+    except (ValueError, OSError):
+        pass
+    try:
+        return Path(os.path.relpath(p, BACKEND_ROOT)).as_posix()
+    except ValueError:  # 跨盘符时 relpath 会抛
+        pass
+    try:
+        return '~/' + p.resolve().relative_to(Path.home()).as_posix()
+    except (ValueError, OSError):
+        return p.name
 
 
 def _sha256_of_file(path: Path) -> str | None:
@@ -382,7 +404,7 @@ def _collect_artifacts(version: str, frontend_version: str | None = None) -> lis
                 {
                     "name": name,
                     "owner": owner,
-                    "path": str(path),
+                    "path": _display_path(path),
                     "sha256": None,
                     "note": note,
                 }
@@ -392,7 +414,7 @@ def _collect_artifacts(version: str, frontend_version: str | None = None) -> lis
         entry = {
             "name": name,
             "owner": owner,
-            "path": str(path),
+            "path": _display_path(path),
             "sha256": digest,
         }
 
@@ -401,14 +423,14 @@ def _collect_artifacts(version: str, frontend_version: str | None = None) -> lis
             d = _dir_digest(companion_dir)
             if d is not None:
                 entry["companion_dir"] = {
-                    "path": str(companion_dir),
+                    "path": _display_path(companion_dir),
                     "files": d["files"],
                     "bytes": d["bytes"],
                     "sha256": d["sha256"],
                 }
             else:
                 entry["companion_dir"] = {
-                    "path": str(companion_dir),
+                    "path": _display_path(companion_dir),
                     "sha256": None,
                     "note": "companion dir not found —— onedir 产物不完整",
                 }
