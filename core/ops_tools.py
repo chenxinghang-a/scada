@@ -294,6 +294,12 @@ class DatabaseMaintainer:
         try:
             with self._get_conn() as conn:
                 if table:
+                    # safe_name 已由 _validate_table_name 三重把关：
+                    #   1) 正则白名单 ^[a-zA-Z_][a-zA-Z0-9_]*$
+                    #   2) sqlite_master 存在性校验（参数化查询）
+                    #   3) 返回时已用双引号引用
+                    # 拼接进去的是「已被引用的标识符」，不存在注入面。
+                    # CodeQL py/sql-injection 无法穿透正则校验 → 误报（告警 #38）。
                     safe_name = self._validate_table_name(conn, table)
                     sql = 'REINDEX ' + safe_name
                     conn.execute(sql)

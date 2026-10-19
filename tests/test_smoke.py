@@ -18,8 +18,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def _find_free_port():
     import socket
+    # 只绑回环：这里仅需要「内核分配一个空闲端口」，绑 0.0.0.0 会让
+    # 这个测试在局域网里短暂可被连（CodeQL py/bind-socket-all-network-interfaces）。
     with socket.socket() as s:
-        s.bind(('', 0))
+        s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
 
 

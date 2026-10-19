@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# 最小权限：本工作流只读代码、跑测试、构建产物；
+# 不发 Release、不写 issue/PR、不改仓库设置。
+# 显式声明而不是依赖仓库默认值 —— 默认值哪天被改成读写，这里不会跟着变，
+# 同时消除 CodeQL `actions/missing-workflow-permissions` 的 3 条告警。
+permissions:
+  contents: read
+
 jobs:
   test:
     # 为什么跑 windows-latest 而不是 ubuntu-latest
