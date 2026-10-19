@@ -37,6 +37,31 @@ class DataExport:
         self.export_dir = Path(export_dir).resolve()
         self.export_dir.mkdir(parents=True, exist_ok=True)
 
+    def _resolve_target(self, filename: str) -> Path:
+        """把调用方给的文件名落成 export_dir 内的绝对路径（防目录穿越）。
+
+        为什么必须做：filename 可能来自请求体（`/api/data/export` 就是），
+        而 `self.export_dir / '../../x.csv'` 会直接写到目录外；
+        `delete_export` 更是能删掉目录外任意文件。
+
+        两道关：
+          1. 只取 basename（`../../a.csv` → `a.csv`），拒绝空名 / `.` / `..`；
+          2. resolve 之后再复核父目录必须**正好**是 export_dir
+             （防符号链接之类的绕过）。
+
+        不合规时抛 ValueError —— 调用方捕获后转成「导出失败」，
+        绝不退化成「写到目录外」。
+        """
+        import os
+
+        name = os.path.basename(str(filename or '').replace('\\', '/')).strip()
+        if not name or name in ('.', '..'):
+            raise ValueError(f'非法导出文件名: {filename!r}')
+        target = (self.export_dir / name).resolve()
+        if target.parent != self.export_dir:
+            raise ValueError(f'导出路径越界: {filename!r}')
+        return target
+
     def export_csv(self, data: list[dict[str, Any]], filename: str | None = None) -> str:
         """
         导出CSV格式
@@ -57,9 +82,8 @@ class DataExport:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'export_{timestamp}.csv'
 
-        filepath = self.export_dir / filename
-
         try:
+            filepath = self._resolve_target(filename)
             # 获取字段名
             fieldnames = data[0].keys()
 
@@ -103,9 +127,8 @@ class DataExport:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'export_{timestamp}.xlsx'
 
-        filepath = self.export_dir / filename
-
         try:
+            filepath = self._resolve_target(filename)
             df = pd.DataFrame(data)
             df.to_excel(filepath, sheet_name=sheet_name, index=False)
 
@@ -138,9 +161,8 @@ class DataExport:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'export_{timestamp}.json'
 
-        filepath = self.export_dir / filename
-
         try:
+            filepath = self._resolve_target(filename)
             with open(filepath, 'w', encoding='utf-8') as f:
                 if pretty:
                     json.dump(data, f, ensure_ascii=False, indent=2)
@@ -290,7 +312,11 @@ class DataExport:
         Returns:
             bool: 删除是否成功
         """
-        filepath = self.export_dir / filename
+        try:
+            filepath = self._resolve_target(filename)
+        except ValueError as exc:
+            logger.warning(f"拒绝删除非法导出文件名: {filename!r}（{exc}）")
+            return False
 
         try:
             if filepath.exists():
