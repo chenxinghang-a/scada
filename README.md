@@ -223,6 +223,24 @@ industrial_scada/
 
 ## 快速开始
 
+### 开工前检查（开发 / 协作必跑）
+
+```bash
+python tools/scada_preflight.py
+```
+
+一条命令核仓库实况，避免"照着过期前提动手"：当前分支 / 与远端同步 / 工作区是否脏 /
+`VERSION` / `.pytest_tmp` 积压 / `.env` 是否被忽略 / stash 与未合并分支 / 最近 5 条提交。
+输出 `PASS | WARN | FAIL`，有 `FAIL` 时退出码 1。
+
+提交前还有一道自动闸门 `tools/git-hooks/pre-commit`（挡未解决冲突标记、密钥类文件、
+>5MB 大文件、`.pyc`/`__pycache__` 等临时产物；行尾空白只提示不拦）。
+首次 clone 后挂一次即可，它是版本化的：
+
+```bash
+git config core.hooksPath tools/git-hooks
+```
+
 ### 方式一: 本地开发 (推荐)
 
 ```bash
