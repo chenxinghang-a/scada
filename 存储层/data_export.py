@@ -6,11 +6,51 @@
 import csv
 import json
 import logging
+import re
 from typing import Any
 from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+#: 会被 Excel / LibreOffice 当成**公式**的起始字符（CWE-1236，CSV/Excel 注入）。
+#: `\t` / `\r` 也算：某些版本会先剥掉前导空白再解析公式。
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+#: 纯负数字符串（`-5` / `-1.2` / `-1.2e3`）。这类不是公式，不该被加引号。
+_NEGATIVE_NUMBER_RE = re.compile(r'^-\d+(\.\d+)?([eE][+-]?\d+)?$')
+
+
+def _sanitize_cell(value: Any) -> Any:
+    """中和「以公式前缀开头的**字符串**单元格」（前置一个单引号）。
+
+    为什么需要（CWE-1236）
+    ----------------------
+    设备名 / 寄存器名 / 单位都是用户可填的。若某个值以 `=` 开头，导出成 CSV
+    再用 Excel 打开时会被当作公式执行 —— `=cmd|'/C calc'!A0` 这类 payload 能
+    直接拉起进程；`=HYPERLINK(...)` 还能把数据外带。导出文件通常会被转发给
+    别人，等于把攻击面带出系统。
+
+    为什么**只处理字符串**、且放过纯负数
+    ----------------------------------
+    SCADA 数据里负数遍地（零下温度、反向功率）。若对数值也加引号，
+    `-5.0` 会变成文本，Excel 里再也算不了 —— 修安全问题不能顺手把数据搞坏。
+    数值本身不是公式载体；字符串形态的 `"-5"` / `"-1.2e3"` 同理放过。
+    这条规则与前端 `scada-app/src/utils/export.ts::escCSV` 保持一致。
+    """
+    if not isinstance(value, str):
+        return value
+    if value[:1] not in _FORMULA_PREFIXES:
+        return value
+    if _NEGATIVE_NUMBER_RE.match(value):
+        return value
+    return "'" + value
+
+
+def _sanitize_rows(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """对整批数据逐单元格中和（保持键与顺序不变）。"""
+    return [{k: _sanitize_cell(v) for k, v in row.items()} for row in data]
+
 
 
 class DataExport:
@@ -90,7 +130,8 @@ class DataExport:
             with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
-                writer.writerows(data)
+                # 逐格中和公式前缀（CWE-1236），见 _sanitize_cell 的说明
+                writer.writerows(_sanitize_rows(data))
 
             logger.info(f"CSV导出成功: {filepath}")
             return str(filepath)
@@ -129,7 +170,9 @@ class DataExport:
 
         try:
             filepath = self._resolve_target(filename)
-            df = pd.DataFrame(data)
+            # pandas.to_excel 走 openpyxl 时，以 `=` 开头的**字符串**会被写成公式
+            # （data_type='f'），所以 Excel 这条路同样要中和（CWE-1236）。
+            df = pd.DataFrame(_sanitize_rows(data))
             df.to_excel(filepath, sheet_name=sheet_name, index=False)
 
             logger.info(f"Excel导出成功: {filepath}")
