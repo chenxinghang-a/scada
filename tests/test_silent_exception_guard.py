@@ -94,19 +94,14 @@ BROAD_EXCEPTIONS = {"Exception", "BaseException"}
 #: `tests/test_core_regressions.py::test_silent_broad_allowlist_does_not_grow`
 #: 会盯着这里，防止有人图省事把新违规加进白名单。
 ALLOWED_SILENT_BROAD: dict[tuple[str, int], str] = {
-    ("core/health_checker.py", 548): (
-        "已登记的存量负债（未修复）。"
-        "`_check_data_freshness()` 里 `data_collector.data_queue.qsize()` 的 "
-        "`except Exception: pass`：队列深度读不出来时会静默跳过"
-        "「内存队列为空但磁盘队列有积压 → 消费链路停摆」这条交叉信号，"
-        "健康检查于是可能报 HEALTHY。"
-        "修法：改绑 `as e` 并 `logger.warning('数据新鲜度检查: 队列深度读取失败，"
-        "该交叉信号已跳过: %s', e)`，同时把 `queue_in_memory` 置为 None 而非 0，"
-        "避免被当成「内存队列是空的」。"
-        "本轮（core 静默失败专项）文件边界明确排除 core/health_checker.py"
-        "（该文件刚被其它改动触碰），故仅登记、不修改；"
-        "请在后续针对 health_checker 的变更中一并修掉并删除本豁免。"
-    ),
+    # 2026-10-20：原唯一一条豁免（core/health_checker.py 的
+    # `_check_data_freshness()` 里 `except Exception: pass`）已按豁免里写的修法修掉
+    # （改绑 `as e` + logger.warning + `queue_in_memory` 显式置 None），故清空。
+    #
+    # ⚠️ 顺带记一个脆弱点：这份豁免是**按行号**索引的。上面那个文件只要在豁免
+    # 之上插入几行，行号就会漂移、守卫随即误报「新违规」—— 本轮就是这么撞上的
+    # （给 `start_periodic_checks` 加了注释后，548 变成 555）。
+    # 所以能修就修掉，别留着等它下次再咬人。
 }
 
 

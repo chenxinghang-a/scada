@@ -61,6 +61,10 @@ class ScheduledTask:
 class TaskManager:
     """定时任务管理器"""
 
+    #: `stop()` 等待循环退出的上限（秒）。超时不代表失败 —— 只表示任务正在执行，
+    #: 此时 `start()` 会拒绝启动，避免两条循环并存。
+    STOP_JOIN_TIMEOUT_S = 5.0
+
     def __init__(self):
         self._tasks: Dict[str, ScheduledTask] = {}
         # 必须是可重入锁：start_all()/stop_all() 在持锁状态下遍历并调用
@@ -105,6 +109,21 @@ class TaskManager:
             if task.status == 'running':
                 return True
 
+            # ⚠️ 上一条循环还没退出时**不能** clear()。
+            #
+            # `stop()` 只是 set 事件，循环可能正卡在 `_execute_task`（备份/清理
+            # 动辄几十秒）。此时若立刻 start：
+            #   1. `clear()` 把事件清掉 → **旧循环被救活**（它下一轮检查时已复位）；
+            #   2. 又起一条新线程 → 同一个任务被**两条循环同时执行**
+            #      （备份写两份、清理跑两遍、指标重复上报）。
+            # 所以这里先确认旧线程真的没了；没有就拒绝本次启动并留痕。
+            if task._thread is not None and task._thread.is_alive():
+                logger.warning(
+                    "定时任务 %s 的上一次循环仍在退出中（可能正在执行），本次启动已忽略",
+                    name,
+                )
+                return False
+
             task._stop_event.clear()
             task._pause_event.set()
             task.status = 'running'
@@ -125,8 +144,20 @@ class TaskManager:
             task._stop_event.set()
             task._pause_event.set()  # 唤醒暂停的线程
             task.status = 'stopped'
-            logger.info("停止定时任务: %s", name)
-            return True
+            thread = task._thread
+
+        # join 必须放在锁**外**：循环退出前会回调本管理器（`_execute_task` 里取
+        # `self._lock` 改状态），持锁 join 会把对方挡在锁上，只能等到超时。
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=self.STOP_JOIN_TIMEOUT_S)
+            if thread.is_alive():
+                logger.warning(
+                    "定时任务 %s 在 %.1fs 内未退出（多半正在执行中）；"
+                    "在它结束前 start() 会被拒绝，避免同一任务被两条循环同时跑",
+                    name, self.STOP_JOIN_TIMEOUT_S,
+                )
+        logger.info("停止定时任务: %s", name)
+        return True
 
     def pause(self, name: str) -> bool:
         """暂停任务"""
@@ -154,17 +185,28 @@ class TaskManager:
 
     def start_all(self):
         """启动所有任务"""
+        # 先取名字再逐个启动：`start()` 内部会取同一把（可重入）锁，
+        # 且在「旧循环未退出」时会拒绝启动并打日志 —— 在锁内循环调用会让
+        # 日志/状态更新与 join 相互干扰，这里统一改成锁外执行。
         with self._lock:
-            for task in self._tasks.values():
-                if task.status in ('pending', 'stopped'):
-                    self.start(task.name)
+            names = [
+                t.name for t in self._tasks.values()
+                if t.status in ('pending', 'stopped')
+            ]
+        for name in names:
+            self.start(name)
 
     def stop_all(self):
         """停止所有任务"""
         with self._lock:
-            for task in self._tasks.values():
-                if task.status in ('running', 'paused'):
-                    self.stop(task.name)
+            names = [
+                t.name for t in self._tasks.values()
+                if t.status in ('running', 'paused')
+            ]
+        # 锁外逐个 stop：stop() 里有 join（最多 STOP_JOIN_TIMEOUT_S），
+        # 持锁 join 会把正在执行的任务线程挡在 self._lock 上，只能等超时。
+        for name in names:
+            self.stop(name)
 
     def get_status(self, name: str = None) -> Any:
         """获取任务状态"""

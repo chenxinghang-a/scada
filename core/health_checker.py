@@ -298,10 +298,17 @@ class HealthChecker:
             logger.warning("周期健康检查已在运行，忽略重复启动")
             return
 
-        cls._stop_event = threading.Event()
+        # ⚠️ 事件必须**按线程捕获成局部变量**，不能在线程体里读 `cls._stop_event`。
+        #
+        # 原实现 `while not cls._stop_event.wait(interval)` 读的是**类属性**（迟绑定）：
+        # 一旦发生「stop 时 join 超时（check() 卡在慢库/慢盘上，timeout=30s）→
+        # 再 start 装了新事件」，旧线程下一轮读到的就是**新**事件（未 set），
+        # 永远收不到自己的停止信号 → 健康检查线程越积越多（每轮多一次全量检查）。
+        stop_event = threading.Event()
+        cls._stop_event = stop_event
 
         def _periodic_loop():
-            while not cls._stop_event.wait(interval):
+            while not stop_event.wait(interval):
                 try:
                     result = cls.check()
                     # 如果有新的不健康项，触发告警
@@ -545,8 +552,13 @@ def _check_data_freshness(db, data_collector=None):
             problems.append('内存队列为空但磁盘队列有积压 —— 消费链路可能已停摆')
             if status == HealthStatus.HEALTHY:
                 status = HealthStatus.DEGRADED
-    except Exception:
-        pass
+    except Exception as e:
+        # 读不出内存队列深度 → 跳过这条交叉信号，并**显式置 None**：
+        # 置 0 会被下游当成「内存队列确实是空的」，与「读不到」混淆。
+        # 必须留痕（warning 而非 debug）：这条信号本身是用来发现
+        # 「消费链路停摆」的，检查不出来意味着可能漏报，运维要能看到。
+        details['queue_in_memory'] = None
+        logger.warning('数据新鲜度检查: 队列深度读取失败，该交叉信号已跳过: %s', e)
 
     message = '; '.join(problems) if problems else '数据新鲜度与队列正常'
     return {'status': status, 'message': message, 'details': details}
