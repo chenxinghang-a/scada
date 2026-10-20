@@ -141,13 +141,25 @@ class AlarmOutput:
             logger.error(f"写DO{address}失败: {e}")
             return False
 
-    def _write_all_do(self, red: bool, yellow: bool, green: bool, buzzer: bool):
-        """批量写DO线圈"""
+    def _write_all_do(self, red: bool, yellow: bool, green: bool, buzzer: bool) -> bool:
+        """批量写DO线圈。
+
+        Returns:
+            bool: **四个通道是否全部写成功**。任一失败即 False。
+
+        为什么要返回 bool：`reset()` 之前无论写没写成功都返回 True 并打印
+        「报警输出已复位（绿灯正常）」，于是 Modbus DO 写失败时——
+        **现场红灯/蜂鸣器还在响，界面却说已恢复正常**。声光报警是这个系统的
+        安全出口，这种假成功比没有功能更危险。
+        """
         with self._lock:
-            self._write_do(self.do_red, red)
-            self._write_do(self.do_yellow, yellow)
-            self._write_do(self.do_green, green)
-            self._write_do(self.do_buzzer, buzzer)
+            results = [
+                self._write_do(self.do_red, red),
+                self._write_do(self.do_yellow, yellow),
+                self._write_do(self.do_green, green),
+                self._write_do(self.do_buzzer, buzzer),
+            ]
+        return all(results)
 
     # ==================== 报警输出 ====================
 
@@ -168,6 +180,16 @@ class AlarmOutput:
             level: 报警级别 (critical/warning/info)
             message: 报警消息
             device_id: 设备ID
+
+        Returns:
+            str | bool: 正常路径返回本次输出的日志文案（供调用方记录/测试断言）；
+            **DO 写入失败时返回 False**。
+
+            为什么成功返回文案、失败返回 False：`AlarmManager._call_output_method`
+            的契约是「显式 False / {'success': False} 才算失败」，返回 None 或任意
+            字符串都当成功。此前本方法无论写没写成功都返回文案，于是
+            **报警响了但声光没动，系统却认为输出成功**，`errors` 计数也不会涨 ——
+            现场没有任何信号。失败必须显式返回 False 才能被计数与上报。
         """
         if not self.enabled:
             return
@@ -206,7 +228,7 @@ class AlarmOutput:
                 'pattern': AlarmLightPattern.FAST_FLASH
             })
             # 先写入目标灯ON + 蜂鸣器ON（避免闪烁线程启动前的黑灯间隙）
-            self._write_all_do(red=True, yellow=False, green=False, buzzer=True)
+            ok = self._write_all_do(red=True, yellow=False, green=False, buzzer=True)
             self._start_flash('red', 0.25)  # 250ms间隔=快闪
             # critical级别：蜂鸣器常响（不启脉冲线程，保持DO=True）
 
@@ -221,7 +243,7 @@ class AlarmOutput:
                 'pattern': AlarmLightPattern.SLOW_FLASH
             })
             # 先写入目标灯ON（避免闪烁线程启动前的黑灯间隙）
-            self._write_all_do(red=False, yellow=True, green=False, buzzer=False)
+            ok = self._write_all_do(red=False, yellow=True, green=False, buzzer=False)
             self._start_flash('yellow', 0.5)  # 500ms间隔=慢闪
             # warning级别：蜂鸣器脉冲响（响0.3s停0.7s）
             self._start_buzzer_pulse(on_time=0.3, off_time=0.7)
@@ -236,11 +258,18 @@ class AlarmOutput:
                 'buzzer': False,
                 'pattern': AlarmLightPattern.STEADY
             })
-            self._write_all_do(red=False, yellow=False, green=True, buzzer=False)
+            ok = self._write_all_do(red=False, yellow=False, green=True, buzzer=False)
 
             log_msg = f"【信息】🟢 {message} (设备: {device_id})"
             logger.info(log_msg)
 
+        if not ok:
+            logger.error(
+                "报警输出失败[level=%s]: DO 写入未成功 —— 现场声光可能没有动作"
+                "（红灯/黄灯/蜂鸣器），请检查 DO 通道与通信链路",
+                level,
+            )
+            return False
         return log_msg
 
     def acknowledge(self):
@@ -262,6 +291,10 @@ class AlarmOutput:
         """
         复位 — 全部清零，恢复绿灯正常状态
         报警解除后调用
+
+        Returns:
+            bool: DO 是否**真的**全部写成功。False 表示软件状态已清零，
+            但硬件可能没收到（红灯/蜂鸣器仍在），调用方必须据此告知操作员。
         """
         self._stop_flash()
         self._stop_buzzer()
@@ -274,9 +307,15 @@ class AlarmOutput:
             'acknowledged': False
         })
 
-        self._write_all_do(red=False, yellow=False, green=True, buzzer=False)
-        logger.info("报警输出已复位（绿灯正常）")
-        return True
+        ok = self._write_all_do(red=False, yellow=False, green=True, buzzer=False)
+        if ok:
+            logger.info("报警输出已复位（绿灯正常）")
+        else:
+            logger.error(
+                "报警输出复位：DO 写入失败 —— 硬件可能仍处于报警态"
+                "（红灯亮/蜂鸣器响），请检查 DO 通道与通信链路"
+            )
+        return ok
 
     # ==================== 手动控制 ====================
 

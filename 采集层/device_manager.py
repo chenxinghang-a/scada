@@ -607,8 +607,19 @@ class DeviceManager:
         """获取连接池统计信息"""
         return self._connection_pool.get_stats()
 
-    def _save_config(self):
-        """保存设备配置到文件（线程安全 + 原子写入）"""
+    def _save_config(self) -> bool:
+        """保存设备配置到文件（线程安全 + 原子写入）。
+
+        Returns:
+            bool: 是否真的落盘成功。
+
+        ⚠️ 返回值不是装饰品。此前这个方法吞掉异常并返回 None，而
+        `展示层/api/api_devices.py::update_device` 丢掉返回值、无条件回
+        「设备 X 更新成功」—— 于是**磁盘写不进去时，用户看到成功、重启后改动消失**。
+        这正是本项目反复修的「静默假成功」。同仓的
+        `报警层/alarm_manager._save_config` 与 `智能层/energy_manager._save_config`
+        早已改成返回 bool，这里补齐口径。
+        """
         try:
             with self._lock:
                 config = {'devices': list(self.devices.values())}
@@ -620,5 +631,7 @@ class DeviceManager:
                 yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
             tmp_file.replace(config_file)
             logger.info("设备配置已保存")
+            return True
         except Exception as e:
             logger.error(f"保存配置文件异常: {e}")
+            return False

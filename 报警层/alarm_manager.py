@@ -1382,6 +1382,12 @@ class AlarmManager:
 
         Args:
             device_id: 设备ID（None=全部复位）
+
+        Returns:
+            bool: 复位是否**完整**成功。报警状态清空总是成功的；但如果配了声光
+            输出、而 DO 写入失败，返回 False —— 此时软件侧已清零、硬件侧可能
+            仍停在红灯/蜂鸣器状态。调用方（API/UI）必须把 False 报给操作员，
+            否则就是「界面说绿灯、现场还在响」的假成功。
         """
         with self._state_lock:
             if device_id:
@@ -1415,11 +1421,12 @@ class AlarmManager:
                 self._acknowledge_history.clear()
 
         # 声光复位（全部清零，绿灯恢复）
+        output_ok = True
         if self.alarm_output and self.alarm_output.enabled:
-            self._call_output_method('alarm_output', self.alarm_output, 'reset')
+            output_ok = self._call_output_method('alarm_output', self.alarm_output, 'reset')
 
         logger.info(f"报警已复位: {'全部' if not device_id else device_id}")
-        return True
+        return output_ok
 
     def get_alarm_statistics(self) -> dict[str, Any]:
         """

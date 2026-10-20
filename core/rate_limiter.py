@@ -13,15 +13,28 @@ from flask_limiter.util import get_remote_address
 import logging
 import threading
 
+from config import SecurityConfig
+
 logger = logging.getLogger(__name__)
 
 # 限流配置
+#
+# ⚠️ `default` / `login` 的**第一段**来自 `config.SecurityConfig`，
+# 这样 `RATE_LIMIT_DEFAULT` / `RATE_LIMIT_LOGIN` 两个环境变量才真的有效。
+#
+# 历史问题（2026-10-19 实测）：`SecurityConfig.RATE_LIMIT_ENABLED / DEFAULT / LOGIN`
+# 三项**全库零读取** —— 也就是「在环境里设了也不生效」的死旋钮。
+# 更糟的是它们是**安全相关**的：运维以为调紧了登录限流，实际还是 5/min 的硬编码。
+# 现在 config.py 是唯一真源，本字典只保留「第二段」这类代码侧补充限制。
+#
+# 默认值必须与历史行为**逐字一致**（SecurityConfig 的默认就是历史值），
+# 否则这次改动会悄悄改掉线上限流强度。
 RATE_LIMIT_CONFIG = {
     # 默认限制
-    'default': ['200 per minute', '50 per second'],
+    'default': [SecurityConfig.RATE_LIMIT_DEFAULT, '50 per second'],
 
     # 登录接口（严格）
-    'login': ['5 per minute', '10 per hour'],
+    'login': [SecurityConfig.RATE_LIMIT_LOGIN, '10 per hour'],
 
     # 改密接口（严格，防令牌被盗后暴力改密）
     'change_password': ['5 per minute', '20 per hour'],
@@ -41,20 +54,34 @@ RATE_LIMIT_CONFIG = {
 
 
 def create_limiter(app):
-    """创建速率限制器并登记为全局实例"""
+    """创建速率限制器并登记为全局实例。
+
+    `RATE_LIMIT_ENABLED=false` 时创建一个**停用**的 Limiter：
+    保留实例（`app.limiter` / `get_limiter()` 的契约不变，装饰器不会 AttributeError），
+    但不做任何限流判定。这样运维在环境变量里关掉限流是真的能关掉，
+    而不是「设了也没用、只能改代码」。
+    """
+    enabled = bool(SecurityConfig.RATE_LIMIT_ENABLED)
     limiter = Limiter(
         app=app,
         key_func=get_remote_address,
         default_limits=RATE_LIMIT_CONFIG['default'],
         storage_uri="memory://",
         strategy="fixed-window",
+        enabled=enabled,
     )
 
     # 必须登记，否则 get_limiter() 恒为 None，
     # rate_limit_login / control / export 这些装饰器一被使用就 AttributeError。
     set_limiter(limiter)
 
-    logger.info(f"API速率限制已启用: {RATE_LIMIT_CONFIG['default']}")
+    if enabled:
+        logger.info(f"API速率限制已启用: {RATE_LIMIT_CONFIG['default']}")
+    else:
+        logger.warning(
+            "API速率限制已被 RATE_LIMIT_ENABLED=false 关闭 —— "
+            "等保2.0 要求对异常访问做限制，生产环境不应关闭"
+        )
     return limiter
 
 

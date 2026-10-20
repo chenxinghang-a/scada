@@ -147,7 +147,19 @@ def update_device(device_id):
     except ValueError as e:
         return api_error(str(e))
 
-    device_manager._save_config()
+    # 配置已在内存里生效，但**必须**确认真的落盘：写不进去时回「更新成功」
+    # 等于骗用户 —— 重启后改动消失，且现场无从察觉（本项目招牌病：静默假成功）。
+    if not device_manager._save_config():
+        logger.error("设备 %s 配置已应用到运行时，但写入配置文件失败", device_id)
+        return jsonify({
+            'success': False,
+            'message': (
+                f'设备 {device_id} 的配置已应用到运行时，但**未能写入配置文件**，'
+                f'重启后会丢失。请检查配置文件所在目录的写权限与磁盘空间。'
+            ),
+            'runtime_applied': True,
+            'persisted': False,
+        }), 500
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_device', f"更新设备: {device_id}")
     return jsonify({'success': True, 'message': f'设备 {device_id} 更新成功'})

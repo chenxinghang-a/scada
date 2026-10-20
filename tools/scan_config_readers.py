@@ -77,8 +77,37 @@ def collect_config_classes() -> dict[str, dict[str, int]]:
     return out
 
 
-def scan_readers(class_names: set[str], roots: list[Path]):
-    """返回 (读取点, 动态访问点)。读取点形状 {(cls, attr): [文件:行, ...]}。"""
+def collect_class_aliases(classes: dict[str, dict[str, int]]) -> dict[str, str]:
+    """收集 config.py 里的**类别名**：``WebConfig = FlaskConfig`` → {"WebConfig": "FlaskConfig"}。
+
+    为什么必须处理别名
+    ------------------
+    代码里 `run.py:510` 读的是 `WebConfig.HOST`，而类名是 `FlaskConfig`。
+    旧版扫描器只认 `Cls.ATTR` 的字面类名，于是把 `FlaskConfig.HOST/PORT/REAL_PORT`
+    全报成「无人读」——**假阳性**。
+
+    假阳性的代价不是「多几行输出」，而是**这份清单会被人整体忽略**：
+    一份 56 项里混着 7 项本来就有人读的报告，没人会去逐条核对，
+    真正的「算了没人读」就被淹掉了（这正是本项目反复栽的「闸门喊狼来了」）。
+    """
+    tree = ast.parse(CONFIG_FILE.read_text(encoding="utf-8"))
+    aliases: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        tgt = node.targets[0]
+        if isinstance(tgt, ast.Name) and isinstance(node.value, ast.Name):
+            if node.value.id in classes and tgt.id not in classes:
+                aliases[tgt.id] = node.value.id
+    return aliases
+
+
+def scan_readers(resolve: dict[str, str], roots: list[Path]):
+    """返回 (读取点, 动态访问点)。读取点形状 {(cls, attr): [文件:行, ...]}。
+
+    ``resolve`` 是「名字 → 规范类名」的映射，**包含类名自身与全部别名**，
+    这样 `WebConfig.HOST` 会被记到 `FlaskConfig.HOST` 名下。
+    """
     readers: dict[tuple[str, str], list[str]] = {}
     dynamic: list[str] = []
 
@@ -91,38 +120,39 @@ def scan_readers(class_names: set[str], roots: list[Path]):
                 continue
             rel = f.relative_to(REPO).as_posix()
             for node in ast.walk(tree):
-                # Cls.ATTR
+                # Cls.ATTR / Alias.ATTR
                 if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-                    if node.value.id in class_names:
-                        readers.setdefault((node.value.id, node.attr), []).append(
+                    canonical = resolve.get(node.value.id)
+                    if canonical is not None:
+                        readers.setdefault((canonical, node.attr), []).append(
                             f"{rel}:{node.lineno}"
                         )
-                # config.Cls.ATTR
+                # config.Cls.ATTR / config.Alias.ATTR
                 elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute):
                     inner = node.value
                     if (
                         isinstance(inner.value, ast.Name)
                         and inner.value.id == "config"
-                        and inner.attr in class_names
+                        and resolve.get(inner.attr) is not None
                     ):
-                        readers.setdefault((inner.attr, node.attr), []).append(
+                        readers.setdefault((resolve[inner.attr], node.attr), []).append(
                             f"{rel}:{node.lineno}"
                         )
                 # getattr(Cls, ...) / Cls.__dict__
                 elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                     if node.func.id == "getattr" and node.args:
                         a0 = node.args[0]
-                        if isinstance(a0, ast.Name) and a0.id in class_names:
+                        if isinstance(a0, ast.Name) and resolve.get(a0.id) is not None:
                             dynamic.append(f"{rel}:{node.lineno} getattr({a0.id}, ...)")
                         elif (
                             isinstance(a0, ast.Attribute)
                             and isinstance(a0.value, ast.Name)
                             and a0.value.id == "config"
-                            and a0.attr in class_names
+                            and resolve.get(a0.attr) is not None
                         ):
                             dynamic.append(f"{rel}:{node.lineno} getattr(config.{a0.attr}, ...)")
                 elif isinstance(node, ast.Attribute) and node.attr == "__dict__":
-                    if isinstance(node.value, ast.Name) and node.value.id in class_names:
+                    if isinstance(node.value, ast.Name) and resolve.get(node.value.id) is not None:
                         dynamic.append(f"{rel}:{node.lineno} {node.value.id}.__dict__")
     return readers, dynamic
 
@@ -133,15 +163,18 @@ def main() -> int:
     args = ap.parse_args()
 
     classes = collect_config_classes()
-    class_names = set(classes)
+    aliases = collect_class_aliases(classes)
+    # 名字 → 规范类名：类名映射到自身，别名映射到它指向的类
+    resolve = {name: name for name in classes}
+    resolve.update(aliases)
 
     prod_roots = [REPO / d for d in PROD_DIRS if (REPO / d).exists()]
     prod_roots += [REPO / f for f in PROD_FILES if (REPO / f).exists()]
 
-    prod_readers, dynamic = scan_readers(class_names, prod_roots)
-    test_readers, _ = scan_readers(class_names, [TEST_DIR])
+    prod_readers, dynamic = scan_readers(resolve, prod_roots)
+    test_readers, _ = scan_readers(resolve, [TEST_DIR])
 
-    report = {"classes": {}, "dynamic_access": dynamic}
+    report = {"classes": {}, "dynamic_access": dynamic, "aliases": aliases}
     for cls, attrs in sorted(classes.items()):
         rows = []
         for attr, lineno in sorted(attrs.items(), key=lambda kv: kv[1]):
@@ -182,12 +215,15 @@ def main() -> int:
                 print(f"            测试读点: {t}")
 
     print(f"\n合计 {unread_total} 项在生产代码里没有读取点。")
+    if aliases:
+        pairs = ", ".join(f"{a} → {c}" for a, c in sorted(aliases.items()))
+        print(f"\n已解析类别名 {len(aliases)} 个（别名下的读取已计入规范类名）：{pairs}")
     if dynamic:
         print(f"\n⚠️ 发现 {len(dynamic)} 处动态访问（可能造成漏报，需人工判断）：")
         for d in dynamic:
             print(f"    {d}")
     else:
-        print("\n（无动态访问 → 本扫描没有已知漏报通道）")
+        print("\n（无动态访问、别名已解析 → 本扫描没有已知漏报通道）")
     return 0
 
 

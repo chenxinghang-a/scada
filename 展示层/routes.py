@@ -54,6 +54,15 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     from config import FlaskConfig, SecurityConfig
     app.config['SECRET_KEY'] = FlaskConfig.SECRET_KEY
 
+    # 请求体上限（`SCADA_MAX_CONTENT_MB`，默认 16MB）。
+    #
+    # ⚠️ 这个旋钮此前是**装饰品**：`FlaskConfig.MAX_CONTENT_LENGTH` 定义在
+    # config.py 里，但全库没有任何一处把它交给 Flask，于是 Werkzeug 用默认值
+    # （不限制）—— 任何带认证的接口都能被一个超大 JSON body 顶到 OOM。
+    # `MAX_CONTENT_LENGTH` 是 Flask 读取的标准键，赋值后 Werkzeug 在解析
+    # 请求体时就会拒绝超限请求（413），不需要逐个端点写校验。
+    app.config['MAX_CONTENT_LENGTH'] = FlaskConfig.MAX_CONTENT_LENGTH
+
     # 登记「当前进程实际在用的库路径」（唯一真源）—— 入口在这里登记一次，
     # 别的模块（性能指标、运维工具…）只读，避免各自去猜模式。
     # 实测背景（2026-10-11，round 212）：api_performance 写死 data/scada.db，

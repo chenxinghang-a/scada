@@ -119,10 +119,22 @@ def alarm_output_reset():
     alarm_manager = current_app.alarm_manager
     if not alarm_manager.alarm_output:
         return jsonify({'success': False, 'message': '声光报警输出未启用'}), 400
-    alarm_manager.reset_alarm()
+    output_ok = alarm_manager.reset_alarm()
     get_auth_manager().log_operation(
         request.current_user['username'], 'alarm_reset', '报警输出复位')
-    return jsonify({'success': True, 'message': '报警输出已复位（绿灯正常）'})
+    if not output_ok:
+        # 软件状态已清零，但硬件没确认 —— 必须如实报给操作员。
+        # 旧实现无论 DO 写没写成功都回「已复位（绿灯正常）」，等于
+        # 「界面说绿灯、现场红灯还在亮」。
+        return jsonify({
+            'success': False,
+            'message': '报警状态已清除，但声光输出复位失败（硬件未确认）。'
+                       '请检查 DO 通道与通信链路，必要时到现场确认指示灯状态。',
+            'state_cleared': True,
+            'output_ok': False,
+        }), 500
+    return jsonify({'success': True, 'message': '报警输出已复位（绿灯正常）',
+                    'output_ok': True})
 
 
 @alarms_bp.route('/alarm-output/manual', methods=['POST'])

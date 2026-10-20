@@ -158,9 +158,19 @@ class AuthManager:
                 logger.info("已创建默认管理员账户 (密码通过 SCADA_ADMIN_PASSWORD 环境变量配置)")
 
     def _validate_password_strength(self, password: str) -> tuple[bool, str]:
-        """验证密码强度 - 等保2.0要求"""
-        if len(password) < 8:
-            return False, "密码长度至少8位"
+        """验证密码强度 - 等保2.0要求
+
+        长度下限取 ``AuthConfig.MIN_PASSWORD_LENGTH``（环境变量
+        ``MIN_PASSWORD_LENGTH``），但**不低于 8**。
+
+        为什么要有 8 这个地板：这个旋钮此前是硬编码 8、配置项 `MIN_PASSWORD_LENGTH=6`
+        全库零读取 —— 运维把它调成 6 以为放宽了（不生效），调成 12 以为收紧了
+        （也不生效）。现在配置真的生效，但**只能收紧不能放宽**：等保2.0 要求
+        长度≥8，放开这个地板等于留一个「配一下就绕过合规」的后门。
+        """
+        min_len = max(8, int(getattr(AuthConfig, 'MIN_PASSWORD_LENGTH', 8) or 8))
+        if len(password) < min_len:
+            return False, f"密码长度至少{min_len}位"
         if not any(c.isupper() for c in password):
             return False, "密码必须包含大写字母"
         if not any(c.islower() for c in password):
