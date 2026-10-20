@@ -168,7 +168,7 @@ class AuthManager:
         （也不生效）。现在配置真的生效，但**只能收紧不能放宽**：等保2.0 要求
         长度≥8，放开这个地板等于留一个「配一下就绕过合规」的后门。
         """
-        min_len = max(8, int(getattr(AuthConfig, 'MIN_PASSWORD_LENGTH', 8) or 8))
+        min_len = max(8, int(AuthConfig.MIN_PASSWORD_LENGTH or 8))
         if len(password) < min_len:
             return False, f"密码长度至少{min_len}位"
         if not any(c.isupper() for c in password):
