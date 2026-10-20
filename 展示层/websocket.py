@@ -217,13 +217,46 @@ def init_socketio(app, database, data_collector):
 _push_stop_event = None
 
 
+def _count_clients(rooms: dict | None) -> int:
+    """数「当前连接的不同客户端数」。
+
+    socket.io 的 `manager.rooms` 形状是 `{room: {sid: ...}}`：
+    键是**房间名**（含默认房间 `''`），值是该房间里的会话 id 集合。
+    原实现直接 `len(rooms)` —— 数的是**房间数**，不是客户端数：
+    20 个客户端全订阅同一台设备时 `rooms` 只有 2 个键（`''` 和 `device_x`），
+    自适应频率据此以为「客户端很少」，一直按最高频推送。
+
+    这里对**会话 id 去重**：同一个连接既在默认房间又在设备房间，只算一次。
+    """
+    if not rooms:
+        return 0
+    sids: set[str] = set()
+    for members in rooms.values():
+        if not members:
+            continue
+        try:
+            sids.update(members)
+        except TypeError:      # 非预期结构（不同 socket.io 版本）→ 不猜，按 0 处理
+            return 0
+    return len(sids)
+
+
 def start_data_push_thread(database, data_collector):
     """启动数据推送线程（优化版：单次查询 + 状态缓存 + 异常保护）"""
     global _push_stop_event
     # 如果已有线程在运行，先停止
     if _push_stop_event is not None:
         _push_stop_event.set()
-    _push_stop_event = threading.Event()
+
+    # ⚠️ 必须把事件**捕获成本地变量**再交给线程，不能让线程每轮去读模块全局。
+    # 原实现 `while not _push_stop_event.is_set()` 读的是全局名字（迟绑定）：
+    # 重启时全局被换成**新**事件（未 set），旧线程于是永远看不到自己被停 ——
+    # 每重启一次就多一条推送线程，DB 查询翻倍、同一条数据被 emit 多次；
+    # 而 `stop_data_push_thread()` 把全局置 None 后，旧线程还会在 while 条件处
+    # 抛 AttributeError（线程带堆栈猝死）。
+    stop_event = threading.Event()
+    _push_stop_event = stop_event
+
     _last_status_time = 0
     _cached_status = None
 
@@ -233,10 +266,10 @@ def start_data_push_thread(database, data_collector):
         BASE_INTERVAL = 2.0  # 基础间隔2秒
         MAX_INTERVAL = 10.0  # 最大间隔10秒（无客户端时）
 
-        while not _push_stop_event.is_set():
+        while not stop_event.is_set():
             try:
                 # 根据连接客户端数调整推送频率
-                client_count = len(socketio.server.manager.rooms.get('/', {}))
+                client_count = _count_clients(socketio.server.manager.rooms.get('/', {}))
                 if client_count == 0:
                     push_interval = MAX_INTERVAL  # 无客户端时降低频率
                 elif client_count > 20:
@@ -271,11 +304,11 @@ def start_data_push_thread(database, data_collector):
                     except Exception as e:
                         logger.debug(f"推送系统状态失败: {e}")
 
-                _push_stop_event.wait(push_interval)
+                stop_event.wait(push_interval)
 
             except Exception as e:
                 logger.error(f"数据推送异常: {e}")
-                _push_stop_event.wait(5)
+                stop_event.wait(5)
 
     thread = threading.Thread(target=push_data, daemon=True)
     thread.start()
