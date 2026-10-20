@@ -422,6 +422,19 @@ class DataCollector:
         # 采集任务（线程安全）
         self._tasks_lock = threading.Lock()
         self.tasks = {}  # device_id -> threading.Timer
+        # 已取消的设备：删除设备任务时登记，调度时据此**拒绝复活**。
+        #
+        # 为什么必须有这个集合（2026-10-20 实测的竞态）：
+        #   `remove_device_task` 只能 cancel **还没触发**的 Timer。若删除发生时
+        #   该设备的 `collect_task` 正在线程池里跑（最长 30s），它结束后仍会走
+        #   `_schedule_next()` 新建一个 Timer 并写回 `self.tasks[device_id]` ——
+        #   于是出现两个后果：
+        #     ① 僵尸任务：设备已删，采集器仍按间隔轮询它，`failed_collections`
+        #        每轮 +1，健康指标被一个不存在的设备污染；
+        #     ② 更隐蔽：`start_device_task` 看到 `device_id in self.tasks` 就
+        #        「已有任务，跳过」→ **删掉再重新添加同一台设备，采集永远不启动**，
+        #        必须重启进程才恢复。
+        self._cancelled_devices: set[str] = set()
         self.running = False
 
         # 失败计数器（用于退避）
@@ -561,6 +574,11 @@ class DataCollector:
 
         self.running = True
 
+        # 新的一轮启动：清空「已取消」登记，否则上一轮删过的设备 id
+        # 会被永久挡住调度（见 __init__ 里 _cancelled_devices 的说明）。
+        with self._tasks_lock:
+            self._cancelled_devices.clear()
+
         # 启动数据处理线程
         self.process_thread = threading.Thread(target=self._process_data, daemon=True)
         self.process_thread.start()
@@ -691,6 +709,9 @@ class DataCollector:
             if device_id in self.tasks:
                 logger.debug(f"设备 {device_id} 已有采集任务，跳过")
                 return
+            # 重新添加同一台设备（此前被删除）时，必须解除「已取消」标记，
+            # 否则 _schedule_next 会一直拒绝调度 → 采集中断且无任何报错。
+            self._cancelled_devices.discard(device_id)
 
         # 确保客户端已创建（device_manager.add_device 只存配置，不创建客户端）
         client = self.device_manager.get_client(device_id)
@@ -710,6 +731,9 @@ class DataCollector:
         """删除设备的采集任务（设备被删除时调用）"""
         with self._tasks_lock:
             timer = self.tasks.pop(device_id, None)
+            # 登记「已取消」：正在线程池里跑的那一轮结束后会走 _schedule_next，
+            # 必须让它看到这个标记而不再复活（否则删了还在采，见 __init__ 注释）。
+            self._cancelled_devices.add(device_id)
         if timer:
             timer.cancel()
             logger.info(f"已停止设备 {device_id} 的采集任务")
@@ -760,6 +784,11 @@ class DataCollector:
         def on_data(device_id, name, value, unit):
             if value is None:
                 return
+            # 设备被删除 / 采集器已停止时，回调可能还在（客户端没来得及断开），
+            # 此时必须丢弃 —— 否则已删除设备的数据仍会入库，且会绕过
+            # `remove_device_task` 的追踪清理。
+            if not self.running or device_id in self._cancelled_devices:
+                return
             try:
                 value = float(value)
             except (ValueError, TypeError):
@@ -802,9 +831,14 @@ class DataCollector:
             return self._collect_device_data(device_id, device_config, protocol)
 
         def _schedule_next(interval):
-            """安全地调度下一次采集"""
+            """安全地调度下一次采集。
+
+            除 `self.running` 外还要检查「已取消」标记：设备被删除时，
+            当前这一轮可能正跑在线程池里（`remove_device_task` 取消不到它），
+            它结束后若无条件 `_schedule_next`，就会把刚删掉的设备**重新挂上定时器**。
+            """
             with self._tasks_lock:
-                if self.running:
+                if self.running and device_id not in self._cancelled_devices:
                     timer = threading.Timer(interval, collect_task)
                     timer.daemon = True
                     timer.start()
