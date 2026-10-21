@@ -20,6 +20,13 @@ _FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
 #: 纯负数字符串（`-5` / `-1.2` / `-1.2e3`）。这类不是公式，不该被加引号。
 _NEGATIVE_NUMBER_RE = re.compile(r'^-\d+(\.\d+)?([eE][+-]?\d+)?$')
 
+#: 导出时每次向数据库取的批大小（分页拉取，避免一次性把整段数据读进内存）。
+EXPORT_PAGE_SIZE = 10000
+
+#: 单次导出的总行数硬上限。超过就**明确报错**，不静默截断 ——
+#: 导出的文件通常被当成「完整数据」使用，悄悄少一半比失败更危险。
+MAX_EXPORT_ROWS = 200000
+
 
 def _sanitize_cell(value: Any) -> Any:
     """中和「以公式前缀开头的**字符串**单元格」（前置一个单引号）。
@@ -221,9 +228,22 @@ class DataExport:
 
     def export_device_data(self, database, device_id: str,
                            start_time: datetime, end_time: datetime,
-                           format: str = 'csv') -> str | None:
+                           format: str = 'csv', interval: str = 'raw') -> str | None:
         """
-        导出设备数据
+        导出设备数据。
+
+        ⚠️ 三处**曾经都是静默错误**（round 228 修）：
+
+        1. **默认不传 `interval`** → 走 `get_history_data` 的默认 `'1min'`，
+           于是「导出设备数据」拿到的其实是**每分钟平均值**，不是原始采样。
+           用户以为导的是原始数据，实际每个 1 分钟只剩一条均值。
+           → 默认改为 `'raw'`（导出即原始明细），需要聚合由调用方显式传。
+        2. **没有 `register_name` 列** —— 多寄存器设备的导出是**一锅混在一起**
+           的数据，无法区分哪一行属于哪个寄存器。→ 逐行补上 `register_name`。
+        3. **每寄存器 `LIMIT 10000` 静默截断** —— 24h 原始数据动辄几万行，
+           导出文件少一半而没有任何提示。→ 分页拉全量，超过
+           :data:`MAX_EXPORT_ROWS` 则**抛 ValueError 明确拒绝**（宁可不导，
+           也不给一份「看起来完整」的残缺文件）。
 
         Args:
             database: 数据库实例
@@ -231,32 +251,46 @@ class DataExport:
             start_time: 开始时间
             end_time: 结束时间
             format: 导出格式（csv, excel, json）
+            interval: 聚合粒度；``'raw'``（默认）= 原始明细
 
         Returns:
-            str: 导出文件路径
+            str: 导出文件路径；无数据时返回 None
+
+        Raises:
+            ValueError: 总行数超过 :data:`MAX_EXPORT_ROWS`
         """
-        # 获取所有寄存器的历史数据
-        data = []
-        # 先获取设备的所有寄存器名称
+        data: list[dict[str, Any]] = []
         registers = database.get_device_registers(device_id)
-        if not registers:
-            # 没有寄存器信息时，用 None 查询全部数据
-            register_data = database.get_history_data(
-                device_id=device_id,
-                register_name=None,
-                start_time=start_time,
-                end_time=end_time
-            )
-            data.extend(register_data)
-        else:
-            for register_name in registers:
-                register_data = database.get_history_data(
+        # 没有寄存器信息时，用 None 查询全部（此时无法补 register_name）
+        targets: list[str | None] = registers if registers else [None]
+
+        for register_name in targets:
+            offset = 0
+            while True:
+                batch = database.get_history_data(
                     device_id=device_id,
                     register_name=register_name,
                     start_time=start_time,
-                    end_time=end_time
+                    end_time=end_time,
+                    interval=interval,
+                    limit=EXPORT_PAGE_SIZE,
+                    offset=offset,
                 )
-                data.extend(register_data)
+                if not batch:
+                    break
+                for row in batch:
+                    if register_name is not None:
+                        # 放在最前，Excel 里一眼能看到归属
+                        row = {'register_name': register_name, **row}
+                    data.append(row)
+                if len(data) > MAX_EXPORT_ROWS:
+                    raise ValueError(
+                        f'导出数据量过大：已超过 {MAX_EXPORT_ROWS:,} 行，'
+                        f'请缩小时间范围或改用更粗的聚合粒度（当前 interval={interval!r}）'
+                    )
+                if len(batch) < EXPORT_PAGE_SIZE:
+                    break
+                offset += EXPORT_PAGE_SIZE
 
         if not data:
             logger.warning(f"设备 {device_id} 在指定时间范围内没有数据")
@@ -293,13 +327,29 @@ class DataExport:
         Returns:
             str: 导出文件路径
         """
-        # 获取报警记录
-        data = database.get_alarm_records(
-            device_id=device_id,
-            start_time=start_time,
-            end_time=end_time,
-            limit=10000
-        )
+        # 获取报警记录（分页拉全量）。
+        # ⚠️ 原先写死 `limit=10000`：超过 1 万条的区间会**静默少一截**，
+        #    而导出文件通常被当成「完整记录」存档 / 交上去。
+        data: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            batch = database.get_alarm_records(
+                device_id=device_id,
+                start_time=start_time,
+                end_time=end_time,
+                limit=EXPORT_PAGE_SIZE,
+                offset=offset,
+            )
+            if not batch:
+                break
+            data.extend(batch)
+            if len(data) > MAX_EXPORT_ROWS:
+                raise ValueError(
+                    f'导出报警记录过多：已超过 {MAX_EXPORT_ROWS:,} 条，请缩小时间范围'
+                )
+            if len(batch) < EXPORT_PAGE_SIZE:
+                break
+            offset += EXPORT_PAGE_SIZE
 
         if not data:
             logger.warning("没有报警记录可导出")

@@ -151,13 +151,21 @@ def export_device_data(device_id):
         return jsonify({'success': False, 'message': '缺少start_time或end_time参数'}), 400
 
     exporter = DataExport()
-    filepath = exporter.export_device_data(
-        database=current_app.database,
-        device_id=device_id,
-        start_time=_parse_time(start_time_str, datetime.now() - timedelta(hours=24)),
-        end_time=_parse_time(end_time_str, datetime.now()),
-        format=data.get('format', 'csv')
-    )
+    try:
+        filepath = exporter.export_device_data(
+            database=current_app.database,
+            device_id=device_id,
+            start_time=_parse_time(start_time_str, datetime.now() - timedelta(hours=24)),
+            end_time=_parse_time(end_time_str, datetime.now()),
+            format=data.get('format', 'csv'),
+            # 默认 raw：导出应当是**原始明细**，不是每分钟均值。
+            # 需要聚合时由调用方显式传 interval（与查询接口同一套取值）。
+            interval=(data.get('interval') or 'raw'),
+        )
+    except ValueError as exc:
+        # 数据量超上限 / 粒度非法 —— 必须明确告诉用户怎么改，
+        # 而不是落进 api_error_handler 的「请求参数验证失败」。
+        return jsonify({'success': False, 'message': str(exc)}), 400
 
     if filepath:
         from pathlib import Path
@@ -176,12 +184,15 @@ def export_alarms():
 
     data = request.get_json() or {}
     exporter = DataExport()
-    filepath = exporter.export_alarm_records(
-        database=current_app.database,
-        start_time=_parse_time(data.get('start_time'), None),
-        end_time=_parse_time(data.get('end_time'), None),
-        format=data.get('format', 'csv')
-    )
+    try:
+        filepath = exporter.export_alarm_records(
+            database=current_app.database,
+            start_time=_parse_time(data.get('start_time'), None),
+            end_time=_parse_time(data.get('end_time'), None),
+            format=data.get('format', 'csv')
+        )
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
 
     if filepath:
         from pathlib import Path

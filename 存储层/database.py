@@ -840,7 +840,8 @@ class Database:
 
     def get_alarm_records(self, device_id: str | None = None, alarm_level: str | None = None,
                           start_time: datetime | None = None, end_time: datetime | None = None,
-                          acknowledged: bool | None = None, limit: int = 100) -> list[dict[str, Any]]:
+                          acknowledged: bool | None = None, limit: int = 100,
+                          offset: int = 0) -> list[dict[str, Any]]:
         """
         获取报警记录
 
@@ -881,8 +882,9 @@ class Database:
                 query += ' AND acknowledged = ?'
                 params.append(1 if acknowledged else 0)
 
-            query += ' ORDER BY timestamp DESC LIMIT ?'
+            query += ' ORDER BY timestamp DESC LIMIT ? OFFSET ?'
             params.append(limit)
+            params.append(offset)
 
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
