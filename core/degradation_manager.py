@@ -29,6 +29,22 @@ class DegradationLevel(IntEnum):
     EMERGENCY = 4   # 紧急降级
 
 
+class FeatureDisabledError(RuntimeError):
+    """功能因系统降级被禁用。
+
+    继承 RuntimeError 而不是自定义基类，是为了让现有那些
+    `except Exception` / `except RuntimeError` 的兜底能接住它；
+    但 API 层应当**先**捕获它并转成 503，而不是落到通用 500 分支。
+    """
+
+    def __init__(self, feature_name: str, level_name: str):
+        self.feature_name = feature_name
+        self.level_name = level_name
+        super().__init__(
+            f"功能 {feature_name} 因系统降级（当前 {level_name}）已禁用"
+        )
+
+
 # 各降级等级下被禁用的功能模块
 DISABLED_FEATURES = {
     DegradationLevel.NORMAL: set(),
@@ -79,6 +95,32 @@ DISABLED_FEATURES = {
         'performance_monitor',  # 性能监控
     },
 }
+
+
+# 功能名 → 真实消费方（文件:函数）。
+#
+# 为什么需要这张表：`DISABLED_FEATURES` 只是**声明**「降级时该停什么」，
+# 它自己不会让任何东西停下来。一个功能名如果没有任何代码去查
+# `is_feature_enabled(这个名字)`，那它在界面上显示「已禁用」就是**假的** ——
+# 运维在事故中手动降级后以为资源被释放了，实际一点没省。
+#
+# 本表登记「确实接了闸门」的功能，`ENFORCED_FEATURES` 由它派生；
+# 未登记的名字一律进 `get_status()['advisory_disabled_features']`，明确告诉
+# 调用方「这只是声明，当前没有代码消费」。tests/test_degradation_enforcement.py
+# 会逐条核对这里的路径与函数名真实存在，防止表本身腐化。
+FEATURE_CONSUMERS = {
+    'predictive_maintenance': '采集层/data_collector.py:_dispatch_intelligence',
+    'spc_analyzer':           '采集层/data_collector.py:_dispatch_intelligence',
+    'oee_calculator':         '采集层/data_collector.py:_dispatch_intelligence',
+    'energy_optimizer':       '采集层/data_collector.py:_dispatch_intelligence',
+    'edge_decision':          '采集层/data_collector.py:_dispatch_intelligence',
+    'vibration_analyzer':     '采集层/data_collector.py:_dispatch_intelligence',
+    'data_export':            '展示层/api/api_data.py:_require_feature_export',
+    'data_archive':           'core/maintenance.py:_data_archive',
+}
+
+# 降级后会**真的**停止的功能（由 FEATURE_CONSUMERS 派生，不要手工维护两份）
+ENFORCED_FEATURES = frozenset(FEATURE_CONSUMERS)
 
 
 # 各降级等级下降低采样/推送频率的倍数
@@ -272,15 +314,39 @@ class DegradationManager:
         with self._lock:
             return DISABLED_FEATURES.get(self._level, set()).copy()
 
+    def get_enforced_disabled_features(self) -> Set[str]:
+        """当前被禁用、且**真的有消费方**的功能（降级后确实停止）"""
+        return self.get_disabled_features() & ENFORCED_FEATURES
+
+    def get_advisory_disabled_features(self) -> Set[str]:
+        """当前被声明禁用、但没有任何消费方的功能（只是名义上禁用）"""
+        return self.get_disabled_features() - ENFORCED_FEATURES
+
+    def require_feature(self, feature_name: str):
+        """
+        功能被降级禁用时抛 `FeatureDisabledError`。
+
+        API 层用：把「降级了」如实回给调用方，而不是继续算出一份
+        结果让人误以为功能正常。
+        """
+        if not self.is_feature_enabled(feature_name):
+            raise FeatureDisabledError(feature_name, self.level_name)
+
     def get_status(self) -> Dict[str, Any]:
         """获取降级管理器状态"""
         with self._lock:
+            disabled = DISABLED_FEATURES.get(self._level, set())
             return {
                 'level': self._level,
                 'level_name': DegradationLevel(self._level).name,
                 'manual_override': self._manual_override,
                 'manual_reason': self._manual_reason,
-                'disabled_features': sorted(DISABLED_FEATURES.get(self._level, set())),
+                'disabled_features': sorted(disabled),
+                # 「声明禁用」与「真的禁用」必须分开报 —— 只报一个 disabled_features
+                # 会让运维以为 data_export / report_generator 之类降级后真的停了。
+                'enforced_disabled_features': sorted(disabled & ENFORCED_FEATURES),
+                'advisory_disabled_features': sorted(disabled - ENFORCED_FEATURES),
+                'enforced_features': sorted(ENFORCED_FEATURES),
                 'frequency_multiplier': FREQUENCY_MULTIPLIERS.get(self._level, 1.0),
                 'trigger_count': len(self._triggers),
                 'recent_changes': self._history[-10:],

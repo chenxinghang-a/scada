@@ -20,8 +20,25 @@ from concurrent.futures import ThreadPoolExecutor
 # paths 是仓库根模块。用别名 _paths 避免与局部变量 / 参数名冲突。
 import paths as _paths
 from core.safe_numeric import try_finite_float
+from core.degradation_manager import degradation_manager
 
 logger = logging.getLogger(__name__)
+
+# 智能层模块 → 降级管理器里的功能名。
+# 降级后这些模块**不再收数据**（这是降级唯一能真正省 CPU 的地方）。
+# 右侧的名字必须出现在 core/degradation_manager.DISABLED_FEATURES 里，
+# 否则降级永远关不掉它（tests/test_degradation_enforcement.py 会核对）。
+#
+# 注意：`device_control`（安全联锁）**故意不在表里** —— 联锁在任何降级等级
+# 下都必须继续工作，EMERGENCY 的语义是「仅保留报警与联锁」，不是「什么都停」。
+_INTEL_FEATURE_NAMES = {
+    'predictive_maintenance': 'predictive_maintenance',
+    'spc_analyzer': 'spc_analyzer',
+    'oee_calculator': 'oee_calculator',
+    'energy_manager': 'energy_optimizer',
+    'edge_decision': 'edge_decision',
+    'vibration_analyzer': 'vibration_analyzer',
+}
 
 
 def _normalize_timestamp(ts):
@@ -969,10 +986,14 @@ class DataCollector:
 
             # 检查是否在故障状态
             if status.get('stopped') or status.get('error'):
-                return self._dynamic_interval_config.get('fault', 1)
+                return self._apply_degradation_multiplier(
+                    self._dynamic_interval_config.get('fault', 1))
 
             # 检查健康评分（如果预测性维护模块可用，带缓存避免O(N²)）
-            if self.predictive_maintenance:
+            # 降级把 predictive_maintenance 关掉后，get_health_scores() 会一直返回
+            # 降级前的旧快照 —— 拿陈旧健康分去判定「设备故障 → 1 秒快采」，
+            # 恰好和降级「降低轮询压力」的目的相反，所以这里也要跟着闸门走。
+            if self.predictive_maintenance and self._intel_enabled('predictive_maintenance'):
                 now = time.time()
                 if not hasattr(self, '_health_cache') or now - getattr(self, '_health_cache_ts', 0) > 5:
                     self._health_cache = self.predictive_maintenance.get_health_scores()
@@ -984,9 +1005,11 @@ class DataCollector:
                 if device_health:
                     avg_health = sum(s.get('health_score', 100) for s in device_health) / len(device_health)
                     if avg_health < 40:
-                        return self._dynamic_interval_config.get('fault', 1)
+                        return self._apply_degradation_multiplier(
+                            self._dynamic_interval_config.get('fault', 1))
                     elif avg_health < 60:
-                        return self._dynamic_interval_config.get('warning', 2)
+                        return self._apply_degradation_multiplier(
+                            self._dynamic_interval_config.get('warning', 2))
 
             # 检查设备运行状态
             stats = status.get('stats', {})
@@ -996,13 +1019,36 @@ class DataCollector:
                 state = 'idle'
 
             # 根据状态返回对应的采集间隔
-            interval = self._dynamic_interval_config.get(state, base_interval)
+            interval = self._apply_degradation_multiplier(
+                self._dynamic_interval_config.get(state, base_interval))
+            # 记录**实际生效**的间隔（已含降级倍数），否则这张表记的是
+            # 「没降级时该多久采一次」，运维拿它对不上真实轮询周期。
             self._device_intervals[device_id] = interval
             return interval
 
         except Exception as e:
             logger.debug(f"计算动态采集间隔失败 {device_id}: {e}")
             return base_interval
+
+    @staticmethod
+    def _apply_degradation_multiplier(interval: float) -> float:
+        """按当前降级等级拉长采集间隔。
+
+        `get_frequency_multiplier()` 以前**没有任何消费方** —— 降级后采集频率
+        一点没降，等于降级只改了个显示数字。这里把它接上。
+
+        故障分支（1 秒快采）同样乘倍数：降级是运维显式选择的「用采样密度
+        换系统存活」，降级状态下继续 1 秒轮询每台故障设备会加剧总线与 CPU
+        压力。若确实需要 1 秒快采，正确做法是恢复 NORMAL 等级，而不是指望
+        降级状态下还保持快采。
+        """
+        try:
+            multiplier = float(degradation_manager.get_frequency_multiplier())
+        except Exception:
+            return interval
+        if not math.isfinite(multiplier) or multiplier <= 1.0:
+            return interval
+        return interval * multiplier
 
     def _collect_device_data(self, device_id: str, device_config: dict[str, Any], protocol: str) -> bool:
         """采集单个轮询型设备的数据，返回是否成功"""
@@ -1575,67 +1621,150 @@ class DataCollector:
 
         return {'retried': retried, 'dropped': dropped, 'requeue_full': requeue_full}
 
+    def _intel_enabled(self, module_attr: str) -> bool:
+        """该智能模块在当前降级等级下是否还应该继续收数据。
+
+        未登记在 `_INTEL_FEATURE_NAMES` 的模块（安全联锁等）一律返回 True。
+        """
+        feature = _INTEL_FEATURE_NAMES.get(module_attr)
+        if feature is None:
+            return True
+        return degradation_manager.is_feature_enabled(feature)
+
+    def _safe_intel(self, module_name: str, fn, *args, **kwargs) -> None:
+        """执行单个智能模块的喂数；一个模块抛异常不牵连其它模块。
+
+        原实现把 6 个模块串在同一个 try 里，外层 `_intel_worker` 只兜了一层，
+        所以任一模块抛异常（例如 inf 产量让 `int()` 抛 OverflowError）会让
+        **其后所有模块**整批跳过。而排在最后的恰好是安全联锁 ——
+        业务分析算崩了把安全功能带走，是典型的静默失效。
+        """
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:
+            logger.error("智能模块 %s 处理数据失败（其余模块继续）: %s", module_name, e)
+
     def _dispatch_intelligence(self, data: dict):
-        """智能层数据分发（在独立线程中运行）"""
+        """智能层数据分发（在独立线程中运行）。
+
+        执行顺序是有意为之：**安全联锁第一个跑**。联锁属于安全功能，不能
+        因为前面某个分析模块算崩了就被跳过；它也不在任何降级等级的禁用
+        清单里（EMERGENCY 的语义是「仅保留报警与联锁」）。
+        """
         device_id = data['device_id']
         register_name = data['register_name']
         value = data['value']
         timestamp = data['timestamp']
         name_lower = register_name.lower()
 
+        # 安全联锁 —— 永远第一个，且不受降级影响
+        if self.device_control:
+            self._safe_intel(
+                'device_control', self.device_control.check_interlocks,
+                device_id, register_name, value,
+            )
+
         # 预测性维护
-        if self.predictive_maintenance:
-            self.predictive_maintenance.feed_data(device_id, register_name, value, timestamp)
+        if self.predictive_maintenance and self._intel_enabled('predictive_maintenance'):
+            self._safe_intel(
+                'predictive_maintenance', self.predictive_maintenance.feed_data,
+                device_id, register_name, value, timestamp,
+            )
 
         # 边缘决策
-        if self.edge_decision:
-            self.edge_decision.update_data(f"{device_id}:{register_name}", value)
+        if self.edge_decision and self._intel_enabled('edge_decision'):
+            self._safe_intel(
+                'edge_decision', self.edge_decision.update_data,
+                f"{device_id}:{register_name}", value,
+            )
 
         # 能源管理
-        if self.energy_manager:
+        if self.energy_manager and self._intel_enabled('energy_manager'):
             if _has_keyword(name_lower, _power_kw):
                 power_value = value
                 if 'w' in name_lower and 'kw' not in name_lower:
                     power_value = value / 1000
-                self.energy_manager.feed_power_data(device_id, power_value, timestamp=timestamp)
+                self._safe_intel(
+                    'energy_manager', self.energy_manager.feed_power_data,
+                    device_id, power_value, timestamp=timestamp,
+                )
             elif _has_keyword(name_lower, _energy_kw):
-                self.energy_manager.feed_power_data(device_id, 0, energy_kwh=value, timestamp=timestamp)
+                self._safe_intel(
+                    'energy_manager', self.energy_manager.feed_power_data,
+                    device_id, 0, energy_kwh=value, timestamp=timestamp,
+                )
 
         # SPC
-        if self.spc_analyzer and _has_keyword(name_lower, _spc_kw):
-            self.spc_analyzer.feed_data(device_id, register_name, value)
+        if self.spc_analyzer and self._intel_enabled('spc_analyzer') and _has_keyword(name_lower, _spc_kw):
+            self._safe_intel(
+                'spc_analyzer', self.spc_analyzer.feed_data,
+                device_id, register_name, value,
+            )
 
         # 振动分析
-        if self.vibration_analyzer:
-            self.vibration_analyzer.feed_data(device_id, register_name, value, timestamp)
+        if self.vibration_analyzer and self._intel_enabled('vibration_analyzer'):
+            self._safe_intel(
+                'vibration_analyzer', self.vibration_analyzer.feed_data,
+                device_id, register_name, value, timestamp,
+            )
 
         # OEE
-        if self.oee_calculator:
-            if _has_keyword(name_lower, _status_kw):
-                status_map = {0: 'stopped', 1: 'idle', 2: 'running', 3: 'fault', 4: 'maintenance', 5: 'setup'}
-                try:
-                    status_int = int(value)
-                except (ValueError, OverflowError, TypeError):
-                    status_int = 0
-                status = status_map.get(status_int, 'stopped')
-                self.oee_calculator.update_device_state(device_id, status)
-            elif _has_keyword(name_lower, _count_kw):
-                good_kw = frozenset(['good', 'ok', 'pass', 'qualified'])
-                reject_kw = frozenset(['reject', 'ng', 'defect', 'scrap'])
-                if _has_keyword(name_lower, good_kw):
-                    self.oee_calculator.record_production(device_id, good_count=int(value))
-                elif _has_keyword(name_lower, reject_kw):
-                    # 缺陷数：从总产量中扣除
-                    self.oee_calculator.record_production(device_id, count=int(value))
-                else:
-                    # 总产量：同时记录合格品（98%合格率模拟）
-                    total = int(value)
-                    good = max(0, total - round(total * 0.02))  # 用round避免小批量截断为0
-                    self.oee_calculator.record_production(device_id, count=total, good_count=good)
+        if self.oee_calculator and self._intel_enabled('oee_calculator'):
+            self._safe_intel('oee_calculator', self._dispatch_oee, device_id, name_lower, value)
 
-        # 安全联锁
-        if self.device_control:
-            self.device_control.check_interlocks(device_id, register_name, value)
+    def _dispatch_oee(self, device_id: str, name_lower: str, value) -> None:
+        """OEE 喂数（状态 / 产量）。
+
+        非有限值（NaN / ±Infinity）一律**不记录**，而不是当成 0：
+        - 产量：`int(float('inf'))` 抛 OverflowError、`int(float('nan'))` 抛
+          ValueError，异常被外层接住后这条样本静默丢失；
+        - 状态：原实现把解析失败的值兜底成 `status_int = 0`，而 0 映射到
+          `'stopped'` —— 一台正在运行的设备只要状态寄存器读到 NaN，
+          就会被记成「停机」，直接压低 OEE 可用率。这是**编造数据**，
+          比不记录更糟。
+        """
+        if _has_keyword(name_lower, _status_kw):
+            status_map = {0: 'stopped', 1: 'idle', 2: 'running', 3: 'fault', 4: 'maintenance', 5: 'setup'}
+            status_int = try_finite_float(value)
+            if status_int is None:
+                logger.warning(
+                    "OEE 设备状态非有限值（%r），本条不记录状态 device=%s reg=%s",
+                    value, device_id, name_lower,
+                )
+                return
+            status = status_map.get(int(status_int))
+            if status is None:
+                logger.warning(
+                    "OEE 设备状态码未定义（%r），本条不记录状态 device=%s reg=%s",
+                    value, device_id, name_lower,
+                )
+                return
+            self.oee_calculator.update_device_state(device_id, status)
+            return
+
+        if not _has_keyword(name_lower, _count_kw):
+            return
+
+        count = try_finite_float(value)
+        if count is None:
+            logger.warning(
+                "OEE 产量计数非有限值（%r），本条不计入产量统计 device=%s reg=%s",
+                value, device_id, name_lower,
+            )
+            return
+        count = int(count)
+
+        good_kw = frozenset(['good', 'ok', 'pass', 'qualified'])
+        reject_kw = frozenset(['reject', 'ng', 'defect', 'scrap'])
+        if _has_keyword(name_lower, good_kw):
+            self.oee_calculator.record_production(device_id, good_count=count)
+        elif _has_keyword(name_lower, reject_kw):
+            # 缺陷数：从总产量中扣除
+            self.oee_calculator.record_production(device_id, count=count)
+        else:
+            # 总产量：同时记录合格品（98%合格率模拟）
+            good = max(0, count - round(count * 0.02))  # 用round避免小批量截断为0
+            self.oee_calculator.record_production(device_id, count=count, good_count=good)
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
@@ -1650,4 +1779,11 @@ class DataCollector:
         failures = getattr(self.data_queue, 'persist_failures', 0)
         if failures:
             stats['queue_persist_failures'] = failures
+        # 各设备当前**实际生效**的采集间隔（含降级倍数）。
+        # `_device_intervals` 原来只写不读 —— 降级后运维想确认「到底降频了没有」
+        # 在界面上找不到任何依据，只能靠猜。
+        # 用 getattr 兜底：部分测试会绕过 __init__ 构造采集器。
+        intervals = dict(getattr(self, '_device_intervals', None) or {})
+        if intervals:
+            stats['device_intervals'] = intervals
         return stats

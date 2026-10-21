@@ -11,7 +11,9 @@ from .health_checker import HealthChecker
 from .connection_pool import ConnectionPool, PooledConnection
 from .circuit_breaker import CircuitBreaker, CircuitBreakerManager, circuit_breaker_manager
 from .dynamic_rate_limiter import DynamicRateLimiter, dynamic_rate_limiter
-from .degradation_manager import DegradationManager, DegradationLevel, degradation_manager
+from .degradation_manager import (
+    DegradationManager, DegradationLevel, FeatureDisabledError, degradation_manager,
+)
 from .fault_injection import FaultInjector, FaultType, FaultSeverity, FaultScenarios, fault_injector
 from .chaos_engineering import ChaosEngine, ExperimentState, chaos_engine
 
@@ -20,7 +22,7 @@ __all__ = [
     'HealthChecker', 'ConnectionPool', 'PooledConnection',
     'CircuitBreaker', 'CircuitBreakerManager', 'circuit_breaker_manager',
     'DynamicRateLimiter', 'dynamic_rate_limiter',
-    'DegradationManager', 'DegradationLevel', 'degradation_manager',
+    'DegradationManager', 'DegradationLevel', 'FeatureDisabledError', 'degradation_manager',
     'FaultInjector', 'FaultType', 'FaultSeverity', 'FaultScenarios', 'fault_injector',
     'ChaosEngine', 'ExperimentState', 'chaos_engine',
 ]

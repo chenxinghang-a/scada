@@ -103,6 +103,17 @@ def build_maintenance_tasks(database=None, auth_manager=None, *, archive_days: i
 
     if database is not None:
         def _data_archive():
+            # 降级到 EMERGENCY 时跳过归档：归档是「跨天范围删除 + WAL checkpoint」
+            # 这类重操作，恰恰是在数据库已经吃紧时最不该跑的东西。
+            # 跳过不等于丢数据 —— 历史数据还在，恢复 NORMAL 后下一次调度会补上。
+            from core.degradation_manager import degradation_manager
+            if not degradation_manager.is_feature_enabled('data_archive'):
+                logger.info(
+                    "系统处于 %s 降级状态，跳过本轮数据归档",
+                    degradation_manager.level_name,
+                )
+                return {'skipped': 'degradation', 'feature': 'data_archive'}
+
             result = database.archive_old_data(
                 archive_days=archive_days, delete_days=delete_days)
             logger.info("自动归档完成: %s", result)

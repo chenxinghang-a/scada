@@ -23,6 +23,33 @@ _require_auth = jwt_required
 _require_export = permission_required('export_data')
 
 
+def _require_feature_export(fn):
+    """降级到「数据导出已禁用」的等级时，导出接口直接 503。
+
+    `DISABLED_FEATURES` 早把 `data_export` 列进 SEVERE / EMERGENCY 的禁用
+    清单，但此前**没有任何代码消费这个声明** —— 运维降级后导出照样跑，
+    一次全量导出就能把已经吃紧的数据库再拖一轮。这里把声明变成真闸门。
+
+    返回 503（而不是 200 + 空文件）：降级是临时状态，语义上属于
+    「服务暂不可用」，且必须让调用方知道**没有**拿到数据。
+    """
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        from core.degradation_manager import degradation_manager
+        if not degradation_manager.is_feature_enabled('data_export'):
+            level_name = degradation_manager.level_name
+            return jsonify({
+                'success': False,
+                'message': f'系统当前处于 {level_name} 降级状态，数据导出已暂停，'
+                           f'请稍后重试或联系管理员恢复',
+                'code': 'FEATURE_DISABLED',
+                'feature': 'data_export',
+                'level': level_name,
+            }), 503
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 def _parse_time(time_str, default):
     """安全解析时间字符串，并**统一成「本机时区的 naive datetime」**。
 
@@ -138,6 +165,7 @@ def get_history_data(device_id, register_name):
 @data_bp.route('/export/device/<device_id>', methods=['POST'])
 @_require_auth
 @_require_export
+@_require_feature_export
 @api_error_handler
 def export_device_data(device_id):
     """导出设备数据"""
@@ -177,6 +205,7 @@ def export_device_data(device_id):
 @data_bp.route('/export/alarms', methods=['POST'])
 @_require_auth
 @_require_export
+@_require_feature_export
 @api_error_handler
 def export_alarms():
     """导出报警记录"""
