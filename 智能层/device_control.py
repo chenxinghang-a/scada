@@ -636,6 +636,9 @@ class DeviceControlSafety:
         Returns:
             (success, message): 是否成功及说明
         """
+        activated = False
+        progress = ''
+
         with self._bypass_lock:
             request = self._bypass_requests.get(request_id)
             if not request:
@@ -651,15 +654,25 @@ class DeviceControlSafety:
                 return False, "已经审批过了"
 
             request.approvals.append(approver)
+            progress = f'{len(request.approvals)}/{request.required_approvals}'
 
-            self._audit('bypass_approved', approver, f'审批旁路请求 {request_id}, 联锁 {request.interlock_id}, 进度 {len(request.approvals)}/{request.required_approvals}')
+            self._audit('bypass_approved', approver, f'审批旁路请求 {request_id}, 联锁 {request.interlock_id}, 进度 {progress}')
 
             if request.is_approved:
                 request.status = 'approved'
-                self._activate_bypass(request)
-                return True, f"已批准（{len(request.approvals)}/{request.required_approvals}），旁路已激活"
+                activated = True
 
-            return True, f"已审批（{len(request.approvals)}/{request.required_approvals}）"
+        # ⚠️ 必须在锁**外**激活。
+        # `_activate_bypass()` 自己会取 `self._bypass_lock`，而它是**不可重入**的
+        # `threading.Lock` —— 在锁内调用必然死锁，而且卡死的正是
+        # 「第二个人审批、旁路即将生效」的那一刻：审批线程永久占着锁，
+        # 之后任何旁路操作（request/approve/reject/查询）全部挂住，
+        # 整个联锁旁路功能静默失效（安全相关流程，不能靠重启才能恢复）。
+        if activated:
+            self._activate_bypass(request)
+            return True, f"已批准（{progress}），旁路已激活"
+
+        return True, f"已审批（{progress}）"
 
     def _activate_bypass(self, request: BypassRequest):
         """激活旁路（带自动超时恢复）"""
