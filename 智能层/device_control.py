@@ -1361,7 +1361,8 @@ class DeviceControlSafety:
     # ==================== 写操作回读验证 ====================
 
     def write_with_verification(self, device_id: str, address: int, value: int,
-                                operator: str, max_retries: int = 2) -> dict[str, Any]:
+                                operator: str, max_retries: int = 2,
+                                kind: str = 'register') -> dict[str, Any]:
         """
         带回读验证的写操作
 
@@ -1372,6 +1373,16 @@ class DeviceControlSafety:
         4. 回读验证
         5. 释放锁
         6. 记录审计
+
+        Args:
+            kind: ``'register'``（保持寄存器）或 ``'coil'``（线圈）。
+                ⚠️ 必须由调用方明确指定：Modbus 客户端**同时**有
+                `write_single_register` 和 `write_single_coil`，原先这里按
+                `hasattr(write_single_register)` 优先判断 —— 于是
+                `/api/control/<id>/write-coil` 走安全模块时**写的是同一地址的
+                保持寄存器**，而不是线圈。寄存器 0 和线圈 0 在现场是**两个完全
+                不同的对象**（一个数据字 vs 一个开关位），等于操作员以为按下了
+                启动位、实际往数据寄存器里写了个数。
         """
         # 安全校验
         validation = self.validate_write(device_id, address, value, operator)
@@ -1400,12 +1411,22 @@ class DeviceControlSafety:
                             f'写入失败: 设备 {device_id} 客户端不存在')
                 return {'success': False, 'message': f'设备 {device_id} 不存在或未连接'}
 
+            if kind == 'coil':
+                if not hasattr(client, 'write_single_coil'):
+                    self._audit('write_failed', operator,
+                                f'写入失败: 客户端不支持线圈写入 ({device_id}/{address})')
+                    return {'success': False, 'message': '该设备的客户端不支持线圈写入'}
+            elif not hasattr(client, 'write_single_register'):
+                self._audit('write_failed', operator,
+                            f'写入失败: 客户端不支持寄存器写入 ({device_id}/{address})')
+                return {'success': False, 'message': '该设备的客户端不支持寄存器写入'}
+
             for attempt in range(max_retries + 1):
                 try:
-                    if hasattr(client, 'write_single_register'):
-                        success = client.write_single_register(int(address), int(value))
-                    elif hasattr(client, 'write_single_coil'):
+                    if kind == 'coil':
                         success = client.write_single_coil(int(address), bool(value))
+                    else:
+                        success = client.write_single_register(int(address), int(value))
                     break
                 except Exception as e:
                     if attempt < max_retries:
@@ -1423,33 +1444,55 @@ class DeviceControlSafety:
                 }
 
             # 回读验证
-            readback_ok = True
+            # ⚠️ 三条都是必须的：
+            #   1. 读**同一种对象**：写线圈就读线圈、写寄存器就读寄存器。
+            #      原来无论写什么都读保持寄存器 —— 写线圈时校验的是另一个物理对象；
+            #   2. 回读异常/拿不到值 → `verified=None`（**未验证**），不能当通过。
+            #      原来是 `readback_ok=True` 兜底，通信断了也报「写入成功」；
+            #   3. 寄存器按**精确值**比对。原来容差 ±1，写 100 读到 99 也算通过。
+            verified: bool | None = None
             readback_value = None
             try:
-                if hasattr(client, 'read_holding_registers'):
-                    raw = client.read_holding_registers(int(address), 1)
-                    if raw and len(raw) > 0:
-                        readback_value = raw[0]
-                        if abs(readback_value - value) > 1:
-                            readback_ok = False
-                            logger.warning(f"回读验证失败: 期望 {value}, 实际 {readback_value}")
+                if kind == 'coil':
+                    if hasattr(client, 'read_coils'):
+                        raw = client.read_coils(int(address), 1)
+                        if raw:
+                            readback_value = bool(raw[0])
+                            verified = (readback_value == bool(value))
+                else:
+                    if hasattr(client, 'read_holding_registers'):
+                        raw = client.read_holding_registers(int(address), 1)
+                        if raw:
+                            readback_value = int(raw[0])
+                            verified = (readback_value == int(value))
+                if verified is False:
+                    logger.warning(f"回读验证失败: 期望 {value}, 实际 {readback_value}")
             except Exception as e:
-                logger.warning(f"回读验证异常: {e}")
+                logger.warning(f"回读验证异常（按未验证处理）: {e}")
+                verified = None
 
             # 审计
+            verify_text = ('未验证' if verified is None
+                           else ('验证通过' if verified else '验证失败'))
             self._audit('write_success', operator,
-                        f'写入成功: {device_id}/{address}={value}'
+                        f'写入成功({kind}): {device_id}/{address}={value}'
                         f'{f", 回读={readback_value}" if readback_value is not None else ""}'
-                        f'{", 验证通过" if readback_ok else ", 验证失败"}')
+                        f', {verify_text}')
 
             result = {
                 'success': True,
                 'message': '写入成功',
-                'warnings': validation.get('warnings', [])
+                'kind': kind,
+                'verified': verified,
+                'warnings': list(validation.get('warnings', []))
             }
-            if not readback_ok:
-                result['message'] = '写入成功，但回读验证失败'
-                result['warnings'].append(f'回读值 {readback_value} 与写入值 {value} 不一致')
+            if verified is False:
+                result['message'] = '写入成功，但回读验证失败（设备未接受该值）'
+                result['warnings'].append(
+                    f'回读值 {readback_value} 与写入值 {value} 不一致')
+            elif verified is None:
+                result['message'] = '写入成功，但无法回读验证'
+                result['warnings'].append('未能回读该点位（客户端不支持或回读失败）')
 
             return result
 

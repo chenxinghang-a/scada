@@ -164,8 +164,12 @@ def write_coil(device_id):
     # 工厂级安全校验
     device_control = getattr(current_app, 'device_control', None)
     if device_control:
+        # ⚠️ 必须显式传 kind='coil'。
+        # 不传时 `write_with_verification` 默认按寄存器走，而 Modbus 客户端
+        # 同时具备 write_single_register / write_single_coil —— 于是「写线圈」
+        # 实际写进了**同一地址的保持寄存器**（数据字 vs 开关位，现场是两个对象）。
         result = device_control.write_with_verification(
-            device_id, address, 1 if bool_val else 0, operator)
+            device_id, address, 1 if bool_val else 0, operator, kind='coil')
         if not result['success']:
             return jsonify(result), 403
         return jsonify(result)
