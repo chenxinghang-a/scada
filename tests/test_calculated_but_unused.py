@@ -83,7 +83,9 @@ class TestOEELosses:
             'good_count': 95,
             'ideal_cycle_time': 5.0,
         }
-        losses = calc._calculate_losses('dev1', sd, 0.8, 0.9, 0.95)
+        # 第 6 个参数是「含当前运行段」的实际运行时长（round 233 起由调用方传入，
+        # 避免损失和 performance 各用一个数）。这里就是已结算的 800s。
+        losses = calc._calculate_losses('dev1', sd, 0.8, 0.9, 0.95, 800.0)
 
         assert '可用率损失_秒' in losses, \
             f'返回值缺少「可用率损失_秒」，实际键: {sorted(losses)}'
@@ -103,7 +105,7 @@ class TestOEELosses:
             'good_count': 50,
             'ideal_cycle_time': 1.0,
         }
-        losses = calc._calculate_losses('dev1', sd, 0.6, 1.0, 1.0)
+        losses = calc._calculate_losses('dev1', sd, 0.6, 1.0, 1.0, 300.0)
 
         # availability=0.6 → 秒数 (1-0.6)*500 = 200，百分比 40.0
         assert abs(losses['可用率损失_秒'] - 200.0) < 0.1

@@ -287,7 +287,13 @@ class OEECalculator:
             oee = availability * performance * quality
 
             # 六大损失分析
-            losses = self._calculate_losses(device_id, sd, availability, performance, quality)
+            # ⚠️ 必须把**上面算好的 actual_run**（含当前正在跑的这段时间）传进去。
+            # 原来 _calculate_losses 自己取 `sd['actual_run_time']`（只含已结算的部分），
+            # 于是同一份响应里 `performance` 用了一个运行时长、`性能损失_秒` 用了另一个：
+            # 设备连续跑着没切换状态时 `actual_run_time` 一直是 0，
+            # 性能损失恒为 0，而 performance 已经很低 —— 两个数字互相矛盾。
+            losses = self._calculate_losses(
+                device_id, sd, availability, performance, quality, actual_run)
 
             return {
                 'device_id': device_id,
@@ -309,7 +315,8 @@ class OEECalculator:
 
     def _calculate_losses(self, device_id: str, sd: dict[str, Any],
                            availability: float, performance: float,
-                           quality: float) -> dict[str, Any]:
+                           quality: float,
+                           actual_run: float) -> dict[str, Any]:
         """
         六大损失分析
 
@@ -321,7 +328,8 @@ class OEECalculator:
         6. 开机损失 (Quality) — 开机阶段的不良品
         """
         planned = sd['planned_production_time']
-        actual_run = sd['actual_run_time']
+        # actual_run 由调用方传入（含当前运行段），与 availability / performance
+        # 用的是**同一个**运行时长 —— 否则两个数字对不上（见调用点注释）。
         downtime = sd['downtime']
         total_count = sd['total_count']
         good_count = sd['good_count']
