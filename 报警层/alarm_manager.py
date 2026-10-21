@@ -14,6 +14,7 @@ import shutil
 import yaml
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -302,6 +303,18 @@ class AlarmManager:
         self.alarm_output = alarm_output
         self.broadcast_system = broadcast_system
 
+        # 通知模块（邮件/短信）。由 `load_config()` 按 yaml 的 `notification`
+        # 段构造，也可以用 `set_notification()` 外部注入（测试/自定义实现）。
+        #
+        # 此前 `配置/alarms.yaml` 里那一整段 `notification:`（email/sms/sound）
+        # **没有任何代码读**，`报警层/notification.py`（183 行，含 SMTP +
+        # STARTTLS + HTML 转义）也**只在测试里被实例化过**，
+        # `AlarmConfig.EMAIL_ENABLED` 与 4 个 `SMTP_*` 同样是零消费 ——
+        # 配置齐了、代码写了、就是没接上，运维把 `enabled` 改 true 也不会有邮件。
+        self.notification = None
+        self._notify_executor: ThreadPoolExecutor | None = None
+        self._notify_lock = Lock()
+
         # WebSocket回调（由外部注入，用于前端推送）
         self._websocket_emit: Callable[..., Any] | None = None
 
@@ -543,6 +556,15 @@ class AlarmManager:
             except Exception as e:
                 logger.debug(f"告警升级管理器停止跳过: {e}")
 
+        # 邮件线程池：等已提交的邮件发完再关，避免停机时丢掉最后几条报警邮件
+        with self._notify_lock:
+            executor, self._notify_executor = self._notify_executor, None
+        if executor is not None:
+            try:
+                executor.shutdown(wait=True)
+            except Exception as e:
+                logger.debug(f"邮件线程池关闭跳过: {e}")
+
         logger.info("报警管理器后台资源已停止")
 
     def shutdown(self) -> None:
@@ -552,6 +574,107 @@ class AlarmManager:
     def set_websocket_emit(self, emit_func: Callable[..., Any]):
         """注入WebSocket emit函数（由run.py启动时调用）"""
         self._websocket_emit = emit_func
+
+    def set_notification(self, notifier) -> None:
+        """注入通知实现（默认由 `load_config()` 按 yaml 构造，这里供测试覆盖）"""
+        self.notification = notifier
+
+    def _setup_notification(self, notif_cfg: dict[str, Any]) -> None:
+        """按 yaml 的 `notification` 段配置邮件/短信通知。
+
+        配置不完整时**必须打 ERROR**：否则运维把 `notification.email.enabled`
+        改成 true、填了半套 SMTP，界面一切正常，报警邮件一封都发不出去，
+        日志里也什么都看不到。
+        """
+        try:
+            from 报警层.notification import Notification
+            notifier = Notification(notif_cfg)
+        except Exception as e:
+            logger.error("初始化通知模块失败（报警邮件/短信将不可用）: %s", e)
+            return
+
+        email_cfg = notif_cfg.get('email') or {}
+        if getattr(notifier, 'email_enabled', False):
+            missing = [k for k in ('smtp_server', 'username', 'password')
+                       if not email_cfg.get(k)]
+            if missing:
+                logger.error(
+                    "邮件通知已启用但缺少配置项 %s —— 报警邮件不会发出"
+                    "（检查 配置/alarms.yaml 的 notification.email）", missing)
+            elif not email_cfg.get('recipients'):
+                logger.error(
+                    "邮件通知已启用但没有收件人 —— 报警邮件不会发出"
+                    "（notification.email.recipients）")
+            else:
+                logger.info(
+                    "邮件报警通知已启用: %s:%s → %d 个收件人",
+                    email_cfg.get('smtp_server'),
+                    email_cfg.get('smtp_port', 587),
+                    len(email_cfg['recipients']),
+                )
+
+        self.notification = notifier
+
+    def _ensure_notify_executor(self) -> ThreadPoolExecutor | None:
+        """邮件投递用单线程池：顺序发送、不并发轰炸 SMTP。"""
+        with self._notify_lock:
+            if self._notify_executor is None:
+                self._notify_executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix='alarm-email')
+            return self._notify_executor
+
+    @staticmethod
+    def _send_email_blocking(notifier, payload: dict[str, Any]) -> tuple[bool, str]:
+        """在后台线程里真正发邮件；异常转成 (False, 原因)。"""
+        try:
+            ok = notifier.send_alarm_notification(payload)
+            return bool(ok), '' if ok else 'send_alarm_notification 返回 False'
+        except Exception as e:
+            return False, f'邮件发送异常: {e}'
+
+    def _on_email_done(self, future) -> None:
+        try:
+            ok, err = future.result()
+        except Exception as e:
+            ok, err = False, f'邮件线程异常: {e}'
+        if not ok:
+            self._record_output_failure('email', err or '邮件发送失败')
+
+    def _notify_by_email(self, alarm_data: dict[str, Any]) -> None:
+        """邮件报警通知 —— 异步投递，失败留痕（`output_errors['email']`）。
+
+        为什么必须异步：`Notification.send_email` 是**同步 SMTP**，
+        连接 / STARTTLS / 登录 / 发送串起来，一个不通的 SMTP 服务器能让
+        调用线程卡住十几秒。报警主链路（声光 / 广播 / 前端推送）不能被
+        一个可选通道拖死 —— 声光不响比邮件晚到严重得多。
+
+        字段映射：`Notification.send_alarm_notification` 读的是
+        `level` / `message` / `value`，而这里上游的报警 payload 用的是
+        `alarm_level` / `alarm_message` / `actual_value`。两套命名不一致，
+        直接传过去会发出一封「[WARNING] 报警通知」的空壳邮件。
+        """
+        notifier = getattr(self, 'notification', None)
+        if notifier is None or not getattr(notifier, 'email_enabled', False):
+            return
+
+        payload = {
+            'level': alarm_data.get('alarm_level', 'warning'),
+            'message': alarm_data.get('alarm_message', '报警通知'),
+            'device_id': alarm_data.get('device_id'),
+            'register_name': alarm_data.get('register_name'),
+            'value': alarm_data.get('actual_value'),
+            'threshold': alarm_data.get('threshold'),
+            'timestamp': alarm_data.get('timestamp'),
+        }
+
+        executor = self._ensure_notify_executor()
+        if executor is None:
+            return
+        try:
+            executor.submit(self._send_email_blocking, notifier, payload) \
+                    .add_done_callback(self._on_email_done)
+        except Exception as e:
+            self._record_output_failure('email', f"邮件任务提交失败: {e}")
 
     def _rebuild_rules_index(self):
         """构建规则索引：(device_id, register_name) -> [(rule_id, rule_config)]"""
@@ -749,6 +872,11 @@ class AlarmManager:
                 self.dedup_config = AlarmDedupConfig(dedup_cfg)
                 logger.info(f"加载去重配置: 冷却{self.dedup_config.emit_cooldown_seconds}s, "
                             f"确认抑制{self.dedup_config.acknowledge_suppress_seconds}s")
+
+            # 加载通知配置（邮件/短信）—— 这一段此前从来没人读
+            notif_cfg = config.get('notification', {})
+            if notif_cfg:
+                self._setup_notification(notif_cfg)
 
             # 加载升级配置
             escalation_cfg = config.get('escalation', {})
@@ -1193,7 +1321,7 @@ class AlarmManager:
             logger.debug(f"报警WebSocket推送被去重抑制: {rule_id} ({device_id}/{register_name})")
             return
         self._record_emit(rule_id, device_id, register_name)
-        self._emit_websocket_alarm({
+        alarm_payload = {
             'alarm_id': rule_id,
             'device_id': device_id,
             'register_name': register_name,
@@ -1204,7 +1332,13 @@ class AlarmManager:
             'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
             'area': alarm_area,
             'dedup_key': f"{rule_id}:{device_id}:{register_name}",
-        })
+        }
+        self._emit_websocket_alarm(alarm_payload)
+
+        # 5. 邮件通知（异步，不阻塞上面的声光/广播/前端推送）。
+        #    放在去重点**之后**是刻意的：复用同一套冷却与确认抑制，
+        #    否则报警风暴会把收件人邮箱打爆（同一条报警每 10 秒一封）。
+        self._notify_by_email(alarm_payload)
 
     def _record_output_failure(self, channel: str, detail: str) -> None:
         """输出通道失败必须可见：ERROR 日志 + 计数（绝不静默吞掉）"""
@@ -1301,8 +1435,12 @@ class AlarmManager:
 
     def _send_notification(self, rule_config: dict[str, Any], device_id: str,
                            register_name: str, value: float, timestamp: datetime):
-        """
-        发送报警通知（保留兼容，具体实现在 _trigger_alarm 中）
+        """【占位，全仓库零调用】只打一条 INFO 日志。
+
+        ⚠️ 别把它当成「发通知」的入口：真正发邮件的是 `_notify_by_email()`，
+        它在 `_trigger_alarm` 的去重点之后调用、走后台线程池。
+        这个方法留着是为了不破坏可能存在的旧调用方，方法名很有迷惑性，
+        所以在这里写清楚。
         """
         alarm_level = rule_config.get('level', 'warning')
         alarm_message = rule_config.get('name', '未知报警')
