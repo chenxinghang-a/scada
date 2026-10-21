@@ -26,6 +26,42 @@ import paths
 logger = logging.getLogger(__name__)
 
 
+#: 运行时配置的默认值。抽成模块级常量是为了让 `reset()` 与
+#: `get_wiring_status()` 都能拿到「默认值」这一份唯一真源。
+DEFAULT_RUNTIME_CONFIG: Dict[str, Any] = {
+    'alarm_dedup_window_sec': 30,
+    'alarm_flood_threshold': 100,
+    'alarm_flood_window_sec': 60,
+    'data_retention_days': 90,
+    'log_retention_days': 30,
+    # 与推送线程的默认基础间隔（2 秒）保持一致：改这个值才改变行为，
+    # 默认值下行为与接线前完全相同。
+    'websocket_push_interval_ms': 2000,
+    'device_poll_interval_sec': 5,
+    'health_check_interval_sec': 30,
+    'max_concurrent_requests': 100,
+    'request_timeout_sec': 30,
+    'backup_enabled': True,
+    'backup_interval_hours': 24,
+    'metrics_enabled': True,
+    'tracing_enabled': False,
+}
+
+#: **真的会改变系统行为**的配置键 → 消费方（`文件:位置`）。
+#:
+#: 未登记的键 = 只写内存、不影响任何模块。`set()` 仍会更新 dict 并返回
+#: True（保持接口兼容），但 `get_wiring_status()` 会把它们标成 not_wired。
+#:
+#: 为什么必须显式登记：这套运行时配置和 `config.py` / `配置/*.yaml` 是
+#: **两套并行**的配置来源。运维在 `/api/ops/config` 上把
+#: `device_poll_interval_sec` 从 5 改成 1，接口回「changed_count: 1」，
+#: 而采集器读的仍是 yaml 里的每设备间隔 —— 改了等于没改，且没有任何提示。
+#: 静态守卫 `tests/test_runtime_config_wiring.py` 会核对这里的消费方真实存在。
+WIRED_KEYS: Dict[str, str] = {
+    'websocket_push_interval_ms': '展示层/websocket.py:_base_push_interval',
+}
+
+
 class OpsAuditLogger:
     """运维操作审计日志"""
 
@@ -92,6 +128,12 @@ class RuntimeConfigManager:
 
     支持在不重启的情况下修改运行参数。
     变更通过回调通知相关模块。
+
+    ⚠️ **这套配置与 `config.py` / `配置/*.yaml` 是两套独立的东西**。
+    只有登记在 `WIRED_KEYS` 里的键才有真实消费方；其余键 `set()` 会写进
+    内存 dict 并返回 True，但**系统行为一点不变** —— 运维以为调了参数，
+    实际什么都没发生。`get_wiring_status()` 会把这两类如实分开报，
+    不要再把「未接线的键」当成已生效。
     """
 
     def __init__(self):
@@ -106,22 +148,7 @@ class RuntimeConfigManager:
 
     def _load_defaults(self):
         """加载默认运行时配置"""
-        self._config = {
-            'alarm_dedup_window_sec': 30,
-            'alarm_flood_threshold': 100,
-            'alarm_flood_window_sec': 60,
-            'data_retention_days': 90,
-            'log_retention_days': 30,
-            'websocket_push_interval_ms': 1000,
-            'device_poll_interval_sec': 5,
-            'health_check_interval_sec': 30,
-            'max_concurrent_requests': 100,
-            'request_timeout_sec': 30,
-            'backup_enabled': True,
-            'backup_interval_hours': 24,
-            'metrics_enabled': True,
-            'tracing_enabled': False,
-        }
+        self._config = dict(DEFAULT_RUNTIME_CONFIG)
 
     def get(self, key: str, default: Any = None) -> Any:
         """获取配置值"""
@@ -139,8 +166,19 @@ class RuntimeConfigManager:
 
         Returns:
             True 如果值已变更
+
+        Raises:
+            KeyError: 键不在默认配置里
+
+        为什么未知键要抛异常而不是静默新增：原实现直接
+        `self._config[key] = value`，于是 `PUT /api/ops/config` 能被用来
+        往配置表里塞任意垃圾键，而且 `GET /api/ops/config` 还会把它当合法
+        配置回显给运维。
         """
         with self._lock:
+            if key not in DEFAULT_RUNTIME_CONFIG:
+                raise KeyError(key)
+
             old_value = self._config.get(key)
             if old_value == value:
                 return False
@@ -152,6 +190,7 @@ class RuntimeConfigManager:
                 'old': old_value,
                 'new': value,
                 'operator': operator,
+                'wired': key in WIRED_KEYS,
             })
             if len(self._history) > self._max_history:
                 self._history = self._history[-self._max_history:]
@@ -163,16 +202,53 @@ class RuntimeConfigManager:
                 except Exception as e:
                     logger.error(f"配置回调异常 [{key}]: {e}")
 
-            logger.info(f"运行时配置变更: {key} = {value} (原值: {old_value})")
+            if key in WIRED_KEYS:
+                logger.info(f"运行时配置变更: {key} = {value} (原值: {old_value})")
+            else:
+                # 未接线的键必须留痕：否则运维从日志里看到"变更成功"，
+                # 会以为参数已经生效。
+                logger.warning(
+                    "运行时配置变更（**未接线，系统行为不会改变**）: %s = %r (原值: %r)",
+                    key, value, old_value,
+                )
             return True
 
-    def update_batch(self, updates: Dict[str, Any], operator: str = "system") -> int:
-        """批量更新配置"""
-        changed = 0
+    def update_batch(self, updates: Dict[str, Any], operator: str = "system") -> Dict[str, Any]:
+        """批量更新配置。
+
+        Returns:
+            ``{'changed': 真正变更的键, 'rejected': 不存在被拒的键}``
+
+        原实现只返回一个 int（变更数），调用方无法区分「值没变」
+        和「键根本不存在」—— 两种都表现为 changed 少了一个。
+        """
+        changed: List[str] = []
+        rejected: List[str] = []
         for key, value in updates.items():
-            if self.set(key, value, operator):
-                changed += 1
-        return changed
+            try:
+                if self.set(key, value, operator):
+                    changed.append(key)
+            except KeyError:
+                rejected.append(key)
+        return {'changed': changed, 'rejected': rejected}
+
+    def get_wiring_status(self) -> Dict[str, Any]:
+        """如实报告「哪些键真的生效、哪些只是写内存」。
+
+        这是本类最重要的一条自述：这套配置与 `config.py` / yaml 是两套
+        独立来源，绝大多数键没有消费方。接口如果不把这件事说清楚，
+        运维就会以为自己在调参。
+        """
+        with self._lock:
+            keys = sorted(self._config)
+        wired = [k for k in keys if k in WIRED_KEYS]
+        return {
+            'wired': wired,
+            'not_wired': [k for k in keys if k not in WIRED_KEYS],
+            'consumers': {k: WIRED_KEYS[k] for k in wired},
+            # 只存内存、重启即回到默认值 —— 不要指望它跨重启保留。
+            'persistent': False,
+        }
 
     def register_callback(self, key: str, callback: Callable):
         """注册配置变更回调"""
@@ -192,18 +268,20 @@ class RuntimeConfigManager:
             return self._history[-limit:]
 
     def reset(self, key: str = None, operator: str = "system"):
-        """重置配置到默认值"""
-        defaults = {}
-        self._load_defaults()
-        defaults = dict(self._config)
-        self._load_defaults()  # 重新加载默认值
+        """重置配置到默认值。
 
+        原实现是**无效的**：先 `_load_defaults()` 把 `_config` 刷回默认值，
+        再 `set(key, default_val)` —— 此时值已经等于默认值，`set()` 判等后
+        直接返回 False，等于什么都没做（而且不记 history、不通知回调）。
+        """
         if key:
-            default_val = defaults.get(key)
-            if default_val is not None:
-                self.set(key, default_val, operator)
-        else:
-            self._config = defaults
+            if key not in DEFAULT_RUNTIME_CONFIG:
+                raise KeyError(key)
+            self.set(key, DEFAULT_RUNTIME_CONFIG[key], operator)
+            return
+
+        for k, v in DEFAULT_RUNTIME_CONFIG.items():
+            self.set(k, v, operator)
 
 
 class DatabaseMaintainer:

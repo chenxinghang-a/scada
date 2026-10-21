@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-21T20:43:17+00:00",
+  "generated_at": "2026-10-21T21:19:38+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -1423,25 +1423,25 @@
       "method": "GET",
       "backend_path": "/api/ops/audit",
       "source_file": "api_ops.py",
-      "source_line": 381
+      "source_line": 421
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/cleanup/backups",
       "source_file": "api_ops.py",
-      "source_line": 321
+      "source_line": 361
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/cleanup/history",
       "source_file": "api_ops.py",
-      "source_line": 302
+      "source_line": 342
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/cleanup/logs",
       "source_file": "api_ops.py",
-      "source_line": 337
+      "source_line": 377
     },
     {
       "method": "GET",
@@ -1453,73 +1453,73 @@
       "method": "PUT",
       "backend_path": "/api/ops/config",
       "source_file": "api_ops.py",
-      "source_line": 136
+      "source_line": 143
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/config/<key>",
       "source_file": "api_ops.py",
-      "source_line": 169
+      "source_line": 191
     },
     {
       "method": "PUT",
       "backend_path": "/api/ops/config/<key>",
       "source_file": "api_ops.py",
-      "source_line": 183
+      "source_line": 210
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/config/history",
       "source_file": "api_ops.py",
-      "source_line": 209
+      "source_line": 249
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/db/analyze",
       "source_file": "api_ops.py",
-      "source_line": 255
+      "source_line": 295
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/db/integrity",
       "source_file": "api_ops.py",
-      "source_line": 269
+      "source_line": 309
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/db/reindex",
       "source_file": "api_ops.py",
-      "source_line": 239
+      "source_line": 279
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/db/tables",
       "source_file": "api_ops.py",
-      "source_line": 283
+      "source_line": 323
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/db/vacuum",
       "source_file": "api_ops.py",
-      "source_line": 225
+      "source_line": 265
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/diagnostics/export",
       "source_file": "api_ops.py",
-      "source_line": 357
+      "source_line": 397
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/maintenance/tasks",
       "source_file": "api_ops.py",
-      "source_line": 397
+      "source_line": 437
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/maintenance/tasks/<name>/run",
       "source_file": "api_ops.py",
-      "source_line": 413
+      "source_line": 453
     },
     {
       "method": "GET",

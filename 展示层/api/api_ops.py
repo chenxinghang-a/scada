@@ -8,7 +8,7 @@ from flask import Blueprint, request
 
 from core.ops_tools import (
     ops_audit, runtime_config_manager, db_maintainer,
-    data_cleaner, diagnostic_exporter,
+    data_cleaner, diagnostic_exporter, WIRED_KEYS,
 )
 #: 保留天数的**唯一真源**读取器（round 209）。手动清理端点的默认值必须与
 #: `配置/system.yaml` 的 `database.retention.raw_data_days` 一致 ——
@@ -125,9 +125,16 @@ def _log_ops(operation, result, target: str = '', details=None):
 @ops_bp.route('/config', methods=['GET'])
 @jwt_required
 def get_runtime_config():
-    """获取运行时配置"""
+    """获取运行时配置。
+
+    `config` 是配置值，`wiring` 如实说明哪些键**真的会改变系统行为**。
+    两者必须一起返回：只给 config 的话，调用方会把整套键都当成已生效。
+    """
     try:
-        return success_response(runtime_config_manager.get_all())
+        return success_response({
+            'config': runtime_config_manager.get_all(),
+            'wiring': runtime_config_manager.get_wiring_status(),
+        })
     except Exception as e:
         logger.error(f"获取运行时配置失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -149,18 +156,33 @@ def update_runtime_config():
         if not updates:
             return error_response("config 字段不能为空", 400)
 
-        changed = runtime_config_manager.update_batch(updates, operator)
+        result = runtime_config_manager.update_batch(updates, operator)
+        changed = result['changed']
+        rejected = result['rejected']
 
-        # 记录审计
+        # 记录审计（被拒的键也要留痕：说明有人试图写不存在的配置项）
         ops_audit.log_operation(
             'config_update', operator=operator,
-            details={'keys': list(updates.keys()), 'changed_count': changed},
+            details={'keys': list(updates.keys()), 'changed': changed, 'rejected': rejected},
         )
 
-        return success_response({
-            'changed_count': changed,
+        # 「改了但不会生效」的键必须单独报出来，不能混在 changed 里让人以为生效了
+        not_wired = [k for k in changed if k not in WIRED_KEYS]
+
+        resp = {
+            'changed_count': len(changed),
+            'changed': changed,
+            'rejected': rejected,
+            'not_wired': not_wired,
             'config': runtime_config_manager.get_all(),
-        })
+        }
+        if rejected:
+            resp['message'] = f"以下配置项不存在，已忽略: {', '.join(rejected)}"
+        elif not_wired:
+            resp['message'] = (
+                f"以下配置项已写入但**未接线，系统行为不会改变**: {', '.join(not_wired)}"
+            )
+        return success_response(resp)
     except Exception as e:
         logger.error(f"更新运行时配置失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -174,7 +196,12 @@ def get_config_key(key):
         value = runtime_config_manager.get(key)
         if value is None:
             return error_response(f"配置项 {key} 不存在", 404)
-        return success_response({'key': key, 'value': value})
+        return success_response({
+            'key': key,
+            'value': value,
+            'wired': key in WIRED_KEYS,
+            'consumer': WIRED_KEYS.get(key),
+        })
     except Exception as e:
         logger.error(f"获取配置失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -193,14 +220,27 @@ def set_config_key(key):
         # SECURITY: 从JWT获取操作者，不信任客户端传入
         operator = request.current_user.get('username', 'unknown')
         value = data['value']
-        changed = runtime_config_manager.set(key, value, operator)
+        try:
+            changed = runtime_config_manager.set(key, value, operator)
+        except KeyError:
+            # 原实现会静默新增这个键，于是 GET /config 把它当合法配置回显
+            return error_response(f"配置项 {key} 不存在（不接受新增键）", 400)
 
         ops_audit.log_operation(
             'config_set', operator=operator, target=key,
             details={'value': value, 'changed': changed},
         )
 
-        return success_response({'key': key, 'value': value, 'changed': changed})
+        resp = {
+            'key': key,
+            'value': value,
+            'changed': changed,
+            'wired': key in WIRED_KEYS,
+            'consumer': WIRED_KEYS.get(key),
+        }
+        if key not in WIRED_KEYS:
+            resp['message'] = f"配置项 {key} 已写入但**未接线，系统行为不会改变**"
+        return success_response(resp)
     except Exception as e:
         logger.error(f"设置配置失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)

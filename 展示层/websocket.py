@@ -4,6 +4,7 @@ WebSocket模块
 """
 
 import time
+import math
 import logging
 import threading
 import yaml
@@ -469,6 +470,30 @@ def _push_device_status_changes(data_collector) -> int:
     return len(changes)
 
 
+def _base_push_interval() -> float:
+    """数据推送的基础间隔（秒），读运行时配置 `websocket_push_interval_ms`。
+
+    这是 `RuntimeConfigManager` 里**唯一**接了线的键：改它立即生效，不用重启。
+    其余键（`device_poll_interval_sec` / `max_concurrent_requests` 等）
+    只是写内存、不影响任何模块 —— 见 `core/ops_tools.WIRED_KEYS` 与
+    `get_wiring_status()`。
+
+    返回值夹在 0.5~10 秒：
+    - 小于 0.5 秒等于忙等，会把 SQLite 查询打成连发；
+    - 大于 10 秒时「实时推送」名存实亡，且无客户端时的 10 秒降频档也被绕过。
+    非有限值 / 非法类型一律退回默认 2 秒，不让一个手滑的配置把推送线程搞死。
+    """
+    try:
+        from core.ops_tools import runtime_config_manager
+        ms = float(runtime_config_manager.get('websocket_push_interval_ms', 2000))
+    except Exception as e:
+        logger.debug(f"读取 websocket_push_interval_ms 失败，用默认 2 秒: {e}")
+        return 2.0
+    if not math.isfinite(ms) or ms <= 0:
+        return 2.0
+    return min(max(ms / 1000.0, 0.5), 10.0)
+
+
 def start_data_push_thread(database, data_collector):
     """启动数据推送线程（优化版：单次查询 + 状态缓存 + 异常保护）"""
     global _push_stop_event
@@ -491,11 +516,13 @@ def start_data_push_thread(database, data_collector):
     def push_data():
         nonlocal _last_status_time, _cached_status
         # 自适应频率：根据连接客户端数调整推送间隔
-        BASE_INTERVAL = 2.0  # 基础间隔2秒
         MAX_INTERVAL = 10.0  # 最大间隔10秒（无客户端时）
 
         while not stop_event.is_set():
             try:
+                # 基础间隔每轮读一次运行时配置 —— 运维改了立即生效，不用重启。
+                BASE_INTERVAL = _base_push_interval()
+
                 # 根据连接客户端数调整推送频率
                 client_count = _count_clients(socketio.server.manager.rooms.get('/', {}))
                 if client_count == 0:
