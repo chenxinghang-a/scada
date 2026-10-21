@@ -90,7 +90,7 @@ class TestDelayRule:
         mgr._process_alarm_state('r_delay', rule, 'd1', 'temp', 90.0, t0, True)
 
         assert emits == [], '未到延迟时长却已产生报警（延迟语义失效）'
-        state = mgr.alarm_states[('d1', 'temp')]
+        state = mgr.alarm_states[('r_delay', 'd1', 'temp')]
         assert state['pending'] is True
 
     def test_fired_after_delay_elapsed(self, mgr):
@@ -105,7 +105,7 @@ class TestDelayRule:
             t0 + timedelta(seconds=11), True)
 
         assert len(emits) == 1, '条件持续超过 delay 秒后仍未报警（delay 规则永不触发）'
-        state = mgr.alarm_states[('d1', 'temp')]
+        state = mgr.alarm_states[('r_delay', 'd1', 'temp')]
         assert state['pending'] is False and state['confirmed'] is True
 
     def test_condition_recovered_restarts_delay(self, mgr):
@@ -140,7 +140,7 @@ class TestDelayRule:
         t0 = datetime.now()
 
         mgr._process_alarm_state('r_delay', rule, 'd1', 'temp', 90.0, t0, True)
-        state = mgr.alarm_states[('d1', 'temp')]
+        state = mgr.alarm_states[('r_delay', 'd1', 'temp')]
         state.pop('confirm_time', None)
         state.pop('first_trigger_time', None)
 
@@ -437,7 +437,7 @@ class TestEscalationSingleTrack:
         assert escalated[0]['device_id'] == 'd1'
         assert escalated[0]['register_name'] == 'temp'
         assert escalated[0]['escalation_level'] == 1
-        assert manager.alarm_states[('d1', 'temp')]['escalated'] is True
+        assert manager.alarm_states[('r_esc', 'd1', 'temp')]['escalated'] is True
 
     def test_cleared_alarm_stops_escalation_tracking(self, manager_with_rules):
         """报警恢复正常后必须撤销升级跟踪，否则会被升级到"已恢复的报警"上"""

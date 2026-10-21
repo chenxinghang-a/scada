@@ -290,7 +290,13 @@ class AlarmManager:
         self.rules: dict[str, dict] = {}  # rule_id -> rule_config
 
         # 报警状态
-        self.alarm_states: dict[tuple, dict] = {}  # (device_id, register_name) -> alarm_state
+        # 键是 **(rule_id, device_id, register_name)**，不是 (device, register)。
+        # 同一个寄存器经常同时配「警告 80 / 严重 100」两条规则；用两元组做键时
+        # 两条规则抢同一个槽位：后触发的把先触发的状态覆盖掉，于是
+        #   · 严重规则会借「已有报警」的迟滞分支，在**低于自己阈值**时触发；
+        #   · 两条规则同时成立时每个数据点互相覆盖 → 声光反复触发；
+        #   · 清除任意一条会把另一条一起从活动列表里抹掉。
+        self.alarm_states: dict[tuple, dict] = {}  # (rule_id, device_id, register_name)
 
         # 输出总线（延迟注入，启动后绑定）
         self.alarm_output = alarm_output
@@ -615,8 +621,7 @@ class AlarmManager:
                     state['escalated'] = True
                     state['escalation_time'] = now.isoformat()
 
-                device_id, register_name = state_key
-                rule_id = state.get('alarm_id')
+                rule_id, device_id, register_name = state_key
                 rule_config = self.rules.get(rule_id, {})
 
                 alarm_info = {
@@ -660,7 +665,7 @@ class AlarmManager:
         now = datetime.now()
 
         with self._state_lock:
-            state = self.alarm_states.get((device_id, register_name))
+            state = self.alarm_states.get((rule_id, device_id, register_name))
             if state is not None:
                 state['escalated'] = True
                 state['escalation_time'] = now.isoformat()
@@ -821,7 +826,8 @@ class AlarmManager:
 
             # 检查报警条件（含非对称死区/迟滞）
             with self._state_lock:
-                current_alarm_state = self.alarm_states.get((device_id, register_name))
+                # 按**本规则**取状态：迟滞（死区）判断必须只看自己这条规则
+                current_alarm_state = self.alarm_states.get((rule_id, device_id, register_name))
             alarm_triggered = self._check_condition(
                 value=value,
                 condition=rule_config.get('condition'),
@@ -954,7 +960,8 @@ class AlarmManager:
             timestamp: 时间戳
             triggered: 是否触发
         """
-        state_key = (device_id, register_name)
+        # 每条规则独立一个状态槽位（见 __init__ 里 alarm_states 的说明）
+        state_key = (rule_id, device_id, register_name)
 
         with self._state_lock:
             current_state = self.alarm_states.get(state_key, {})
@@ -1316,8 +1323,7 @@ class AlarmManager:
             rules_snapshot = dict(self.rules)
 
         for state_key, state in snapshot:
-            device_id, register_name = state_key
-            rule_id = state.get('alarm_id')
+            rule_id, device_id, register_name = state_key
             rule_config = rules_snapshot.get(rule_id, {})
 
             active_alarms.append({
@@ -1352,11 +1358,11 @@ class AlarmManager:
         Returns:
             bool: 确认是否成功
         """
-        state_key = (device_id, register_name)
+        state_key = (alarm_id, device_id, register_name)
 
         with self._state_lock:
             state = self.alarm_states.get(state_key)
-            if state and state.get('alarm_id') == alarm_id:
+            if state is not None:
                 state['acknowledged'] = True
                 state['acknowledged_by'] = acknowledged_by
                 state['acknowledged_at'] = datetime.now()
@@ -1394,14 +1400,18 @@ class AlarmManager:
         """
         with self._state_lock:
             if device_id:
-                keys_to_remove = [k for k in self.alarm_states if k[0] == device_id]
-                cleared_rules = [(self.alarm_states[k].get('alarm_id'), k[0], k[1])
-                                 for k in keys_to_remove]
+                # 键是 (rule_id, device_id, register_name) → 设备在 k[1]
+                keys_to_remove = [k for k in self.alarm_states if k[1] == device_id]
+                cleared_rules = [(k[0], k[1], k[2]) for k in keys_to_remove]
                 for key in keys_to_remove:
                     del self.alarm_states[key]
             else:
-                cleared_rules = [(state.get('alarm_id'), key[0], key[1])
-                                 for key, state in self.alarm_states.items()]
+                # 键是 (rule_id, device_id, register_name)，三个都要原样取出。
+                # ⚠️ 这里曾经写成 `(state['alarm_id'], key[0], key[1])` ——
+                # 加 rule_id 之后 key[0] 就是 rule_id，于是传给升级管理器的是
+                # `remove_alarm(rule_id, rule_id, device_id)`：设备/寄存器全错位，
+                # 已复位的报警会继续被升级跟踪（且 _states 里留下垃圾键）。
+                cleared_rules = [(key[0], key[1], key[2]) for key in self.alarm_states]
                 self.alarm_states.clear()
 
         # 复位即报警生命周期结束，撤销升级跟踪（避免已复位的报警继续升级）

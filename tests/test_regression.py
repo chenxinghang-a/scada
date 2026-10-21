@@ -192,7 +192,9 @@ class TestAlarmManagerRegression:
 
         # check_alarm 是"即发即忘"式 API（无返回值），断言可观测的副作用：
         # 1) 报警状态机被置位
-        state = manager.alarm_states.get(('test_device', 'temperature'))
+        # 键是 (rule_id, device_id, register_name)：同一寄存器可以有多条规则
+        # （警告/严重分级），必须各占一个槽位，否则会互相覆盖。
+        state = manager.alarm_states.get(('test_rule', 'test_device', 'temperature'))
         assert state is not None, "报警未触发：状态机中没有对应记录"
         assert state['alarm_id'] == 'test_rule'
         assert state['trigger_count'] == 1

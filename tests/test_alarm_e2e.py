@@ -45,7 +45,9 @@ class TestAlarmE2E:
         )
 
         # 验证报警状态存在
-        state_key = ('motor_01', 'temperature')
+        # 键是 (rule_id, device_id, register_name)：同一寄存器可以有多条规则
+        # （警告/严重），必须各占一个槽位，否则会互相覆盖状态。
+        state_key = ('test_rule_001', 'motor_01', 'temperature')
         assert state_key in am.alarm_states
         assert am.alarm_states[state_key]['alarm_id'] == 'test_rule_001'
 

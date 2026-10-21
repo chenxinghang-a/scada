@@ -165,7 +165,7 @@ class TestAlarmManager:
         }
         alarm_manager._rebuild_rules_index()
 
-        state_key = ('dev1', 'temp')
+        state_key = ('rule_001', 'dev1', 'temp')   # (rule_id, device_id, register_name)
         alarm_manager.alarm_states[state_key] = {
             'alarm_id': 'rule_001',
             'device_id': 'dev1',
@@ -225,7 +225,7 @@ class TestAlarmManager:
 
     def test_acknowledge_alarm_state(self, alarm_manager):
         """Acknowledging an alarm updates its state"""
-        state_key = ('dev1', 'temp')
+        state_key = ('rule_001', 'dev1', 'temp')   # (rule_id, device_id, register_name)
         alarm_manager.alarm_states[state_key] = {
             'alarm_id': 'rule_001',
             'acknowledged': False,

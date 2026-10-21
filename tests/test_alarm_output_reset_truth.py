@@ -144,7 +144,7 @@ def _bare_alarm_manager(output):
 
     mgr = AlarmManager.__new__(AlarmManager)
     mgr._state_lock = threading.RLock()
-    mgr.alarm_states = {('dev1', 'temp'): {'alarm_id': 'r1', 'level': 'high'}}
+    mgr.alarm_states = {('r1', 'dev1', 'temp'): {'alarm_id': 'r1', 'level': 'high'}}
     mgr._escalation_manager = None
     mgr._dedup_lock = threading.Lock()
     mgr._emit_history = {}

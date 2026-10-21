@@ -119,8 +119,10 @@ class TestAlarmOutput:
         from 报警层.alarm_manager import AlarmManager
         am = AlarmManager(mock_db)
         # 先制造报警状态，才能验证复位真的清掉了它
-        am.alarm_states[('dev1', 'temp')] = {'level': 'critical', 'active': True}
-        am.alarm_states[('dev2', 'pressure')] = {'level': 'warning', 'active': True}
+        # 键是 (rule_id, device_id, register_name)：同一寄存器可有多条规则（分级报警），
+        # 各占一个槽位，否则会互相覆盖状态。
+        am.alarm_states[('r1', 'dev1', 'temp')] = {'level': 'critical', 'active': True}
+        am.alarm_states[('r2', 'dev2', 'pressure')] = {'level': 'warning', 'active': True}
         assert len(am.alarm_states) == 2, "前置状态未建立"
         am.reset_alarm()
         # 原测试只调用不校验（恒过）。全量复位必须清空所有报警状态。
