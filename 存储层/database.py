@@ -364,6 +364,25 @@ class Database:
                 ON {ARCHIVE_TABLE}(device_id, archive_date)
             ''')
 
+            # ⚠️ 归档表必须对「设备 + 寄存器 + 日期」唯一，否则 `INSERT OR IGNORE`
+            #    没有任何冲突可忽略 —— 归档任务每天跑一次，同一天会被反复插入：
+            #    第 7 天归档一次、第 8 天又一次……直到第 30 天原始数据被删，
+            #    同一个 (设备, 寄存器, 日期) 最多堆出 24 条重复行，
+            #    归档查询返回重复点、归档表体积也涨 24 倍。
+            #    历史库里可能已经堆了重复行，所以**先按组保留 id 最小的一条**再去重，
+            #    否则 CREATE UNIQUE INDEX 会直接失败（启动报错）。
+            cursor.execute(f'''
+                DELETE FROM {ARCHIVE_TABLE}
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM {ARCHIVE_TABLE}
+                    GROUP BY device_id, register_name, archive_date
+                )
+            ''')
+            cursor.execute(f'''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_unique
+                ON {ARCHIVE_TABLE}(device_id, register_name, archive_date)
+            ''')
+
             # 复合索引优化常见查询模式
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_alarm_device_ack
@@ -1226,7 +1245,15 @@ class Database:
             archive_days: 归档天数（默认7天前的数据归档）
             delete_days: 删除天数（默认30天前的数据删除）
         """
-        archive_cutoff = datetime.now() - timedelta(days=archive_days)
+        # ⚠️ 归档截止时间必须**对齐到天边界**（当天 00:00）。
+        #    否则「此刻减 7 天」会把一个**只过了几小时的那一天**也归档进去：
+        #    第 8 天 10:00 跑归档时，第 1 天只有 00:00–10:00 的采样落在 cutoff 之前，
+        #    于是归档表里存下的是「半天均值」；等第 9 天整天都过了，
+        #    `INSERT OR IGNORE` 又因为已有记录而**忽略**掉完整那一天的聚合。
+        #    结果：那一天的日均值永远只有半天数据，且没有任何提示。
+        archive_cutoff = (datetime.now() - timedelta(days=archive_days)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         delete_cutoff = datetime.now() - timedelta(days=delete_days)
 
         with self.get_connection() as conn:
