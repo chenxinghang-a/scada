@@ -10,6 +10,7 @@ import secrets
 import logging
 from functools import wraps
 from flask import request, jsonify, current_app
+from core.safe_numeric import try_int
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,9 @@ class CSRFProtection:
                 return False
 
             timestamp_str, hmac_value = parts
-            timestamp = int(timestamp_str)
+            timestamp = try_int(timestamp_str)
+            if timestamp is None:
+                return False
 
             # 检查过期（1小时）
             if time.time() - timestamp > 3600:

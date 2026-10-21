@@ -9,6 +9,7 @@ import logging
 import threading
 from typing import Any, Callable
 from datetime import datetime
+from core.safe_numeric import to_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -404,10 +405,10 @@ class MQTTClient:
                 if len(parts) == 2:
                     device_id = topic.split('/')[-1] if '/' in topic else topic
                     register_name = parts[0].strip()
-                    value = float(parts[1].strip())
+                    value = to_finite_float(parts[1].strip(), 'mqtt_value')
                     self._notify_callbacks(device_id, register_name, value, '')
             else:
-                value = float(payload.strip())
+                value = to_finite_float(payload.strip(), 'mqtt_value')
                 device_id = topic.split('/')[-1] if '/' in topic else topic
                 self._notify_callbacks(device_id, 'value', value, '')
         except (ValueError, IndexError):

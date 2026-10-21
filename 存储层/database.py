@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import contextmanager
 import paths
+from core.safe_numeric import try_int
 
 logger = logging.getLogger(__name__)
 
@@ -490,9 +491,8 @@ class Database:
                 q = d.get('quality', 192)
                 # 兜底：允许字符串形式的数字，但显式拒掉 'BAD'/'good' 这类
                 # 非数值标记 —— 存进去只会让前端比较逻辑静默判错。
-                try:
-                    q = int(q)
-                except (TypeError, ValueError):
+                q = try_int(q)
+                if q is None:
                     q = 192
                 valid_rows.append((
                     d['device_id'], d['register_name'], d['value'],

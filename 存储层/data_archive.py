@@ -11,6 +11,7 @@ from typing import Any, List, Dict, Tuple
 from collections import defaultdict
 
 from .database import ARCHIVE_TABLE
+from core.safe_numeric import to_finite_float, try_int
 
 logger = logging.getLogger(__name__)
 
@@ -213,15 +214,15 @@ class DataArchive:
                     continue
 
             try:
-                value = float(raw_value)
+                # 归档里出现 `.inf` / `NaN` 会把污染扩散到统计与图表
+                value = to_finite_float(raw_value, 'value')
             except (TypeError, ValueError):
                 logger.debug(f"跳过分桶数据（值不是数字）: {raw_value!r}")
                 continue
 
             sample_count = item.get('sample_count')
-            try:
-                count = int(sample_count) if sample_count is not None else 1
-            except (TypeError, ValueError):
+            count = 1 if sample_count is None else try_int(sample_count)
+            if count is None:
                 count = 1
 
             normalized.append({

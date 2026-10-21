@@ -16,6 +16,7 @@ from .opcua_client import OPCUAClient
 from .mqtt_client import MQTTClient
 from .rest_client import RESTDeviceClient
 import paths
+from core.safe_numeric import try_int
 
 logger = logging.getLogger(__name__)
 
@@ -250,9 +251,10 @@ class RealDeviceManager(IDeviceManager):
             logger.error("[真实] 设备 %s 启停点位类型非法: %r",
                          config.get('id'), spec.get('type'))
             return None
-        try:
-            address = int(spec.get('address'))
-        except (TypeError, ValueError):
+        address = try_int(spec.get('address'))
+        if address is None:
+            # YAML 的 `.inf` / `.nan` 是合法字面量 → `int(inf)` 抛 OverflowError
+            # （不在 TypeError/ValueError 里），原本会让整台设备初始化崩掉。
             logger.error("[真实] 设备 %s 启停点位地址非法: %r",
                          config.get('id'), spec.get('address'))
             return None

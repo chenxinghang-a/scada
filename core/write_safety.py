@@ -17,6 +17,7 @@ Modbus写入安全验证器
 
 import logging
 from dataclasses import dataclass
+from core.safe_numeric import to_finite_float
 from enum import Enum
 from typing import Any
 
@@ -261,6 +262,16 @@ class WriteSafetyValidator:
             (allowed, reason): 是否允许写入 + 原因
         """
         self.write_count += 1
+
+        # 0. 非有限值（NaN / ±Infinity）一律拒绝 —— 见下方第 3 步的说明：
+        #    `NaN < min` 与 `NaN > max` 都是 False，量程校验判不出它。
+        try:
+            to_finite_float(value, 'value')
+        except ValueError:
+            self.blocked_count += 1
+            reason = f'写入值 {value!r} 不是有限数值（NaN/Infinity）或无法解析，拒绝写入'
+            logger.warning(f"[写入安全] {self.device_name}: 写入被拒绝 — {reason}, user={user}")
+            return False, reason
 
         # 1. 检查寄存器是否存在
         profile = self._profiles.get(address)

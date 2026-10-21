@@ -62,7 +62,17 @@ def _get_secret(name: str, env_var: str) -> str:
 
 
 def _get_int(env_var: str, default: int, min_val: int = None, max_val: int = None) -> int:
-    """获取整数配置值，带范围验证"""
+    """获取整数配置值，带范围验证。
+
+    ⚠️ 这里**有意**只用裸 `int()`，不接 `core.safe_numeric`：
+    * `os.environ.get()` 只可能返回 `str`，`int(str)` 抛不出 OverflowError
+      （`int('inf')` 是 ValueError，已被下面接住），不存在漏成 500 的通道；
+    * `config.py` 必须保持**零内部依赖** —— 它在冻结产物里被单独放在
+      `_internal/` 下，且是 `core` 各模块的早期依赖。一旦 import `core.*`
+      就会触发 `core/__init__.py`，把整个核心层拉起来，形成循环依赖风险。
+      `tests/test_frozen_layout_paths.py` 用一个只含 paths/config/VERSION 的
+      最小布局盯着这条不变量（本轮试过改成 safe_numeric，9 条用例当场报错）。
+    """
     value = os.environ.get(env_var)
     if value is None:
         return default

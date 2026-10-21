@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # paths 是仓库根模块。用别名 _paths 避免与局部变量 / 参数名冲突。
 import paths as _paths
+from core.safe_numeric import try_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +97,10 @@ def _stale_value_timestamp(client, address: int, count: int,
         return fallback
     if age is None:
         return fallback
-    try:
-        return fallback - timedelta(seconds=float(age))
-    except (TypeError, ValueError):
+    seconds = try_finite_float(age)
+    if seconds is None:
         return fallback
+    return fallback - timedelta(seconds=seconds)
 
 
 class DataQualityAssessor:
@@ -789,11 +790,8 @@ class DataCollector:
             # `remove_device_task` 的追踪清理。
             if not self.running or device_id in self._cancelled_devices:
                 return
-            try:
-                value = float(value)
-            except (ValueError, TypeError):
-                return
-            if math.isnan(value) or math.isinf(value):
+            value = try_finite_float(value)
+            if value is None:
                 return
             # 队列满时丢弃最旧数据，绝不阻塞回调线程
             self._enqueue_drop_oldest({
@@ -1231,11 +1229,20 @@ class DataCollector:
         for name, data in latest.items():
             value = data.get('value')
             if value is not None:
+                # 设备可能吐出 NaN/Infinity（float32 溢出、寄存器位型异常）。
+                # 原实现 `float(value)` 会让它们原样入库，污染趋势图与统计。
+                numeric = try_finite_float(value)
+                if numeric is None:
+                    logger.warning(
+                        f"缓存采集数据丢弃 device={device_id} register={name} "
+                        f"value={value!r}: 不是有限数值（NaN/Infinity）"
+                    )
+                    continue
                 try:
                     item = {
                         'device_id': device_id,
                         'register_name': name,
-                        'value': float(value) if value is not None else 0,
+                        'value': numeric,
                         'timestamp': timestamp,
                         'unit': data.get('unit', '')
                     }

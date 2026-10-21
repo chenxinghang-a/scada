@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 import paths
+from core.safe_numeric import to_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -901,7 +902,9 @@ class AlarmManager:
         if raw is None:
             return 0.0
         try:
-            delay = float(raw)
+            # `delay: .inf`（YAML 合法字面量）会让 `max(0.0, inf)` = inf，
+            # 即**报警永不触发** —— 这是静默失效，必须当非法值处理。
+            delay = to_finite_float(raw, 'delay')
         except (TypeError, ValueError):
             logger.warning("报警规则 %s 的 delay 配置非法(%r)，按 0（不延迟）处理",
                            rule_id, raw)

@@ -11,6 +11,8 @@ import yaml
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from core.safe_numeric import try_int
+
 logger = logging.getLogger(__name__)
 
 _MISSING = object()  # 区分"键不存在"和"键存在但值为None"
@@ -293,9 +295,10 @@ def load_collection_settings() -> Dict[str, int]:
         return out
     for key, fallback in COLLECTION_DEFAULTS.items():
         raw = section.get(key)
-        try:
-            val = int(raw)
-        except (TypeError, ValueError):
+        val = try_int(raw)
+        if val is None:
+            # YAML 的 `.inf` / `.nan` 是合法字面量，`int(inf)` 抛的是
+            # OverflowError（不在 TypeError/ValueError 里）→ 原本会直接崩在启动阶段。
             logger.warning("collection.%s=%r 非法，回退默认 %d", key, raw, fallback)
             continue
         if val <= 0:

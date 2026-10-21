@@ -25,6 +25,7 @@ import secrets
 from functools import wraps
 from typing import Any, Dict, Optional
 from flask import request, jsonify, current_app
+from core.safe_numeric import to_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,11 @@ def signature_required(f):
 
         # 验证时间戳
         try:
-            ts = float(timestamp)
+            # ⚠️ 必须 `to_finite_float`：`X-Timestamp: NaN` 会让
+            # `float()` 成功返回 nan，而 `age = abs(now - nan)` 仍是 nan，
+            # `nan > MAX_TIMESTAMP_AGE` 恒为 **False** —— 过期检查直接被绕过，
+            # 重放保护形同虚设。（`inf` 会被 `> MAX` 挡住，`nan` 不会。）
+            ts = to_finite_float(timestamp, 'timestamp')
             age = abs(time.time() - ts)
             if age > MAX_TIMESTAMP_AGE:
                 return jsonify({
@@ -218,7 +223,7 @@ def signature_light(f):
 
         # 验证时间戳
         try:
-            ts = float(timestamp)
+            ts = to_finite_float(timestamp, 'timestamp')  # NaN 会绕过过期检查，见上
             age = abs(time.time() - ts)
             if age > MAX_TIMESTAMP_AGE * 2:  # 轻量签名允许更长过期
                 return jsonify({

@@ -18,6 +18,7 @@ from typing import Any, Callable
 from datetime import datetime
 
 from core.circuit_breaker import get_circuit_breaker, CircuitBreakerOpenError
+from core.safe_numeric import try_int
 
 logger = logging.getLogger(__name__)
 
@@ -338,9 +339,8 @@ class RESTDeviceClient:
                 bracket_pos = part.index('[')
                 key = part[:bracket_pos]
                 idx_str = part[bracket_pos + 1:-1]
-                try:
-                    idx = int(idx_str)
-                except ValueError:
+                idx = try_int(idx_str)
+                if idx is None:
                     return None
 
                 # 先按key导航

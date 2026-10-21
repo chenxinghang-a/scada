@@ -10,6 +10,7 @@ from functools import wraps
 from flask import current_app, jsonify, make_response
 
 import paths
+from core.safe_numeric import to_finite_float, to_int, try_int
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +42,23 @@ def api_error_handler(f):
 
 
 def safe_int(val, name='value'):
-    """安全整数转换"""
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        raise ValueError(f'Invalid {name}: must be integer')
+    """安全整数转换 —— 规则收在 `core/safe_numeric.py`（唯一真源）。
+
+    这里只保留函数名，避免 15 个调用点全改。历史坑：`int(float('inf'))` 抛的是
+    **OverflowError**，不在 `(ValueError, TypeError)` 里，而 JSON 的 `1e400`
+    会被解析成 `inf` —— 于是 `{"address": 1e400}` 漏成 HTTP 500。
+    """
+    return to_int(val, name)
 
 
 def safe_float(val, name='value'):
-    """安全浮点转换"""
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        raise ValueError(f'Invalid {name}: must be number')
+    """安全浮点转换 —— 规则收在 `core/safe_numeric.py`（唯一真源）。
+
+    必须拒掉 **NaN / ±Infinity**：`json.loads` 默认接受裸 `NaN` / `Infinity`
+    字面量，而 `NaN` 参与的任何大小比较都是 False —— `value < min or value > max`
+    判不出越界，**量程校验形同虚设**，NaN 会被下发到现场设备。
+    """
+    return to_finite_float(val, name)
 
 
 # 查询类接口 limit 参数的硬上限。未设上限时，`?limit=999999999` 会直接
@@ -75,9 +80,8 @@ def clamp_limit(val, default: int = 50, maximum: int = MAX_QUERY_LIMIT) -> int:
     base = max(1, min(int(default), upper))
     if val is None:
         return base
-    try:
-        n = int(val)
-    except (ValueError, TypeError):
+    n = try_int(val)
+    if n is None:
         return base
     return max(1, min(n, upper))
 

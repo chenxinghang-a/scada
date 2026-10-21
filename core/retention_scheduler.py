@@ -58,6 +58,8 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
+from core.safe_numeric import try_int
+
 logger = logging.getLogger(__name__)
 
 #: 默认运行间隔（小时）。数据保留不是实时功能，6 小时足够；
@@ -127,13 +129,14 @@ def read_retention_config(config_path: Optional[str] = None) -> Optional[Dict[st
     out: Dict[str, Any] = {}
     for out_key, cfg_key in WINDOW_KEYS.items():
         raw = section.get(cfg_key)
-        try:
-            days = int(raw)
-        except (TypeError, ValueError):
+        parsed = try_int(raw)
+        if parsed is None:
             days = WINDOW_DEFAULTS[out_key]
             logger.warning(
                 "保留天数 %s=%r 非法，回退默认 %d 天", cfg_key, raw, days,
             )
+        else:
+            days = parsed
         if days <= 0:
             # 0/负数当成「非法」而不是「立刻删光」——删数据的方向上宁可保守。
             days = WINDOW_DEFAULTS[out_key]

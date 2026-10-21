@@ -33,6 +33,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 import paths
+from core.safe_numeric import to_finite_float, try_int
 
 try:
     import yaml
@@ -348,7 +349,10 @@ class DeviceControlSafety:
             target = self._write_limits.setdefault(device_id, {})
             for register_name, bounds in limits.items():
                 try:
-                    low, high = float(bounds[0]), float(bounds[1])
+                    # `write_limits: [-.inf, .inf]`（YAML 合法）等于「不设限」，
+                    # 但界面上看是配了量程的 —— 必须当非法配置拒掉。
+                    low = to_finite_float(bounds[0], 'write_limits.low')
+                    high = to_finite_float(bounds[1], 'write_limits.high')
                 except (TypeError, ValueError, IndexError):
                     logger.error("设备 %s 的 write_limits.%s 非法: %r", device_id, register_name, bounds)
                     continue
@@ -753,9 +757,8 @@ class DeviceControlSafety:
                     # coil条件：address是整数地址，register_name可能是名称或地址
                     cond_address = cond.get('address')
                     # 将register_name转为整数地址进行比较
-                    try:
-                        reg_addr = int(register_name)
-                    except (ValueError, TypeError):
+                    reg_addr = try_int(register_name)
+                    if reg_addr is None:
                         reg_addr = self._resolve_register_address(device_id, register_name)
 
                     if (cond.get('device_id') == device_id and
@@ -851,6 +854,20 @@ class DeviceControlSafety:
             {'allowed': bool, 'reason': str, 'warnings': list}
         """
         result = {'allowed': True, 'reason': '', 'warnings': []}
+
+        # 0. 非有限值（NaN / ±Infinity）一律拒绝。
+        #
+        #    `NaN` 与任何数比较都返回 False，所以下面第 3 步的
+        #    `value < min_val or value > max_val` **判不出 NaN** —— 量程校验会
+        #    直接放行，NaN 被下发到现场设备（float32 寄存器会写进一个 NaN 位型）。
+        #    入口处的 `safe_float` 已经拦了一道，这里再挡一次：本方法是安全闸门，
+        #    不能假设调用方都走过 API 参数解析（edge_decision / 测试可直接调用）。
+        try:
+            to_finite_float(value, 'value')
+        except ValueError:
+            result['allowed'] = False
+            result['reason'] = f'写入值 {value!r} 不是有限数值（NaN/Infinity）或无法解析，拒绝写入'
+            return result
 
         # 0. 联锁配置缺失 → fail-closed（仅真实设备模式）
         #    「没有任何联锁规则」= 一条永不触发的保护。历史实现只在加载时打
@@ -1162,9 +1179,10 @@ class DeviceControlSafety:
         if kind not in ('coil', 'register'):
             logger.error("设备 %s 控制点位类型非法: %r", device_id, spec.get('type'))
             return None
-        try:
-            address = int(spec.get('address'))
-        except (TypeError, ValueError):
+        address = try_int(spec.get('address'))
+        if address is None:
+            # YAML 的 `.inf` / `.nan` 是合法字面量 → `int(inf)` 抛 OverflowError
+            # （不在 TypeError/ValueError 里），原本会让控制点位加载直接崩。
             logger.error("设备 %s 控制点位地址非法: %r", device_id, spec.get('address'))
             return None
 
@@ -1199,13 +1217,12 @@ class DeviceControlSafety:
         if isinstance(register_name, int):
             return register_name
 
-        # 尝试转换为整数
-        try:
-            return int(register_name)
-        except (ValueError, TypeError):
-            # 传入的是寄存器名称（非数字字符串）而非地址，转换失败属预期，
-            # 继续走下方按名称查表的逻辑，安全忽略
-            pass
+        # 尝试转换为整数（`try_int` 同时挡住 inf/nan 与 OverflowError）
+        converted = try_int(register_name)
+        if converted is not None:
+            return converted
+        # 传入的是寄存器名称（非数字字符串）而非地址，转换失败属预期，
+        # 继续走下方按名称查表的逻辑，安全忽略
 
         # 从设备配置中查找寄存器名称对应的地址
         if self.device_manager:
@@ -1231,9 +1248,8 @@ class DeviceControlSafety:
         Returns:
             寄存器名称，找不到返回None
         """
-        try:
-            addr = int(address)
-        except (ValueError, TypeError):
+        addr = try_int(address)
+        if addr is None:
             return None
 
         if self.device_manager:
@@ -1243,11 +1259,9 @@ class DeviceControlSafety:
             except Exception:
                 return None
             for reg in registers:
-                try:
-                    if int(reg.get('address')) == addr:
-                        return reg.get('name')
-                except (ValueError, TypeError):
-                    continue
+                reg_addr = try_int(reg.get('address'))
+                if reg_addr is not None and reg_addr == addr:
+                    return reg.get('name')
 
         return None
 

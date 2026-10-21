@@ -9,6 +9,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
+from core.safe_numeric import to_int
 from ._common import get_auth_manager, api_error_handler, api_error, safe_int
 
 logger = logging.getLogger(__name__)
@@ -834,10 +835,15 @@ def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
 
 
 def _validate_port(value: Any) -> int:
-    """验证 TCP/MQTT 等协议端口处于合法范围。"""
+    """验证 TCP/MQTT 等协议端口处于合法范围。
+
+    ⚠️ 走 `to_int` 而不是裸 `int()`：`{"port": 1e400}` 在 JSON 里会被解析成
+    `inf`，`int(inf)` 抛 **OverflowError**（不在 `(TypeError, ValueError)` 里）
+    → 漏成 500。`{"port": NaN}` 更糟：`1 <= NaN` 恒为 False，会静默存进去。
+    """
     try:
-        port = int(value)
-    except (TypeError, ValueError) as exc:
+        port = to_int(value, 'port')
+    except ValueError as exc:
         raise ValueError('端口必须是整数') from exc
     if not 1 <= port <= 65535:
         raise ValueError('端口范围必须是1到65535')

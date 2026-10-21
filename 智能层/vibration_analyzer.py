@@ -33,6 +33,7 @@ import threading
 from typing import Any
 from datetime import datetime
 from collections import deque
+from core.safe_numeric import try_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -186,11 +187,8 @@ class VibrationAnalyzer:
         """校验采样率：非数值或 <=0 一律视为"未知采样率"（返回 None）"""
         if rate is None or isinstance(rate, bool):
             return None
-        try:
-            value = float(rate)
-        except (TypeError, ValueError):
-            return None
-        if value <= 0 or math.isnan(value) or math.isinf(value):
+        value = try_finite_float(rate)
+        if value is None or value <= 0:
             return None
         return value
 
