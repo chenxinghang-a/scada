@@ -231,9 +231,18 @@ class PredictiveMaintenance:
         ss_res = sum((yi - (slope * xi + intercept)) ** 2 for xi, yi in zip(x, values))
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
-        # 变化率（每小时）
+        # 变化率（每小时）—— 注意是**绝对变化量**，不是百分比（docstring 已改正）
         time_span_hours = (window[-1]['ts_epoch'] - window[0]['ts_epoch']) / 3600
         change_rate = (slope * n / time_span_hours) if time_span_hours > 0 else 0
+
+        # 每小时变化量：slope 是「每个采样点」的增量，一个采样点代表
+        # (time_span_hours / (n-1)) 小时 → 乘回去才是「每小时」。
+        # 故障预测必须用它换算天数：**采样间隔是设备决定的**（devices.yaml 里
+        # 有 5 秒的），不能假设「每分钟一个点」。
+        slope_per_hour = (
+            slope * (n - 1) / time_span_hours
+            if (time_span_hours > 0 and n > 1) else 0.0
+        )
 
         # 方向判定
         if abs(slope) < 1e-6:
@@ -249,6 +258,7 @@ class PredictiveMaintenance:
             'r_squared': max(0, r_squared),
             'direction': direction,
             'change_rate': round(change_rate, 4),
+            'slope_per_hour': round(slope_per_hour, 6),
         }
 
     def _detect_anomalies(self, window: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -358,6 +368,33 @@ class PredictiveMaintenance:
         total = stability_score + trend_score + anomaly_score
         return round(min(100, max(0, total)), 1)
 
+    def _distance_to_days(self, distance: float, trend: dict[str, Any],
+                          slope_per_sample: float) -> float | None:
+        """把「还差多少值」换算成「多少天」（基于**真实时间戳**）。
+
+        ⚠️ 这里曾经写死「假设每分钟 1 个采样点」（`sample_interval=60`），
+        用 `slope(每采样点) × 60` 当秒数。而 `配置/devices.yaml` 里有
+        `collection_interval: 5` 的设备 —— 采样间隔 5 秒时，
+        **剩余天数会被报大 12 倍**（明天就到限，界面上写「12 天后」）。
+        趋势分析本来就有真实时间戳（`ts_epoch`），换算必须用它。
+
+        只有拿不到时间戳（老数据 / 手工灌入）时才退回按配置间隔估算，
+        并且明确记日志 —— 这个假设一旦和真实采集间隔不符，天数会成倍错。
+        """
+        rate_per_hour = abs(trend.get('slope_per_hour') or 0.0)
+        if rate_per_hour > 0:
+            return distance / rate_per_hour / 24
+
+        if slope_per_sample <= 0:
+            return None
+
+        interval = self.config.get('sample_interval', 60)
+        logger.warning(
+            "故障预测缺少时间戳信息，退回按配置采样间隔 %ss 估算剩余天数 "
+            "（若与实际采集间隔不符，天数会成倍偏差）", interval,
+        )
+        return (distance / slope_per_sample) * interval / 86400
+
     def _predict_failure(self, device_id: str, register_name: str,
                           window: list[dict[str, Any]], trend: dict[str, Any]) -> dict[str, Any] | None:
         """
@@ -390,29 +427,28 @@ class PredictiveMaintenance:
 
         if upper is not None and slope > 0:
             # 上升趋势，预测何时超过上限
-            samples_to_limit = (upper - current_value) / slope
-            if samples_to_limit > 0:
-                # 估算时间（假设每分钟1个采样点）
-                interval = self.config.get('sample_interval', 60)  # 秒
-                seconds_to_limit = samples_to_limit * interval
-                days = seconds_to_limit / 86400
+            distance = upper - current_value
+            days = self._distance_to_days(distance, trend, slope) if distance > 0 else None
+            if days is not None:
                 results.append({
                     'predicted_limit': round(upper, 2),
-                    'days_to_limit': round(days, 1),
+                    # 天只留 1 位小数时，「2 小时后到限」会显示成 0.0 天；
+                    # 补一个 hours_to_limit，并保留 2 位天精度。
+                    'days_to_limit': round(days, 2),
+                    'hours_to_limit': round(days * 24, 1),
                     'limit_type': 'upper',
                     'confidence': round(trend.get('r_squared', 0.5), 2),
                 })
 
         if lower is not None and slope < 0:
             # 下降趋势，预测何时低于下限
-            samples_to_limit = (current_value - lower) / abs(slope)
-            if samples_to_limit > 0:
-                interval = self.config.get('sample_interval', 60)
-                seconds_to_limit = samples_to_limit * interval
-                days = seconds_to_limit / 86400
+            distance = current_value - lower
+            days = self._distance_to_days(distance, trend, abs(slope)) if distance > 0 else None
+            if days is not None:
                 results.append({
                     'predicted_limit': round(lower, 2),
-                    'days_to_limit': round(days, 1),
+                    'days_to_limit': round(days, 2),
+                    'hours_to_limit': round(days * 24, 1),
                     'limit_type': 'lower',
                     'confidence': round(trend.get('r_squared', 0.5), 2),
                 })
@@ -433,9 +469,14 @@ class PredictiveMaintenance:
             msg_parts.append(f"健康评分偏低({health}分)，建议安排预防性维护")
 
         if failure_pred:
-            days = failure_pred['days_to_limit']
             limit_type = '上限' if failure_pred['limit_type'] == 'upper' else '下限'
-            msg_parts.append(f"预计{days}天后触及{limit_type}({failure_pred['predicted_limit']})")
+            hours = failure_pred.get('hours_to_limit')
+            # 48 小时内用「小时」说，否则「预计0.21天后」这种说法没人能读
+            if hours is not None and hours < 48:
+                when = f'{hours}小时后'
+            else:
+                when = f"{failure_pred['days_to_limit']}天后"
+            msg_parts.append(f"预计{when}触及{limit_type}({failure_pred['predicted_limit']})")
 
         if trend.get('direction') == 'rising':
             msg_parts.append(f"数据持续上升(变化率{trend['change_rate']}/h)")
