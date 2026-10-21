@@ -500,16 +500,26 @@ class DeviceControlSafety:
                                 f'批量{action}设备 {device_id}: 无可用控制点位，已拒绝写入')
                     continue
 
+                # 按点位类型走对应写法，**不允许跨类型退回**：
+                # 线圈和寄存器在现场是两个对象，退回写等于写错地方，
+                # 而调用方只会看到「成功」。不支持就明确失败。
+                unsupported = None
                 if point['type'] == 'coil':
                     if hasattr(client, 'write_single_coil'):
                         success = client.write_single_coil(point['address'], bool(point['value']))
-                    elif hasattr(client, 'write_single_register'):
-                        success = client.write_single_register(point['address'], int(bool(point['value'])))
+                    else:
+                        unsupported = '客户端不支持线圈写入'
                 else:  # register
                     if hasattr(client, 'write_single_register'):
                         success = client.write_single_register(point['address'], int(point['value']))
-                    elif hasattr(client, 'write_single_coil'):
-                        success = client.write_single_coil(point['address'], bool(point['value']))
+                    else:
+                        unsupported = '客户端不支持寄存器写入'
+
+                if unsupported:
+                    results[device_id] = {'success': False, 'message': unsupported}
+                    self._audit(f'batch_{action}', operator,
+                                f'批量{action}设备 {device_id}: {unsupported}')
+                    continue
 
                 if success and self.device_manager:
                     if action == 'start':

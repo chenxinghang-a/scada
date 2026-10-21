@@ -268,18 +268,25 @@ class RealDeviceManager(IDeviceManager):
 
     @staticmethod
     def _write_control(client, kind: str, address: int, value) -> bool:
-        """按点位类型写入；客户端不支持该写法时返回 False（不静默当成功）。"""
+        """按点位类型写入；客户端不支持**该类型**时返回 False（不静默当成功）。
+
+        ⚠️ 不允许「线圈写不了就退回写寄存器」这种跨类型兜底。
+        寄存器 0 和线圈 0 在现场是两个不同对象（数据字 vs 开关位），
+        退回写等于**写错了地方**，而且调用方只会看到「成功」。
+        客户端不支持就明确失败，由上层报给操作员。
+        （实测：只有 Modbus / 模拟客户端实现了这两个方法，且两者**都**实现；
+        跨类型兜底在现有实现里打不到，只会成为将来的坑。）
+        """
         if kind == 'coil':
-            if hasattr(client, 'write_single_coil'):
-                return bool(client.write_single_coil(address, bool(value)))
-            if hasattr(client, 'write_single_register'):
-                return bool(client.write_single_register(address, int(bool(value))))
-            return False
-        if hasattr(client, 'write_single_register'):
-            return bool(client.write_single_register(address, int(value)))
-        if hasattr(client, 'write_single_coil'):
+            if not hasattr(client, 'write_single_coil'):
+                logger.error("[真实] 客户端不支持线圈写入（点位类型 coil）—— 拒绝跨类型退回写寄存器")
+                return False
             return bool(client.write_single_coil(address, bool(value)))
-        return False
+
+        if not hasattr(client, 'write_single_register'):
+            logger.error("[真实] 客户端不支持寄存器写入（点位类型 register）—— 拒绝跨类型退回写线圈")
+            return False
+        return bool(client.write_single_register(address, int(value)))
 
     def stop_device(self, device_id: str) -> bool:
         """停止指定设备（仅限机械类设备）。
