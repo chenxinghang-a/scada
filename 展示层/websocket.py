@@ -381,6 +381,94 @@ def _count_clients(rooms: dict | None) -> int:
     return len(sids)
 
 
+# 上一轮的设备连接状态：device_id -> (connected, status, stopped)
+#
+# 模块级是为了「跨轮次记住基线」；测试直接重置这个 dict 即可。
+_device_status_cache: dict[str, tuple] = {}
+
+
+def _diff_device_status(brief_statuses, cache: dict) -> list[tuple[str, dict]]:
+    """对比上一轮的设备连接状态，返回发生变化的那几台。
+
+    Args:
+        brief_statuses: `device_manager.get_all_status(brief=True)` 的结果
+            （每条含 `device_id` / `connected` / `status` / `stopped`）
+        cache: 上一轮基线，**会被就地更新**
+
+    Returns:
+        ``[(device_id, {'connected':…, 'status':…, 'stopped':…}), …]``
+
+    设计取舍：
+    - **首轮只建基线不推**。启动瞬间 100 台设备全部「从无到有」，
+      全推一遍等于把一次 HTTP 轮询复制到 WebSocket 上，纯噪声。
+    - **只推变化**。设备状态几小时不变是常态，逐轮全推会让
+      「实时推送」退化成高频轮询。
+    - **消失的设备清基线**。否则设备删了再加回来（同 id）时，
+      缓存里还留着旧值，判不出变化 → 再也不推。
+    """
+    changes: list[tuple[str, dict]] = []
+    seen: set[str] = set()
+
+    for st in brief_statuses or ():
+        try:
+            device_id = st.get('device_id')
+        except AttributeError:
+            continue
+        if not device_id:
+            continue
+        seen.add(device_id)
+
+        cur = (
+            bool(st.get('connected')),
+            st.get('status'),
+            bool(st.get('stopped')),
+        )
+        prev = cache.get(device_id)
+        if prev == cur:
+            continue
+        cache[device_id] = cur
+        if prev is None:
+            continue        # 首轮：只建基线
+
+        changes.append((device_id, {
+            'connected': cur[0],
+            'status': cur[1],
+            'stopped': cur[2],
+        }))
+
+    for device_id in list(cache):
+        if device_id not in seen:
+            del cache[device_id]
+
+    return changes
+
+
+def _push_device_status_changes(data_collector) -> int:
+    """把本轮变化的设备连接状态推给客户端，返回推送条数。
+
+    `emit_device_status()` 此前**零调用** —— 前端
+    `socket.on('device_status')` 一直在监听一个永不到来的事件，
+    设备在线/离线只能靠 2~5 秒的 HTTP 轮询兜底。
+
+    数据源用 `get_all_status(brief=True)` 而不是 `get_device_status()`：
+    后者会**尝试自动重连**并写状态缓存，在推送线程里每轮调 100 次等于
+    把「查询状态」变成「反复发起连接」，副作用太大。
+    """
+    device_manager = getattr(data_collector, 'device_manager', None)
+    if device_manager is None:
+        return 0
+    try:
+        brief = device_manager.get_all_status(brief=True)
+    except Exception as e:
+        logger.debug(f"读取设备状态列表失败: {e}")
+        return 0
+
+    changes = _diff_device_status(brief, _device_status_cache)
+    for device_id, payload in changes:
+        emit_device_status(device_id, payload)
+    return len(changes)
+
+
 def start_data_push_thread(database, data_collector):
     """启动数据推送线程（优化版：单次查询 + 状态缓存 + 异常保护）"""
     global _push_stop_event
@@ -428,6 +516,14 @@ def start_data_push_thread(database, data_collector):
                                 socketio.emit('data_update', compress_message(latest), room=f'device_{device_id}')
                             except Exception as e:
                                 logger.debug(f"推送设备 {device_id} 数据失败: {e}")
+
+                # 设备连接/运行状态变化 → `device_status`。
+                # 只在有客户端时做：没人连的时候算出来也没人收。
+                if client_count > 0:
+                    try:
+                        _push_device_status_changes(data_collector)
+                    except Exception as e:
+                        logger.debug(f"设备状态推送失败: {e}")
 
                 now = time.time()
                 if now - _last_status_time >= 10:
@@ -491,15 +587,14 @@ def emit_broadcast(broadcast_data):
 
 
 def emit_device_status(device_id, status):
-    """发送设备状态更新。
+    """发送设备连接/运行状态更新（按设备房间定向推送）。
 
-    ⚠️ **当前没有任何调用方**（全仓库零引用）。前端 Dashboard 在
-    `socket.on('device_status')` 里监听它，但后端从不发 —— 设备在线/离线
-    状态实际只靠 2~5 秒的 HTTP 轮询兜底（`dev.connected`）。
-    接线的正确位置是推送线程：每轮拿设备连接状态、与上一轮比对后只发变化；
-    数据源是 `device_manager.get_device_status()`（`get_device_summary()` 里
-    没有 connected/status 字段，别从那里取）。留着这个函数是为了接线时复用，
-    但**不要**把它当成"已经生效"。
+    `status` 形状：``{'connected': bool, 'status': 'online'|'offline', 'stopped': bool}``
+    —— 前端 Dashboard 的 handler 读的是 `data.status.connected` /
+    `data.status.status`（**外层 `status` 再套一层 `status`**，看着别扭，
+    但改形状要同时改前端，本轮不动）。
+
+    由推送线程的 `_push_device_status_changes()` 调用，只在状态**变化**时发。
     """
     if socketio:
         try:
