@@ -26,7 +26,9 @@ SYSTEM_START_TIME = datetime.now()
 
 # 配置结构化日志（等保2.0 GB/T 22239）
 from core.structured_logging import setup_logging, get_logger
-from config import LogConfig
+from config import (
+    AlarmOutputConfig, BroadcastConfig, FlaskConfig, LogConfig, TDengineConfig,
+)
 setup_logging(
     log_dir=str(LogConfig.LOG_DIR),
     log_level=LogConfig.LEVEL,
@@ -165,7 +167,25 @@ def main():
         # 从alarms.yaml读取灯控设备配置
         import yaml
         alarms_config_path = paths.resolve('配置/alarms.yaml')
-        alarm_output_cfg = {'enabled': True, 'simulation': simulation_mode}
+        # 默认值来自 AlarmOutputConfig（此前这些字段全是装饰品：
+        # run.py 写死 enabled=True + simulation=系统模式，host/port/do_mapping
+        # 只能靠 YAML，改 config.py 一点用都没有）。YAML 里写了的键仍然优先。
+        alarm_output_simulation = simulation_mode or AlarmOutputConfig.SIMULATION
+        if AlarmOutputConfig.SIMULATION and not simulation_mode:
+            logger.warning(
+                "AlarmOutputConfig.SIMULATION=True：系统跑在真实设备模式，"
+                "但声光输出被强制为模拟 —— 现场灯塔/蜂鸣器不会被驱动"
+            )
+        alarm_output_cfg = {
+            'enabled': AlarmOutputConfig.ENABLED,
+            'simulation': alarm_output_simulation,
+            'modbus': {
+                'host': AlarmOutputConfig.MODBUS_HOST,
+                'port': AlarmOutputConfig.MODBUS_PORT,
+                'slave_id': AlarmOutputConfig.MODBUS_SLAVE_ID,
+            },
+            'do_mapping': dict(AlarmOutputConfig.DO_MAPPING),
+        }
         if alarms_config_path.exists():
             with open(alarms_config_path, 'r', encoding='utf-8') as f:
                 alarms_yaml = yaml.safe_load(f) or {}
@@ -186,17 +206,25 @@ def main():
                 })
                 logger.info(f"灯控设备: {tower.get('device_id')} @ {tower.get('host')}")
         alarm_output = AlarmOutput(alarm_output_cfg)
+        # 广播系统默认值来自 BroadcastConfig（此前 areas / 模板 / 开关
+        # 全是硬编码在 run.py 里的字面量，改 config.py 不起作用）
+        broadcast_simulation = simulation_mode or BroadcastConfig.SIMULATION
+        if BroadcastConfig.SIMULATION and not simulation_mode:
+            logger.warning(
+                "BroadcastConfig.SIMULATION=True：系统跑在真实设备模式，"
+                "但广播被强制为模拟 —— 现场功放不会被驱动"
+            )
         broadcast_system = BroadcastSystem({
-            'enabled': True,
-            'simulation': simulation_mode,
-            'areas': ['车间A', '车间B', '仓库', '办公楼'],
+            'enabled': BroadcastConfig.ENABLED,
+            'simulation': broadcast_simulation,
+            'areas': list(BroadcastConfig.AREAS),
             'default_area': 'all',
-            'preset_templates': {
-                'alarm_critical': '注意！{area}发生严重报警：{message}，请立即处置！',
-                'alarm_warning': '提醒：{area}出现告警：{message}，请关注。',
-                'evacuation': '请注意，{area}发生紧急状况，请沿疏散通道撤离！',
-                'all_clear': '广播通知，{area}警报解除，恢复正常。',
-            }
+            'preset_templates': dict(BroadcastConfig.PRESET_TEMPLATES),
+            'mqtt': {
+                'broker': BroadcastConfig.MQTT_BROKER,
+                'port': BroadcastConfig.MQTT_PORT,
+            },
+            'topic_prefix': BroadcastConfig.TOPIC_PREFIX,
         })
         alarm_manager = AlarmManager(database, '配置/alarms.yaml',
                                      alarm_output=alarm_output,
@@ -235,9 +263,14 @@ def main():
             # os 的代码都会抛
             #   UnboundLocalError: cannot access local variable 'os'
             # 模块级第 6 行已有 import os，这里删掉即可。
-            td_host = os.environ.get('TDENGINE_HOST', 'localhost')
-            td_port = int(os.environ.get('TDENGINE_PORT', 6041))
-            tdengine = TDengineClient(td_host, td_port)
+            # 环境变量解析收口在 config.py（TDengineConfig），这里不再重复读一遍：
+            # 两处各自 `os.environ.get(...)` 时，改默认值只改一处、另一处悄悄不一致。
+            tdengine = TDengineClient(
+                TDengineConfig.HOST, TDengineConfig.PORT,
+                user=TDengineConfig.USER,
+                password=TDengineConfig.PASSWORD,
+                database=TDengineConfig.DATABASE,
+            )
             if tdengine.connect():
                 tdengine.init_tables()
 
@@ -564,9 +597,9 @@ def main():
 
         if socketio is None:
             logger.warning("SocketIO未初始化，使用普通Flask服务器")
-            app.run(host=host, port=port, debug=False, ssl_context=ssl_context)
+            app.run(host=host, port=port, debug=FlaskConfig.DEBUG, ssl_context=ssl_context)
         else:
-            socketio.run(app, host=host, port=port, debug=False,
+            socketio.run(app, host=host, port=port, debug=FlaskConfig.DEBUG,
                         allow_unsafe_werkzeug=True, ssl_context=ssl_context)
 
     except KeyboardInterrupt:

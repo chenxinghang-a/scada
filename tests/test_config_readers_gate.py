@@ -48,20 +48,6 @@ CLASS_REASONS = {
         "CHECK_INTERVAL 无主：升级检查间隔在 `报警层/alarm_escalation.py` 自己的 "
         "config.get('check_interval', 30)，洪水检查在 alarm_manager 里硬编码 15s。"
     ),
-    "AlarmOutputConfig": (
-        "整类死配置：run.py 从 `配置/alarms.yaml::alarm_output` 构造 AlarmOutput，"
-        "本类从未被 import。"
-    ),
-    "BroadcastConfig": (
-        "整类死配置：真源是 `配置/alarms.yaml::notification` 与 BroadcastSystem 构造参数。"
-    ),
-    "MQTTConfig": (
-        "整类死配置：`采集层/mqtt_client.py` 收的是设备配置字典（devices.yaml 的 mqtt 段），"
-        "TLS 键为 tls_enabled/ca_cert/client_cert/client_key/tls_insecure。"
-    ),
-    "TDengineConfig": (
-        "整类死配置：`智能层/tsdb_adapter.py` 收的是已构造好的 TDengineClient 实例。"
-    ),
     "ModbusConfig": (
         "真源是 `配置/devices*.yaml` 的每设备字段 + `采集层/modbus_client.py` 的重试/退避实现。"
     ),
@@ -71,11 +57,6 @@ CLASS_REASONS = {
         "（默认 90 天），本类不参与。"
     ),
     "ExportConfig": "EXPORT_DIR 由 `paths.py` 决定；FORMATS 由导出接口按需决定。",
-    "FlaskConfig": (
-        "DEBUG/REQUEST_TIMEOUT/MAX_CONCURRENT_REQUESTS 是**无主旋钮**："
-        "没有任何代码消费它们（并发上限实际由 waitress/线程池与 "
-        "`core/request_queue.py` 控制）。要么接线，要么删。"
-    ),
     "AuthConfig": (
         "_DEV_DEFAULT_ADMIN_PW 是 config.py 内部用于「弱口令检测」的私有常量，"
         "在类体里自用，不对外。"
@@ -84,29 +65,18 @@ CLASS_REASONS = {
 
 # 当前已知的未读配置（2026-10-20 基线，round 218 修完 8 项后的余量）
 KNOWN_UNREAD = {
+    # round 231 之后剩下的未读项。四个「整类死配置」
+    # （AlarmOutputConfig / BroadcastConfig / MQTTConfig / TDengineConfig）
+    # 与 FlaskConfig 的三个无主旋钮都已**接线**，因此从清单里删除
+    # —— 清单只增不减就失去意义（本文件有双向断言盯着）。
     "AlarmConfig": {
         "CHECK_INTERVAL", "EMAIL_ENABLED", "RETENTION_DAYS",
         "SMTP_PASSWORD", "SMTP_PORT", "SMTP_SERVER", "SMTP_USERNAME",
     },
-    "AlarmOutputConfig": {
-        "DO_MAPPING", "ENABLED", "MODBUS_HOST", "MODBUS_PORT",
-        "MODBUS_SLAVE_ID", "SIMULATION",
-    },
     "AuthConfig": {"_DEV_DEFAULT_ADMIN_PW"},
-    "BroadcastConfig": {
-        "AREAS", "ENABLED", "MQTT_BROKER", "MQTT_PORT",
-        "PRESET_TEMPLATES", "SIMULATION", "TOPIC_PREFIX",
-    },
     "DatabaseConfig": {"COMPRESSION_INTERVAL", "DB_PATH", "RETENTION_DAYS"},
     "ExportConfig": {"EXPORT_DIR", "FORMATS"},
-    "FlaskConfig": {"DEBUG", "MAX_CONCURRENT_REQUESTS", "REQUEST_TIMEOUT"},
-    "MQTTConfig": {
-        "BROKER_HOST", "BROKER_PORT", "CA_CERT", "CLIENT_CERT",
-        "CLIENT_ID_PREFIX", "CLIENT_KEY", "QOS", "TLS_ENABLED",
-        "TLS_INSECURE", "TOPIC_PREFIX",
-    },
     "ModbusConfig": {"CONNECTION_TIMEOUT", "DEFAULT_INTERVAL", "MAX_RETRIES", "RETRY_INTERVAL"},
-    "TDengineConfig": {"DATABASE", "HOST", "PASSWORD", "PORT", "USER"},
 }
 
 

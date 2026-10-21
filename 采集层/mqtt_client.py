@@ -10,6 +10,7 @@ import threading
 from typing import Any, Callable
 from datetime import datetime
 from core.safe_numeric import to_finite_float
+from config import MQTTConfig
 
 logger = logging.getLogger(__name__)
 
@@ -62,35 +63,37 @@ class MQTTClient:
             self.config = config
             self.device_id = config.get('id', 'mqtt_device')
             self.device_name = config.get('name', 'MQTT设备')
-            self.broker_host = config.get('host', 'localhost')
-            self.broker_port = config.get('port', 1883)
+            # 默认值来自 MQTTConfig（此前是硬编码 'localhost'/1883，
+            # 改 config.py 的 MQTT_BROKER/MQTT_PORT 完全无效）
+            self.broker_host = config.get('host', MQTTConfig.BROKER_HOST)
+            self.broker_port = config.get('port', MQTTConfig.BROKER_PORT)
             username = config.get('username')
             password = config.get('password')
             self.topics_config = config.get('topics', [])
             # TLS参数
-            self.tls_enabled = config.get('tls_enabled', False)
-            self.ca_cert = config.get('ca_cert')
-            self.client_cert = config.get('client_cert')
-            self.client_key = config.get('client_key')
-            self.tls_insecure = config.get('tls_insecure', False)
+            self.tls_enabled = config.get('tls_enabled', MQTTConfig.TLS_ENABLED)
+            self.ca_cert = config.get('ca_cert') or MQTTConfig.CA_CERT or None
+            self.client_cert = config.get('client_cert') or MQTTConfig.CLIENT_CERT or None
+            self.client_key = config.get('client_key') or MQTTConfig.CLIENT_KEY or None
+            self.tls_insecure = config.get('tls_insecure', MQTTConfig.TLS_INSECURE)
         else:
             # 兼容旧的独立参数方式
             self.config = kwargs
             self.device_id = kwargs.get('client_id', 'mqtt_device')
             self.device_name = kwargs.get('client_id', 'MQTT设备')
-            self.broker_host = kwargs.get('broker_host', 'localhost')
-            self.broker_port = kwargs.get('broker_port', 1883)
+            self.broker_host = kwargs.get('broker_host', MQTTConfig.BROKER_HOST)
+            self.broker_port = kwargs.get('broker_port', MQTTConfig.BROKER_PORT)
             username = kwargs.get('username')
             password = kwargs.get('password')
             self.topics_config = []
             # TLS参数
-            self.tls_enabled = kwargs.get('tls_enabled', False)
-            self.ca_cert = kwargs.get('ca_cert')
-            self.client_cert = kwargs.get('client_cert')
-            self.client_key = kwargs.get('client_key')
-            self.tls_insecure = kwargs.get('tls_insecure', False)
+            self.tls_enabled = kwargs.get('tls_enabled', MQTTConfig.TLS_ENABLED)
+            self.ca_cert = kwargs.get('ca_cert') or MQTTConfig.CA_CERT or None
+            self.client_cert = kwargs.get('client_cert') or MQTTConfig.CLIENT_CERT or None
+            self.client_key = kwargs.get('client_key') or MQTTConfig.CLIENT_KEY or None
+            self.tls_insecure = kwargs.get('tls_insecure', MQTTConfig.TLS_INSECURE)
 
-        self.client_id = f'scada_{self.device_id}'
+        self.client_id = f'{MQTTConfig.CLIENT_ID_PREFIX}{self.device_id}'
 
         # 创建MQTT客户端（兼容 paho-mqtt v1.x 和 v2.x）
         try:
@@ -107,10 +110,10 @@ class MQTTClient:
             self.client.username_pw_set(username, password)
 
         # LWT（遗嘱消息）：设备离线时 Broker 自动发布
-        lwt_topic = f'scada/{self.device_id}/status'
+        lwt_topic = f'{MQTTConfig.TOPIC_PREFIX}{self.device_id}/status'
         lwt_payload = json.dumps({'device_id': self.device_id, 'status': 'offline',
                                    'timestamp': datetime.now().isoformat()})
-        self.client.will_set(lwt_topic, lwt_payload, qos=1, retain=True)
+        self.client.will_set(lwt_topic, lwt_payload, qos=MQTTConfig.QOS, retain=True)
 
         # 自动重连延迟（指数退避：1s → 2s → 4s → ... → 60s）
         self.client.reconnect_delay_set(min_delay=1, max_delay=60)
@@ -217,7 +220,7 @@ class MQTTClient:
             topic = topic_config.get('topic', '')
             if not topic:
                 continue
-            qos = topic_config.get('qos', 1)
+            qos = topic_config.get('qos', MQTTConfig.QOS)
             if topic not in self._subscriptions:
                 added += 1
             self._subscriptions[topic] = qos
@@ -322,10 +325,10 @@ class MQTTClient:
             logger.info(f"MQTT连接成功: {self.broker_host}:{self.broker_port}")
 
             # 发布上线状态（retained）
-            status_topic = f'scada/{self.device_id}/status'
+            status_topic = f'{MQTTConfig.TOPIC_PREFIX}{self.device_id}/status'
             status_payload = json.dumps({'device_id': self.device_id, 'status': 'online',
                                           'timestamp': datetime.now().isoformat()})
-            client.publish(status_topic, status_payload, qos=1, retain=True)
+            client.publish(status_topic, status_payload, qos=MQTTConfig.QOS, retain=True)
 
             # 自动订阅已记录的主题（QoS 1）
             for topic, qos in self._subscriptions.items():
@@ -456,7 +459,7 @@ class MQTTDeviceManager:
             topics = self.config.get('topics', [])
             for topic_config in topics:
                 topic = topic_config.get('topic', '')
-                qos = topic_config.get('qos', 1)
+                qos = topic_config.get('qos', MQTTConfig.QOS)
                 if topic:
                     self.client.subscribe(topic, qos)
 

@@ -215,9 +215,20 @@ class AlarmConfig:
 
 # 报警输出配置（声光报警器 + 广播系统）
 class AlarmOutputConfig:
-    # 声光报警器（Modbus DO控制灯塔+蜂鸣器）
+    """声光报警器默认值（Modbus DO 控制灯塔 + 蜂鸣器）。
+
+    这些值此前**全是装饰品**：`run.py` 里写死 `{'enabled': True,
+    'simulation': simulation_mode}`，host/port/do_mapping 全靠 `配置/alarms.yaml`
+    覆盖，改这个类不起任何作用。现在它作为**默认值**接到 run.py，
+    YAML 里写了的键仍然优先。
+
+    `SIMULATION` 的语义是「**强制**模拟输出」，默认 False：
+    * False（默认）→ 跟随系统模式：模拟模式就模拟，真实模式就驱动硬件；
+    * True → 即使系统跑在真实模式也走日志输出（现场无灯塔时调试用）。
+      ⚠️ 此时 run.py 会打 WARNING，避免「配了硬件却没人被驱动」被静默忽略。
+    """
     ENABLED = True
-    SIMULATION = True  # True=模拟模式(日志输出), False=硬件模式(Modbus DO)
+    SIMULATION = False
     DO_MAPPING = {
         'red_light': 0,    # DO0 = 红灯
         'yellow_light': 1, # DO1 = 黄灯
@@ -231,8 +242,16 @@ class AlarmOutputConfig:
 
 # 工业广播系统配置
 class BroadcastConfig:
+    """工业广播系统默认值。
+
+    此前同样是装饰品：`run.py` 直接硬编码了 areas / preset_templates，
+    改这里没有任何效果。现在接到 run.py 作为默认值。
+
+    `SIMULATION` 语义与 :class:`AlarmOutputConfig` 一致：默认 False =
+    跟随系统模式；True = 强制模拟（会打 WARNING）。
+    """
     ENABLED = True
-    SIMULATION = True
+    SIMULATION = False
     MQTT_BROKER = os.environ.get('PA_BROKER', 'localhost')
     MQTT_PORT = int(os.environ.get('PA_MQTT_PORT', 1883))
     TOPIC_PREFIX = 'pa/'  # 广播MQTT主题前缀
@@ -398,9 +417,27 @@ class SecurityConfig:
     TLS_KEY_FILE = os.environ.get('SCADA_TLS_KEY', str(BASE_DIR / 'certs' / 'server.key'))
 
 # TDengine时序数据库配置
+def _tdengine_password() -> str:
+    """TDengine 密码：`CHANGE_ME` / 空串视为未设置，回落到客户端默认值。
+
+    放在**模块级**而不是类体里：类体里的中间变量会被
+    `tools/scan_config_readers.py` 当成一个配置字段，凭空多出一条
+    「永远无人读」的记录（配置闸门会因此变红）。
+    """
+    raw = os.environ.get('TDENGINE_PASSWORD', '').strip()
+    return 'taosdata' if raw in ('', 'CHANGE_ME') else raw
+
+
 class TDengineConfig:
     HOST = os.environ.get('TDENGINE_HOST', 'localhost')
     PORT = int(os.environ.get('TDENGINE_PORT', 6041))
     USER = os.environ.get('TDENGINE_USER', 'root')
-    PASSWORD = os.environ.get('TDENGINE_PASSWORD', '')
+    # 默认值与 `timeseries/tdengine_client.py` 的构造默认值保持一致（taosdata）。
+    #
+    # ⚠️ 两件事：
+    #   1. 原来这里是空串 —— 一旦接线就会用空密码去连，把原本能连上的实例连挂；
+    #   2. `.env.example` 里写的是 `CHANGE_ME`（**占位符**，不是密码）。
+    #      项目对密钥的既有口径就是「CHANGE_ME 视为未设置」（见本文件
+    #      `_get_secret` 附近的说明），这里沿用，避免把占位符当密码发出去。
+    PASSWORD = _tdengine_password()
     DATABASE = os.environ.get('TDENGINE_DATABASE', 'scada')
