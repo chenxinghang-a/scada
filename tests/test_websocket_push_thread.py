@@ -20,7 +20,6 @@
 （默认房间 `''` + `device_x`），于是被判成「客户端很少」，一直按最高频推送。
 """
 
-import threading
 import time
 from unittest.mock import MagicMock
 
@@ -77,29 +76,34 @@ def fake_socketio(monkeypatch):
     ws.stop_data_push_thread()
 
 
-def _new_thread(before: set, exclude: set | None = None):
-    """从 threading.enumerate() 的差集里挑出本次新起的线程。"""
-    exclude = exclude or set()
-    diff = set(threading.enumerate()) - before - exclude
-    assert diff, '没有观察到新线程启动'
-    return diff.pop()
+def _start(db, dc):
+    """启动推送线程并返回**这一次**起的线程对象。
+
+    不要用 `threading.enumerate()` 差集去猜：差集里可能混进别的线程
+    （日志、采集、定时器），猜错就会 join 到一条不是自己起的线程上 ——
+    CI 上实测报过 `RuntimeError: cannot join thread before it is started`。
+    """
+    t = ws.start_data_push_thread(db, dc)
+    assert t is not None, 'start_data_push_thread 没有返回线程对象'
+    return t
 
 
-def test_restart_stops_previous_thread(fake_socketio):
-    """重启推送线程后，**旧线程必须退出**（否则线程数无限增长）。"""
+def _fake_backends():
     db = MagicMock()
     db.get_device_summary.return_value = []
     db.get_database_stats.return_value = {}
     dc = MagicMock()
     dc.get_stats.return_value = {}
+    return db, dc
 
-    before = set(threading.enumerate())
 
-    ws.start_data_push_thread(db, dc)
-    t1 = _new_thread(before)
+def test_restart_stops_previous_thread(fake_socketio):
+    """重启推送线程后，**旧线程必须退出**（否则线程数无限增长）。"""
+    db, dc = _fake_backends()
 
-    ws.start_data_push_thread(db, dc)
-    t2 = _new_thread(before, exclude={t1})
+    t1 = _start(db, dc)
+    t2 = _start(db, dc)
+    assert t1 is not t2, '两次启动拿到同一个线程对象'
 
     t1.join(3)
     assert not t1.is_alive(), (
@@ -110,15 +114,9 @@ def test_restart_stops_previous_thread(fake_socketio):
 
 
 def test_stop_clears_global_and_thread_exits(fake_socketio):
-    db = MagicMock()
-    db.get_device_summary.return_value = []
-    db.get_database_stats.return_value = {}
-    dc = MagicMock()
-    dc.get_stats.return_value = {}
+    db, dc = _fake_backends()
 
-    before = set(threading.enumerate())
-    ws.start_data_push_thread(db, dc)
-    t = _new_thread(before)
+    t = _start(db, dc)
 
     ws.stop_data_push_thread()
 

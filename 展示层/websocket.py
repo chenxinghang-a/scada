@@ -313,6 +313,11 @@ def start_data_push_thread(database, data_collector):
     thread = threading.Thread(target=push_data, daemon=True)
     thread.start()
     logger.info("数据推送线程已启动")
+    # 返回线程对象：调用方/测试要能**精确**拿到这一次起的线程。
+    # 否则只能靠 `threading.enumerate()` 差集去猜，而差集里可能混进别的线程
+    # （日志/采集/定时器），猜错就会 join 到一条不是自己起的线程上
+    # —— CI 上实测出现过 `RuntimeError: cannot join thread before it is started`。
+    return thread
 
 
 def stop_data_push_thread():
