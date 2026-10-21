@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 import paths
-from core.safe_numeric import to_finite_float
+from core.safe_numeric import to_finite_float, try_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -933,7 +933,27 @@ class AlarmManager:
         """
         if value is None:
             return
-        # 用索引快速查找匹配的规则（避免遍历所有规则）
+
+        # 非有限值（NaN / ±Infinity）= 「读数无效 / 不知道」，**不能当成「恢复正常」**。
+        #
+        # 原实现直接往下走：`_check_condition` 里 `nan > 100` 恒为 False，
+        # 于是 `triggered=False` → `_process_alarm_state` 走进清除分支 →
+        # `del self.alarm_states[...]` —— **已激活的报警被静默清除**，
+        # 还会连带撤销升级跟踪。运维看到报警消失，以为设备自己好了。
+        # （实测：value=120 触发 → 喂 NaN → 状态变 CLEARED。）
+        #
+        # 也不能反过来「按触发处理」：那会在传感器故障时刷出一堆假报警。
+        # 正确做法是**本条不更新状态**：既不清除、也不触发，留一条 warning。
+        # 设备真的离线会有 failed_collections / 熔断器另一条链路兜底。
+        numeric = try_finite_float(value)
+        if numeric is None:
+            logger.warning(
+                "报警检查收到非有限值，跳过本条（不触发也不清除已有报警）: "
+                "%s/%s value=%r", device_id, register_name, value)
+            return
+        value = numeric
+
+        # 用索引快速查找匹配的规则
         rules_key = (device_id, register_name)
         matched_rules = self._rules_index.get(rules_key)
         if not matched_rules:

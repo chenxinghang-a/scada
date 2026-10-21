@@ -1263,7 +1263,20 @@ class DataCollector:
 
             if value is None:
                 return None
-            return round(value * scale + offset, 4)
+            # 缩放/偏移**之后**也必须过一遍非有限值检查。
+            # `base_client.decode_float32` 只过滤了原始解码值；`value * scale + offset`
+            # 在 scale 配置过大或异常数据下会溢出成 ±inf，NaN 也可能由此产生。
+            # 缓存采集路径（`_collect_from_cache`）早就有这道检查，Modbus 路径没有 ——
+            # 两条采集路径对同一个问题不一致，就是漏网的口子。
+            scaled = value * scale + offset
+            numeric = try_finite_float(scaled)
+            if numeric is None:
+                logger.warning(
+                    f"寄存器解码缩放后得到非有限值，丢弃 device={register['name']} "
+                    f"value={value!r} scale={scale!r} offset={offset!r} -> {scaled!r}"
+                )
+                return None
+            return round(numeric, 4)
         except Exception:
             return None
 
