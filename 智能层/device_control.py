@@ -33,7 +33,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 import paths
-from core.safe_numeric import to_finite_float, try_int
+from core.safe_numeric import to_finite_float, try_finite_float, try_int
 
 try:
     import yaml
@@ -752,6 +752,32 @@ class DeviceControlSafety:
             register_name: 寄存器名称
             value: 当前值
         """
+        # 非有限值（NaN / ±Infinity）= 读数无效，**不是「条件解除」**。
+        #
+        # 原实现直接往下走：所有阈值比较对 NaN 都返回 False → `triggered=False`
+        # → 走 `elif not triggered and was_triggered` 分支 →
+        # `self._interlock_states[rule_id] = False`，还打一条
+        # 「联锁条件解除」的 INFO。
+        #
+        # 而 `_interlock_states` 正是 **block_start 联锁的准入依据**
+        # （`control_device(action='start')` 与 `validate_operation` 都读它）：
+        # 状态被清成 False 之后，运维可以在超温状态下把设备启动起来。
+        # 也就是说**一条 NaN 读数能把安全联锁整个绕过**，日志还会告诉他
+        # 「条件已解除」—— 比不报警更糟。
+        #
+        # 实测（注入 block_start 规则 + 120 触发 + NaN）：
+        #   {'il_temp': True}  →  {'il_temp': False}
+        #
+        # 处理方式与 `AlarmManager.check_alarm` 一致：本条不更新状态
+        # （既不触发也不解除），留 warning。设备真离线有采集失败/熔断器兜底。
+        numeric = try_finite_float(value)
+        if numeric is None:
+            logger.warning(
+                "联锁检查收到非有限值，跳过本条（不触发也不解除已有联锁）: "
+                "%s/%s value=%r", device_id, register_name, value)
+            return
+        value = numeric
+
         with self._lock:
             for rule_id, rule in self._interlock_rules.items():
                 # 跳过被旁路的联锁
