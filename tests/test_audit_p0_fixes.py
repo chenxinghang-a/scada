@@ -400,13 +400,21 @@ class TestControlInterlockFailClosed:
         assert r['allowed'] is True
 
     def test_real_mode_with_interlocks_allows_write(self):
-        """有联锁配置时正常放行（证明不是「一律拒绝」）"""
+        """有联锁配置时正常放行（证明不是「一律拒绝」）。
+
+        ⚠️ round 236 起，「没配 write_limits」在真实模式下也会被拒
+        （与联锁同一套 fail-closed 口径）。本用例要验的是**联锁分支**，
+        所以这里把量程一并配好，否则会在量程那一步先被拦下，
+        用例就测不到它本来想测的东西了。
+        """
         rules = [{'id': 'r1', 'condition': {'device_id': 'x', 'register': 't', 'operator': '>', 'value': 999},
                   'action': {'type': 'block_start'}}]
         dc = _dc(interlocks=rules, simulation=False)
         assert dc._interlock_rules
+        dc._write_limits = {'plc_a': {'temperature': (0.0, 100.0)}}
+        dc._resolve_register_name = lambda device_id, address: 'temperature'
         r = dc.validate_write('plc_a', 0, 1, 'op')
-        assert r['allowed'] is True
+        assert r['allowed'] is True, r['reason']
 
 
 # ===========================================================================

@@ -919,6 +919,31 @@ class DeviceControlSafety:
 
         # 3. 值范围校验（白名单按寄存器名索引，需先把地址反查为寄存器名）
         limits = self._write_limits.get(device_id, {})
+
+        # 3.0 该设备**完全没配量程**时怎么办 —— 与联锁保持同一套口径。
+        #
+        # 原实现 `if limits:` 一判，没配量程就整段跳过：**不做任何范围校验，
+        # 也不给任何提示**。而随仓库发布的 `配置/devices.yaml` 里
+        # `write_limits` 出现次数为 0 —— 也就是说开箱状态下所有设备都能被写入
+        # 任意值（把 100 写成 10000 也照样下发）。
+        #
+        # 联锁那边的口径是「真实设备模式没配规则 → fail-closed 拒绝一切写」，
+        # 理由同样适用：**没有量程 = 一条永不触发的保护**。
+        # 模拟模式没有物理风险，放行但留痕（演示要能跑）。
+        if not limits:
+            if self._is_simulation():
+                result['warnings'].append(
+                    f'设备 {device_id} 未配置写入量程(write_limits)，本次写入未做范围校验'
+                )
+            else:
+                result['allowed'] = False
+                result['reason'] = (
+                    f'设备 {device_id} 未配置写入量程(write_limits)，'
+                    f'真实设备模式下拒绝写入 —— 请在 配置/devices*.yaml 的该设备下'
+                    f'声明 write_limits（按寄存器名给 [下限, 上限]）'
+                )
+                return result
+
         if limits:
             limit_key = self._resolve_register_name(device_id, address)
             if limit_key is None:

@@ -151,7 +151,10 @@ def test_verified_true_on_match():
     dc = _dc(_FakeClient(reg_value=100))
     res = dc.write_with_verification('dev1', 1, 100, 'op')
     assert res['verified'] is True
-    assert res['warnings'] == []
+    # ⚠️ 不能断言 warnings == []：round 236 起，**未配置 write_limits** 的设备
+    # 在模拟模式下会带一条「本次写入未做范围校验」的提示（这是有意留痕）。
+    # 这里要钉的是「回读一致时不该有**验证失败**的警告」。
+    assert not any('回读' in w for w in res['warnings']), res['warnings']
 
 
 def test_verified_false_on_mismatch():
