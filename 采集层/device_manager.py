@@ -306,8 +306,8 @@ class DeviceManager:
             timeout: 单个设备连接超时秒数（默认20s）
         """
         results = {}
-        for device_id in self.devices:
-            if self.devices[device_id].get('enabled', True):
+        for device_id in list(self.devices):     # 快照：connect 期间可能有增删
+            if self.devices.get(device_id, {}).get('enabled', True):
                 results[device_id] = self.connect_device(device_id, timeout=timeout)
             else:
                 results[device_id] = None
@@ -332,7 +332,10 @@ class DeviceManager:
         def _reconnect_loop():
             while self._reconnect_running:
                 try:
-                    for device_id, config in self.devices.items():
+                    # 快照迭代：`add_device` / `remove_device` 会在别的线程里
+                    # 增删这张表，直接 `self.devices.items()` 会抛
+                    # RuntimeError（dictionary changed size during iteration）。
+                    for device_id, config in list(self.devices.items()):
                         if not self._reconnect_running:
                             break
                         if not config.get('enabled', True):
@@ -503,8 +506,9 @@ class DeviceManager:
             brief: True时返回精简字段，适用于100+设备的仪表盘轮询
         """
         if brief:
-            return [self._get_brief_status(did) for did in self.devices]
-        return [self.get_device_status(did) for did in self.devices]
+            # 快照：推导式同样是活视图迭代，增删设备并发时抛 RuntimeError
+            return [self._get_brief_status(did) for did in list(self.devices)]
+        return [self.get_device_status(did) for did in list(self.devices)]
 
     def _get_brief_status(self, device_id: str) -> dict[str, Any]:
         """获取设备精简状态（仅仪表盘所需字段）"""
@@ -555,11 +559,18 @@ class DeviceManager:
             if device_id in self.devices:
                 logger.warning(f"设备 {device_id} 已存在，将被覆盖")
                 self.disconnect_device(device_id)
-                if device_id in self.clients:
-                    del self.clients[device_id]
+                with self._lock:
+                    self.clients.pop(device_id, None)
                 self._connection_pool.remove(device_id)
 
-            self.devices[device_id] = device_config
+            # ⚠️ 必须持锁写入：`_save_config()` 在锁内做
+            # `list(self.devices.values())`，而重连循环在读 `self.devices.items()`。
+            # 不加锁就会出现「迭代中被插入/删除」→
+            # `RuntimeError: dictionary changed size during iteration`，
+            # 被两处的 `except Exception` 各自吞掉，表现为
+            # 「配置没存下来」+「这一轮重连整批跳过」，日志里只有一行异常。
+            with self._lock:
+                self.devices[device_id] = device_config
             self._save_config()
 
             # 热添加后自动连接设备
@@ -585,8 +596,10 @@ class DeviceManager:
         """移除设备"""
         try:
             self.disconnect_device(device_id)
-            self.devices.pop(device_id, None)
-            self.clients.pop(device_id, None)
+            # 持锁删除：与 add_device 同理，防「迭代中被删除」
+            with self._lock:
+                self.devices.pop(device_id, None)
+                self.clients.pop(device_id, None)
             self._connection_pool.remove(device_id)
             self._save_config()
             logger.info(f"移除设备: {device_id}")
@@ -598,7 +611,7 @@ class DeviceManager:
     def get_protocol_summary(self) -> dict[str, int]:
         """获取各协议设备数量统计"""
         summary = {}
-        for d in self.devices.values():
+        for d in list(self.devices.values()):
             p = d.get('protocol', 'modbus_tcp')
             summary[p] = summary.get(p, 0) + 1
         return summary

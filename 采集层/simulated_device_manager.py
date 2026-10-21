@@ -4,6 +4,7 @@
 """
 
 import logging
+import threading
 import yaml
 from typing import Any
 from pathlib import Path
@@ -47,6 +48,9 @@ class SimulatedDeviceManager(IDeviceManager):
         self.simulation_mode = True  # 模拟设备管理器始终为模拟模式
         self.devices: dict[str, dict[str, Any]] = {}
         self.clients: dict[str, IDeviceClient] = {}
+        # 保护 devices / clients 两张表：API 线程增删设备，重连循环与
+        # `_save_config()` 同时在读它们。不可重入锁，临界区只包字典操作。
+        self._lock = threading.Lock()
         
         # 加载设备配置
         self.load_config()
@@ -75,7 +79,7 @@ class SimulatedDeviceManager(IDeviceManager):
 
             # 按协议统计
             proto_count = {}
-            for d in self.devices.values():
+            for d in list(self.devices.values()):
                 p = d.get('protocol', 'modbus_tcp')
                 proto_count[p] = proto_count.get(p, 0) + 1
             summary = ', '.join(f"{k}:{v}" for k, v in proto_count.items())
@@ -197,8 +201,8 @@ class SimulatedDeviceManager(IDeviceManager):
     def connect_all(self, **kwargs) -> dict[str, bool]:
         """连接所有设备"""
         results = {}
-        for device_id in self.devices:
-            if self.devices[device_id].get('enabled', True):
+        for device_id in list(self.devices):     # 快照：连接期间可能有增删
+            if self.devices.get(device_id, {}).get('enabled', True):
                 results[device_id] = self.connect_device(device_id)
             else:
                 results[device_id] = None  # 跳过禁用设备
@@ -271,8 +275,8 @@ class SimulatedDeviceManager(IDeviceManager):
             brief: True时返回精简字段，适用于100+设备的仪表盘轮询
         """
         if brief:
-            return [self._get_brief_status(did) for did in self.devices]
-        return [self.get_device_status(did) for did in self.devices]
+            return [self._get_brief_status(did) for did in list(self.devices)]
+        return [self.get_device_status(did) for did in list(self.devices)]
 
     def _get_brief_status(self, device_id: str) -> dict[str, Any]:
         """获取设备精简状态（仅仪表盘所需字段）"""
@@ -317,10 +321,11 @@ class SimulatedDeviceManager(IDeviceManager):
             if device_id in self.devices:
                 logger.warning(f"设备 {device_id} 已存在，将被覆盖")
                 self.disconnect_device(device_id)
-                if device_id in self.clients:
-                    del self.clients[device_id]
+                with self._lock:
+                    self.clients.pop(device_id, None)
 
-            self.devices[device_id] = device_config
+            with self._lock:
+                self.devices[device_id] = device_config
             self._save_config()
 
             logger.info(f"[模拟] 添加设备: {device_id} [{protocol}]")
@@ -334,8 +339,9 @@ class SimulatedDeviceManager(IDeviceManager):
         """移除设备"""
         try:
             self.disconnect_device(device_id)
-            self.devices.pop(device_id, None)
-            self.clients.pop(device_id, None)
+            with self._lock:
+                self.devices.pop(device_id, None)
+                self.clients.pop(device_id, None)
             self._save_config()
             logger.info(f"[模拟] 移除设备: {device_id}")
             return True
@@ -346,7 +352,7 @@ class SimulatedDeviceManager(IDeviceManager):
     def get_protocol_summary(self) -> dict[str, int]:
         """获取各协议设备数量统计"""
         summary = {}
-        for d in self.devices.values():
+        for d in list(self.devices.values()):
             p = d.get('protocol', 'modbus_tcp')
             summary[p] = summary.get(p, 0) + 1
         return summary
@@ -370,14 +376,26 @@ class SimulatedDeviceManager(IDeviceManager):
             }
         return {'success': True, 'message': '当前已是模拟模式'}
 
-    def _save_config(self) -> None:
-        """保存设备配置到文件"""
+    def _save_config(self) -> bool:
+        """保存设备配置到文件；**返回是否真的写成功**。
+
+        ⚠️ 必须返回 bool：`展示层/api/api_devices.py::update_device` 用
+        `if not device_manager._save_config():` 判定落盘结果。
+        这里返回 None 会让「保存成功」被判成失败 —— 纯模拟模式下
+        每次改设备都回 500「未能写入配置文件」，而文件其实写好了。
+        （反向的静默错误：假失败。与统一管理器返回 bool 的口径对齐。）
+        """
         try:
-            config = {'devices': list(self.devices.values())}
+            # 持锁取快照：API 线程正在增删时，裸 `list(self.devices.values())`
+            # 会抛 RuntimeError，被下面的 except 吞掉 → 配置静默不写盘。
+            with self._lock:
+                config = {'devices': list(self.devices.values())}
             config_file = paths.resolve(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
             with open(config_file, 'w', encoding='utf-8') as f:
                 yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
             logger.info("[模拟] 设备配置已保存")
+            return True
         except Exception as e:
             logger.error(f"保存配置文件异常: {e}")
+            return False
