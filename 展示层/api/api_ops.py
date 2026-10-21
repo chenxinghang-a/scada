@@ -4,7 +4,7 @@
 """
 
 import logging
-from flask import Blueprint, request
+from flask import Blueprint, request, current_app
 
 from core.ops_tools import (
     ops_audit, runtime_config_manager, db_maintainer,
@@ -262,11 +262,66 @@ def get_config_history():
 # 数据库维护 API
 # ================================================================
 
+def _collector_running() -> bool:
+    """采集器是否正在运行。取不到就按「未运行」处理（不阻塞运维）。
+
+    判据写 `is True` 而不是 `bool(...)`：测试里 `app.data_collector` 是
+    `MagicMock`，它的 `.running` 是个 truthy 的 Mock —— 用 `bool()` 会把
+    所有维护端点误判成「采集运行中」而一律 409。真实采集器的 `running`
+    就是 `True/False`，`is True` 足够。
+    """
+    try:
+        dc = getattr(current_app, 'data_collector', None)
+        return getattr(dc, 'running', False) is True
+    except Exception as e:
+        logger.debug(f"读取采集器运行状态失败（按未运行处理）: {e}")
+        return False
+
+
+def _maintenance_guard(action: str):
+    """会长时间独占数据库锁的维护操作，在采集运行时的准入判断。
+
+    返回 None 表示放行；否则返回一个错误响应（409）。
+
+    为什么需要这道闸门：`VACUUM` / `REINDEX` 在 SQLite 上要拿**独占锁**，
+    期间所有写入阻塞。主库连接是 `busy_timeout=30000`（30 秒），
+    一个 3 GB 的库 VACUUM 动辄几分钟 —— 采集线程的批量写入会一路等到超时，
+    报 `database is locked`，数据进队列重试/积压。
+    也就是说：修好「维护端点 100% 失败」之后，如果不加闸门，
+    就变成「运维点一下按钮就能把采集卡住」—— 换个方向的事故。
+
+    允许 `?force=1` 显式强制：停机窗口里采集可能仍标着 running，
+    运维明确知道风险时不该被拦住。强制会留 warning。
+    """
+    if not _collector_running():
+        return None
+
+    force = (request.args.get('force') or '').strip().lower()
+    if force in ('1', 'true', 'yes'):
+        logger.warning(
+            "运维操作 %s 在采集运行中被**强制**执行（force=%s）—— 期间写入可能阻塞",
+            action, force,
+        )
+        return None
+
+    return error_response(
+        f"{action} 需要独占数据库锁，采集运行期间执行会让写入阻塞"
+        f"（busy_timeout 30 秒）甚至失败。请先停止采集，"
+        f"或确认风险后加 ?force=1 强制执行。",
+        409,
+    )
+
+
 @ops_bp.route('/db/vacuum', methods=['POST'])
 @jwt_required
 @role_required('admin')
 def db_vacuum():
-    """执行 VACUUM"""
+    """执行 VACUUM（采集运行中默认拒绝，见 `_maintenance_guard`）"""
+    blocked = _maintenance_guard('VACUUM')
+    if blocked is not None:
+        ops_audit.log_operation('db_vacuum', result='rejected',
+                                details={'reason': 'collector_running'})
+        return blocked
     try:
         result = db_maintainer.vacuum()
         ops_audit.log_operation('db_vacuum', details=result)
@@ -280,7 +335,12 @@ def db_vacuum():
 @jwt_required
 @role_required('admin')
 def db_reindex():
-    """执行 REINDEX"""
+    """执行 REINDEX（采集运行中默认拒绝）"""
+    blocked = _maintenance_guard('REINDEX')
+    if blocked is not None:
+        ops_audit.log_operation('db_reindex', result='rejected',
+                                details={'reason': 'collector_running'})
+        return blocked
     try:
         data = request.get_json() or {}
         table = data.get('table')
@@ -296,7 +356,12 @@ def db_reindex():
 @jwt_required
 @role_required('admin')
 def db_analyze():
-    """执行 ANALYZE"""
+    """执行 ANALYZE（采集运行中默认拒绝）"""
+    blocked = _maintenance_guard('ANALYZE')
+    if blocked is not None:
+        ops_audit.log_operation('db_analyze', result='rejected',
+                                details={'reason': 'collector_running'})
+        return blocked
     try:
         result = db_maintainer.analyze()
         ops_audit.log_operation('db_analyze', details=result)

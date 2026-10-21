@@ -134,9 +134,16 @@ def main():
         # 抛 TypeError，被 `except Exception` 收成 `{'status': 'error'}`，
         # 再被 `success_response` 包成 HTTP 200 → 界面显示"清理成功"，实际一行没删。
         # 与 ensure_indexes 同理，必须放在建库之后。
-        from core.ops_tools import data_cleaner
+        #
+        # `db_maintainer`（round 242）：同一批全局单例里**漏了这一个** ——
+        # 它的 `set_db_path()` 同样零调用方，于是 `/api/ops/db/vacuum|reindex|analyze|
+        # tables|integrity` 五个端点 100% 失败：`_get_conn()` 抛
+        # 「数据库路径未设置」，`vacuum()` 甚至先撞 `os.path.getsize(None)` 的
+        # TypeError。数据库维护整个功能区在生产环境从未成功执行过一次。
+        from core.ops_tools import data_cleaner, db_maintainer
         data_cleaner.set_db_path(str(db_path))
-        logger.info("运维清理工具已接线: %s", db_path)
+        db_maintainer.set_db_path(str(db_path))
+        logger.info("运维工具已接线: %s", db_path)
 
         # 数据保留策略调度接线（round 209）。
         #
