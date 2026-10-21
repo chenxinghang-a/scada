@@ -12,6 +12,7 @@ from flask import request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime
 from core.ws_compress import compress_message
+from core.ws_offline_queue import offline_queue
 import paths
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,33 @@ socketio = None
 # 每次都吞掉 ImportError，`/api/health` 的 websocket 状态**永远是 'unknown'**，
 # WebSocket 是否可用在监控里完全不可见。
 _connected_clients: set[str] = set()
+
+# sid → 已认证用户名。
+#
+# 为什么需要它：离线消息补发必须按**用户**归档，不能按 sid ——
+# sid 是每次连接新分配的，客户端重连后 sid 完全不同，用 sid 做 key
+# 等于永远取不到自己断线前缓存的消息（`offline_queue` 会一直空着）。
+_sid_user: dict[str, str] = {}
+
+# 曾经成功连接过的用户名 → 最后一次连接的时间戳 = 离线消息补发的目标集合。
+#
+# 只在 connect 成功后写入，因此「服务启动后从没人登录过」这段时间的报警
+# 不会被补发（没有目标用户可言）—— 这是有意的，不要为了"看起来完整"
+# 把所有人名都塞进来。
+#
+# 存时间戳而不是只存名字：账号被删/长期不用的用户如果不清理，会**永久**
+# 被当作补发目标 —— 每条报警都往他的队列塞一份，白占内存与 CPU。
+# 超过 `OFFLINE_TARGET_TTL` 没连过的用户不再入队（队列本身 1 小时就过期，
+# 这个 TTL 只是防集合无限增长）。
+_known_users: dict[str, float] = {}
+
+# 离线补发的目标有效期（秒）
+OFFLINE_TARGET_TTL = 24 * 3600
+
+# 离线补发的一次性上限。`offline_queue` 每个客户端最多 100 条，
+# 取 200 保证一次能取完，不会出现「补了一半剩下的要等下次重连」。
+OFFLINE_REPLAY_LIMIT = 200
+
 _clients_lock = threading.Lock()
 
 
@@ -35,6 +63,102 @@ def get_connected_count() -> int:
     """当前 WebSocket 连接数（线程安全）。供 /api/health 等监控端点使用。"""
     with _clients_lock:
         return len(_connected_clients)
+
+
+def _emit_to_current_client(event, data):
+    """把一条消息发给当前请求上下文里的那个客户端（socket.io 的 emit）。"""
+    emit(event, data)
+
+
+def _offline_usernames() -> list[str]:
+    """当前「登录过但一个连接都不在线」的用户名列表。
+
+    注意语义：判断粒度是**用户**，不是设备/标签页。同一用户开了两个客户端，
+    只要还有一个连着，就不算离线、不入队 —— 另一个端断线期间的消息不会补发。
+    按用户归档是刻意的：sid 每次连接都变，按 sid 归档等于永远补不到。
+    """
+    now = time.time()
+    with _clients_lock:
+        online = set(_sid_user.values())
+        return [
+            u for u, last_seen in _known_users.items()
+            if u not in online and now - last_seen <= OFFLINE_TARGET_TTL
+        ]
+
+
+def _queue_for_offline_users(event: str, data, priority: int = 0) -> int:
+    """把一条事件按用户归档给所有当前离线的用户，返回入队用户数。
+
+    只用于**事件类**消息（报警 / 广播）。像 `data_update` 这种高频实时值
+    不要走这里 —— 重连后直接拉最新值即可，回放历史实时值是纯噪声，
+    而且 100 条的队列上限会被几秒钟的量灌满，把真正的报警挤掉。
+    """
+    queued = 0
+    for username in _offline_usernames():
+        try:
+            if offline_queue.enqueue(username, event, data, priority=priority):
+                queued += 1
+        except Exception as e:
+            logger.warning("离线消息入队失败 user=%s event=%s: %s", username, event, e)
+    if queued:
+        logger.info("断线用户离线入队: event=%s, 用户数=%d", event, queued)
+    return queued
+
+
+def _replay_offline_messages(username: str, send=None) -> dict:
+    """把 `username` 断线期间积压的消息补发出去。
+
+    Args:
+        username: 已认证用户名
+        send: 发送函数 `(event, data) -> None`；默认发到当前请求上下文的客户端。
+              测试注入假的 send，不需要真的 socketio。
+
+    Returns:
+        ``{'sent': 已发条数, 'requeued': 发送中断后放回队列的条数}``
+    """
+    result = {'sent': 0, 'requeued': 0}
+    if not username:
+        return result
+    send = send or _emit_to_current_client
+
+    try:
+        messages = offline_queue.dequeue(username, limit=OFFLINE_REPLAY_LIMIT)
+    except Exception as e:
+        logger.error("读取离线消息失败 user=%s: %s", username, e)
+        return result
+
+    if not messages:
+        return result
+
+    for idx, msg in enumerate(messages):
+        try:
+            send(msg.get('event'), msg.get('data'))
+            result['sent'] += 1
+        except Exception as e:
+            # 连接中途又断了：把这条和剩下的**放回队列**。
+            # 它们已经被 dequeue 出来，直接丢就真没了 —— 而它们多半是报警。
+            rest = messages[idx:]
+            requeue_failed = 0
+            for m in rest:
+                try:
+                    offline_queue.enqueue(username, m.get('event'), m.get('data'))
+                except Exception as re_err:
+                    # 重新入队失败 = 这条消息真的没了（多半是报警），必须留痕
+                    requeue_failed += 1
+                    logger.warning(
+                        "离线消息重新入队失败 user=%s event=%s: %s",
+                        username, m.get('event'), re_err,
+                    )
+            result['requeued'] = len(rest) - requeue_failed
+            result['requeue_failed'] = requeue_failed
+            logger.warning(
+                "离线消息补发中断 user=%s 已发=%d 重新入队=%d: %s",
+                username, result['sent'], result['requeued'], e,
+            )
+            return result
+
+    logger.info("离线消息补发完成 user=%s 条数=%d", username, result['sent'])
+    return result
 
 
 def _load_cors_origins():
@@ -147,21 +271,37 @@ def init_socketio(app, database, data_collector):
 
         # 认证通过后才占名额：容量检查与登记放在同一临界区内，
         # 保证「检查 → 写入」原子，不会超卖连接数。
+        username = user['username']
         with _clients_lock:
             if len(_connected_clients) >= MAX_CONNECTIONS:
                 logger.warning(f"WebSocket连接被拒绝: 超过最大连接数 {MAX_CONNECTIONS}, sid={request.sid}")
                 return False
             _connected_clients.add(request.sid)
+            _sid_user[request.sid] = username
+            _known_users[username] = time.time()
             current = len(_connected_clients)
 
-        logger.info(f"客户端连接: {request.sid}, 用户: {user['username']}, 当前连接数: {current}")
-        emit('connected', {'message': '连接成功', 'user': user['username']})
+        logger.info(f"客户端连接: {request.sid}, 用户: {username}, 当前连接数: {current}")
+        emit('connected', {'message': '连接成功', 'user': username})
+
+        # 补发断线期间积压的报警/广播。
+        #
+        # 此前 `core/ws_offline_queue.py` 整个模块只被维护任务调用
+        # `cleanup_expired()` —— 从来没人 enqueue、也没人 dequeue，队列永远是空的。
+        #
+        # 注意别夸大严重性：前端还有 HTTP 兜底（Dashboard 每 2~5 秒拉
+        # `/api/alarms?limit=50`，AlarmOutput 拉 `/broadcast/history?limit=30`），
+        # 所以断线期间的报警**不是永久丢失**。真实缺口是「精度与延迟」：
+        # 重连后要等下一次轮询才看到，且只有最近 50 条；更根本的是代码库里
+        # 摆着一整套没接线的实现、还被定期清理，看代码的人会以为它已上线。
+        _replay_offline_messages(username)
 
     @socketio.on('disconnect')
     def handle_disconnect():
         """客户端断开"""
         with _clients_lock:
             _connected_clients.discard(request.sid)
+            _sid_user.pop(request.sid, None)
             current = len(_connected_clients)
         logger.info(f"客户端断开: {request.sid}, 当前连接数: {current}")
 
@@ -330,25 +470,37 @@ def stop_data_push_thread():
 
 
 def emit_alarm(alarm_data):
-    """发送报警通知（广播给所有客户端）"""
+    """发送报警通知（广播给所有客户端；离线的按用户入队，重连后补发）"""
     if socketio:
         try:
             socketio.emit('alarm', alarm_data)
         except Exception as e:
             logger.debug(f"报警推送失败: {e}")
+        # 报警优先级最高：队列满时挤掉的是广播类消息，不是报警
+        _queue_for_offline_users('alarm', alarm_data, priority=10)
 
 
 def emit_broadcast(broadcast_data):
-    """发送广播事件通知（广播给所有客户端）"""
+    """发送广播事件通知（广播给所有客户端；离线的按用户入队）"""
     if socketio:
         try:
             socketio.emit('broadcast', broadcast_data)
         except Exception as e:
             logger.debug(f"广播推送失败: {e}")
+        _queue_for_offline_users('broadcast', broadcast_data, priority=0)
 
 
 def emit_device_status(device_id, status):
-    """发送设备状态更新"""
+    """发送设备状态更新。
+
+    ⚠️ **当前没有任何调用方**（全仓库零引用）。前端 Dashboard 在
+    `socket.on('device_status')` 里监听它，但后端从不发 —— 设备在线/离线
+    状态实际只靠 2~5 秒的 HTTP 轮询兜底（`dev.connected`）。
+    接线的正确位置是推送线程：每轮拿设备连接状态、与上一轮比对后只发变化；
+    数据源是 `device_manager.get_device_status()`（`get_device_summary()` 里
+    没有 connected/status 字段，别从那里取）。留着这个函数是为了接线时复用，
+    但**不要**把它当成"已经生效"。
+    """
     if socketio:
         try:
             socketio.emit('device_status', {
