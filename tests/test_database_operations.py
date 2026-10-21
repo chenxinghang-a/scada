@@ -275,13 +275,17 @@ class TestDatabaseQuery:
         database.close()
 
     def test_get_history_data_unknown_interval(self, db):
-        """未知间隔使用默认格式"""
+        """未知间隔必须报错，不能静默退化成「按秒聚合」"""
         database = self._insert_test_data(db)
         now = datetime.now()
         start = now - timedelta(hours=1)
         end = now + timedelta(hours=1)
-        data = database.get_history_data('dev1', 'temp', start, end, interval='unknown')
-        assert isinstance(data, list)
+        # ⚠️ 原实现把未知粒度落到 else 分支 `GROUP BY 秒`：10Hz 采样被压成 1Hz
+        #    平均值，而调用方以为拿到了「其它粒度」。拼错的粒度必须当场报错，
+        #    否则「数据看着有、其实被改了语义」是最难查的一类问题。
+        with pytest.raises(ValueError) as ei:
+            database.get_history_data('dev1', 'temp', start, end, interval='unknown')
+        assert 'unknown' in str(ei.value)
         database.close()
 
     def test_get_history_data_all_registers(self, db):

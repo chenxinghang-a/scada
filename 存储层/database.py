@@ -16,6 +16,15 @@ from core.safe_numeric import try_int
 
 logger = logging.getLogger(__name__)
 
+#: 历史查询单次返回的硬上限（原始行或聚合桶都算）。
+#: 没有上限时，`?start_time=2000-01-01&end_time=2030-01-01&interval=raw`
+#: 会把 30 年数据一次性塞进内存并 JSON 序列化 —— 进程直接 OOM。
+MAX_HISTORY_POINTS = 10000
+
+#: 支持的聚合粒度。`''` / `'raw'` / `'none'` = 不聚合，返回原始采样点。
+RAW_INTERVALS = ('', 'raw', 'none')
+SUPPORTED_INTERVALS = RAW_INTERVALS + ('1min', '5min', '1hour', '1day')
+
 
 #: 全局唯一的归档表名（**真源**）。
 #:
@@ -681,7 +690,10 @@ class Database:
                 - ``'5min'``: 按 5 分钟聚合。
                 - ``'1hour'``: 按小时聚合。
                 - ``'1day'``: 按天聚合。
-                - 其他值: 不聚合，返回原始时间戳。
+                - ``''`` / ``'raw'`` / ``'none'``: **不聚合**，返回原始采样点
+                  （字段为 ``timestamp`` / ``value`` / ``unit``）。
+                - 其它值: 抛 ``ValueError`` —— 拼错的粒度不能静默变成
+                  「按秒聚合」（那会把 10Hz 数据压成 1Hz，图表看不出来）。
 
         Returns:
             list[dict[str, Any]]: 聚合后的历史数据列表，每条记录包含：
@@ -697,6 +709,13 @@ class Database:
         Exceptions:
             不会主动抛出异常。空结果返回空列表。
         """
+        interval = (interval or '').strip().lower()
+        if interval not in SUPPORTED_INTERVALS:
+            raise ValueError(
+                f'不支持的时间聚合粒度: {interval!r}'
+                f'（可选: raw / 1min / 5min / 1hour / 1day）'
+            )
+
         with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
 
@@ -706,6 +725,20 @@ class Database:
             if register_name is not None:
                 base_where += ' AND register_name = ?'
                 params.append(register_name)
+
+            # ---- 原始明细：不聚合 ----
+            # 前端「原始」传的是空字符串；此前它落到下面的 else 分支被
+            # `GROUP BY 秒` 聚合了 —— 10Hz 采样变成 1Hz 平均值，界面上却标着
+            # 「原始明细（不做聚合）」，且 `sample_count` 把同秒多条压成 1 条。
+            if interval in RAW_INTERVALS:
+                cursor.execute(f'''
+                    SELECT timestamp, value, unit
+                    FROM history_data
+                    {base_where}
+                    ORDER BY timestamp
+                    LIMIT ? OFFSET ?
+                ''', params + [limit, offset])
+                return [dict(row) for row in cursor.fetchall()]
 
             # 根据时间间隔进行数据聚合
             if interval == '1min':
@@ -724,7 +757,8 @@ class Database:
                     {base_where}
                     GROUP BY time_bucket
                     ORDER BY time_bucket
-                ''', params)
+                    LIMIT ? OFFSET ?
+                ''', params + [limit, offset])
                 return [dict(row) for row in cursor.fetchall()]
             elif interval == '1hour':
                 group_format = '%Y-%m-%d %H:00:00'

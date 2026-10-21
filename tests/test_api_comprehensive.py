@@ -176,10 +176,15 @@ class TestDataAPIComprehensive:
         assert resp.status_code == 200
 
     def test_history_data_with_time_params(self, client, auth_headers, app):
-        """GET /api/data/history 带时间参数"""
+        """GET /api/data/history 带时间参数（区间落在单次上限内）"""
         app.database.get_history_data.return_value = []
+        # 1 天 × 5min = 288 个桶，远低于单次上限。
+        # ⚠️ 原用例查的是「1 年 × 5min」= 105,120 个桶 —— 旧实现会**静默截断**
+        #    到 10000 个（图表只画前 35 天，后半段凭空消失），
+        #    现在这种区间会被 400 拒绝并提示换更粗的粒度（见
+        #    tests/test_history_time_range.py::test_endpoint_rejects_oversized_range_before_querying）。
         resp = client.get(
-            '/api/data/history/dev1/temp?start_time=2024-01-01T00:00:00&end_time=2024-12-31T23:59:59&interval=5min',
+            '/api/data/history/dev1/temp?start_time=2024-01-01T00:00:00&end_time=2024-01-02T00:00:00&interval=5min',
             headers=auth_headers)
         assert resp.status_code == 200
 

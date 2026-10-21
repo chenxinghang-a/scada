@@ -24,13 +24,27 @@ _require_export = permission_required('export_data')
 
 
 def _parse_time(time_str, default):
-    """安全解析时间字符串"""
+    """安全解析时间字符串，并**统一成「本机时区的 naive datetime」**。
+
+    ⚠️ 两件事缺一不可：
+
+    1. 前端用 `Date.toISOString()` 传的是 **UTC**（`...T07:00:00.000Z`），
+       `fromisoformat` 会解析成 **aware** datetime。而库里存的是
+       `datetime.now()` 得到的**本地 naive** 字符串（如 `2026-10-21 15:00:00`）。
+       把 aware 直接绑进 SQL，sqlite3 会写成 `2026-10-21 07:00:00+00:00`，
+       与库存值做**字符串比较** → 整段窗口偏 8 小时，查出来是空的。
+    2. 所以必须 `astimezone()` 转本机时区，再 `replace(tzinfo=None)` 去掉 tzinfo，
+       让「用户选的 15:00」对上「库里存的 15:00」。
+    """
     if not time_str:
         return default
     try:
-        return datetime.fromisoformat(time_str)
+        dt = datetime.fromisoformat(time_str)
     except (ValueError, TypeError):
         return default
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
 
 
 # ==================== 数据查询API ====================
@@ -63,22 +77,60 @@ def get_latest_data(device_id):
 @_require_auth
 @api_error_handler
 def get_history_data(device_id, register_name):
-    """获取历史数据"""
-    start_time = request.args.get('start_time')
-    end_time = request.args.get('end_time')
-    interval = request.args.get('interval', '1min')
+    """获取历史数据。
 
-    start_time = _parse_time(start_time, datetime.now() - timedelta(hours=1))
-    end_time = _parse_time(end_time, datetime.now())
+    两处**必须显式处理**，否则都是静默错误：
+
+    1. `interval` 可能传来**空字符串**（前端「原始」下拉项的值就是 `''`）。
+       `request.args.get('interval', '1min')` 在参数存在但为空时返回 `''`，
+       不是默认值 —— 于是「原始」被当成未知粒度走了按秒聚合分支。
+    2. 结果集必须**封顶并告知**。原实现按 `LIMIT 10000` 静默截断：
+       图表只画到前 10000 个点，后半段直接消失，界面上没有任何提示
+       （看着像「那段时间没数据」）。现在多取一条来判定是否截断，
+       并在响应里带 `truncated`。
+    """
+    from 存储层.database import MAX_HISTORY_POINTS
+
+    start_raw = request.args.get('start_time') or request.args.get('start')
+    end_raw = request.args.get('end_time') or request.args.get('end')
+    # ⚠️ 不能用 `request.args.get('interval', '1min')`：`?interval=` 会返回 ''
+    # 而不是默认值。空串本身是合法语义（前端「原始」= 不聚合），交给 DB 层处理。
+    interval = (request.args.get('interval') or '').strip().lower()
+
+    start_time = _parse_time(start_raw, datetime.now() - timedelta(hours=1))
+    end_time = _parse_time(end_raw, datetime.now())
+
+    if end_time < start_time:
+        return api_error(
+            f'结束时间（{end_time:%Y-%m-%d %H:%M:%S}）早于开始时间'
+            f'（{start_time:%Y-%m-%d %H:%M:%S}）', 400,
+        )
+
+    # 已知粒度先按「时间跨度 ÷ 粒度」预估桶数，超限直接拒绝：
+    # 否则要在库里扫完整段时间才由 LIMIT 截断，CPU 白烧（30 年数据能扫几十秒）。
+    _INTERVAL_SECONDS = {'1min': 60, '5min': 300, '1hour': 3600, '1day': 86400}
+    step = _INTERVAL_SECONDS.get(interval)
+    if step:
+        expected = (end_time - start_time).total_seconds() / step + 1
+        if expected > MAX_HISTORY_POINTS:
+            return api_error(
+                f'时间范围过大：按「{interval}」聚合约 {int(expected):,} 个点，'
+                f'超过单次上限 {MAX_HISTORY_POINTS:,}。'
+                f'请缩短时间范围，或选择更粗的聚合粒度。', 400,
+            )
 
     # 前端传入 '*' 表示查询全部寄存器
     if register_name == '*':
         register_name = None
 
-    data = current_app.database.get_history_data(
+    rows = current_app.database.get_history_data(
         device_id=device_id, register_name=register_name,
-        start_time=start_time, end_time=end_time, interval=interval)
-    return jsonify({'data': data})
+        start_time=start_time, end_time=end_time, interval=interval,
+        limit=MAX_HISTORY_POINTS + 1,
+    )
+    truncated = len(rows) > MAX_HISTORY_POINTS
+    data = rows[:MAX_HISTORY_POINTS]
+    return jsonify({'data': data, 'truncated': truncated})
 
 
 # ==================== 数据导出API ====================
