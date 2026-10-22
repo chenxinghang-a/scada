@@ -86,3 +86,38 @@ def try_int(value: Any) -> int | None:
         return to_int(value)
     except ValueError:
         return None
+
+
+def require_positive_int(value: Any, name: str = 'value', minimum: int = 1) -> int:
+    """把「保留天数 / 保留份数」一类入参收敛成 >= ``minimum`` 的整数。
+
+    为什么必须有这道校验（round 248 实测）：
+    清理类接口的入参直接来自 HTTP body，而它们是**删除操作的方向** ——
+
+    - ``retention_days=0`` → cutoff = 现在 → ``timestamp < now``
+      命中**全部**历史（实测 201 万行 100% 被删）；
+    - ``retention_days=-1`` → cutoff 在未来 → 同样全删；
+    - ``keep_count=0`` → ``backups[0:]`` → 全部备份被删（实测 7/7）。
+
+    定时路径（``core/retention_scheduler.py``）早就把 ``days <= 0``
+    回退成默认值，但**手动清理接口与 Database 的保留策略方法都没有校验** ——
+    运维手滑填个 0、前端传个未初始化的 ``undefined``，就是一次全表删除。
+
+    删数据的方向上宁可保守：非法入参一律**抛 ValueError**
+    （调用方 bug，不是环境故障），由 API 层转成 400，而不是吞进
+    ``{'status': 'error'}`` 显示成 500「服务器坏了」。
+
+    ``bool`` 是 ``int`` 的子类，必须显式排除 —— ``True`` 会变成 1，
+    看起来"合法"，实则把 90 天策略改成 1 天。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f'Invalid {name}: must be an integer '
+            f'(收到 {type(value).__name__}: {value!r})'
+        )
+    if value < minimum:
+        raise ValueError(
+            f'Invalid {name}: must be >= {minimum} (收到 {value}) —— '
+            f'删数据的方向上不接受 0/负数，那等于删光'
+        )
+    return value

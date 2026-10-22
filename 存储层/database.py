@@ -12,9 +12,40 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import contextmanager
 import paths
-from core.safe_numeric import try_int, try_finite_float
+from core.safe_numeric import try_int, try_finite_float, require_positive_int
 
 logger = logging.getLogger(__name__)
+
+
+#: 分块删除的块大小。5000 行约几十毫秒锁，块间提交放锁，
+#: 让并发采集写入能挤进来（round 248 实测：单条 DELETE 持锁 14 秒）。
+_DELETE_CHUNK = 5000
+
+
+def _delete_older_than_chunked(conn, table: str, column: str, cutoff: str) -> int:
+    """分块删除 ``table`` 中 ``column < cutoff`` 的行，返回删除总数。
+
+    与 ``core/ops_tools._delete_older_than`` 同因同法：单条 DELETE 在大表上
+    整个事务持锁，把并发采集写入饿死（``database is locked``，等满
+    ``busy_timeout=30000`` 后失败）。这里不跨模块复用那个函数，是为了避免
+    ``存储层`` 依赖 ``core.ops_tools``（运维工具层）—— 同样的十几行，
+    两边各一份比引错方向好。
+
+    用 ``rowid IN (SELECT ... LIMIT ?)`` 而不是 ``DELETE ... LIMIT``：
+    后者需要编译期开启 ``SQLITE_ENABLE_UPDATE_DELETE_LIMIT``，
+    不是所有构建都带（本项目不能假设）。
+    """
+    total = 0
+    while True:
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE rowid IN ("
+            f"SELECT rowid FROM {table} WHERE {column} < ? LIMIT ?)",
+            (cutoff, _DELETE_CHUNK),
+        )
+        total += cursor.rowcount
+        conn.commit()          # 每块提交：放锁，让采集写入插进来
+        if cursor.rowcount < _DELETE_CHUNK:
+            return total
 
 #: 历史查询单次返回的硬上限（原始行或聚合桶都算）。
 #: 没有上限时，`?start_time=2000-01-01&end_time=2030-01-01&interval=raw`
@@ -1491,24 +1522,33 @@ class Database:
         Side Effects:
             删除 ``history_data`` / ``alarm_records`` 中的过期记录并提交事务。
             删除量为 0 时不打日志。
+
+        ⚠️ 入参校验（round 248）：``history_days`` / ``alarm_days`` 必须是
+        >= 1 的整数。定时路径（``retention_scheduler``）本来就校验，
+        但 ``Database`` 是公开 API，别的调用方传 0 就是一次全表删除 ——
+        在**删数据的方向上**，方法自己要能站住，不能只依赖上游好心。
         """
+        history_days = require_positive_int(history_days, 'history_days')
+        alarm_days = require_positive_int(alarm_days, 'alarm_days')
+
         now = datetime.now()
         results: dict[str, int] = {}
 
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-
-            # 清理过期历史数据（cutoff 用空格分隔格式，与写入格式一致）
+            # 清理过期历史数据（cutoff 用空格分隔格式，与写入格式一致）。
+            # 分块删除：单条 DELETE 在 200 万行的库上持锁 14 秒，
+            # 并发采集写入等 30 秒后 ``database is locked`` 失败
+            # （round 248 实测）。分块后块间放锁，采集能挤进来。
             history_cutoff = now - timedelta(days=history_days)
-            cursor.execute('DELETE FROM history_data WHERE timestamp < ?',
-                           (history_cutoff.isoformat(sep=' '),))
-            results['history_deleted'] = cursor.rowcount
+            results['history_deleted'] = _delete_older_than_chunked(
+                conn, 'history_data', 'timestamp',
+                history_cutoff.isoformat(sep=' '))
 
             # 清理过期报警记录
             alarm_cutoff = now - timedelta(days=alarm_days)
-            cursor.execute('DELETE FROM alarm_records WHERE timestamp < ?',
-                           (alarm_cutoff.isoformat(sep=' '),))
-            results['alarm_deleted'] = cursor.rowcount
+            results['alarm_deleted'] = _delete_older_than_chunked(
+                conn, 'alarm_records', 'timestamp',
+                alarm_cutoff.isoformat(sep=' '))
 
         total_deleted = sum(results.values())
         if total_deleted > 0:
@@ -1536,12 +1576,16 @@ class Database:
 
         Returns:
             int: 删除的行数。
+
+        ⚠️ ``days`` 必须 >= 1（round 248）：``days=0`` 会让 cutoff 变成今天，
+        把**整个归档表**删光 —— 而归档表是原始采样删掉之后唯一还剩的东西。
+        方法自己校验，不依赖上游（``retention_scheduler``）好心。
         """
+        days = require_positive_int(days, 'days')
         cutoff = (datetime.now() - timedelta(days=days)).date().isoformat()
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(f'DELETE FROM {ARCHIVE_TABLE} WHERE archive_date < ?', (cutoff,))
-            deleted = cursor.rowcount
+            deleted = _delete_older_than_chunked(
+                conn, ARCHIVE_TABLE, 'archive_date', cutoff)
         if deleted > 0:
             logger.info(f"归档表保留策略执行完成: {ARCHIVE_TABLE} 删除 {deleted} 行（保留 {days} 天）")
         return deleted

@@ -10,6 +10,10 @@ from core.ops_tools import (
     ops_audit, runtime_config_manager, db_maintainer,
     data_cleaner, diagnostic_exporter, WIRED_KEYS,
 )
+#: 删数据方向上的入参校验（round 248）。放在 `core.safe_numeric` 而不是
+#: `core.ops_tools`：`存储层/database.py` 的保留策略方法也要用同一道校验，
+#: 而它不能依赖运维工具层。
+from core.safe_numeric import require_positive_int
 #: 保留天数的**唯一真源**读取器（round 209）。手动清理端点的默认值必须与
 #: `配置/system.yaml` 的 `database.retention.raw_data_days` 一致 ——
 #: 此前这里写死 `retention_days=90`，而配置里是 30：同一个系统里两个口径。
@@ -278,7 +282,7 @@ def _collector_running() -> bool:
         return False
 
 
-def _maintenance_guard(action: str):
+def _maintenance_guard(action: str, detail: str = None):
     """会长时间独占数据库锁的维护操作，在采集运行时的准入判断。
 
     返回 None 表示放行；否则返回一个错误响应（409）。
@@ -292,6 +296,9 @@ def _maintenance_guard(action: str):
 
     允许 `?force=1` 显式强制：停机窗口里采集可能仍标着 running，
     运维明确知道风险时不该被拦住。强制会留 warning。
+
+    `detail` 用于替换默认的风险描述（删除类操作说的是"阻塞采集写入"，
+    与 VACUUM 的"独占锁"不是一回事，别让运维读到不相干的措辞）。
     """
     if not _collector_running():
         return None
@@ -305,9 +312,11 @@ def _maintenance_guard(action: str):
         return None
 
     return error_response(
-        f"{action} 需要独占数据库锁，采集运行期间执行会让写入阻塞"
-        f"（busy_timeout 30 秒）甚至失败。请先停止采集，"
-        f"或确认风险后加 ?force=1 强制执行。",
+        detail or (
+            f"{action} 需要独占数据库锁，采集运行期间执行会让写入阻塞"
+            f"（busy_timeout 30 秒）甚至失败。请先停止采集，"
+            f"或确认风险后加 ?force=1 强制执行。"
+        ),
         409,
     )
 
@@ -408,16 +417,44 @@ def db_table_stats():
 @jwt_required
 @role_required('admin')
 def cleanup_history():
-    """清理过期历史数据"""
+    """清理过期历史数据
+
+    round 248 补两道保护：
+    1. **入参校验**：``retention_days`` 必须是 >= 1 的整数。
+       0 / 负数 / 字符串一律 400 —— 它们会让 cutoff 落在"现在"或未来，
+       ``timestamp < cutoff`` 命中**全部**历史（实测 201 万行 100% 被删）。
+    2. **运行期闸门**：删除是长事务（即使已分块，200 万行也要跑十几秒），
+       采集运行期间默认 409，``?force=1`` 显式强制。
+    """
     try:
         data = request.get_json() or {}
         # 默认保留天数取自配置（唯一真源）；配置不可用时回退 90（历史默认）。
         # 手动清理是**运维的显式动作**，所以即使自动保留被关掉也照常执行。
         _cfg = read_retention_config() or {}
         days = data.get('retention_days', _cfg.get('history_days', 90))
+        # 先校验再执行：非法入参是调用方错误（400），不是服务器故障（500）
+        require_positive_int(days, 'retention_days')
+
+        blocked = _maintenance_guard(
+            '清理历史数据',
+            "清理历史数据是长事务删除，采集运行期间执行会让批量写入等待"
+            "（busy_timeout 30 秒）甚至失败。请先停止采集，"
+            "或确认风险后加 ?force=1 强制执行。")
+        if blocked is not None:
+            # 不走 `_log_ops`：它只认 success/error 两态，会把「被拒」
+            # 记成 success。直接写审计，与 db_vacuum 的被拒路径一致。
+            ops_audit.log_operation(
+                'cleanup_history', operator=_ops_operator(), result='rejected',
+                details={'retention_days': days, 'reason': 'collector_running'})
+            return blocked
+
         result = data_cleaner.clean_history_data(days)
         _log_ops('cleanup_history', result, details={'retention_days': days, **(result if isinstance(result, dict) else {})})
         return _cleanup_response(result)
+    except ValueError as e:
+        # 入参非法 → 400，并把「为什么」说清楚（默认值是多少、边界在哪）
+        logger.warning("清理历史数据入参非法: %s", e)
+        return error_response(f"retention_days 非法: {e}", 400)
     except Exception as e:
         logger.error(f"清理历史数据失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -427,13 +464,22 @@ def cleanup_history():
 @jwt_required
 @role_required('admin')
 def cleanup_backups():
-    """清理旧备份"""
+    """清理旧备份
+
+    round 248：``keep_count`` 必须是 >= 1 的整数。0 会让
+    ``backups[0:]`` 命中**全部**备份（实测 7/7 全删）——
+    删备份不留一份，等于把恢复能力清零。
+    """
     try:
         data = request.get_json() or {}
         keep = data.get('keep_count', 5)
+        require_positive_int(keep, 'keep_count')
         result = data_cleaner.clean_old_backups(keep_count=keep)
         _log_ops('cleanup_backups', result, details={'keep_count': keep, **(result if isinstance(result, dict) else {})})
         return _cleanup_response(result)
+    except ValueError as e:
+        logger.warning("清理备份入参非法: %s", e)
+        return error_response(f"keep_count 非法: {e}", 400)
     except Exception as e:
         logger.error(f"清理备份失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -443,13 +489,21 @@ def cleanup_backups():
 @jwt_required
 @role_required('admin')
 def cleanup_logs():
-    """清理过期日志"""
+    """清理过期日志
+
+    round 248：``retention_days`` 必须 >= 1。0 / 负数会把
+    ``*.log*`` 全目录删光（含当天正在写的日志）。
+    """
     try:
         data = request.get_json() or {}
         days = data.get('retention_days', 30)
+        require_positive_int(days, 'retention_days')
         result = data_cleaner.clean_log_files(retention_days=days)
         ops_audit.log_operation('cleanup_logs', details=result)
         return _cleanup_response(result)
+    except ValueError as e:
+        logger.warning("清理日志入参非法: %s", e)
+        return error_response(f"retention_days 非法: {e}", 400)
     except Exception as e:
         logger.error(f"清理日志失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)

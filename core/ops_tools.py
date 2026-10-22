@@ -22,8 +22,47 @@ from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 import paths
+from core.safe_numeric import require_positive_int as _require_positive_int
 
 logger = logging.getLogger(__name__)
+
+
+
+#: ⚠️ 这里**不要**再写一份 `_require_positive_int` 的本地实现。
+#: round 248 踩过：本地 def 会覆盖上面的 import（后定义者赢），
+#: 于是对 `core/safe_numeric.py` 的变异/修复全部失效 ——
+#: 改了半天发现跑的是另一份代码。判据见本轮提交信息。
+#: 唯一实现在 `core/safe_numeric.require_positive_int`。
+
+
+def _delete_older_than(conn, table: str, column: str, cutoff: str,
+                       chunk: int = 5000) -> int:
+    """分块删除 ``table`` 中 ``column < cutoff`` 的行，返回删除总数。
+
+    **为什么分块**（round 248 实测）：单条
+    ``DELETE FROM history_data WHERE timestamp < ?`` 在 200 万行的库上
+    跑了 14.4 秒，且**整个事务持有写锁**。并发采集写入等待 32.8 秒后
+    ``database is locked`` 失败（主库 ``busy_timeout=30000``）——
+    清理一次，采集丢一批数据。
+
+    分块后每个块只持有几十毫秒锁，块间提交放锁，采集写入能挤进来。
+    总耗时基本不变，但**不再饿死采集**。
+
+    用 ``rowid IN (SELECT ... LIMIT ?)`` 而不是 ``DELETE ... LIMIT``：
+    后者需要编译期开启 ``SQLITE_ENABLE_UPDATE_DELETE_LIMIT``，
+    不是所有构建都带（本项目不能假设）。
+    """
+    total = 0
+    while True:
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE rowid IN ("
+            f"SELECT rowid FROM {table} WHERE {column} < ? LIMIT ?)",
+            (cutoff, chunk),
+        )
+        total += cursor.rowcount
+        conn.commit()          # 每块提交：放锁，让采集写入插进来
+        if cursor.rowcount < chunk:
+            return total
 
 
 #: 运行时配置的默认值。抽成模块级常量是为了让 `reset()` 与
@@ -507,19 +546,25 @@ class DataCleaner:
         return self._db_path
 
     def clean_history_data(self, retention_days: int = 90) -> Dict[str, Any]:
-        """清理过期历史数据"""
+        """清理过期历史数据
+
+        ⚠️ 入参校验在 **try 之前**：非法 ``retention_days`` 抛 ValueError
+        （调用方 bug），由 API 层转 400。放在 try 里会被吞成
+        ``{'status': 'error'}`` → HTTP 500，把「你传错了」显示成「服务器坏了」。
+
+        删除走 :func:`_delete_older_than` 分块提交 —— 单条 DELETE 在
+        200 万行的库上持锁 14 秒，会把并发采集写入饿死（round 248 实测）。
+        """
+        retention_days = _require_positive_int(retention_days, 'retention_days')
         start = time.time()
         try:
             # sep=' ' 与库内写入格式一致；用默认的 'T' 分隔会多删同日的记录
             cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat(sep=' ')
             conn = sqlite3.connect(self._require_db_path(), timeout=30)
-            cursor = conn.execute(
-                "DELETE FROM history_data WHERE timestamp < ?",
-                (cutoff,)
-            )
-            deleted = cursor.rowcount
-            conn.commit()
-            conn.close()
+            try:
+                deleted = _delete_older_than(conn, 'history_data', 'timestamp', cutoff)
+            finally:
+                conn.close()
 
             elapsed = time.time() - start
             result = {
@@ -544,18 +589,16 @@ class DataCleaner:
         这是**如实失败**，好过静默假成功。
         审计系统该收敛到哪一套属 P2-8 的产品口径，见队列「待主人确认」第 8 条。
         """
+        retention_days = _require_positive_int(retention_days, 'retention_days')
         start = time.time()
         try:
             # sep=' ' 与库内写入格式一致；用默认的 'T' 分隔会多删同日的记录
             cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat(sep=' ')
             conn = sqlite3.connect(self._require_db_path(), timeout=30)
-            cursor = conn.execute(
-                "DELETE FROM audit_log WHERE timestamp < ?",
-                (cutoff,)
-            )
-            deleted = cursor.rowcount
-            conn.commit()
-            conn.close()
+            try:
+                deleted = _delete_older_than(conn, 'audit_log', 'timestamp', cutoff)
+            finally:
+                conn.close()
 
             elapsed = time.time() - start
             return {
@@ -575,7 +618,11 @@ class DataCleaner:
         CWD 下的错误目录上 —— 匹配不到任何文件 → ``deleted_count=0`` →
         返回 ``status: 'success'``。**「清理成功但一个都没删」是最坏的失败形态**：
         调用方看到 success 就不会再查。
+
+        ``keep_count`` 必须 >= 1：0 会让 ``backups[0:]`` 命中**全部**备份
+        （round 248 实测 7/7 全删）。删备份不留一份，等于把恢复能力清零。
         """
+        keep_count = _require_positive_int(keep_count, 'keep_count')
         start = time.time()
         try:
             backup_path = paths.resolve(backup_dir)
@@ -606,6 +653,7 @@ class DataCleaner:
         与 :meth:`clean_old_backups` 同因：相对路径会让 glob 打错目录，
         「成功清理 0 个文件」与「本来就没有过期文件」不可区分。
         """
+        retention_days = _require_positive_int(retention_days, 'retention_days')
         start = time.time()
         try:
             log_path = paths.resolve(log_dir)

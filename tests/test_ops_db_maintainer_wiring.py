@@ -223,10 +223,22 @@ def test_all_three_endpoints_use_the_guard():
 
     带 `^\\s+` 行首锚点 —— 不带的话会命中函数**定义**处，把调用删掉
     照样匹配（round 240 踩过这个坑）。
+
+    ⚠️ round 248：原来断言「全文恰好 3 处调用」，但 cleanup/history
+    也接了同一道闸门（长事务删除，同样饿死采集）—— 计数型断言
+    随着消费者增加必然假红。改成按**端点**断言：每个端点自己的
+    函数体里必须有调用。这样新增消费者不会再误伤，而
+    「某个端点把闸门删了」照样能被抓到。
     """
     import pathlib
     import re
 
     source = (pathlib.Path(PROJECT_ROOT) / '展示层' / 'api' / 'api_ops.py').read_text(encoding='utf-8')
-    calls = re.findall(r'^\s+blocked = _maintenance_guard\(', source, flags=re.MULTILINE)
-    assert len(calls) == 3, f'只有 {len(calls)} 个端点接了闸门，应为 3（vacuum/reindex/analyze）'
+
+    for endpoint in ('db_vacuum', 'db_reindex', 'db_analyze'):
+        m = re.search(rf'^def {endpoint}\(\):(.*?)(?=^@ops_bp\.route|\Z)',
+                      source, flags=re.MULTILINE | re.DOTALL)
+        assert m, f'找不到端点函数 {endpoint}'
+        assert re.search(r'^\s+blocked = _maintenance_guard\(', m.group(1),
+                         flags=re.MULTILINE), \
+            f'{endpoint} 没有调用 _maintenance_guard —— 采集运行时能锁库'
