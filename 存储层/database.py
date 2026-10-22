@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import contextmanager
 import paths
-from core.safe_numeric import try_int
+from core.safe_numeric import try_int, try_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,12 @@ class Database:
 
         # 线程本地存储：每个线程复用一个连接
         self._local = threading.local()
+
+        # 落库层拒掉的非法记录数（内存计数）。database 走线程本地连接，
+        # 没有全局锁可用，这里单独一把小锁保护一个 int。
+        # 光记日志不够 —— 长期跑下来没人会去翻日志，必须在 stats 里可查。
+        self._skip_stats_lock = threading.Lock()
+        self._skipped_invalid_rows = 0
 
         # 上次膨胀告警时间（单调时钟），用于告警节流。
         #
@@ -400,6 +406,7 @@ class Database:
             # 迁移：给旧表添加新列（如果不存在）
             self._migrate_alarm_table(cursor)
             self._migrate_realtime_quality(cursor)
+            self._migrate_realtime_unique(cursor)
 
             logger.info("数据库初始化完成")
 
@@ -447,6 +454,66 @@ class Database:
                 f"（通常为列已存在，需排查时看此错误原文）: {e}"
             )
 
+    def _migrate_realtime_unique(self, cursor):
+        """确保 ``realtime_data`` 有 ``(device_id, register_name)`` 唯一约束。
+
+        **为什么需要这个迁移**：建表语句里明明写了
+        ``UNIQUE(device_id, register_name)``，但 ``CREATE TABLE IF NOT EXISTS``
+        遇到**已存在的老表**直接跳过 —— 而 SQLite **不支持**
+        ``ALTER TABLE ... ADD CONSTRAINT``，所以老库永远拿不到这个约束。
+
+        后果不是报错，是**静默退化**：``insert_data_batch`` 里的
+        ``INSERT ... ON CONFLICT(device_id, register_name) DO UPDATE``
+        找不到冲突目标 → 每次都 INSERT 新行。
+
+        实测 ``data/scada.db``（旧 schema，无 autoindex）：
+        20 台设备、166 个点位，堆了 **239,815 行**，单点位最多 13,929 行。
+        而 ``cleanup_old_data`` 的注释写着「realtime_data 有 UNIQUE 且走 UPSERT，
+        行的数量上界 = 点位总数，根本不会随时间无界增长」—— 恰好是反的，
+        于是这个表**从来不被清理**，一路膨胀到 495 MB。
+
+        做法与归档表（``idx_archive_unique``，round 229）一致：
+        先删重复（每个点位保留 ``id`` 最大的一行 = 最新），再建唯一索引。
+        幂等，可反复执行；已有覆盖这两列的唯一索引（含建表自动生成的
+        autoindex）时直接返回。
+        """
+        try:
+            # 已有覆盖 (device_id, register_name) 的唯一索引 → 无需迁移
+            for _seq, name, unique, _origin, _partial in cursor.execute(
+                    'PRAGMA index_list(realtime_data)').fetchall():
+                if not unique:
+                    continue
+                cols = [r[2] for r in cursor.execute(f'PRAGMA index_info("{name}")')]
+                if cols == ['device_id', 'register_name']:
+                    return
+
+            before = cursor.execute('SELECT COUNT(*) FROM realtime_data').fetchone()[0]
+            cursor.execute('''
+                DELETE FROM realtime_data
+                WHERE id NOT IN (
+                    SELECT MAX(id) FROM realtime_data GROUP BY device_id, register_name
+                )
+            ''')
+            after = cursor.execute('SELECT COUNT(*) FROM realtime_data').fetchone()[0]
+
+            cursor.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_realtime_point
+                ON realtime_data(device_id, register_name)
+            ''')
+
+            logger.warning(
+                "数据库迁移: realtime_data 缺少 (device_id, register_name) 唯一约束，"
+                "已补建 —— 删除重复行 %d 条，保留 %d 个点位的最新值。"
+                "（此前 UPSERT 退化成 INSERT，该表一直在无界增长）",
+                before - after, after,
+            )
+        except Exception as e:
+            # 迁移失败不阻塞启动：服务照常可用，只是继续膨胀。下次启动会重试。
+            logger.error(
+                "数据库迁移失败: 无法为 realtime_data 补建唯一约束（%s）。"
+                "该表会继续无界增长，请手工排查后重启。", e,
+            )
+
     def insert_data(self, device_id: str, register_name: str,
                     value: float, timestamp: datetime, unit: str = ''):
         """
@@ -475,6 +542,20 @@ class Database:
                 INSERT INTO history_data (device_id, register_name, value, unit, timestamp)
                 VALUES (?, ?, ?, ?, ?)
             ''', (device_id, register_name, value, unit, timestamp))
+
+    def _inc_skipped_invalid(self, n: int = 1) -> None:
+        """累计「被落库层拒掉的非法记录数」"""
+        with self._skip_stats_lock:
+            self._skipped_invalid_rows += n
+
+    def get_skipped_invalid_count(self) -> int:
+        """被落库层拒掉的非法记录总数（进程生命周期内累计）。
+
+        正常应为 0 且长期不增长；持续增长说明上游（采集/灌数脚本/新协议客户端）
+        在往库里塞非数值，值得排查。
+        """
+        with self._skip_stats_lock:
+            return self._skipped_invalid_rows
 
     def insert_data_batch(self, batch: list[dict]):
         """批量插入数据（单事务，性能比逐条快 10-50 倍）。
@@ -509,6 +590,7 @@ class Database:
 
         # Validate each record individually to avoid losing entire batch on one bad record
         valid_rows = []
+        skipped_invalid = 0
         for d in batch:
             try:
                 # quality 为 OPC UA 质量码（int）。采集层算出的值经此落库，
@@ -522,12 +604,39 @@ class Database:
                 q = try_int(q)
                 if q is None:
                     q = 192
+
+                # `value` 必须是**有限数值**。这是落库的最后一道关，也是最该把关
+                # 的地方 —— SQLite 是**弱类型**，非法值不会报错，只会静默变味：
+                #   float('nan') → 被 sqlite3 绑成 **NULL**（typeof='null'），
+                #                  读回来是 None，与「没有数据」无法区分；
+                #   float('inf') → 原样存成 real，趋势图画出无穷远点、
+                #                  AVG/MAX 统计全被污染成 inf；
+                #   'abc'        → 原样存成 **TEXT**（typeof='text'），
+                #                  SUM/AVG 遇到它按 0 处理，聚合结果静默偏小。
+                # 上游（采集层）已经修过两处，但上游永远修不完：手工灌数、
+                # 新协议客户端、导入脚本都会绕过它。落库层不校验 = 污染无底。
+                value = try_finite_float(d['value'])
+                if value is None:
+                    skipped_invalid += 1
+                    logger.warning(
+                        "跳过非数值记录: device=%r register=%r value=%r（类型 %s）",
+                        d.get('device_id'), d.get('register_name'),
+                        d['value'], type(d['value']).__name__,
+                    )
+                    continue
+
                 valid_rows.append((
-                    d['device_id'], d['register_name'], d['value'],
+                    d['device_id'], d['register_name'], value,
                     d.get('unit', ''), d['timestamp'], q,
                 ))
             except (KeyError, TypeError) as e:
+                skipped_invalid += 1
                 logger.warning(f"跳过无效记录: {e}")
+
+        if skipped_invalid:
+            # 计数落进 stats，让「有多少条被落库层拒了」在监控里可查 ——
+            # 只有日志的话，长期跑下来没人会去翻。
+            self._inc_skipped_invalid(skipped_invalid)
 
         if not valid_rows:
             return
@@ -976,6 +1085,14 @@ class Database:
         时间戳只表示"这个值多久没更新了"。按时间戳清理等于把设备列表上
         所有当前值一起抹掉 —— 前端会集体显示空白，而磁盘一个字节都省不下来。
         确实要清某台设备的当前值，走 ``delete_device_data``（按设备清）。
+
+        ⚠️ **上面这条「上界 = 点位总数」依赖 `_migrate_realtime_unique`**。
+        SQLite 不支持 ``ALTER TABLE ADD CONSTRAINT``，所以老库的
+        ``realtime_data`` 一直**没有**这个唯一约束 —— UPSERT 静默退化成
+        INSERT。实测某库 166 个点位堆了 239,815 行。现在启动时会自动迁移
+        （去重 + 补唯一索引），迁移成功后这个前提才真的成立。
+        如果日志里出现「无法为 realtime_data 补建唯一约束」，本方法的
+        「不清理」决策就**不成立**，必须先去修迁移。
 
         职责边界（三者不要互相重叠）：
             - ``archive_old_data``：归档聚合 + 按更宽的窗口删原始数据（维护任务入口）
