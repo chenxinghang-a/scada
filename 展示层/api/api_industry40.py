@@ -64,12 +64,146 @@ def _module_check(attr_name: str, display_name: str = None):
     return module, None
 
 
+#: 数据新鲜度阈值（秒）。超过这个时间没更新就标记 stale。
+#:
+#: 取值依据：健康评分/振动评分在每次采集时重算（采集间隔 2~10 秒），
+#: 300 秒没更新说明**喂数已经停了**，不是"刚好没有新数据"。
+FRESHNESS_THRESHOLD_S = 300
+
+
+def _freshness(records, feature: str = None) -> dict:
+    """计算一批分析结果的**新鲜度**，并如实标注降级停喂。
+
+    round 254。背景：`/industry40/*` 的读接口把分析器的字典**原样返回** ——
+    而分析器的数据只会在「采集器喂数」时更新。一旦降级把某个功能停掉
+    （`degradation_manager` 的 ENFORCED_FEATURES），或者上游设备全离线，
+    这些接口会**一直返回最后一帧旧值**：
+
+        {"dev1": {"health_score": 95, "updated_at": "2026-10-22T10:00:00"}}
+
+    看板上这就是"设备健康 95"，没人知道它已经是 8 小时前的数据。
+    这比"没有数据"更危险 —— 冻结的健康评分看起来像健康的设备。
+
+    本函数返回可直接 merge 进响应的字段：
+    - ``freshness``: ``fresh`` / ``stale`` / ``unknown``
+    - ``data_age_seconds`` / ``newest_updated_at``（能算出来时）
+    - ``stale_reason``：说清为什么（超阈值 / 功能被降级停用 / 无时间戳）
+
+    Args:
+        records: 分析器返回的 dict（值是带 ``updated_at`` 的字典），
+            或单个这样的字典。
+        feature: 降级管理器里的功能名（如 ``'predictive_maintenance'``）。
+            给了就会一并报告它是否被降级停用。
+    """
+    out: dict = {}
+
+    # 1) 降级状态：停喂时优先说"被停用了"，而不是让调用方猜为什么旧
+    if feature:
+        try:
+            from core.degradation_manager import degradation_manager
+            enabled = degradation_manager.is_feature_enabled(feature)
+            out['feature_enabled'] = enabled
+            if not enabled:
+                out['freshness'] = 'stale'
+                out['stale_reason'] = (
+                    f'功能 {feature} 因系统降级（{degradation_manager.level_name}）'
+                    f'已停止喂数 —— 返回的是停止前最后一帧数据'
+                )
+        except Exception as e:      # noqa: BLE001 —— 探测失败不阻断读取
+            logger.debug("读取降级状态失败（跳过降级标注）: %s", e)
+
+    # 2) 数据年龄
+    items = []
+    if isinstance(records, dict):
+        items = [v for v in records.values() if isinstance(v, dict)]
+    elif isinstance(records, list):
+        items = [v for v in records if isinstance(v, dict)]
+
+    newest = None
+    for item in items:
+        raw = item.get('updated_at') or item.get('timestamp')
+        if raw is None:
+            continue
+        try:
+            if isinstance(raw, (int, float)):
+                ts = datetime.fromtimestamp(raw)
+            else:
+                ts = datetime.fromisoformat(str(raw))
+        except Exception as e:      # noqa: BLE001 —— 单条时间戳坏了不影响其它
+            # 必须留痕：坏时间戳被静默跳过会让"数据年龄"算错（少一条候选），
+            # 而这条记录本来可能是最新的那条。
+            logger.debug(
+                "数据新鲜度：跳过无法解析的时间戳 %r（%s）: %s",
+                raw, type(e).__name__, e)
+            continue
+        if newest is None or ts > newest:
+            newest = ts
+
+    if newest is None:
+        # 没有时间戳就不猜。明确说"无法判断"，比默认当新鲜更负责。
+        out.setdefault('freshness', 'unknown')
+        out.setdefault('stale_reason', '记录里没有 updated_at/timestamp，无法判断数据新鲜度')
+        return out
+
+    age = max(0.0, (datetime.now() - newest).total_seconds())
+    out['newest_updated_at'] = newest.isoformat()
+    out['data_age_seconds'] = round(age, 1)
+    out['threshold_seconds'] = FRESHNESS_THRESHOLD_S
+    if age > FRESHNESS_THRESHOLD_S:
+        out['freshness'] = 'stale'
+        out.setdefault(
+            'stale_reason',
+            f'最新数据已是 {age:.0f} 秒前（阈值 {FRESHNESS_THRESHOLD_S} 秒）')
+    else:
+        out.setdefault('freshness', 'fresh')
+    return out
+
+
+def _attach_freshness(resp, fresh: dict):
+    """把新鲜度挂到**响应头**上，不改 body 结构。
+
+    为什么不塞进 body：前端 `src/api/industry40.ts` 把
+    `/industry40/health` 的响应直接当 `Record<string, HealthScore>` 用
+    （扁平字典，键是 `device_id:register_name`）。往 body 里加
+    `{scores: ..., freshness: ...}` 会**直接打断前端**；
+    而扁平字典里塞一个 `_meta` 键又可能和设备键撞车。
+    响应头是非破坏性的：现有前端零改动，运维/脚本/curl 能立刻看到，
+    将来前端要展示"数据已过期"也只是读个头。
+
+    同时提供 `GET /api/industry40/freshness` 汇总端点（见下），
+    因为响应头对浏览器端做看板不够方便。
+    """
+    response, code = resp if isinstance(resp, tuple) else (resp, 200)
+    try:
+        for key, value in fresh.items():
+            if value is None or isinstance(value, (dict, list)):
+                continue
+            # HTTP 头只能是 latin-1：中文原因（stale_reason）放不进头里，
+            # 留在 `/industry40/freshness` 的 body 中。头里只传 ASCII 值。
+            text = str(value)
+            try:
+                text.encode('latin-1')
+            except UnicodeEncodeError:
+                continue
+            # `data_age_seconds` → `X-Data-Age-Seconds`（去掉重复的 data_ 前缀）
+            name = key[len('data_'):] if key.startswith('data_') else key
+            response.headers['X-Data-' + name.replace('_', '-').title()] = text
+    except Exception as e:      # noqa: BLE001 —— 加头失败不能影响响应
+        logger.debug("挂载新鲜度响应头失败: %s", e)
+    return response, code
+
+
 # ==================== 预测性维护API ====================
 
 @industry40_bp.route('/industry40/health', methods=['GET'])
 @_require_auth
 def get_health_scores():
-    """获取所有设备健康评分"""
+    """获取所有设备健康评分
+
+    round 254：附带 `freshness` —— 分析器只在采集喂数时更新，
+    降级停喂或设备全离线时会一直返回最后一帧旧值。不标注新鲜度的话，
+    冻结的"健康 95"看起来和实时的一样。
+    """
     try:
         pm, err = _module_check('predictive_maintenance', '预测性维护')
         if err:
@@ -77,7 +211,9 @@ def get_health_scores():
         
         scores = pm.get_health_scores()
         logger.debug(f"获取健康评分: {len(scores) if scores else 0} 个设备")
-        return success_response(scores if scores else {}, message="获取健康评分成功")
+        return _attach_freshness(
+            success_response(scores if scores else {}, message="获取健康评分成功"),
+            _freshness(scores, 'predictive_maintenance'))
     except Exception as e:
         logger.error(f"获取健康评分失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -86,7 +222,7 @@ def get_health_scores():
 @industry40_bp.route('/industry40/health/<device_id>', methods=['GET'])
 @_require_auth
 def get_device_health_by_id(device_id):
-    """获取指定设备健康评分"""
+    """获取指定设备健康评分（附带 freshness）"""
     try:
         pm, err = _module_check('predictive_maintenance', '预测性维护')
         if err:
@@ -97,7 +233,9 @@ def get_device_health_by_id(device_id):
             return error_response(f"设备 '{device_id}' 无健康数据", 404)
         
         logger.debug(f"获取设备 {device_id} 健康评分成功")
-        return success_response(result, message=f"获取设备 {device_id} 健康评分成功")
+        return _attach_freshness(
+            success_response(result, message=f"获取设备 {device_id} 健康评分成功"),
+            _freshness(result, 'predictive_maintenance'))
     except Exception as e:
         logger.error(f"获取设备 {device_id} 健康评分失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -453,7 +591,12 @@ def get_edge_log():
 @industry40_bp.route('/industry40/devices/status', methods=['GET'])
 @_require_auth
 def get_devices_status():
-    """获取所有设备运行状态（用于工艺流程图）"""
+    """获取所有设备运行状态（用于工艺流程图）
+
+    round 254：OEE 的 `device_states` 里只有 `status`/`since`（状态从何时开始），
+    **没有"数据何时更新"** —— 所以这里如实返回 `freshness: unknown`，
+    而不是假装它是新鲜的。要标注真实新鲜度得先让 OEE 记录 `updated_at`。
+    """
     try:
         oee, err = _module_check('oee_calculator', 'OEE计算')
         if err:
@@ -461,7 +604,9 @@ def get_devices_status():
         
         result = oee.get_all_device_states()
         logger.debug(f"获取设备状态: {len(result) if result else 0} 个设备")
-        return success_response(result if result else {}, message="获取设备运行状态成功")
+        return _attach_freshness(
+            success_response(result if result else {}, message="获取设备运行状态成功"),
+            _freshness(result, 'oee_calculator'))
     except Exception as e:
         logger.error(f"获取设备状态失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -469,10 +614,50 @@ def get_devices_status():
 
 # ==================== 振动分析API ====================
 
+@industry40_bp.route('/industry40/freshness', methods=['GET'])
+@_require_auth
+def get_data_freshness():
+    """各智能分析模块的**数据新鲜度**汇总（round 254）。
+
+    为什么单独开一个端点：`/industry40/health` 等接口返回的是**扁平字典**
+    （前端契约），body 里塞不进元信息；而响应头对看板不方便。
+    运维排查「为什么健康评分一直不变」时，先看这里：
+
+        {"predictive_maintenance": {"freshness": "stale",
+                                    "data_age_seconds": 28800,
+                                    "feature_enabled": false,
+                                    "stale_reason": "功能 ... 因系统降级已停止喂数"}}
+
+    分析器只在采集喂数时更新。降级停喂、设备全离线、或采集线程死掉时，
+    这些接口会一直返回最后一帧旧值 —— 冻结的「健康 95」看起来和实时的一样。
+    """
+    modules = [
+        ('predictive_maintenance', '预测性维护', lambda m: m.get_health_scores()),
+        ('vibration_analyzer', '振动分析', lambda m: m.get_vibration_scores()),
+        ('oee_calculator', 'OEE计算', lambda m: m.get_all_device_states()),
+    ]
+    result = {}
+    for attr, display, getter in modules:
+        module = _get_module(attr)
+        if module is None:
+            result[attr] = {'freshness': 'unavailable',
+                            'stale_reason': f'{display}模块未挂载'}
+            continue
+        try:
+            records = getter(module)
+        except Exception as e:      # noqa: BLE001 —— 单个模块失败不影响其它
+            logger.warning("读取 %s 数据失败: %s", attr, e)
+            result[attr] = {'freshness': 'unavailable', 'stale_reason': str(e)}
+            continue
+        result[attr] = _freshness(records, attr)
+
+    return success_response(result, message="数据新鲜度")
+
+
 @industry40_bp.route('/industry40/vibration', methods=['GET'])
 @_require_auth
 def get_vibration_scores():
-    """获取所有设备振动评分"""
+    """获取所有设备振动评分（附带 freshness）"""
     try:
         va, err = _module_check('vibration_analyzer', '振动分析')
         if err:
@@ -480,7 +665,9 @@ def get_vibration_scores():
 
         scores = va.get_vibration_scores()
         logger.debug(f"获取振动评分: {len(scores) if scores else 0} 个设备")
-        return success_response(scores if scores else {}, message="获取振动评分成功")
+        return _attach_freshness(
+            success_response(scores if scores else {}, message="获取振动评分成功"),
+            _freshness(scores, 'vibration_analyzer'))
     except Exception as e:
         logger.error(f"获取振动评分失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
