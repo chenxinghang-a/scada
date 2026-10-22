@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 
+from core.safe_numeric import require_positive_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,10 +43,54 @@ class EscalationState:
     acknowledged: bool = False
 
 
+def _validate_rules(rules: Any) -> List[EscalationRule]:
+    """把升级规则配置收敛成 `EscalationRule` 列表，非法一律抛 ValueError。
+
+    round 249 增加。原来 `update_rules` / `_load_config` 对入参**零校验**：
+
+    - `rules: []` → `update_rules` 把 `self._rules` 清空 → **升级机制被关掉**，
+      且接口回「更新成功」；
+    - `timeout_seconds: 0` → 报警一触发就升级，升级机制变成打鸣；
+    - `level` 缺失/为 0 → `_do_escalation` 里按 level 找规则找不到
+      → **静默不升级**。
+
+    升级是安全功能，配置它的口子必须和删数据一样保守：
+    非空列表 + 每条 level/timeout 都是 >= 1 的整数 + level 不重复。
+    """
+    if not isinstance(rules, list) or not rules:
+        raise ValueError(
+            '升级规则必须是非空列表 —— 空列表等于关闭全部升级，不接受'
+        )
+
+    validated: List[EscalationRule] = []
+    seen_levels = set()
+    for i, r in enumerate(rules):
+        if not isinstance(r, dict):
+            raise ValueError(f'第 {i + 1} 条规则不是字典: {r!r}')
+        level = require_positive_int(r.get('level', 1), f'第 {i + 1} 条规则的 level')
+        timeout = require_positive_int(
+            r.get('timeout_seconds', 300), f'第 {i + 1} 条规则的 timeout_seconds')
+        if level in seen_levels:
+            raise ValueError(
+                f'升级级别重复: level={level} —— 同一级两条规则会让 '
+                f'_do_escalation 只命中第一条，另一条静默失效'
+            )
+        seen_levels.add(level)
+        validated.append(EscalationRule(
+            level=level,
+            timeout_seconds=timeout,
+            actions=r.get('actions', ['notify']),
+            notify_roles=r.get('notify_roles', ['operator']),
+            message_template=r.get('message_template', ''),
+        ))
+    return validated
+
+
 class AlarmEscalationManager:
     """告警升级管理器"""
 
-    # 默认升级规则
+    #: 默认升级规则。**只在配置文件完全没给 rules 段时使用** ——
+    #: 显式的 `rules: []` 会被 `_load_config` 拒绝（见其 docstring）。
     DEFAULT_RULES = [
         EscalationRule(
             level=1,
@@ -82,18 +128,25 @@ class AlarmEscalationManager:
             self._load_config(config)
 
     def _load_config(self, config: Dict[str, Any]):
-        """加载配置"""
+        """加载配置
+
+        ⚠️ round 249：`rules` 段**不允许为空列表**。空列表会被下面
+        `if rules_cfg:` 判为 falsy 而**静默保留 DEFAULT_RULES**
+        （300/900/1800 秒）—— 于是「配置里写了一条 600 秒规则」
+        和「配置里写了个空列表」表现不同，而后者看起来像"关掉了升级"，
+        实际仍在按 300 秒升级。删数据/关保护的方向上不接受空，
+        一律抛 ValueError，让问题在加载时就炸出来。
+        """
         rules_cfg = config.get('rules', [])
         if rules_cfg:
-            self._rules = []
-            for r in rules_cfg:
-                self._rules.append(EscalationRule(
-                    level=r.get('level', 1),
-                    timeout_seconds=r.get('timeout_seconds', 300),
-                    actions=r.get('actions', ['notify']),
-                    notify_roles=r.get('notify_roles', ['operator']),
-                    message_template=r.get('message_template', ''),
-                ))
+            self._rules = _validate_rules(rules_cfg)
+        elif 'rules' in config:
+            # 显式写了 rules 但是空/非法 → 不容错
+            raise ValueError(
+                'escalation.rules 不能为空列表 —— 空列表会被当成"关闭升级"，'
+                '但 DEFAULT_RULES 仍在按 300/900/1800 秒升级。'
+                '如确需单级升级，请给一条规则。'
+            )
 
         self._check_interval = config.get('check_interval', 30)
 
@@ -156,7 +209,18 @@ class AlarmEscalationManager:
         self._callbacks.append(callback)
 
     def check_escalations(self):
-        """检查所有告警是否需要升级"""
+        """检查所有告警是否需要升级
+
+        round 249：原实现一次只跳到**当前适用的最高级别**
+        （`for rule in self._rules: ... target_level = rule.level` 取最后一个
+        命中的），于是当检查迟到（定时器被阻塞 / 首次检查就远超多级阈值）时，
+        中间级别被**静默跳过** —— 每条规则有自己的 notify_roles，
+        跳级意味着「该第一级通知的人从来没被通知过」，升级链断了一节。
+
+        改成逐级补跑：从 current_level+1 开始，把每一级按顺序触发完。
+        正常路径（每级阈值之间都有检查）行为完全不变，只是一次检查
+        最多触发多级。
+        """
         now = time.time()
         to_escalate = []
 
@@ -164,20 +228,16 @@ class AlarmEscalationManager:
             for key, state in self._states.items():
                 if state.acknowledged:
                     continue
-
-                # 找到当前应该升级到的级别
                 elapsed = now - state.first_trigger_time
-                target_level = state.current_level
+                # 逐级补跑：按 level 升序，把已超时且未触发过的级都挑出来
+                for rule in sorted(self._rules, key=lambda r: r.level):
+                    if rule.level <= state.current_level:
+                        continue
+                    if elapsed >= rule.timeout_seconds:
+                        to_escalate.append((key, state, rule.level))
 
-                for rule in self._rules:
-                    if rule.level > state.current_level and elapsed >= rule.timeout_seconds:
-                        target_level = rule.level
-
-                if target_level > state.current_level:
-                    to_escalate.append((key, state, target_level))
-
-        # 执行升级
-        for key, state, target_level in to_escalate:
+        # 执行升级（按级别从低到高，保证通知顺序）
+        for key, state, target_level in sorted(to_escalate, key=lambda t: t[2]):
             self._do_escalation(key, state, target_level)
 
     def _do_escalation(self, key: str, state: EscalationState, target_level: int):
@@ -256,14 +316,12 @@ class AlarmEscalationManager:
         ]
 
     def update_rules(self, rules: List[Dict[str, Any]]):
-        """更新升级规则"""
-        self._rules = []
-        for r in rules:
-            self._rules.append(EscalationRule(
-                level=r.get('level', 1),
-                timeout_seconds=r.get('timeout_seconds', 300),
-                actions=r.get('actions', ['notify']),
-                notify_roles=r.get('notify_roles', ['operator']),
-                message_template=r.get('message_template', ''),
-            ))
+        """更新升级规则（热更新，不重启）
+
+        ⚠️ round 249：空列表 = **取消全部升级**，一律拒绝。
+        升级是安全功能，`PUT {"rules": []}` 不该能把静默关掉。
+        每条规则的 `level` / `timeout_seconds` 也校验（>= 1 的整数）：
+        `timeout_seconds: 0` 会让报警**一触发就升级`，等于升级机制打鸣。
+        """
+        self._rules = _validate_rules(rules)
         logger.info(f"升级规则已更新: {len(self._rules)} 条")

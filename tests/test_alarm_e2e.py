@@ -102,12 +102,27 @@ class TestAlarmE2E:
         assert len(notifications) <= 2  # 允许少量重复（冷却窗口内）
 
     def test_alarm_escalation(self):
-        """测试报警升级"""
+        """测试报警升级
+
+        round 249：`配置/alarms.yaml` 补了 `escalation` 段后，升级策略的
+        权威从「`_escalation_timeout` 单级兜底」变成「管理器的多级规则」。
+        原来 poke `am._escalation_timeout = 1` 就能控制超时，现在那条旋钮
+        只在管理器未装配时生效 —— 用例改成直接配管理器规则（1 秒），
+        这正是现在真正的超时来源。
+        """
         from 报警层.alarm_manager import AlarmManager
 
         db = MagicMock()
         am = AlarmManager(db)
-        am._escalation_timeout = 1  # 1秒超时（测试用）
+        # round 249 起 alarms.yaml 有 escalation 段 → 管理器随构造装配。
+        # 没装配说明配置段丢了，那本身就是缺陷，让用例直接失败。
+        assert am._escalation_manager is not None, (
+            'AlarmEscalationManager 没装配 —— 配置/alarms.yaml 的 escalation 段没了？')
+        am._escalation_manager.update_rules([
+            {'level': 1, 'timeout_seconds': 1,
+             'actions': ['notify'], 'notify_roles': ['operator'],
+             'message_template': 'x'},
+        ])
 
         escalated = []
         am._escalation_callbacks.append(lambda data: escalated.append(data))
@@ -146,6 +161,7 @@ class TestAlarmE2E:
         assert escalated[0]['device_id'] == 'tank_01'
         assert escalated[0]['register_name'] == 'level'
         assert escalated[0]['elapsed_seconds'] >= 1
+        am.stop()
 
 
 class TestAlarmOutputIntegration:

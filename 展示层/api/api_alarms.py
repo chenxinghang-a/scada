@@ -577,15 +577,56 @@ def update_dedup_config():
 
 # ==================== 告警升级配置API ====================
 
+def _escalation_payload(alarm_manager, with_rules: bool) -> dict:
+    """升级策略的**真实**状态。
+
+    round 249 修复：原实现用 `hasattr(alarm_manager, '_escalation_manager')`
+    当守卫，而该属性在 `AlarmManager.__init__` 里就设为 None ——
+    **hasattr 永远为 True**。于是生产环境（配置里没有 escalation 段、
+    管理器未装配）这三个端点全部 `None.get_status()` → 500。
+
+    改成按 `is not None` 判断，并且**未装配时如实说明当前生效的是什么**：
+    单级超时兜底（`_escalation_timeout` 秒）仍在跑，不是"升级已关闭"。
+    运维读到这段应该知道两件事：多级规则没配、兜底策略是多久。
+    """
+    manager = getattr(alarm_manager, '_escalation_manager', None)
+    if manager is not None:
+        status = manager.get_status()
+        status['mode'] = 'multi_level'
+        if not with_rules:
+            return status
+        return {'rules': manager.get_rules(), 'mode': 'multi_level'}
+
+    timeout = getattr(alarm_manager, '_escalation_timeout', 600)
+    payload = {
+        'running': False,
+        'mode': 'single_level_fallback',
+        'tracked_alarms': 0,
+        'rules_count': 0,
+        'timeout_seconds': timeout,
+        'message': (
+            f'多级升级管理器未装配（配置/alarms.yaml 缺 escalation 段或其 rules 为空）。'
+            f'当前生效的是单级超时兜底：报警 {timeout} 秒未确认即升级一次。'
+            f'如需多级规则，请 PUT /api/alarms/escalation/rules。'
+        ),
+    }
+    if not with_rules:
+        return payload
+    return {
+        'rules': [],
+        'mode': 'single_level_fallback',
+        'fallback': {'timeout_seconds': timeout},
+        'message': payload['message'],
+    }
+
+
 @alarms_bp.route('/alarms/escalation/status', methods=['GET'])
 @_require_auth
 @api_error_handler
 def get_escalation_status():
     """获取告警升级状态"""
     alarm_manager = current_app.alarm_manager
-    if hasattr(alarm_manager, '_escalation_manager'):
-        return jsonify(alarm_manager._escalation_manager.get_status())
-    return jsonify({'running': False, 'message': '升级管理器未初始化'})
+    return jsonify(_escalation_payload(alarm_manager, with_rules=False))
 
 
 @alarms_bp.route('/alarms/escalation/rules', methods=['GET'])
@@ -594,25 +635,61 @@ def get_escalation_status():
 def get_escalation_rules():
     """获取升级规则"""
     alarm_manager = current_app.alarm_manager
-    if hasattr(alarm_manager, '_escalation_manager'):
-        return jsonify({'rules': alarm_manager._escalation_manager.get_rules()})
-    return jsonify({'rules': []})
+    return jsonify(_escalation_payload(alarm_manager, with_rules=True))
 
 
 @alarms_bp.route('/alarms/escalation/rules', methods=['PUT'])
 @_require_engineer
 @api_error_handler
 def update_escalation_rules():
-    """更新升级规则"""
+    """更新升级规则（写回 配置/alarms.yaml 并热重载，重启后仍生效）
+
+    round 249：原实现在管理器未装配时直接回 500（hasattr 守卫永远为真），
+    装配了也只能改内存 —— 重启即丢，且与 yaml 双源。现在统一以 yaml 为真源：
+    校验 → 写 `escalation.rules` → `alarm_manager.load_config()` 重载
+    （内部会装配或热更新管理器）。
+    """
     data = request.get_json()
     if not data or 'rules' not in data:
         return api_error('请提供升级规则')
 
+    rules = data['rules']
+    if not isinstance(rules, list) or not rules:
+        return api_error(
+            'rules 必须是非空列表 —— 空列表等于关闭全部升级，不接受')
+
+    # 先过一遍校验，避免把非法规则写进 yaml（写坏了更难恢复）
+    from 报警层.alarm_escalation import _validate_rules
+    try:
+        _validate_rules(rules)
+    except ValueError as e:
+        return api_error(f'升级规则非法: {e}', 400)
+
+    config = load_yaml_config('配置/alarms.yaml')
+    escalation_cfg = config.get('escalation')
+    if not isinstance(escalation_cfg, dict):
+        escalation_cfg = {}
+    escalation_cfg['rules'] = rules
+    config['escalation'] = escalation_cfg
+
+    if not save_yaml_config('配置/alarms.yaml', config):
+        return api_error('升级规则保存失败', 500)
+
     alarm_manager = current_app.alarm_manager
-    if hasattr(alarm_manager, '_escalation_manager'):
-        alarm_manager._escalation_manager.update_rules(data['rules'])
-        get_auth_manager().log_operation(
-            request.current_user['username'], 'update_escalation_rules',
-            f'更新升级规则: {len(data["rules"])} 条')
-        return jsonify({'success': True, 'message': '升级规则已更新'})
-    return api_error('升级管理器未初始化', 500)
+    try:
+        alarm_manager.load_config()      # 装配 / 热更新多级规则
+    except Exception as e:               # noqa: BLE001 —— load_config 自己吞异常
+        logger.error("升级规则重载失败: %s", e, exc_info=True)
+
+    get_auth_manager().log_operation(
+        request.current_user['username'], 'update_escalation_rules',
+        f'更新升级规则: {len(rules)} 条')
+
+    return jsonify({
+        'success': True,
+        'message': '升级规则已更新（已写回配置并热加载）',
+        'rules': alarm_manager._escalation_manager.get_rules()
+        if alarm_manager._escalation_manager is not None else [],
+        'mode': 'multi_level' if alarm_manager._escalation_manager is not None
+        else 'single_level_fallback',
+    })

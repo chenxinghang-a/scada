@@ -174,3 +174,36 @@ notification:
     critical_sound: alarm_critical.mp3
     enabled: true
     warning_sound: alarm_warning.mp3
+
+# ================================================================
+# 告警升级策略（round 249 补）
+# ================================================================
+# 此前这个文件里**没有 escalation 段**，后果（round 249 实测）：
+#   1. `AlarmEscalationManager` 从不装配 → `/api/alarms/escalation/*`
+#      三个端点全部 500（守卫写的是 hasattr，而属性初值就是 None）；
+#   2. 多级升级形同虚设，实际生效的只有代码里的单级 600 秒兜底。
+#
+# 下面这段的语义与补齐前的**单级 600 秒兜底完全一致**（一条 600 秒规则），
+# 补齐只是把"隐式兜底"变成"显式配置"，行为不变、API 可用。
+#
+# 需要多级升级时按同样结构加规则即可（level 从 1 递增、不可重复；
+# timeout_seconds 必须 >= 1；列表不能为空 —— 空列表会被拒）：
+#
+#   escalation:
+#     timeout_seconds: 600          # 未给 rules 时合成单级规则用的超时
+#     rules:
+#       - level: 1
+#         timeout_seconds: 600
+#         actions: [notify, broadcast]
+#         notify_roles: [operator]
+#         message_template: '报警超时未确认: {alarm_message}'
+#       - level: 2
+#         timeout_seconds: 1800
+#         actions: [notify, broadcast]
+#         notify_roles: [engineer, operator]
+#         message_template: '报警升级: {alarm_message} 已超时30分钟'
+#
+# 规则可通过 PUT /api/alarms/escalation/rules 热更新（写回本文件并重载，
+# 重启后仍生效）。
+escalation:
+  timeout_seconds: 600

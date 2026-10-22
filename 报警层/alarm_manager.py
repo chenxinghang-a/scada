@@ -884,38 +884,49 @@ class AlarmManager:
                 self._escalation_timeout = escalation_cfg.get('timeout_seconds', 600)
                 logger.info(f"加载报警升级配置: 超时{self._escalation_timeout}s")
 
-                # 初始化告警升级管理器（多级升级）
-                if self._escalation_manager is None:
-                    try:
-                        from 报警层.alarm_escalation import AlarmEscalationManager
-                        # 单套升级：管理器规则是策略的唯一来源。配置只给了
-                        # timeout_seconds 时补一条同超时的单级规则，否则会出现
-                        # "配置写 600s、管理器仍按默认 300/900/1800 升级"的隐性分歧。
-                        manager_cfg = dict(escalation_cfg)
-                        if not manager_cfg.get('rules'):
-                            manager_cfg['rules'] = [{
-                                'level': 1,
-                                'timeout_seconds': self._escalation_timeout,
-                                'actions': ['notify', 'broadcast'],
-                                'notify_roles': ['operator'],
-                                'message_template': '报警超时未确认: {alarm_message}',
-                            }]
+                # 单套升级：管理器规则是策略的唯一来源。配置只给了
+                # timeout_seconds 时补一条同超时的单级规则，否则会出现
+                # "配置写 600s、管理器仍按默认 300/900/1800 升级"的隐性分歧。
+                manager_cfg = dict(escalation_cfg)
+                if not manager_cfg.get('rules'):
+                    manager_cfg['rules'] = [{
+                        'level': 1,
+                        'timeout_seconds': self._escalation_timeout,
+                        'actions': ['notify', 'broadcast'],
+                        'notify_roles': ['operator'],
+                        'message_template': '报警超时未确认: {alarm_message}',
+                    }]
+
+                try:
+                    from 报警层.alarm_escalation import AlarmEscalationManager
+                    if self._escalation_manager is None:
                         self._escalation_manager = AlarmEscalationManager(manager_cfg)
                         self._escalation_manager.add_callback(self._on_escalation)
                         # 多级升级结果桥接给外部回调（见 _on_manager_escalation）
                         self._escalation_manager.add_callback(self._on_manager_escalation)
                         # 不启动管理器自带线程：升级由报警升级定时器统一驱动，
                         # 否则又是"两套调度各跑一套"
-                        rules = self._escalation_manager.get_rules()
-                        if rules:
-                            self._escalation_timeout = min(
-                                r['timeout_seconds'] for r in rules)
                         logger.info(
-                            "告警升级管理器初始化成功（多级规则，统一由报警升级定时器驱动，"
-                            "首级超时%d秒）", self._escalation_timeout)
-                    except Exception as e:
-                        logger.warning(f"告警升级管理器初始化失败: {e}")
-                        self._escalation_manager = None
+                            "告警升级管理器初始化成功（多级规则，统一由报警升级定时器驱动）")
+                    else:
+                        # round 249：原实现是 `if self._escalation_manager is None:`
+                        # 整段跳过 —— 于是**首次装配之后再改 yaml 里的 rules 永不生效**：
+                        # 手工编辑、热重载监控、以及 PUT /api/alarms/escalation/rules
+                        # 全都撞在这道 Guard 上。yaml 是真源，已装配就走热更新。
+                        self._escalation_manager.update_rules(manager_cfg['rules'])
+                        logger.info("告警升级规则已热更新: %d 条",
+                                    len(manager_cfg['rules']))
+
+                    rules = self._escalation_manager.get_rules()
+                    if rules:
+                        self._escalation_timeout = min(
+                            r['timeout_seconds'] for r in rules)
+                    logger.info("告警升级首级超时 %d 秒", self._escalation_timeout)
+                except Exception as e:
+                    # 装配/热更新失败：**不清空已装配的管理器**（那会让正在
+                    # 生效的多级策略凭空消失），只留 warning。首次装配失败时
+                    # 它本来就是 None，上层 check_escalation 会走单级兜底。
+                    logger.warning(f"告警升级管理器装配失败（保留既有策略）: {e}")
 
         except Exception as e:
             logger.error(f"加载报警配置异常: {e}")
@@ -1292,6 +1303,15 @@ class AlarmManager:
         """
         rule_id = rule_config.get('id')
 
+        # 记录到升级管理器 —— 必须在洪水检测**之前**。
+        # round 249：原实现在洪水抑制的 early return 之后，于是被洪水检测器
+        # 抑制（没弹toast/没广播）的报警**不进升级跟踪**，永远不会升级。
+        # 而它此前的单级兜底读的是 alarm_states（报警已真实存在），
+        # 照样会升级 —— 换到管理器后覆盖范围变小了。
+        # 升级关心的是「这条报警多久没人确认」，与它的**输出**是否被抑制无关。
+        if self._escalation_manager:
+            self._escalation_manager.record_alarm(rule_id, device_id, register_name)
+
         # ISA-18.2: 告警洪水检测 — 抑制低优先级告警
         severity = rule_config.get('level', 'medium')
         should_emit, reason = self._flood_detector.record_alarm(severity)
@@ -1300,9 +1320,6 @@ class AlarmManager:
             return
         alarm_level = rule_config.get('level', 'warning')
 
-        # 记录到升级管理器
-        if self._escalation_manager:
-            self._escalation_manager.record_alarm(rule_id, device_id, register_name)
         alarm_message = rule_config.get('name', '未知报警')
         threshold = rule_config.get('threshold', 0)
         alarm_area = rule_config.get('area', 'all')
