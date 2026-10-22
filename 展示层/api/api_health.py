@@ -174,13 +174,35 @@ def get_health_detail():
             logger.warning("健康详情：请求队列状态探测失败: %s", e, exc_info=True)
             result['queues'] = {'status': 'unavailable', 'reason': str(e)}
 
-        # 熔断器状态
+        # 熔断器状态（round 251：以采集链的内联熔断器为真源）
+        #
+        # 原实现只读 `circuit_breaker_manager.get_all_stats()` —— 那套通用
+        # 熔断器生产环境从未创建过实例，于是这个段永远是 **{}**。
+        # 运维在健康详情里看到"没有熔断器"，而某台设备可能早已熔断打开、
+        # 正在按 30 秒周期空转。真实状态在 DataCollector 里，这里读它。
+        #
+        # ⚠️ 必须校验形状再嵌进响应：这个接口的契约是「单个组件探不到不该让
+        # 整个诊断接口 500」（round 168e 定下的）。第一版直接
+        # `real['summary']` 嵌进去，撞上 MagicMock 采集器（测试夹具）或任何
+        # 返回值不符预期的实现，jsonify 就炸，**连同其它组件的状态一起 500**。
         try:
-            from core.circuit_breaker import circuit_breaker_manager
-            result['circuit_breakers'] = circuit_breaker_manager.get_all_stats()
+            dc = current_app.data_collector
+            real = dc.get_circuit_breaker_states()
+            if not isinstance(real, dict):
+                raise TypeError(
+                    f'get_circuit_breaker_states 返回 {type(real).__name__}，不是 dict')
+            summary = real.get('summary')
+            devices = real.get('devices')
+            if not isinstance(summary, dict) or not isinstance(devices, dict):
+                raise TypeError('熔断状态缺少 summary/devices 字典')
+            result['circuit_breakers'] = {
+                'source': 'data_collector',
+                'summary': summary,
+                'devices': devices,
+            }
         except Exception as e:
             logger.warning("健康详情：熔断器状态探测失败: %s", e, exc_info=True)
-            result['circuit_breakers'] = {'status': 'unavailable', 'reason': str(e)}
+            result['circuit_breakers'] = {'status': 'unknown', 'reason': str(e)}
 
         return success_response(result)
     except Exception as e:

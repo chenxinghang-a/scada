@@ -4,7 +4,7 @@
 """
 
 import logging
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 
 from core.circuit_breaker import circuit_breaker_manager, CircuitBreakerError
 from core.dynamic_rate_limiter import dynamic_rate_limiter, LoadLevel
@@ -26,16 +26,58 @@ resilience_bp = Blueprint('api_resilience', __name__, url_prefix='/api/resilienc
 @resilience_bp.route('/circuit-breaker', methods=['GET'])
 @jwt_required
 def get_all_circuit_breakers():
-    """获取所有熔断器状态"""
+    """获取所有熔断器状态
+
+    round 251：原实现读 `circuit_breaker_manager.get_all_stats()` ——
+    而 `core/circuit_breaker.py` 的通用熔断器**生产环境从未创建过实例**，
+    这个接口于是永远回 `{'breakers': {}, 'total': 0}`。运维在看板上看到
+    「0 个熔断器、一切正常」，而某台设备可能早已熔断打开。
+
+    采集链真正的熔断保护是 `DataCollector` 里的内联实现
+    （`_circuit_state` / `_failure_counts`，按设备、带冷却与半开试探）。
+    现在以它为真源；通用管理器的数据作为 `generic` 字段附带返回
+    （当前为空，保留是为了让"两套实现"这件事在接口层可见）。
+    """
     try:
-        stats = circuit_breaker_manager.get_all_stats()
-        return success_response({
-            'breakers': stats,
-            'total': len(stats),
-        })
-    except Exception as e:
-        logger.error(f"获取熔断器状态失败: {e}", exc_info=True)
-        return error_response("服务器内部错误", 500)
+        generic = circuit_breaker_manager.get_all_stats()
+    except Exception as e:      # noqa: BLE001
+        logger.warning("读取通用熔断器管理器失败: %s", e)
+        generic = {}
+
+    devices: dict = {}
+    source = 'generic_manager'
+    degraded_reason = None
+    try:
+        dc = current_app.data_collector
+        real = dc.get_circuit_breaker_states()
+        # 形状校验：探测代码不能假设对方返回什么。测试夹具里的 MagicMock
+        # 采集器、或者将来返回值不符预期的实现，都会让这里炸 ——
+        # 而一个韧性接口自己 500 是最难看的失败。
+        if not isinstance(real, dict):
+            raise TypeError(
+                f'get_circuit_breaker_states 返回 {type(real).__name__}，不是 dict')
+        if not isinstance(real.get('devices'), dict):
+            raise TypeError('熔断状态缺少 devices 字典')
+        devices = real['devices']
+        source = 'data_collector'
+    except Exception as e:      # noqa: BLE001 —— 探测失败不该 500
+        degraded_reason = str(e)
+        logger.warning("读取采集器熔断状态失败: %s", e)
+
+    payload = {
+        'breakers': devices,
+        'total': len(devices),
+        'source': source,
+        'generic': generic,
+        'note': (
+            'breakers 来自采集链的内联熔断器（真实生效的保护）；'
+            'generic 是 core/circuit_breaker.py 的通用管理器，'
+            '生产环境未使用，恒为空。'
+        ),
+    }
+    if degraded_reason is not None:
+        payload['degraded'] = {'status': 'unknown', 'reason': degraded_reason}
+    return success_response(payload)
 
 
 @resilience_bp.route('/circuit-breaker/<name>', methods=['GET'])

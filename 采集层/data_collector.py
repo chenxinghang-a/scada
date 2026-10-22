@@ -1779,6 +1779,61 @@ class DataCollector:
             good = max(0, count - round(count * 0.02))  # 用round避免小批量截断为0
             self.oee_calculator.record_production(device_id, count=count, good_count=good)
 
+    def get_circuit_breaker_states(self) -> dict[str, Any]:
+        """各设备**真实生效**的熔断器状态（round 251）。
+
+        为什么需要它：采集链的熔断保护是 `_handle_circuit_breaker()` 里的
+        内联实现（`_circuit_state` / `_failure_counts`，按设备、带冷却与
+        半开试探）。而 `core/circuit_breaker.py` 那套通用熔断器
+        **生产环境从未创建过实例** —— `/api/resilience/circuit-breaker`
+        和健康详情的 `circuit_breakers` 段读的是它，于永远是**空**。
+
+        净效果：运维在韧性看板上看到「0 个熔断器、一切正常」，
+        而某台设备可能早已熔断打开、正在按 30 秒周期空转。
+        **真实状态没有任何接口能看到**，这是本轮要修的。
+
+        Returns:
+            ``{'summary': {...}, 'devices': {device_id: {...}}}``。
+            只包含「已熔断」或「有连续失败」的设备 —— 全健康时
+            ``devices`` 为空、``summary.open == 0``，调用方可以据此判断。
+        """
+        now = time.time()
+        open_states = dict(getattr(self, '_circuit_state', None) or {})
+        failure_counts = dict(getattr(self, '_failure_counts', None) or {})
+
+        devices: dict[str, Any] = {}
+        for device_id in set(open_states) | {d for d, n in failure_counts.items() if n}:
+            cb = open_states.get(device_id) or {}
+            opened_at = cb.get('opened_at')
+            failures = int(failure_counts.get(device_id, 0) or 0)
+            entry: dict[str, Any] = {
+                'state': 'open' if opened_at else 'closed',
+                'consecutive_failures': failures,
+                'threshold': CIRCUIT_BREAKER_THRESHOLD,
+            }
+            if opened_at:
+                elapsed = max(0.0, now - opened_at)
+                entry['opened_at'] = opened_at
+                entry['opened_for_sec'] = round(elapsed, 1)
+                entry['cooldown_remaining_sec'] = round(
+                    max(0.0, CIRCUIT_BREAKER_COOLDOWN_S - elapsed), 1)
+                entry['phase'] = ('cooldown' if elapsed < CIRCUIT_BREAKER_COOLDOWN_S
+                                  else 'half_open_probe')
+            devices[device_id] = entry
+
+        opened = sum(1 for d in devices.values() if d['state'] == 'open')
+        return {
+            'summary': {
+                'total_tracked': len(devices),
+                'open': opened,
+                'cooldown': sum(1 for d in devices.values()
+                                if d.get('phase') == 'cooldown'),
+                'threshold': CIRCUIT_BREAKER_THRESHOLD,
+                'cooldown_sec': CIRCUIT_BREAKER_COOLDOWN_S,
+            },
+            'devices': devices,
+        }
+
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         with self._stats_lock:
@@ -1799,4 +1854,14 @@ class DataCollector:
         intervals = dict(getattr(self, '_device_intervals', None) or {})
         if intervals:
             stats['device_intervals'] = intervals
+        # 真实熔断状态（round 251）。此前 `/api/resilience/circuit-breaker`
+        # 读的是从未被实例化的通用熔断器管理器，恒为空 —— 看板显示"一切正常"，
+        # 而设备可能早已熔断。这里把内联熔断器的真实状态暴露出来。
+        try:
+            cb = self.get_circuit_breaker_states()
+            stats['circuit_breakers'] = cb['summary']
+            if cb['devices']:
+                stats['circuit_breaker_devices'] = cb['devices']
+        except Exception as e:      # noqa: BLE001 —— 统计不该因探测失败而 500
+            logger.debug(f"读取熔断器状态失败: {e}")
         return stats

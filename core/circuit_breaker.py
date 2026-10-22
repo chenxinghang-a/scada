@@ -7,6 +7,25 @@
   CLOSED  → 正常放行，统计失败率
   OPEN    → 直接拒绝，等待冷却时间
   HALF_OPEN → 允许少量探测请求，成功则CLOSED，失败则OPEN
+
+⚠️ **本模块在生产环境中没有被使用**（round 251 核实）:
+    全仓库没有任何地方调用 `get_circuit_breaker(...)` 把真实操作包进来 ——
+    `circuit_breaker_manager` 永远是空的，于是
+    `/api/resilience/circuit-breaker` 与健康详情的 `circuit_breakers` 段
+    曾经永远返回空，看板显示"0 个熔断器、一切正常"。
+
+    采集链**真正生效**的熔断保护是 `采集层/data_collector.py` 里的
+    内联实现（`_circuit_state` / `_failure_counts` / `_handle_circuit_breaker()`）:
+    按设备、连续失败 5 次打开、冷却 30 秒后半开试探、可生成 BAD 质量兜底数据。
+    它和本模块不是同一件东西的两个副本，而是**两种不同抽象**：
+    内联版与采集器的 Timer 调度/线程池/兜底数据深度耦合，
+    本模块是通用的"包住一个 callable"式熔断器。
+
+    round 251 起，两个接口改以采集器的内联状态为真源
+    （`DataCollector.get_circuit_breaker_states()`），本模块的数据作为
+    `generic` 字段附带返回。若将来要把某条链路（如数据库调用）接入熔断，
+    用 `get_circuit_breaker(name)` 包住它即可，那时看板上的 generic 段
+    才会有内容。
 """
 
 import threading
