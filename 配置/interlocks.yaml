@@ -1,0 +1,114 @@
+# ================================================================
+# 安全联锁规则（工艺阈值）
+# ================================================================
+# 这个文件是 `DeviceControlSafety` 的**唯一**规则来源（启动时由
+# `_load_interlocks_from_file()` 读取，路径 `配置/interlocks.yaml`）。
+#
+# 背景：此前仓库里没有任何联锁配置 —— 预置的 plc_reactor_01 等规则
+# 引用了设备清单里不存在的设备，条件永不匹配，属于「看似在保护、
+# 实际不保护」的死规则，已移除。没有配置就没有联锁，并明确告警。
+#
+# 阈值来源分两类，**改动前请确认自己是哪一类**：
+#   [A] 与 `配置/alarms.yaml` 的 critical 报警阈值对齐 —— 同一工况下
+#       报警已经会响，联锁只是把「响一下」升级为「禁止启动」。
+#   [B] 模板值（典型工艺经验值，本项目无报警规则参照）——
+#       **必须由工艺负责人确认后再启用**，不确定就把 enabled 改 false。
+#
+# 生效范围：block_start 类联锁是「启动/写入的准入依据」
+# （`validate_write` 与 `batch_control(action='start')` 读联锁状态），
+# 触发后对应设备的启动与写操作被拒绝，直到条件恢复正常。
+#
+# 寄存器/设备名写错不会报错，只会让这条规则永不触发 ——
+# tests/test_interlocks_config_wiring.py 会逐条核对设备与寄存器
+# 是否存在于 `配置/devices.yaml`，改完请跑该测试。
+# ================================================================
+
+interlocks:
+  # ---------- 西门子 S7-1500 PLC（锅炉） ----------
+  # [A] 与 alarms.yaml 的 critical 规则同阈值（>180℃）
+  - id: boiler_overtemp_block_start
+    name: 锅炉温度超限禁止启动
+    priority: 1
+    enabled: true
+    description: >
+      锅炉温度超过 180℃ 时禁止启动。与报警规则
+      siemens_1500_01/boiler_temperature greater_than 180（critical）同阈值。
+    condition:
+      type: threshold
+      device_id: siemens_1500_01
+      register: boiler_temperature
+      operator: '>'
+      value: 180.0
+    action:
+      type: block_start
+      device_id: siemens_1500_01
+    alarm:
+      level: critical
+      message: 锅炉温度超限（>180℃），启动已阻止
+
+  # [A] 与 alarms.yaml 的 critical 规则同阈值（>1.2 MPa）
+  - id: boiler_overpressure_block_start
+    name: 锅炉压力超限禁止启动
+    priority: 1
+    enabled: true
+    description: >
+      锅炉压力超过 1.2 时禁止启动。与报警规则
+      siemens_1500_01/boiler_pressure greater_than 1.2（critical）同阈值。
+    condition:
+      type: threshold
+      device_id: siemens_1500_01
+      register: boiler_pressure
+      operator: '>'
+      value: 1.2
+    action:
+      type: block_start
+      device_id: siemens_1500_01
+    alarm:
+      level: critical
+      message: 锅炉压力超限（>1.2），启动已阻止
+
+  # [B] 模板值 —— 典型锅炉低水位联锁，**需工艺确认**
+  - id: boiler_low_water_level_block_start
+    name: 锅炉低水位禁止启动（模板值，待确认）
+    priority: 1
+    enabled: false
+    description: >
+      模板规则，默认禁用。给水水位低于 30 时禁止启动（干烧保护）。
+      30 这个值是典型经验值，本项目无对应报警规则参照，
+      **必须由工艺负责人确认量纲与阈值后再把 enabled 改 true**。
+      不确定量纲（是百分比、mm 还是 m³/h）时先去看 devices.yaml 里
+      feed_water_level 的 scale/unit 定义。
+    condition:
+      type: threshold
+      device_id: siemens_1500_01
+      register: feed_water_level
+      operator: '<'
+      value: 30.0
+    action:
+      type: block_start
+      device_id: siemens_1500_01
+    alarm:
+      level: critical
+      message: 锅炉给水水位过低，启动已阻止
+
+  # ---------- 施耐德 M340 PLC（水处理泵组） ----------
+  # [B] 模板值 —— 泵组干转保护，**需工艺确认**
+  - id: pump_low_water_level_block_start
+    name: 水处理泵低水位禁止启动（模板值，待确认）
+    priority: 2
+    enabled: false
+    description: >
+      模板规则，默认禁用。水槽水位低于 20 时禁止启动泵组（干转保护）。
+      阈值为典型经验值，需工艺确认；确认前保持 enabled: false。
+    condition:
+      type: threshold
+      device_id: schneider_m340_01
+      register: water_level
+      operator: '<'
+      value: 20.0
+    action:
+      type: block_start
+      device_id: schneider_m340_01
+    alarm:
+      level: critical
+      message: 水槽水位过低，泵组启动已阻止

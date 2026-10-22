@@ -105,7 +105,6 @@ industrial_scada/
 │
 ├── 报警层/                       # 报警管理模块
 │   ├── alarm_manager.py         # 报警管理器 (阈值检测/去重/升级)
-│   ├── alarm_rules.py           # 报警规则引擎
 │   ├── alarm_escalation.py      # 告警升级管理器 (规则列表模型)
 │   ├── alarm_output.py          # 声光报警器输出 (Modbus DO)
 │   ├── broadcast_system.py      # PA广播系统 (MQTT)

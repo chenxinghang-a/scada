@@ -102,7 +102,6 @@ def get_health_detail():
                 "websocket": {"status": "ok", "connected_clients": 5},
                 "collector": {"status": "ok", "active_tasks": 10},
                 "version": "1.3.1028",
-                "api_cache": {...},
                 "queues": {"report": {...}, "export": {...}},
                 "circuit_breakers": {...}
             }
@@ -163,14 +162,6 @@ def get_health_detail():
         except Exception as e:
             logger.warning("健康详情：读取版本号失败: %s", e, exc_info=True)
             result['version'] = 'unknown'
-
-        # API缓存状态
-        try:
-            from core.api_cache import get_cache_stats
-            result['api_cache'] = get_cache_stats()
-        except Exception as e:
-            logger.warning("健康详情：API 缓存状态探测失败: %s", e, exc_info=True)
-            result['api_cache'] = {'status': 'unavailable', 'reason': str(e)}
 
         # 请求队列状态
         try:

@@ -262,54 +262,6 @@ class TestIDeviceManagerInterface:
 
 
 # ============================================================
-# AlarmRules additional tests (for alarm_rules.py coverage)
-# ============================================================
-from 报警层.alarm_rules import AlarmRule, AlarmRules
-
-
-class TestAlarmRuleEdgeCases:
-
-    def test_check_all_conditions(self):
-        conditions = {
-            'greater_than': (90, 80, True),
-            'less_than': (70, 80, True),
-            'equal_to': (80, 80, True),
-            'not_equal_to': (80, 80, False),
-            'greater_equal': (80, 80, True),
-            'less_equal': (80, 80, True),
-        }
-        for condition, (value, threshold, expected) in conditions.items():
-            rule = AlarmRule('r1', 'test', 'd1', 'v', condition, threshold)
-            assert rule.check(value) == expected, f"Condition {condition} failed"
-
-    def test_from_dict_defaults(self):
-        data = {
-            'id': 'r1', 'name': 'X', 'device_id': 'd1',
-            'register_name': 'v', 'condition': 'greater_than',
-            'threshold': 80.0
-        }
-        rule = AlarmRule.from_dict(data)
-        assert rule.level == 'warning'
-        assert rule.enabled is True
-        assert rule.delay == 0
-        assert rule.description == ''
-
-    def test_rules_multiple_device_check(self):
-        rules = AlarmRules()
-        rules.add_rule(AlarmRule('r1', 'A', 'd1', 'temp', 'greater_than', 80.0))
-        rules.add_rule(AlarmRule('r2', 'B', 'd1', 'temp', 'greater_than', 90.0))
-        rules.add_rule(AlarmRule('r3', 'C', 'd2', 'temp', 'greater_than', 70.0))
-        triggered = rules.check_value('d1', 'temp', 95.0)
-        assert len(triggered) == 2
-
-    def test_rules_check_disabled_rule(self):
-        rules = AlarmRules()
-        rules.add_rule(AlarmRule('r1', 'A', 'd1', 'temp', 'greater_than', 80.0, enabled=False))
-        triggered = rules.check_value('d1', 'temp', 90.0)
-        assert len(triggered) == 0
-
-
-# ============================================================
 # Notification additional tests
 # ============================================================
 from 报警层.notification import Notification

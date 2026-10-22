@@ -177,9 +177,15 @@ class DeviceControlSafety:
         加载安全联锁规则（配置驱动）
 
         规则来源（按优先级，先命中先返回）：
-        1. 配置/interlocks.yaml（生产推荐：含真实设备ID与寄存器名）
-        2. 构造参数 config['interlocks']（测试/嵌入式注入）
+        1. 构造参数 config['interlocks']（显式传入，测试/嵌入式注入）
+        2. 配置/interlocks.yaml（生产推荐：含真实设备ID与寄存器名）
         3. 各设备配置中的 `interlocks` 段（按设备就近声明）
+
+        ⚠️ round 247 调整过 1/2 的顺序：原来是「文件 > 注入」，
+        在补了 `配置/interlocks.yaml` 之后暴露出真实问题 ——
+        调用方显式注入的规则会被仓库里的文件**静默顶掉**，
+        注入方以为自己的规则生效了，实际跑的是文件里的规则。
+        显式传入优先于环境文件，是更稳的默认方向。
 
         历史实现把 6 条"预置规则"直接写死在代码里，绑定了 `plc_reactor_01`
         等**配置中并不存在**的设备名 —— 条件永远不会匹配，等于装了一批永不触发的
@@ -204,16 +210,21 @@ class DeviceControlSafety:
         rules = []
         source = None
 
-        # 1. 配置文件
-        file_rules = self._load_interlocks_from_file()
-        if file_rules:
-            rules, source = file_rules, str(paths.resolve(INTERLOCK_CONFIG_PATH))
+        # 1. 构造参数注入（**显式传入优先于环境文件**）
+        # 优先级理由：调用方在代码里明确给出的配置，比磁盘上恰好存在的文件
+        # 更具体。原顺序是「文件 > 注入」，在 round 247 补了
+        # `配置/interlocks.yaml` 之后暴露出真实问题：测试（以及任何嵌入方）
+        # 注入的规则会被仓库里的配置文件**静默顶掉**，注入方以为自己的规则
+        # 生效了，实际跑的是文件里的规则 —— 和「联锁看似在保护」同一种病。
+        injected = self.config.get('interlocks')
+        if isinstance(injected, list) and injected:
+            rules, source = list(injected), "config['interlocks']"
 
-        # 2. 构造参数注入
+        # 2. 配置文件（生产环境的规则来源）
         if not rules:
-            injected = self.config.get('interlocks')
-            if isinstance(injected, list) and injected:
-                rules, source = list(injected), "config['interlocks']"
+            file_rules = self._load_interlocks_from_file()
+            if file_rules:
+                rules, source = file_rules, str(paths.resolve(INTERLOCK_CONFIG_PATH))
 
         # 3. 设备配置内的 interlocks 段
         if not rules:

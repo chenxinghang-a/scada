@@ -372,7 +372,7 @@ class TestComposeSecrets:
 # 3. 设备控制 fail-closed
 # ===========================================================================
 
-def _dc(interlocks=None, simulation=False, devices=None):
+def _dc(interlocks=None, simulation=False, devices=None, no_config_sources=False):
     from 智能层.device_control import DeviceControlSafety
     from unittest.mock import MagicMock
 
@@ -381,13 +381,21 @@ def _dc(interlocks=None, simulation=False, devices=None):
     dm.simulation_mode = simulation
     dm.get_all_devices.return_value = dict(dm.devices)
     cfg = {'interlocks': interlocks} if interlocks is not None else {}
-    return DeviceControlSafety(MagicMock(), device_manager=dm, config=cfg)
+    dc = DeviceControlSafety(MagicMock(), device_manager=dm, config=cfg)
+    if no_config_sources:
+        # 「零联锁」场景必须真的零：round 247 起仓库里有
+        # `配置/interlocks.yaml`，不注入也不清空文件来源的话，
+        # 这里会加载到生产规则，「without interlocks」的场景就失真了。
+        dc._interlock_rules.clear()
+        dc._load_interlocks_from_file = lambda: []
+        dc._load_interlocks_from_devices = lambda: []
+    return dc
 
 
 class TestControlInterlockFailClosed:
     def test_real_mode_without_interlocks_refuses_write(self):
         """真实设备模式 + 零联锁规则 → 写操作必须被拒（此前只打 warning）"""
-        dc = _dc(interlocks=None, simulation=False)
+        dc = _dc(interlocks=None, simulation=False, no_config_sources=True)
         assert dc._interlock_rules == {}
         r = dc.validate_write('plc_a', 0, 1, 'op')
         assert r['allowed'] is False
@@ -395,7 +403,7 @@ class TestControlInterlockFailClosed:
 
     def test_simulation_without_interlocks_still_allows_write(self):
         """反向对照：模拟模式无物理风险，不能把演示链路卡死"""
-        dc = _dc(interlocks=None, simulation=True)
+        dc = _dc(interlocks=None, simulation=True, no_config_sources=True)
         r = dc.validate_write('plc_a', 0, 1, 'op')
         assert r['allowed'] is True
 

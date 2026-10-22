@@ -25,12 +25,13 @@
 修法与 `AlarmManager.check_alarm` 一致：非有限值 = 读数无效，
 **本条不更新状态**（既不触发也不解除），留 warning。
 
-⚠️ 另附一个与代码无关、但必须知道的事实：仓库里
-`配置/interlocks.yaml` **不存在**，`配置/devices.yaml` 也没有 `interlocks`
-段，`run.py` 构造 `DeviceControlSafety` 时没传 `config` ——
-**生产环境启动后联锁规则是 0 条**，只在启动日志里有一句 WARNING。
-本文件的用例靠 `config={'interlocks': [...]}` 注入规则，
-所以它们验证的是「配了规则之后行为对不对」，不代表线上已经配了规则。
+⚠️ 配置来源说明（round 247 更新）：`配置/interlocks.yaml` **已存在**
+（工艺阈值，见 tests/test_interlocks_config_wiring.py）。本文件仍靠
+`config={'interlocks': [...]}` 注入规则，因为**构造参数优先于文件**
+（round 247 改的优先级：显式传入比磁盘上恰好存在的文件更具体）。
+所以这些用例验证的是「给定规则下的行为是否正确」，
+与生产实际加载了哪些规则无关 —— 后者由
+tests/test_interlocks_config_wiring.py 负责。
 """
 
 import os

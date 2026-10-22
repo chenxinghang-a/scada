@@ -11,12 +11,15 @@
 | 结构 | 清理函数 | 不清理的后果 |
 |---|---|---|
 | ``jwt_blacklist`` | ``AuthManager.cleanup_expired_blacklist`` | 表无界增长；且查询代价随时间线性上升 |
-| API 响应缓存 | ``core.api_cache.cleanup_expired`` | 内存无界增长 |
 | 请求签名 nonce | ``core.request_signature.cleanup_nonce_cache`` | 内存无界增长 |
 | 用户限流计数 | ``core.user_rate_limiter.cleanup_expired_entries`` | 内存无界增长 |
 | WebSocket 离线队列 | ``offline_queue.cleanup_expired`` | 内存无界增长 |
-| 分层缓存 | ``tiered_cache.cleanup_expired`` | 内存无界增长 |
 | 历史数据 | ``Database.archive_old_data`` + ``wal_checkpoint`` | 库文件无界增长 |
+
+（``core.api_cache`` 与 ``core.cache_tier`` 两套缓存实现已于 round 247 删除：
+两者都**只有自己的清理函数被这里调用过**，没有任何业务代码写入或读取，
+属于「清理一个永远为空的缓存」的假维护。真需要 API 缓存时，应带着真实
+消费方一起加进来，而不是先留一套没人用的实现。）
 
 ``run.py`` 里原本手写了一个 ``while True: sleep(86400)`` 的裸线程做归档，
 既没有停止路径，也和其他清理任务各写一套。本模块把它们统一收敛到
@@ -40,11 +43,9 @@ logger = logging.getLogger(__name__)
 #: 各维护任务的默认执行间隔（秒）
 DEFAULT_INTERVALS: Dict[str, float] = {
     'jwt_blacklist_cleanup': 3600,        # 1 小时
-    'api_cache_cleanup': 300,             # 5 分钟
     'nonce_cache_cleanup': 600,           # 10 分钟
     'rate_limiter_cleanup': 600,          # 10 分钟
     'ws_offline_queue_cleanup': 300,      # 5 分钟
-    'cache_tier_cleanup': 600,            # 10 分钟
     'data_archive': 86400,                # 24 小时
 }
 
@@ -66,10 +67,6 @@ def build_maintenance_tasks(database=None, auth_manager=None, *, archive_days: i
             auth_manager.cleanup_expired_blacklist,
         ))
 
-    def _api_cache_cleanup():
-        from core.api_cache import cleanup_expired
-        return cleanup_expired()
-
     def _nonce_cache_cleanup():
         from core.request_signature import cleanup_nonce_cache
         return cleanup_nonce_cache()
@@ -82,23 +79,13 @@ def build_maintenance_tasks(database=None, auth_manager=None, *, archive_days: i
         from core.ws_offline_queue import offline_queue
         return offline_queue.cleanup_expired()
 
-    def _cache_tier_cleanup():
-        # 注意：TieredCache 上的方法是 cleanup()；
-        # cleanup_expired() 属于内部的 MemoryCache，不能在这里调。
-        from core.cache_tier import tiered_cache
-        return tiered_cache.cleanup()
-
     tasks.extend([
-        ('api_cache_cleanup', DEFAULT_INTERVALS['api_cache_cleanup'],
-         '清理过期的 API 响应缓存', _api_cache_cleanup),
         ('nonce_cache_cleanup', DEFAULT_INTERVALS['nonce_cache_cleanup'],
          '清理过期的请求签名 nonce', _nonce_cache_cleanup),
         ('rate_limiter_cleanup', DEFAULT_INTERVALS['rate_limiter_cleanup'],
          '清理过期的用户限流计数', _rate_limiter_cleanup),
         ('ws_offline_queue_cleanup', DEFAULT_INTERVALS['ws_offline_queue_cleanup'],
          '清理过期的 WebSocket 离线消息', _ws_offline_queue_cleanup),
-        ('cache_tier_cleanup', DEFAULT_INTERVALS['cache_tier_cleanup'],
-         '清理过期的分层缓存', _cache_tier_cleanup),
     ])
 
     if database is not None:
@@ -141,7 +128,7 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
         auth_manager: ``用户层.auth.AuthManager`` 实例，用于黑名单清理；为 None 则跳过。
         archive_days: 归档阈值（天）。
         delete_days: 删除阈值（天）。
-        intervals: 覆盖默认间隔，形如 ``{'api_cache_cleanup': 60}``。
+        intervals: 覆盖默认间隔，形如 ``{'nonce_cache_cleanup': 60}``。
 
     Returns:
         已注册的任务名列表。

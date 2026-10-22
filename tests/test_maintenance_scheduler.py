@@ -116,7 +116,6 @@ def test_optional_dependencies_are_skipped_not_fatal():
     assert 'jwt_blacklist_cleanup' not in names, 'auth_manager 为 None 时不应注册黑名单清理'
     assert 'data_archive' not in names, 'database 为 None 时不应注册归档任务'
     # 纯模块级函数不依赖任何对象，必须照常注册
-    assert 'api_cache_cleanup' in names
     assert 'nonce_cache_cleanup' in names
     assert 'rate_limiter_cleanup' in names
 
@@ -192,7 +191,7 @@ def test_maintenance_endpoints_registered(app):
     assert resp.status_code in (401, 403), (
         f'状态接口未鉴权（期望 401/403，实际 {resp.status_code}）'
     )
-    resp = client.post('/api/ops/maintenance/tasks/api_cache_cleanup/run')
+    resp = client.post('/api/ops/maintenance/tasks/nonce_cache_cleanup/run')
     assert resp.status_code in (401, 403), (
         f'手动触发接口未鉴权（期望 401/403，实际 {resp.status_code}）'
     )
