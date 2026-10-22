@@ -367,15 +367,23 @@ class TestNotification:
             mock_send.assert_called_once()
 
     def test_send_sms_disabled(self):
+        """未启用 → 直接 False（不尝试、不报错）。"""
         n = Notification()
         result = n.send_sms(['13800138000'], 'test')
         assert result is False
 
-    def test_send_sms_enabled(self):
+    def test_send_sms_enabled_is_honest_about_being_unimplemented(self):
+        """round 250：启用也不许假装成功。
+
+        旧实现是「打一行 INFO 就 return True」—— 一条短信都不发却报告成功。
+        一旦接进报警链路，运维会在日志里看到"短信发送: 发送N条短信"，
+        于是放心地依赖一个从不工作的通道。现在必须返回 False。
+        """
         config = {'sms': {'enabled': True}}
         n = Notification(config)
         result = n.send_sms(['13800138000'], 'test')
-        assert result is True
+        assert result is False, (
+            'send_sms 又返回 True 了 —— 它是占位实现，返回 True 就是假成功')
 
     def test_test_email(self):
         config = {

@@ -161,6 +161,14 @@ notification:
     smtp_port: 587
     smtp_server: smtp.example.com
     username: ''
+  # ⚠️ 短信通道**尚未实现**（round 250 如实标注）。
+  # `报警层/notification.py:send_sms` 此前是「打一行 INFO 就 return True」的
+  # 占位实现 —— 一条短信都不发，却报告成功。现已改为明确报错并返回 False，
+  # 并接进了报警链路：**启用它会产生响亮的失败**（每条报警一条 ERROR 日志 +
+  # `output_errors['sms']` 计数），而不是此前的静默无底洞。
+  # 要实现它需要：阿里云 RPC 签名（HMAC-SHA1，百分号编码最容易错）、
+  # 用 access_key/secret_key 调 SendSms、以及**无凭证环境下可测的签名单测**。
+  # 清单见 send_sms 的 docstring。完成前请保持 enabled: false。
   sms:
     access_key: ''
     enabled: false
@@ -170,6 +178,13 @@ notification:
     secret_key: ''
     sign_name: ''
     template_code: ''
+  # ⚠️ 本段**没有任何服务端消费方**（round 250 核实）：后端不播放音频文件，
+  # Vue 前端与旧版静态前端也都没有 `new Audio()` / `.mp3` 的播放代码。
+  # 也就是说：把 enabled 改成 true、填好文件名，**不会发出任何声音**。
+  # 真正的「声光」在 `报警层/alarm_output.py`（Modbus DO → 灯塔 + 蜂鸣器，
+  # 硬件通道，那条是接通并可用的），语音广播在 `报警层/broadcast_system.py`
+  # （MQTT → 现场音柱）。报警音效应在前端播放（WebSocket 收到 alarm 事件时），
+  # 属 scada-app 的职责；本段留着只为兼容前端可能仍在发送的字段。
   sound:
     critical_sound: alarm_critical.mp3
     enabled: true
@@ -185,6 +200,11 @@ notification:
 #
 # 下面这段的语义与补齐前的**单级 600 秒兜底完全一致**（一条 600 秒规则），
 # 补齐只是把"隐式兜底"变成"显式配置"，行为不变、API 可用。
+#
+# ⚠️ 注意：通过 API 修改报警配置（加规则 / 改去重 / 改升级规则）会用
+# `yaml.dump` 重写本文件，**yaml 注释不会保留** —— 本块说明会被抹平。
+# 所以"sms 未实现""sound 没有消费方"等事实同时落在代码与测试里
+# （tests/test_notification_channel_honesty.py），那才是耐久真源。
 #
 # 需要多级升级时按同样结构加规则即可（level 从 1 递增、不可重复；
 # timeout_seconds 必须 >= 1；列表不能为空 —— 空列表会被拒）：

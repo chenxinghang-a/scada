@@ -153,22 +153,40 @@ class Notification:
         """
         发送短信通知
 
+        ⚠️ **尚未实现**（round 250 如实标注）。此前这个方法直接
+        ``logger.info(...)`` 然后 ``return True`` —— 一条短信都没发，
+        却告诉调用方"发送成功"。这是比"没接线"更坏的形态：一旦有人
+        把它接进报警链路，运维会在日志里看到"短信发送: 发送3条短信"，
+        于是放心地依赖一个从不工作的通道。
+
+        现在改为：明确报错并返回 False，让失败在**接线的那一刻就可见**。
+
+        要实现它需要补的是（按 `配置/alarms.yaml` 的 `notification.sms` 段）：
+        1. 选服务商：配置里写的是 `provider: aliyun`，即阿里云短信
+           （`dysms.aliyuncs.com`，POP RPC 协议，SignatureVersion=1.0，
+           HMAC-SHA1 签名 —— 百分号编码规则是这里最容易错的地方）；
+        2. 用 `access_key` / `secret_key` 签名，`sign_name` + `template_code`
+           调用 SendSms，`phone_numbers` 为接收方；
+        3. **必须能在没有真实凭证的环境下被测试**：签名构造单独成函数，
+           用固定向量单测（否则签名错一条都发不出去，且只在生产炸）。
+
+        在完成上述三项之前，请保持 `配置/alarms.yaml` 里
+        `notification.sms.enabled: false`。
+
         Args:
             phone_numbers: 手机号列表
             message: 短信内容
 
         Returns:
-            bool: 发送是否成功
+            bool: 发送是否成功（当前恒为 False —— 未实现）
         """
-        if not self.sms_enabled:
-            logger.warning("短信通知未启用")
-            return False
-
-        # 这里可以实现短信发送逻辑
-        # 示例：使用阿里云短信服务
-        # 安全地记录日志，不暴露敏感信息
-        logger.info(f"短信发送: 发送{len(phone_numbers)}条短信")
-        return True
+        logger.error(
+            "短信通知**未实现**：send_sms 是占位实现，不会发出任何短信"
+            "（phone_numbers=%d 条）。详见本方法 docstring 里的实现清单；"
+            "在实现完成前请把 notification.sms.enabled 置为 false。",
+            len(phone_numbers) if phone_numbers else 0,
+        )
+        return False
 
     def test_email(self) -> bool:
         """

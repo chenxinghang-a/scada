@@ -347,8 +347,10 @@ class AlarmManager:
         # 输出通道失败计数（声光/广播/前端）。
         # 声光与广播是安全关键输出，"调用不通"绝不能静默 —— 每次失败都记账，
         # 并通过 get_alarm_statistics()['output']['errors'] / 日志暴露。
+        # email / sms 两个通知通道（round 243/250）也走同一套计数。
         self._output_errors: dict[str, int] = {
-            'alarm_output': 0, 'broadcast': 0, 'websocket': 0}
+            'alarm_output': 0, 'broadcast': 0, 'websocket': 0,
+            'email': 0, 'sms': 0}
         self._output_error_lock = Lock()
 
         # 状态锁（保护 alarm_states, rules, _shelved_alarms, _deadbands）
@@ -613,6 +615,21 @@ class AlarmManager:
                     len(email_cfg['recipients']),
                 )
 
+        # 短信通道（round 250）：`Notification.send_sms` 是**占位实现**，
+        # 一条都不会发出。这里把现状说清楚，并且**照常接入报警链路** ——
+        # 启用它之后每条报警都会走一次「尝试 → 失败 → 记账 + ERROR」，
+        # 而不是像此前那样：接口看着正常、日志一片安静、短信一封没有。
+        # 静默的缺口比响亮的缺口更难发现。
+        sms_cfg = notif_cfg.get('sms') or {}
+        if getattr(notifier, 'sms_enabled', False):
+            logger.error(
+                "短信通知已启用，但 send_sms **尚未实现**（占位，恒返回 False）—— "
+                "报警短信不会发出。每条报警会记一条 output_errors['sms']。"
+                "实现清单见 报警层/notification.py:send_sms 的 docstring；"
+                "在实现完成前请把 notification.sms.enabled 置为 false。")
+        elif sms_cfg and sms_cfg.get('phone_numbers'):
+            logger.info("短信通知未启用（notification.sms.enabled 不为真）")
+
         self.notification = notifier
 
     def _ensure_notify_executor(self) -> ThreadPoolExecutor | None:
@@ -675,6 +692,70 @@ class AlarmManager:
                     .add_done_callback(self._on_email_done)
         except Exception as e:
             self._record_output_failure('email', f"邮件任务提交失败: {e}")
+
+    # ------------------------------------------------------------
+    # 短信通知（round 250）
+    # ------------------------------------------------------------
+
+    @staticmethod
+    def _send_sms_blocking(notifier, payload: dict[str, Any]) -> tuple[bool, str]:
+        """在后台线程里尝试发短信；异常转成 (False, 原因)。
+
+        与 `_send_email_blocking` 同构：同步 IO 不进报警主链路。
+        """
+        try:
+            numbers = list(payload.get('phone_numbers') or [])
+            if not numbers:
+                return False, 'notification.sms.phone_numbers 为空'
+            ok = notifier.send_sms(numbers, payload.get('message', ''))
+            return bool(ok), '' if ok else 'send_sms 返回 False（占位实现，未真正发送）'
+        except Exception as e:
+            return False, f'短信发送异常: {e}'
+
+    def _on_sms_done(self, future) -> None:
+        try:
+            ok, err = future.result()
+        except Exception as e:
+            ok, err = False, f'短信线程异常: {e}'
+        if not ok:
+            self._record_output_failure('sms', err or '短信发送失败')
+
+    def _notify_by_sms(self, alarm_data: dict[str, Any]) -> None:
+        """短信报警通知 —— 异步投递，失败留痕（`output_errors['sms']`）。
+
+        round 250。`Notification.send_sms` 目前是**占位实现**（恒返回 False，
+        见其 docstring 里的实现清单）。仍然接进链路是刻意的：
+
+        - 启用 `notification.sms` 后，每条报警都会尝试一次并记一条
+          `output_errors['sms']` + ERROR 日志 —— 缺口是**响亮的**；
+        - 此前的状态是「接口正常、日志安静、短信一封没有」—— 缺口是**静默的**。
+        静默的缺口更难发现，也更晚被发现。
+
+        去重位置与邮件一致（去重点之后），报警风暴不会把短信网关打爆。
+        """
+        notifier = getattr(self, 'notification', None)
+        if notifier is None or not getattr(notifier, 'sms_enabled', False):
+            return
+
+        sms_cfg = getattr(notifier, 'sms_config', None) or {}
+        payload = {
+            'phone_numbers': sms_cfg.get('phone_numbers') or [],
+            'message': (
+                f"[{alarm_data.get('alarm_level', 'warning')}] "
+                f"{alarm_data.get('alarm_message', '报警通知')} "
+                f"{alarm_data.get('device_id', '')}/{alarm_data.get('register_name', '')} "
+                f"当前值 {alarm_data.get('actual_value')}"
+            ),
+        }
+
+        executor = self._ensure_notify_executor()
+        if executor is None:
+            return
+        try:
+            executor.submit(self._send_sms_blocking, notifier, payload) \
+                    .add_done_callback(self._on_sms_done)
+        except Exception as e:
+            self._record_output_failure('sms', f"短信任务提交失败: {e}")
 
     def _rebuild_rules_index(self):
         """构建规则索引：(device_id, register_name) -> [(rule_id, rule_config)]"""
@@ -1376,6 +1457,11 @@ class AlarmManager:
         #    放在去重点**之后**是刻意的：复用同一套冷却与确认抑制，
         #    否则报警风暴会把收件人邮箱打爆（同一条报警每 10 秒一封）。
         self._notify_by_email(alarm_payload)
+
+        # 6. 短信通知（round 250，异步 + 失败记账）。
+        #    `send_sms` 目前是占位实现 —— 启用它会收到**响亮的失败**
+        #    （ERROR + output_errors['sms']），而不是此前的静默无底洞。
+        self._notify_by_sms(alarm_payload)
 
     def _record_output_failure(self, channel: str, detail: str) -> None:
         """输出通道失败必须可见：ERROR 日志 + 计数（绝不静默吞掉）"""
