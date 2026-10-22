@@ -120,9 +120,15 @@ def test_optional_dependencies_are_skipped_not_fatal():
     assert 'rate_limiter_cleanup' in names
 
 
-def test_every_maintenance_task_function_runs(tmp_path, auth_manager):
+def test_every_maintenance_task_function_runs(tmp_path, auth_manager, monkeypatch):
     """逐个真正执行一遍 —— 这条能抓到模块路径写错/签名不匹配。"""
+    import paths
     from core.maintenance import build_maintenance_tasks
+
+    # performance_metrics 会写 metrics/metrics.jsonl —— 必须隔离到临时目录，
+    # 否则每次跑测试都往仓库里灌一行真实采样（round 252 实测到过：
+    # 全量跑一次，metrics.jsonl 的 mtime 就变一次）。
+    monkeypatch.setattr(paths, 'METRICS_DIR', tmp_path / 'metrics')
 
     tasks = build_maintenance_tasks(
         database=_make_database(tmp_path), auth_manager=auth_manager)

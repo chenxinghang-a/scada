@@ -373,7 +373,13 @@ def test_auto_metrics_skips_corrupt_lines_but_keeps_valid(tmp_path, monkeypatch,
     表现为指标条数莫名其妙变少，没有任何提示。
     """
     import tools.auto_metrics as metrics_mod
+    import paths
 
+    # round 252：`MetricsCollector` 的目录来自 `paths.METRICS_DIR`（round 213
+    # 起的单一真源），**不是** `project_root`。原先只 patch project_root，
+    # 于是夹具数据（含 40 万字符的 bomb 行）全写进了仓库里真实的
+    # `metrics/metrics.jsonl` —— 每跑一次全量测试就污染一次生产数据文件。
+    monkeypatch.setattr(paths, 'METRICS_DIR', tmp_path / 'metrics')
     monkeypatch.setattr(metrics_mod, 'project_root', tmp_path)
     mc = metrics_mod.MetricsCollector()
     mc.metrics_file.parent.mkdir(parents=True, exist_ok=True)
@@ -413,7 +419,11 @@ def test_auto_metrics_does_not_swallow_resource_errors(tmp_path, monkeypatch):
     所以必须让异常**发生在 try 内部**。
     """
     import tools.auto_metrics as metrics_mod
+    import paths
 
+    # round 252：同上一个用例 —— 必须隔离 `paths.METRICS_DIR`，
+    # 否则这个 40 万字符的 bomb 行会写进仓库里真实的 metrics.jsonl。
+    monkeypatch.setattr(paths, 'METRICS_DIR', tmp_path / 'metrics')
     monkeypatch.setattr(metrics_mod, 'project_root', tmp_path)
     mc = metrics_mod.MetricsCollector()
     mc.metrics_file.parent.mkdir(parents=True, exist_ok=True)

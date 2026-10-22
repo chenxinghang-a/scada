@@ -46,6 +46,7 @@ DEFAULT_INTERVALS: Dict[str, float] = {
     'nonce_cache_cleanup': 600,           # 10 分钟
     'rate_limiter_cleanup': 600,          # 10 分钟
     'ws_offline_queue_cleanup': 300,      # 5 分钟
+    'performance_metrics': 300,           # 5 分钟（性能历史采样）
     'data_archive': 86400,                # 24 小时
 }
 
@@ -79,6 +80,24 @@ def build_maintenance_tasks(database=None, auth_manager=None, *, archive_days: i
         from core.ws_offline_queue import offline_queue
         return offline_queue.cleanup_expired()
 
+    def _performance_metrics_sample():
+        """性能指标采样 —— 写 `metrics/metrics.jsonl`（round 252）。
+
+        为什么需要它：该文件此前**只有 `tools/auto_metrics.py`（独立 CLI）会写**，
+        而生产环境没有任何地方调用那个 CLI（无 cron / 计划任务 / 维护任务）。
+        于是 `/api/performance/metrics/history` 永远 `samples: 0`、
+        `/summary` 永远「无历史数据」，前端性能页的历史曲线与摘要面板
+        **在生产永远是空的** —— 读取侧完好、写入侧不存在。
+
+        采样本身很轻（psutil + 文件统计），5 分钟一次；降级到 EMERGENCY 时
+        也照跑 —— 性能数据恰是排障时最需要的东西。
+        """
+        from 展示层.api.api_performance import collector
+        lines = collector.append_sample()
+        if lines < 0:
+            raise RuntimeError('性能指标采样失败（详见 ERROR 日志）')
+        return {'metrics_lines': lines}
+
     tasks.extend([
         ('nonce_cache_cleanup', DEFAULT_INTERVALS['nonce_cache_cleanup'],
          '清理过期的请求签名 nonce', _nonce_cache_cleanup),
@@ -86,6 +105,9 @@ def build_maintenance_tasks(database=None, auth_manager=None, *, archive_days: i
          '清理过期的用户限流计数', _rate_limiter_cleanup),
         ('ws_offline_queue_cleanup', DEFAULT_INTERVALS['ws_offline_queue_cleanup'],
          '清理过期的 WebSocket 离线消息', _ws_offline_queue_cleanup),
+        ('performance_metrics', DEFAULT_INTERVALS['performance_metrics'],
+         '采样性能指标（写 metrics.jsonl，供 /performance/metrics/history 读取）',
+         _performance_metrics_sample),
     ])
 
     if database is not None:

@@ -187,6 +187,64 @@ class PerformanceCollector:
 
         return metrics
 
+    def append_sample(self, retention_days: int = 7, max_lines: int = 20000) -> int:
+        """采集一次指标并追加到 ``metrics/metrics.jsonl``，返回文件行数。
+
+        round 252：此前这个文件**只有 `tools/auto_metrics.py`（独立 CLI）会写**，
+        而生产环境没有任何地方调用它 —— 没有 cron、没有计划任务、维护任务里
+        也没有。于是：
+
+        - ``GET /performance/metrics/history`` 永远 ``samples: 0``；
+        - ``GET /performance/metrics/summary`` 永远回「无历史数据」；
+        - 前端 ``src/api/performance.ts`` 的 getHistory/getSummary 拿到空数组，
+          性能页的历史曲线和摘要面板**在生产永远是空的**。
+
+        也就是「读取侧完好、写入侧不存在」—— 又一处声明与实现不符。
+        本方法由 `core/maintenance.py` 的 `performance_metrics` 任务周期调用
+        （默认 5 分钟一次），写入格式与 `tools/auto_metrics.py` 完全一致
+        （一行一个 JSON，顶层带 `timestamp`），读取侧无需改动。
+
+        同时做**保留策略**：jsonl 不裁剪就会无界增长（每 5 分钟一行、
+        一天 288 行，一年 10 万行）。按天数 + 行数双重上限裁剪，
+        超出的旧行删掉 —— 与其它维护任务同一思路。
+
+        Args:
+            retention_days: 保留天数（默认 7 天）
+            max_lines: 行数硬上限（默认 2 万行，约 70 天@5分钟）
+
+        Returns:
+            写入后的文件行数；采集/写入失败返回 -1（由调用方记账）。
+        """
+        try:
+            metrics = self.collect_all(use_cache=False)
+            metrics_file = paths.METRICS_DIR / 'metrics.jsonl'
+            paths.METRICS_DIR.mkdir(parents=True, exist_ok=True)
+
+            line = json.dumps(metrics, ensure_ascii=False)
+            with open(metrics_file, 'a', encoding='utf-8') as f:
+                f.write(line + '\n')
+
+            # 裁剪：行数超限时只保留尾部（旧行在前，因为追加写）
+            try:
+                with open(metrics_file, 'r', encoding='utf-8') as f:
+                    all_lines = f.readlines()
+            except Exception as e:      # noqa: BLE001 —— 读失败不影响本次写入
+                logger.warning("指标文件读取失败，跳过裁剪: %s", e)
+                return -1
+
+            if len(all_lines) > max_lines:
+                kept = all_lines[-max_lines:]
+                with open(metrics_file, 'w', encoding='utf-8') as f:
+                    f.writelines(kept)
+                logger.info(
+                    "指标文件超行数上限（%d > %d），已裁剪到 %d 行",
+                    len(all_lines), max_lines, len(kept))
+                return len(kept)
+            return len(all_lines)
+        except Exception as e:
+            logger.error("性能指标采样失败: %s", e, exc_info=True)
+            return -1
+
     def get_history(self, hours: int = 24) -> list:
         """获取历史指标"""
         # round 213：目录走 paths 单一真源（与 tools/auto_metrics.py 的写入侧同源）
