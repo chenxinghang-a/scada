@@ -1453,6 +1453,15 @@ class AlarmManager:
         }
         self._emit_websocket_alarm(alarm_payload)
 
+        # Prometheus：报警总数（round 253）。放在去重点**之后**、与推送同一位置，
+        # 所以它统计的是「真正推出去的报警」—— 被冷却/确认抑制掉的重复报警不计入，
+        # 否则一条抖动报警能把计数刷到天上，看板上的报警率就失去意义。
+        try:
+            from core.metrics import ALARMS_TOTAL
+            ALARMS_TOTAL.labels(level=alarm_level, device_id=device_id).inc()
+        except Exception as e:      # noqa: BLE001 —— 指标失败不影响报警
+            logger.debug(f"报警指标打点失败: {e}")
+
         # 5. 邮件通知（异步，不阻塞上面的声光/广播/前端推送）。
         #    放在去重点**之后**是刻意的：复用同一套冷却与确认抑制，
         #    否则报警风暴会把收件人邮箱打爆（同一条报警每 10 秒一封）。

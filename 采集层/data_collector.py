@@ -554,6 +554,26 @@ class DataCollector:
         with self._stats_lock:
             self.stats[key] = self.stats.get(key, 0) + amount
 
+    def _protocol_of(self, device_id: str) -> str:
+        """设备协议（带缓存）。指标标签用，避免每次读数都查设备配置。
+
+        Prometheus 标签基数必须可控：协议只有 modbus_tcp/rest/opcua/mqtt/mc/fins
+        这几种，按 device_id 缓存一次即可。
+        """
+        cache = getattr(self, '_protocol_cache', None)
+        if cache is None:
+            cache = self._protocol_cache = {}
+        proto = cache.get(device_id)
+        if proto is None:
+            try:
+                devices = getattr(self.device_manager, 'devices', None) or {}
+                cfg = devices.get(device_id) or {}
+                proto = cfg.get('protocol', 'unknown')
+            except Exception:      # noqa: BLE001 —— 取不到就 unknown，不影响采集
+                proto = 'unknown'
+            cache[device_id] = proto
+        return proto
+
     def _enqueue_drop_oldest(self, item: dict) -> bool:
         """非阻塞入队；队列满时丢弃最旧的一条，仍满则丢弃本条。
 
@@ -578,6 +598,19 @@ class DataCollector:
                 pass
         try:
             self.data_queue.put_nowait(item)
+            # Prometheus：采集读数计数（round 253）。
+            # 只统计**真实采集**的读数 —— 断路器冷却期生成的兜底数据
+            # quality 是 BAD（合成数据），计进去会让"采集速率"看起来正常，
+            # 而实际设备已经失联。那正是最需要看出来的场景。
+            try:
+                if item.get('quality') != 'BAD':
+                    from core.metrics import DATA_COLLECTED
+                    DATA_COLLECTED.labels(
+                        device_id=item.get('device_id', 'unknown'),
+                        protocol=self._protocol_of(item.get('device_id', '')),
+                    ).inc()
+            except Exception as e:      # noqa: BLE001 —— 指标失败不能影响采集
+                logger.debug(f"采集指标打点失败: {e}")
             return True
         except queue.Full:
             self._inc_stat('dropped_items')
@@ -1053,16 +1086,31 @@ class DataCollector:
     def _collect_device_data(self, device_id: str, device_config: dict[str, Any], protocol: str) -> bool:
         """采集单个轮询型设备的数据，返回是否成功"""
 
+        def _metric_error(kind: str):
+            """Prometheus：采集错误计数（round 253）。
+
+            只在**失败分支**调用，按 (device_id, error_type) 打点 ——
+            `scada_data_errors_total` 此前从未被递增，看板上恒 0，
+            等于"采集一直在失败但监控看不出来"。
+            """
+            try:
+                from core.metrics import DATA_ERRORS
+                DATA_ERRORS.labels(device_id=device_id, error_type=kind).inc()
+            except Exception as e:      # noqa: BLE001
+                logger.debug(f"采集错误指标打点失败: {e}")
+
         try:
             client = self.device_manager.get_client(device_id)
             if not client:
                 logger.debug(f"设备 {device_id} 客户端不存在，跳过采集")
                 self._inc_stat('failed_collections')
+                _metric_error('no_client')
                 return False
 
             if not getattr(client, 'connected', False):
                 if not self.device_manager.connect_device(device_id):
                     self._inc_stat('failed_collections')
+                    _metric_error('connect_failed')
                     return False
 
             timestamp = datetime.now()
@@ -1083,6 +1131,7 @@ class DataCollector:
             else:
                 logger.warning(f"设备 {device_id} 不支持的协议: {protocol}")
                 self._inc_stat('failed_collections')
+                _metric_error('unsupported_protocol')
                 return False
 
             self._inc_stat('successful_collections')
@@ -1093,6 +1142,7 @@ class DataCollector:
         except Exception as e:
             logger.error(f"采集设备 {device_id} 数据异常: {e}")
             self._inc_stat('failed_collections')
+            _metric_error(type(e).__name__)
             return False
 
     def _collect_modbus(self, client, device_id: str, device_config: dict[str, Any],

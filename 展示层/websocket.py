@@ -283,6 +283,13 @@ def init_socketio(app, database, data_collector):
             current = len(_connected_clients)
 
         logger.info(f"客户端连接: {request.sid}, 用户: {username}, 当前连接数: {current}")
+        # Prometheus：当前连接数（round 253）。此前该 gauge 从未被设置，
+        # 看板上恒 0 —— 有连接也显示 0，等于这个指标不存在。
+        try:
+            from core.metrics import WS_CONNECTIONS
+            WS_CONNECTIONS.set(current)
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"WebSocket 连接数指标打点失败: {e}")
         emit('connected', {'message': '连接成功', 'user': username})
 
         # 补发断线期间积压的报警/广播。
@@ -305,6 +312,11 @@ def init_socketio(app, database, data_collector):
             _sid_user.pop(request.sid, None)
             current = len(_connected_clients)
         logger.info(f"客户端断开: {request.sid}, 当前连接数: {current}")
+        try:
+            from core.metrics import WS_CONNECTIONS
+            WS_CONNECTIONS.set(current)
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"WebSocket 连接数指标打点失败: {e}")
 
     @socketio.on('heartbeat')
     def handle_heartbeat(data):

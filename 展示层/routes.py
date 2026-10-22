@@ -110,6 +110,24 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         started = getattr(g, '_request_started_at', None)
         if started is not None:
             elapsed = time.monotonic() - started
+            # Prometheus：HTTP 请求数与耗时（round 253）。
+            #
+            # ⚠️ 标签必须用**路由模板**（`/api/devices/<id>`），不能用
+            # `request.path`（`/api/devices/dev123`）—— 后者每个设备 id 都会
+            # 生成一个新时间序列，指标内存无界增长，Prometheus 侧也会爆。
+            # 未匹配到路由时统一归到 `<unmatched>`，同样是为了基数可控。
+            try:
+                from core.metrics import HTTP_REQUESTS, HTTP_DURATION
+                rule = request.url_rule
+                endpoint = rule.rule if rule is not None else '<unmatched>'
+                status = str(response.status_code)
+                HTTP_REQUESTS.labels(
+                    method=request.method, endpoint=endpoint, status=status).inc()
+                HTTP_DURATION.labels(
+                    method=request.method, endpoint=endpoint).observe(elapsed)
+            except Exception as e:      # noqa: BLE001 —— 指标失败不能影响响应
+                logger.debug("HTTP 指标打点失败: %s", e)
+
             if elapsed > _slow_request_seconds:
                 # `SCADA_REQUEST_TIMEOUT` 的语义是「一个请求最多该花多久」。
                 # WSGI 里没法安全地中途杀掉处理函数，所以这里做成**可观测**的

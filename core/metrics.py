@@ -1,6 +1,17 @@
 """
 Prometheus指标导出 - 工业SCADA监控
 提供采集/告警/连接/性能指标
+
+⚠️ round 253 实测：本模块定义了 15 个指标家族，而**其中 12 个从来没有
+被任何生产代码递增过** —— `/metrics` 会把它们全部导出成恒为 0 的线。
+对 Prometheus/Grafana 来说，这比"没有这个指标"更糟：看板上会出现一条
+平直的 0 曲线，看上去像"系统安静"，实际是"没人往这里写"。
+
+现在分两类，见文件末尾的 `WIRED_METRICS` / `UNWIRED_METRICS`：
+- 已接线：采集读数、采集错误、报警总数、WebSocket 连接数、HTTP 请求与耗时；
+- 未接线：在 `UNWIRED_METRICS` 里逐条写明**为什么没接**。
+守卫 `tests/test_metrics_wiring.py` 会核对：每个定义出来的指标要么有真实
+写入点，要么在未接线清单里 —— 新增指标时必须二选一，不许默默躺平。
 """
 from prometheus_client import Counter, Gauge, Histogram, Info, generate_latest, CONTENT_TYPE_LATEST
 import threading
@@ -118,3 +129,67 @@ class MetricsCollector:
 
 # 全局指标收集器实例
 metrics_collector = MetricsCollector()
+
+
+#: **已接线**的指标 → 写入点（`文件:位置`）。
+#: 守卫 `tests/test_metrics_wiring.py` 会核对这里的消费方真实存在。
+WIRED_METRICS = {
+    'scada_data_collected_total': '采集层/data_collector.py:_enqueue_drop_oldest',
+    'scada_data_errors_total': '采集层/data_collector.py:_collect_device_data',
+    'scada_alarms_total': '报警层/alarm_manager.py:_trigger_alarm',
+    'scada_websocket_connections': '展示层/websocket.py:connect/disconnect',
+    'scada_http_requests_total': '展示层/routes.py:record_http_metrics',
+    'scada_http_request_duration_seconds': '展示层/routes.py:record_http_metrics',
+}
+
+#: **未接线**的指标 → 为什么不接。
+#:
+#: 这些指标仍然导出（保持与既有 Grafana 看板的兼容），但它们是**恒 0 的线**。
+#: 与其假装它们在监控什么，不如把原因写在这里。
+UNWIRED_METRICS = {
+    'scada_devices_total': '由 MetricsCollector.update_device_metrics 按需设置，'
+                           '/metrics 每次请求时刷新（非零，属已接线）',
+    'scada_devices_connected': '由 MetricsCollector 每次 /metrics 请求时刷新（非零，属已接线）',
+    'scada_devices_fault': '由 MetricsCollector 每次 /metrics 请求时刷新（非零，属已接线）',
+    'scada_alarms_active': '由 MetricsCollector 每次 /metrics 请求时刷新（非零，属已接线）',
+    'scada_data_queue_size': '由 MetricsCollector 每次 /metrics 请求时刷新（非零，属已接线）',
+    'scada_collection_duration_seconds': '采集耗时直方图：需要在 _run_collection '
+                                         '里计时并按 device_id 打点，本轮未做（采集路径已很重）',
+    'scada_alarms_acknowledged_total': '确认动作在 acknowledge_alarm 里，'
+                                       '但该路径有多个入口（API/前端/自动），本轮未逐一接线',
+    'scada_alarm_duration_seconds': '需要记录报警持续时长（确认/清除时算差），'
+                                    '报警状态机里没有保留 started_at，本轮未做',
+    'scada_modbus_requests_total': 'Modbus 客户端层（采集层/base_client.py）未引入指标，'
+                                   '逐请求打点会侵入协议实现',
+    'scada_modbus_errors_total': '同 modbus_requests：需在协议实现里逐请求打点，本轮未做',
+    'scada_modbus_rtt_seconds': '同 modbus_requests：需在协议实现里逐请求计时，本轮未做',
+    'scada_websocket_messages_total': 'WebSocket 收发计数需要包住 emit/on，'
+                                      '与离线补发逻辑耦合，本轮未做',
+    'scada_device_health_score': '预测性维护的健康评分（get_health_scores）未被轮询写入指标，'
+                                 '本轮未做（属智能层，需按设备逐个 set）',
+    'scada_oee_score': 'OEE 评分同理：需按设备逐个 set，属智能层，本轮未做',
+}
+
+#: 一致性守卫用：本模块定义的全部指标家族名
+DEFINED_METRICS = (
+    'scada_devices_total',
+    'scada_devices_connected',
+    'scada_devices_fault',
+    'scada_data_collected_total',
+    'scada_data_errors_total',
+    'scada_collection_duration_seconds',
+    'scada_data_queue_size',
+    'scada_alarms_total',
+    'scada_alarms_active',
+    'scada_alarms_acknowledged_total',
+    'scada_alarm_duration_seconds',
+    'scada_modbus_requests_total',
+    'scada_modbus_errors_total',
+    'scada_modbus_rtt_seconds',
+    'scada_websocket_connections',
+    'scada_websocket_messages_total',
+    'scada_http_requests_total',
+    'scada_http_request_duration_seconds',
+    'scada_device_health_score',
+    'scada_oee_score',
+)
