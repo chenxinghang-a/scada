@@ -269,6 +269,51 @@ COLLECTION_DEFAULTS = {
 }
 
 
+#: `performance.connection_pool` 段的兜底默认值（round 257 接线）。
+#:
+#: ⚠️ 这些值**必须与 `配置/system.yaml` 里的值一致** —— 它们是「配置读不到时」
+#: 的兜底，不是第二套真源。`tests/test_system_config_knobs.py` 会断言这一点。
+#:
+#: 接线前的事实（round 257 实测）：`采集层/device_manager.py` 里是
+#: `ConnectionPool(max_size=50, max_idle_time=300, max_lifetime=3600)` 的硬编码，
+#: 而 `配置/system.yaml` 写的是 `size: 10` / `timeout: 30` —— **两边都对不上**，
+#: 且 `timeout: 30` 到底指"空闲回收"还是"建立连接超时"根本没说清。
+#: 运维按 10 调小连接数，实际仍是 50。
+CONNECTION_POOL_DEFAULTS = {
+    #: 连接池容量上限（同时保持的客户端连接数）。
+    'size': 50,
+    #: 空闲多久回收（秒）。
+    'idle_timeout_seconds': 300,
+    #: 连接最大存活时间（秒），到期强制重建，规避长连接泄漏。
+    'max_lifetime_seconds': 3600,
+}
+
+
+def load_connection_pool_settings() -> Dict[str, int]:
+    """读取 `配置/system.yaml` 的 `performance.connection_pool` 段。
+
+    Returns:
+        `{'size': int, 'idle_timeout_seconds': int, 'max_lifetime_seconds': int}`；
+        配置缺失/非法时逐项回退 :data:`CONNECTION_POOL_DEFAULTS`。
+    """
+    cfg = load_system_config()
+    perf = cfg.get('performance') if isinstance(cfg, dict) else None
+    section = perf.get('connection_pool') if isinstance(perf, dict) else None
+    out = dict(CONNECTION_POOL_DEFAULTS)
+    if not isinstance(section, dict):
+        return out
+    for key, fallback in CONNECTION_POOL_DEFAULTS.items():
+        raw = section.get(key)
+        val = try_int(raw)
+        if val is None or val <= 0:
+            # YAML 的 `.inf` / `.nan` 是合法字面量；`int(inf)` 抛 OverflowError。
+            logger.warning("performance.connection_pool.%s=%r 非法，回退默认 %d",
+                           key, raw, fallback)
+            continue
+        out[key] = val
+    return out
+
+
 def load_system_config(reload: bool = True) -> Dict[str, Any]:
     """读取 `配置/system.yaml`。
 

@@ -14,6 +14,7 @@ from typing import Any
 from pathlib import Path
 
 from core.connection_pool import ConnectionPool
+from core.config_manager import load_connection_pool_settings
 import paths
 
 logger = logging.getLogger(__name__)
@@ -135,13 +136,23 @@ class DeviceManager:
         self._reconnect_interval = 30
 
         # 连接池 - 复用连接，避免频繁创建/销毁
+        #
+        # round 257：这里原来是 `max_size=50, max_idle_time=300,
+        # max_lifetime=3600` 的**硬编码**，而 `配置/system.yaml` 的
+        # `performance.connection_pool` 写的是 `size: 10 / timeout: 30` ——
+        # 两边都对不上，运维按配置调小连接数**没有任何效果**。
+        # 现在真正读配置（读不到才回退 `CONNECTION_POOL_DEFAULTS`）。
+        pool_cfg = load_connection_pool_settings()
         self._connection_pool = ConnectionPool(
             factory=self._create_client_for_pool,
-            max_size=50,
-            max_idle_time=300,  # 5分钟空闲回收
-            max_lifetime=3600,  # 1小时最大生命周期
+            max_size=pool_cfg['size'],
+            max_idle_time=pool_cfg['idle_timeout_seconds'],
+            max_lifetime=pool_cfg['max_lifetime_seconds'],
             name="modbus",
         )
+        logger.info("连接池已按配置初始化: size=%d idle=%ds lifetime=%ds",
+                    pool_cfg['size'], pool_cfg['idle_timeout_seconds'],
+                    pool_cfg['max_lifetime_seconds'])
 
         # 加载设备配置
         self.load_config()
@@ -391,11 +402,15 @@ class DeviceManager:
         self.clients.clear()
 
         # 3. 重建连接池（使用新模式的工厂方法）
+        #    round 257：这里原来又是一份 `max_size=50 / 300 / 3600` 的硬编码副本 ——
+        #    切换模拟/真实模式会把 __init__ 里按配置建好的池**换回硬编码值**，
+        #    配置只在启动时生效一次、切一次模式就失效。改成同一个来源。
+        pool_cfg = load_connection_pool_settings()
         self._connection_pool = ConnectionPool(
             factory=self._create_client_for_pool,
-            max_size=50,
-            max_idle_time=300,
-            max_lifetime=3600,
+            max_size=pool_cfg['size'],
+            max_idle_time=pool_cfg['idle_timeout_seconds'],
+            max_lifetime=pool_cfg['max_lifetime_seconds'],
             name="modbus",
         )
 

@@ -7,10 +7,14 @@
 #   自行做等价展开，否则请直接在部署侧渲染本文件（禁止把真实密钥提交进仓库）。
 # - 所有变量清单见 .env.example。
 # =============================================================================
-alarm:
-  check_interval: 10
-  confirm_timeout: 300
-  escalation_time: 600
+# ⚠️ round 257：这里原有的 `alarm:` 段（check_interval / confirm_timeout /
+#    escalation_time）**已删除** —— 三个键在生产代码里零读取点，全是装饰品，
+#    而且每一条都已经有真正的实现，留着只会误导：
+#      · 报警检查没有"轮询间隔"这回事：每次采集到样本就调 `check_alarm()`；
+#      · "确认超时"是**规则级**的（`配置/alarms.yaml` 里每条规则的 `delay`）；
+#      · "升级超时"的唯一真源是 `配置/alarms.yaml` 的 `escalation.rules`
+#        （round 249 接的 AlarmEscalationManager，多级规则）。
+#    守卫：tests/test_system_config_knobs.py::test_no_decorative_sections。
 collection:
   # ⚠️ 2026-10-10（round 210）：这一段此前**整段是装饰品** —— 生产代码零读取点，
   #    而且 `max_concurrent` 与代码里的硬编码值**对不上**（这里 10 / 代码 20）。
@@ -59,13 +63,12 @@ database:
     compressed_data_days: 365
     raw_data_days: 30
   type: sqlite
-export:
-  directory: exports
-  formats:
-  - csv
-  - excel
-  - json
-  max_rows: 100000
+# ⚠️ round 257：原有 `export:` 段（directory / formats / max_rows）**已删除** ——
+#    零读取点，导出实现根本不看它：
+#      · 导出目录的唯一真源是 `paths.EXPORT_DIR`（支持 SCADA_EXPORT_DIR 覆盖）；
+#      · 可用格式由 `存储层/data_export.py` 自己校验，传错格式回 400；
+#      · 单次导出行数上限由导出器按查询粒度判断（超限回 400 并说明怎么改）。
+#    把这三项写在配置文件里，只会让人以为"改这里能生效"。
 logging:
   console:
     enabled: true
@@ -77,13 +80,25 @@ logging:
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   level: DEBUG
 performance:
-  cache:
-    enabled: true
-    ttl_seconds: 300
-    type: memory
+  # ⚠️ round 257：原有 `cache:` 子段（enabled / type / ttl_seconds）**已删除** ——
+  #    缓存模块在 round 247 就整块删掉了（`core/api_cache.py` / `cache_tier.py`
+  #    已不存在），留着这一段等于承诺一个不存在的功能。
+  #
+  # 连接池：**这一段是真旋钮**（round 257 接线）。
+  # 此前 `采集层/device_manager.py` 里是 `max_size=50 / max_idle_time=300 /
+  # max_lifetime=3600` 的硬编码，而这里写的是 `size: 10 / timeout: 30` ——
+  # 两边都对不上，运维按 10 调小连接数完全没有效果。
+  # 现在由 `core/config_manager.load_connection_pool_settings()` 读取，
+  # 读不到/非法时回退 `CONNECTION_POOL_DEFAULTS`（= 下面这三个值）。
+  # 守卫：tests/test_system_config_knobs.py
   connection_pool:
-    size: 10
-    timeout: 30
+    # 连接池容量上限（同时保持的客户端连接数）。
+    size: 50
+    # 空闲多久回收（秒）。原键名 `timeout` 语义不明（是建连超时还是空闲回收？），
+    # 改为显式命名；`timeout` 已删除。
+    idle_timeout_seconds: 300
+    # 连接最大存活时间（秒），到期强制重建，规避长连接泄漏。
+    max_lifetime_seconds: 3600
 # round 256：`simulation_mode` 现在是**启动时真的会读**的字段。
 # 优先级：命令行 `--simulator` / `--real` > 本字段 > 默认模拟。
 #   · true  → 模拟模式（开箱默认，不连现场设备）
@@ -96,17 +111,14 @@ system:
   name: 工业数据采集与监控系统
   simulation_mode: true
   version: 2.1.0
-mqtt:
-  broker_host: localhost
-  broker_port: 1883
-  tls:
-    enabled: false
-    ca_cert: ""
-    client_cert: ""
-    client_key: ""
-    insecure: false
-  # TLS端口通常8883
-  # tls_port: 8883
+# ⚠️ round 257：原有 `mqtt:` 段（broker_host / broker_port / tls.*）**已删除** ——
+#    零读取点。MQTT 连接的默认值来自 `config.MQTTConfig`，它只读**环境变量**：
+#      MQTT_BROKER / MQTT_PORT / MQTT_TLS_ENABLED / MQTT_CA_CERT /
+#      MQTT_CLIENT_CERT / MQTT_CLIENT_KEY / MQTT_TLS_INSECURE
+#    （清单见 .env.example）。设备级 MQTT 参数在 `配置/devices*.yaml` 的
+#    `host` / `port` / `tls_*` 里；广播音柱的 MQTT 在 `配置/alarms.yaml` 的
+#    `broadcast.mqtt` 里（那是**另一个** MQTT 连接，别混）。
+#    把同一个旋钮写在三处、而其中一处没人读，是最容易让运维白折腾的形状。
 web:
   cors:
     enabled: true

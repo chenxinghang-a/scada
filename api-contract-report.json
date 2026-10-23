@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-23T13:52:11+00:00",
+  "generated_at": "2026-10-23T16:44:17+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -585,7 +585,7 @@
       "status": "match",
       "detail": "精确匹配 api_control.py:638",
       "source_file": "control.ts",
-      "source_line": 103
+      "source_line": 105
     },
     {
       "method": "POST",
@@ -595,7 +595,7 @@
       "status": "match",
       "detail": "精确匹配 api_control.py:611",
       "source_file": "control.ts",
-      "source_line": 99
+      "source_line": 101
     },
     {
       "method": "GET",

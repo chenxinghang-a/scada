@@ -170,3 +170,121 @@ class TestLoadCollectionSettingsIsFailSafe:
         out = load_collection_settings()
         assert set(out) == {"max_concurrent", "default_interval"}
         assert all(isinstance(v, int) and v > 0 for v in out.values())
+
+
+# ===========================================================================
+# round 257：`performance.connection_pool` 接线 + 「不许再长装饰段」
+# ===========================================================================
+
+DEVICE_MANAGER = BACKEND_ROOT / "采集层" / "device_manager.py"
+
+#: `配置/system.yaml` **允许存在**的顶层段 → 谁在真正读它。
+#:
+#: 加段必须同时给读取点：这个表是闭集，多一段就红。
+#: （`alarm` / `export` / `mqtt` 在 round 257 被删掉了，见各自在配置文件里的说明。）
+ALLOWED_SECTIONS: dict[str, str] = {
+    "collection": "core/config_manager.load_collection_settings → 采集层/data_collector",
+    "database": "core/retention_scheduler.read_retention_config（保留策略唯一真源）",
+    "logging": "配置页 GET/PUT /api/config 的展示与保存（前端 Config.vue）",
+    "performance": "core/config_manager.load_connection_pool_settings → 采集层/device_manager",
+    "system": "run.py（simulation_mode）+ 配置页展示",
+    "web": "展示层/websocket._load_cors_origins（socket.io 白名单）",
+}
+
+
+class TestConnectionPoolSectionIsWired:
+    def test_defaults_equal_the_config_file(self, system_cfg):
+        """兜底默认值必须等于配置文件里的值，否则就是第二个真源。"""
+        from core.config_manager import CONNECTION_POOL_DEFAULTS
+
+        section = system_cfg["performance"]["connection_pool"]
+        assert set(section) == set(CONNECTION_POOL_DEFAULTS), (
+            f"connection_pool 段的键与策展表不一致：\n"
+            f"  配置里多出：{sorted(set(section) - set(CONNECTION_POOL_DEFAULTS))}\n"
+            f"  表里有但配置缺失：{sorted(set(CONNECTION_POOL_DEFAULTS) - set(section))}"
+        )
+        for key, expected in CONNECTION_POOL_DEFAULTS.items():
+            assert section[key] == expected, (
+                f"performance.connection_pool.{key}={section[key]!r} 与兜底默认 "
+                f"{expected!r} 不一致 —— 两处都是真源，会悄悄漂移")
+
+    def test_old_ambiguous_timeout_key_is_gone(self, system_cfg):
+        """`timeout: 30` 语义不明（建连超时？空闲回收？）且没人读，已删。"""
+        section = system_cfg["performance"]["connection_pool"]
+        assert "timeout" not in section
+
+    def test_device_manager_has_no_hardcoded_pool_size(self):
+        """`max_size=<数字>` 的硬编码不许再出现 —— 否则配置又会失效。"""
+        code = _strip_comments(DEVICE_MANAGER.read_text(encoding="utf-8"))
+        assert not re.search(r"max_size\s*=\s*\d+", code), (
+            "device_manager 里又出现了 max_size=<数字> 的硬编码 —— "
+            "配置里的 performance.connection_pool.size 会再次失效")
+        assert "load_connection_pool_settings()" in code, (
+            "device_manager 没有调用 load_connection_pool_settings()")
+
+    def test_device_manager_really_uses_the_values(self, monkeypatch):
+        """把配置改成一组怪值，构造出来的连接池必须跟着变。"""
+        from core import config_manager as cm
+        import 采集层.device_manager as dm_mod
+
+        monkeypatch.setattr(cm, "load_connection_pool_settings",
+                            lambda: {"size": 7, "idle_timeout_seconds": 11,
+                                     "max_lifetime_seconds": 13})
+        monkeypatch.setattr(dm_mod, "load_connection_pool_settings",
+                            cm.load_connection_pool_settings)
+        mgr = dm_mod.DeviceManager(config_path=str(BACKEND_ROOT / "配置" / "devices.yaml"),
+                                   simulation_mode=True)
+        try:
+            pool = mgr._connection_pool
+            assert pool._max_size == 7 or getattr(pool, "max_size", None) == 7, (
+                f"连接池容量没跟着配置走: {pool.__dict__}")
+        finally:
+            try:
+                mgr.shutdown()
+            except Exception:      # noqa: BLE001
+                pass
+
+    def test_load_settings_falls_back(self, monkeypatch):
+        from core import config_manager as cm
+        monkeypatch.setattr(cm, "load_system_config", lambda *a, **k: {})
+        assert cm.load_connection_pool_settings() == dict(cm.CONNECTION_POOL_DEFAULTS)
+
+    @pytest.mark.parametrize("bad", ["0", "-1", "abc", None, "inf"])
+    def test_load_settings_illegal_values(self, monkeypatch, bad):
+        from core import config_manager as cm
+        monkeypatch.setattr(cm, "load_system_config", lambda *a, **k: {
+            "performance": {"connection_pool": {"size": bad,
+                                                "idle_timeout_seconds": 21,
+                                                "max_lifetime_seconds": 22}}})
+        out = cm.load_connection_pool_settings()
+        assert out["size"] == cm.CONNECTION_POOL_DEFAULTS["size"]
+        assert out["idle_timeout_seconds"] == 21
+
+    def test_reads_the_real_config(self):
+        from core.config_manager import load_connection_pool_settings
+        out = load_connection_pool_settings()
+        assert set(out) == {"size", "idle_timeout_seconds", "max_lifetime_seconds"}
+        assert all(isinstance(v, int) and v > 0 for v in out.values())
+
+
+class TestNoDecorativeSections:
+    """`配置/system.yaml` 的顶层段必须是**闭集**，且每段都有读取点。"""
+
+    def test_top_level_sections_are_curated(self, system_cfg):
+        actual = set(system_cfg)
+        assert actual == set(ALLOWED_SECTIONS), (
+            f"system.yaml 顶层段与策展表不一致：\n"
+            f"  多出（谁在读它？没有就删掉，别当装饰品）：{sorted(actual - set(ALLOWED_SECTIONS))}\n"
+            f"  表里有但配置缺失：{sorted(set(ALLOWED_SECTIONS) - actual)}\n"
+            "  新增段请：① 接上真实读取点；② 加进 ALLOWED_SECTIONS 并写明读它的位置。"
+        )
+
+    def test_deleted_decorative_keys_stay_deleted(self, system_cfg):
+        """round 257 删掉的假旋钮不许悄悄回来（每个都有真实替代品）。"""
+        assert "alarm" not in system_cfg, (
+            "alarm 段是装饰品：检查间隔按样本触发、确认超时在规则里、"
+            "升级超时在 alarms.yaml 的 escalation.rules")
+        assert "export" not in system_cfg, (
+            "export 段是装饰品：导出目录 = paths.EXPORT_DIR，格式/上限由导出器自己校验")
+        assert "cache" not in (system_cfg.get("performance") or {}), (
+            "缓存模块在 round 247 已删除，performance.cache 承诺的是不存在的功能")
