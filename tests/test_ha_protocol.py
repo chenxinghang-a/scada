@@ -91,7 +91,7 @@ def _start_listener_ready(ha: HAManager, port: int):
     没有这一步，负向断言（丢弃类）会因为「监听还没起来」而假绿。
     """
     ha._running = True
-    ha._started_at = time.time()
+    ha._started_at_mono = time.monotonic()
     t = threading.Thread(target=ha._listen_loop, daemon=True, name='ha-listen-test')
     t.start()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -194,7 +194,8 @@ class TestFailoverChain:
     def test_peer_never_seen_triggers_failover(self):
         """配了对端却从未见到 + 超过超时窗口 → 必须接管为 PRIMARY。"""
         ha = _make_node(_free_udp_port(), heartbeat_interval=0.2, heartbeat_timeout=0.6)
-        ha._started_at = time.time() - 100       # 已运行很久（peer_never_seen 条件）
+        # 已运行很久（peer_never_seen 条件）。窗口计时用**单调时钟**（round 259）
+        ha._started_at_mono = time.monotonic() - 100
         ha._set_role(HARole.STANDBY)
 
         self._run_loop(ha, 1.6)
@@ -205,9 +206,10 @@ class TestFailoverChain:
     def test_fresh_heartbeat_does_not_failover(self):
         """刚收到过心跳（未超时）→ 必须保持 STANDBY（反向对照，防「无脑接管」）。"""
         ha = _make_node(_free_udp_port(), heartbeat_interval=0.2, heartbeat_timeout=10.0)
-        ha._started_at = time.time() - 100
+        ha._started_at_mono = time.monotonic() - 100
         ha._set_role(HARole.STANDBY)
-        ha._last_peer_heartbeat = time.time()    # 心跳新鲜
+        ha._last_peer_heartbeat = time.monotonic()   # 心跳新鲜
+        ha._peer_seen = True
 
         self._run_loop(ha, 1.6)
 

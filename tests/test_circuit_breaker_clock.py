@@ -27,6 +27,9 @@ import pytest
 
 BREAKER_SRC = Path(__file__).resolve().parents[1] / "core" / "circuit_breaker.py"
 
+#: 真实墙钟函数（被 monkeypatch 之前的原版）—— 用来模拟「回拨 8 小时」
+_REAL_TIME = time.time
+
 
 def _boom():
     raise RuntimeError('device read failed')
@@ -46,7 +49,7 @@ def test_breaker_recovers_after_backward_clock_jump(monkeypatch):
     assert b.state == CircuitState.OPEN
 
     # 墙钟被回拨 8 小时（单调时钟不受影响）
-    monkeypatch.setattr(time, 'time', lambda: 1_000_000.0)
+    monkeypatch.setattr(time, 'time', lambda: _REAL_TIME() - 8 * 3600)
 
     time.sleep(0.08)          # 真实经过 80ms > recovery_timeout 50ms
     assert b.state == CircuitState.HALF_OPEN, (
@@ -62,7 +65,7 @@ def test_remaining_seconds_is_sane_after_backward_jump(monkeypatch):
     with pytest.raises(RuntimeError):
         b.call(_boom)
 
-    monkeypatch.setattr(time, 'time', lambda: 1_000_000.0)
+    monkeypatch.setattr(time, 'time', lambda: _REAL_TIME() - 8 * 3600)
     with pytest.raises(CircuitBreakerError) as exc:
         b.call(_boom)
     remaining = exc.value.remaining_seconds

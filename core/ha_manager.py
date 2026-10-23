@@ -110,9 +110,18 @@ class HAManager:
         # 心跳相关
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._listen_thread: Optional[threading.Thread] = None
+        #: 对端最后一次心跳的时刻 —— **单调时钟**（round 259）。
+        #: 心跳超时表达的是**时长**，用墙钟的话 NTP 校时/手工改时间会让
+        #: `now - last` 变负：对端明明已经宕机，`peer_alive` 却一直为真，
+        #: 备机永远不接管（或者反过来，健康对端被误判超时而**双主**）。
         self._last_peer_heartbeat = 0.0
+        #: 是否**曾经**收到过对端心跳。原来用 `_last_peer_heartbeat > 0` 当哨兵，
+        #: 换成单调时钟后这个判据不可靠（开机第一刻的 monotonic 可能极小），
+        #: 改用显式布尔。
+        self._peer_seen = False
         self._peer_node: Optional[HANode] = None
-        self._started_at = 0.0
+        #: 启动时刻（单调时钟），只用于「配了对端却从未收到心跳」的判定。
+        self._started_at_mono = 0.0
         # 运维是否用 force_role() 手动指定过角色（手动指定后不再自动仲裁）
         self._manual_role_set = False
 
@@ -132,7 +141,7 @@ class HAManager:
         """启动HA管理器"""
         with self._lock:
             self._running = True
-            self._started_at = time.time()
+            self._started_at_mono = time.monotonic()
             self._manual_role_set = False
 
             # 初始角色：如果没有对端，自己是主
@@ -192,8 +201,8 @@ class HAManager:
                 # 在锁内读取共享状态，避免竞态
                 with self._lock:
                     current_role = self.role
-                    now = time.time()
-                    peer_ever_seen = self._last_peer_heartbeat > 0
+                    now = time.monotonic()
+                    peer_ever_seen = self._peer_seen
                     peer_timed_out = (
                         peer_ever_seen and
                         now - self._last_peer_heartbeat > self.heartbeat_timeout
@@ -203,8 +212,8 @@ class HAManager:
                     peer_never_seen = (
                         not peer_ever_seen and
                         bool(self.peer_address) and
-                        self._started_at > 0 and
-                        now - self._started_at > self.heartbeat_timeout
+                        self._started_at_mono > 0 and
+                        now - self._started_at_mono > self.heartbeat_timeout
                     )
 
                 # 心跳双向发送：不区分角色
@@ -307,7 +316,8 @@ class HAManager:
         peer_role = _parse_role(msg.get('role'))
 
         with self._lock:
-            self._last_peer_heartbeat = time.time()
+            self._last_peer_heartbeat = time.monotonic()
+            self._peer_seen = True
             self.stats['heartbeats_received'] += 1
             self._peer_node = HANode(
                 node_id=peer_id,
@@ -356,7 +366,8 @@ class HAManager:
             peer = self._peer_node
             if peer is None or peer.role != HARole.STANDBY:
                 return
-            if time.time() - self._last_peer_heartbeat > self.heartbeat_timeout:
+            if (time.monotonic() - self._last_peer_heartbeat
+                    > self.heartbeat_timeout):
                 return
             if not self._wins_election(peer.priority, peer.node_id):
                 return
@@ -389,7 +400,8 @@ class HAManager:
                 return
 
             self.stats['failovers'] += 1
-            self._last_peer_heartbeat = 0  # 重置
+            self._last_peer_heartbeat = 0.0  # 重置
+            self._peer_seen = False
 
         self._promote_to_primary("主节点心跳超时，备节点接管")
 
@@ -402,8 +414,9 @@ class HAManager:
                 'state': self.state.value,
                 'priority': self.priority,
                 'peer_address': self.peer_address,
-                'peer_alive': (time.time() - self._last_peer_heartbeat < self.heartbeat_timeout
-                              if self._last_peer_heartbeat > 0 else False),
+                'peer_alive': (time.monotonic() - self._last_peer_heartbeat
+                               < self.heartbeat_timeout
+                               if self._peer_seen else False),
                 'stats': dict(self.stats),
             }
 

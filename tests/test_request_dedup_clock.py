@@ -23,6 +23,9 @@ from pathlib import Path
 
 DEDUP_SRC = Path(__file__).resolve().parents[1] / "core" / "request_dedup.py"
 
+#: 真实墙钟函数（被 monkeypatch 之前的原版）—— 用来模拟「回拨 8 小时」
+_REAL_TIME = time.time
+
 
 def _make_app():
     from flask import Flask, jsonify
@@ -55,7 +58,7 @@ def test_retry_allowed_after_window_despite_backward_clock(monkeypatch):
     assert client.post('/api/write-probe', json={'a': 1}).status_code == 409
 
     # 墙钟被回拨 8 小时（单调时钟不受影响）
-    monkeypatch.setattr(time, 'time', lambda: 1_000_000.0)
+    monkeypatch.setattr(time, 'time', lambda: _REAL_TIME() - 8 * 3600)
 
     time.sleep(DEDUP_WINDOW + 0.3)      # 真实时间已过窗口
     assert client.post('/api/write-probe', json={'a': 1}).status_code == 200, (

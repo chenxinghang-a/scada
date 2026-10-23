@@ -13,13 +13,22 @@ logger = logging.getLogger(__name__)
 
 
 class PooledConnection:
-    """池化连接包装"""
+    """池化连接包装。
+
+    round 259：`created_at` / `last_used` 用**单调时钟**。
+    它们只被拿去做差（`now - last_used >= max_idle_time`），而墙钟被回拨
+    一次（NTP 校时、现场机无电池开机后校时、手工改时间）会让差值变负 →
+    空闲连接**永不回收**、超龄连接**永不过期**：一条已经死掉的 socket
+    会一直躺在池里被反复取出，该设备的采集从此一直失败，只能重启进程。
+    反过来（向前跳）则会让所有连接同时超龄 → 全部重建（重连风暴）。
+    ⚠️ 因此这两个值**不能**当时间戳展示/落库。
+    """
     __slots__ = ('client', 'created_at', 'last_used', 'use_count', 'in_use', 'healthy')
 
     def __init__(self, client: Any):
         self.client = client
-        self.created_at = time.time()
-        self.last_used = time.time()
+        self.created_at = time.monotonic()
+        self.last_used = time.monotonic()
         self.use_count = 0
         self.in_use = False
         self.healthy = True
@@ -133,7 +142,7 @@ class ConnectionPool:
             if key in self._pool:
                 conn = self._pool[key]
                 if not conn.in_use and conn.healthy:
-                    now = time.time()
+                    now = time.monotonic()
                     # 检查生命周期和空闲超时
                     if now - conn.created_at >= self._max_lifetime:
                         self._destroy_connection(key, conn)
@@ -148,7 +157,7 @@ class ConnectionPool:
                             self._destroy_connection(key, conn)
                         else:
                             conn.in_use = True
-                            conn.last_used = time.time()
+                            conn.last_used = time.monotonic()
                             conn.use_count += 1
                             self._stats['hits'] += 1
                             self._stats['active'] += 1
@@ -159,7 +168,7 @@ class ConnectionPool:
                     # 不能再建一条新连接去覆盖这个槽位：旧连接会立刻失去引用，
                     # 永远不会被 disconnect/close（连接泄漏 → 长期运行耗尽句柄）。
                     # 这里复用既有连接，保证调用方仍拿到可用客户端。
-                    conn.last_used = time.time()
+                    conn.last_used = time.monotonic()
                     conn.use_count += 1
                     self._stats['hits'] += 1
                     logger.warning(
@@ -197,7 +206,7 @@ class ConnectionPool:
                 was_in_use = conn.in_use
                 conn.in_use = False
                 conn.healthy = healthy
-                conn.last_used = time.time()
+                conn.last_used = time.monotonic()
 
                 if was_in_use:
                     self._stats['active'] -= 1
@@ -284,7 +293,7 @@ class ConnectionPool:
             time.sleep(60)
             # 快照：在锁内获取空闲连接列表
             with self._lock:
-                now = time.time()
+                now = time.monotonic()
                 snapshot = [(key, conn) for key, conn in self._pool.items()
                            if not conn.in_use]
 
@@ -315,7 +324,7 @@ class ConnectionPool:
     def _check_auto_scale(self):
         """检查是否需要扩缩容"""
         import time
-        now = time.time()
+        now = time.monotonic()
 
         # 冷却时间检查
         if now - self._last_scale_time < self._scale_cooldown:

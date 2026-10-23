@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -30,6 +31,9 @@ from unittest.mock import MagicMock
 import pytest
 
 ALARM_MANAGER = Path(__file__).resolve().parents[1] / "报警层" / "alarm_manager.py"
+
+#: 真实墙钟函数（被 monkeypatch 之前的原版）—— 用来模拟「回拨 8 小时」
+_REAL_TIME = time.time
 
 
 def _strip_comments(src: str) -> str:
@@ -71,7 +75,7 @@ def test_ack_suppression_survives_backward_clock_jump(mgr, monkeypatch):
 
     base = mgr._clock()
     # 墙钟被回拨 8 小时（单调时钟不动）
-    monkeypatch.setattr('time.time', lambda: 1_000_000.0)
+    monkeypatch.setattr('time.time', lambda: _REAL_TIME() - 8 * 3600)
     assert mgr._should_emit(*key) is False, '抑制窗口内本就该抑制'
 
     # 单调时钟推进 601 秒 → 必须放行
@@ -89,7 +93,7 @@ def test_cooldown_survives_backward_clock_jump(mgr, monkeypatch):
 
     mgr._record_emit(*key)
     base = mgr._clock()
-    monkeypatch.setattr('time.time', lambda: 1_000_000.0)
+    monkeypatch.setattr('time.time', lambda: _REAL_TIME() - 8 * 3600)
 
     assert mgr._should_emit(*key) is False
     mgr._clock = lambda: base + 301
@@ -124,7 +128,7 @@ def test_flood_window_expires_after_backward_jump(monkeypatch):
 
     # 墙钟回拨 8 小时，然后被测对象自己的时钟推进到窗口之外
     base = det._clock()
-    monkeypatch.setattr('time.time', lambda: 1_000_000.0)
+    monkeypatch.setattr('time.time', lambda: _REAL_TIME() - 8 * 3600)
     det._clock = lambda: base + 3600
 
     det.check_flood_end()
