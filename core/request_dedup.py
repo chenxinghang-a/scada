@@ -40,8 +40,14 @@ def _make_fingerprint() -> str:
 
 
 def _cleanup_expired(fingerprints: dict[str, float], lock: threading.Lock):
-    """清理过期的指纹缓存"""
-    now = time.time()
+    """清理过期的指纹缓存。
+
+    round 258：用**单调时钟**。指纹表存的是"什么时候过期"，
+    墙钟被回拨一次（NTP 校时 / 现场机开机后校时 / 手工改时间），
+    所有指纹的过期时刻都变成"远在未来" → 这些请求**永久**被判重复，
+    每个写接口一直回 409，直到进程重启。
+    """
+    now = time.monotonic()
     with lock:
         expired = [k for k, v in fingerprints.items() if v < now]
         for k in expired:
@@ -58,7 +64,8 @@ def init_request_dedup(app: Flask):
     """
     state = app.extensions.setdefault(
         _STATE_KEY,
-        {'fingerprints': {}, 'lock': threading.Lock(), 'last_cleanup': time.time()},
+        {'fingerprints': {}, 'lock': threading.Lock(),
+         'last_cleanup': time.monotonic()},
     )
     fingerprints: dict[str, float] = state['fingerprints']
     fingerprints_lock: threading.Lock = state['lock']
@@ -85,7 +92,8 @@ def init_request_dedup(app: Flask):
             return None
 
         fingerprint = _make_fingerprint()
-        now = time.time()
+        # round 258：单调时钟（见 _cleanup_expired 的说明）
+        now = time.monotonic()
 
         with fingerprints_lock:
             expiry = fingerprints.get(fingerprint)

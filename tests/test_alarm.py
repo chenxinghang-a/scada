@@ -179,49 +179,38 @@ class TestAlarmManager:
         assert alarm_manager.alarm_states[state_key]['acknowledged'] is False
 
     def test_dedup_cooldown_prevents_duplicate(self, alarm_manager):
-        """Same alarm within cooldown window is not re-emitted"""
+        """Same alarm within cooldown window is not re-emitted
+
+        round 258：原用例**根本没调生产代码** —— 它自己写了一遍
+        `(now - last_emit) < cooldown` 再断言这个表达式，所以无论
+        `_should_emit` 实现成什么样它都绿（一条永远不会红的测试）。
+        现在直接调 `_should_emit`，并用被测代码的时钟 `_dedup_now()` 造数据。
+        """
         alarm_key = ('rule_001', 'dev1', 'temp')
         alarm_manager.dedup_config.enabled = True
         alarm_manager.dedup_config.emit_cooldown_seconds = 300
 
-        # Simulate first emit
-        alarm_manager._emit_history[alarm_key] = time.time()
+        alarm_manager._emit_history[alarm_key] = alarm_manager._dedup_now()
 
-        # Check: should be suppressed (within cooldown)
-        now = time.time()
-        last_emit = alarm_manager._emit_history.get(alarm_key, 0)
-        cooldown = alarm_manager.dedup_config.emit_cooldown_seconds
-        is_suppressed = (now - last_emit) < cooldown
-
-        assert is_suppressed is True
+        assert alarm_manager._should_emit(*alarm_key) is False
 
     def test_dedup_cooldown_expired_allows_emit(self, alarm_manager):
         """After cooldown expires, alarm can be re-emitted"""
         alarm_key = ('rule_001', 'dev1', 'temp')
         alarm_manager.dedup_config.enabled = True
-        alarm_manager.dedup_config.emit_cooldown_seconds = 1  # 1 second
+        alarm_manager.dedup_config.emit_cooldown_seconds = 1
 
-        # Simulate emit in the past
-        alarm_manager._emit_history[alarm_key] = time.time() - 5  # 5 seconds ago
+        alarm_manager._emit_history[alarm_key] = alarm_manager._dedup_now() - 5
 
-        # Check: should NOT be suppressed (cooldown expired)
-        now = time.time()
-        last_emit = alarm_manager._emit_history.get(alarm_key, 0)
-        cooldown = alarm_manager.dedup_config.emit_cooldown_seconds
-        is_suppressed = (now - last_emit) < cooldown
-
-        assert is_suppressed is False
+        assert alarm_manager._should_emit(*alarm_key) is True
 
     def test_dedup_disabled_always_emits(self, alarm_manager):
         """When dedup is disabled, alarms always emit"""
-        alarm_manager.dedup_config.enabled = False
-
-        # Even with a recent emit, should not be suppressed
         alarm_key = ('rule_001', 'dev1', 'temp')
-        alarm_manager._emit_history[alarm_key] = time.time()
+        alarm_manager.dedup_config.enabled = False
+        alarm_manager._emit_history[alarm_key] = alarm_manager._dedup_now()
 
-        is_suppressed = alarm_manager.dedup_config.enabled and False
-        assert is_suppressed is False
+        assert alarm_manager._should_emit(*alarm_key) is True
 
     def test_acknowledge_alarm_state(self, alarm_manager):
         """Acknowledging an alarm updates its state"""

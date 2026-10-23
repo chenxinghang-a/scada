@@ -90,7 +90,22 @@ class CircuitBreaker:
         self._failure_count = 0
         self._success_count = 0       # 半开状态下的连续成功计数
         self._half_open_calls = 0     # 半开状态下的当前探测请求数
-        self._last_failure_time = 0.0
+        #: **窗口计时用单调时钟**（round 258）。
+        #:
+        #: 原来这里和 `state` / `call()` 都用 `time.time()`。恢复窗口表达的是
+        #: **时长**，而墙钟被改动一次（NTP 校时、现场机无电池开机后校时、
+        #: 手工改时间）就整体错位：向后跳之后 `elapsed` 变成负数，
+        #: `elapsed >= recovery_timeout` 永远不成立 → 熔断器**永久停在 OPEN**，
+        #: 该设备的采集从此彻底停摆。而它的表现只是「设备一直离线」，
+        #: 日志里写着"剩余 N 秒"却永远等不到 —— 最难查的一类。
+        #:
+        #: 初值必须是 `-inf` 而不是 `0`：`time.monotonic()` 在 Windows 上是
+        #: **开机以来的秒数**，用 0 会让「刚开机就 force_open」的熔断器
+        #: 多卡 `recovery_timeout - 开机时长` 秒。
+        self._last_failure_mono = float('-inf')
+        #: 墙钟失败时刻（epoch 秒）。**只用于展示 / get_stats()**，
+        #: 不参与任何窗口计算 —— 否则上面那个坑会从接口绕回来。
+        self._last_failure_wall: float | None = None
         self._last_state_change = time.time()
         self._lock = threading.RLock()
 
@@ -105,7 +120,8 @@ class CircuitBreaker:
         """获取当前状态（自动检查OPEN→HALF_OPEN转换）"""
         with self._lock:
             if self._state == CircuitState.OPEN:
-                elapsed = time.time() - self._last_failure_time
+                # 单调时钟：墙钟回拨不该让熔断器永远回不到 HALF_OPEN
+                elapsed = time.monotonic() - self._last_failure_mono
                 if elapsed >= self.recovery_timeout:
                     self._transition(CircuitState.HALF_OPEN)
             return self._state
@@ -154,7 +170,8 @@ class CircuitBreaker:
 
             if current == CircuitState.OPEN:
                 self._total_rejections += 1
-                remaining = self.recovery_timeout - (time.time() - self._last_failure_time)
+                remaining = self.recovery_timeout - (
+                    time.monotonic() - self._last_failure_mono)
                 raise CircuitBreakerError(self.name, max(0, remaining))
 
             if current == CircuitState.HALF_OPEN:
@@ -189,7 +206,8 @@ class CircuitBreaker:
         with self._lock:
             self._failure_count += 1
             self._total_failures += 1
-            self._last_failure_time = time.time()
+            self._last_failure_mono = time.monotonic()
+            self._last_failure_wall = time.time()
 
             if self._state == CircuitState.HALF_OPEN:
                 # 半开状态失败 → 直接打开
@@ -204,10 +222,17 @@ class CircuitBreaker:
             )
 
     def force_open(self):
-        """手动打开熔断器"""
+        """手动打开熔断器。
+
+        round 258：原来这里写的是墙钟字段，而窗口计算已经改成单调时钟 ——
+        两个字段必须**同时**更新，否则 `force_open` 之后 `elapsed` 用的是
+        `-inf`，熔断器立刻半开，等于没打开。现在两个字段一起写，
+        语义是「按正常熔断处理：等满 recovery_timeout 再半开探测」。
+        """
         with self._lock:
             self._transition(CircuitState.OPEN)
-            self._last_failure_time = time.time()
+            self._last_failure_mono = time.monotonic()
+            self._last_failure_wall = time.time()
 
     def force_close(self):
         """手动关闭熔断器"""
@@ -240,7 +265,7 @@ class CircuitBreaker:
                 'total_failures': self._total_failures,
                 'total_rejections': self._total_rejections,
                 'failure_rate': round(failure_rate, 2),
-                'last_failure': self._last_failure_time,
+                'last_failure': self._last_failure_wall,
                 'last_state_change': self._last_state_change,
                 'recent_transitions': self._state_transitions[-5:],
             }

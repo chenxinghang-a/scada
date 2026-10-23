@@ -139,11 +139,19 @@ class AlarmFloodDetector:
         self._flood_active = False
         self._suppressed_count = 0
         self._flood_start = None
+        #: 窗口计时用的时钟。默认单调时钟；测试替换这个缝来模拟"时间流逝"
+        #: （**不要** monkeypatch 全局 time.monotonic —— 会波及后台线程的
+        #: `Event.wait(timeout)`，teardown 直接卡死）。
+        self._clock = time.monotonic
 
     def record_alarm(self, severity: str) -> tuple[bool, str]:
         """记录一条告警，返回 (should_emit, reason)"""
         with self._lock:
-            now = time.time()
+            # round 258：滑动窗口用**单调时钟**（原来是 time.time()）。
+            # 墙钟向后跳一次，窗口里的旧时间戳就永远算不出"过期"
+            # （`now - t` 为负）→ 洪水抑制**永久卡在激活态**，
+            # 所有低于 suppress_below 的报警被静默吞掉，直到窗口被新告警挤满。
+            now = self._clock()
             self._timestamps.append(now)
 
             # 清理窗口外的时间戳
@@ -194,7 +202,8 @@ class AlarmFloodDetector:
             if not self._flood_active:
                 return
 
-            now = time.time()
+            # round 258：同 record_alarm，窗口计时用单调时钟
+            now = self._clock()
             cutoff = now - self.window
             recent = [t for t in self._timestamps if t > cutoff]
 
@@ -342,6 +351,10 @@ class AlarmManager:
         # key: (alarm_id, device_id, register_name) -> acknowledge_timestamp
         self._acknowledge_history: dict[tuple, float] = {}
 
+        #: 去重窗口的时钟缝（默认单调时钟）。测试替换它来模拟"时间流逝"，
+        #: 详见 `_dedup_now()` 的 docstring。
+        self._clock = time.monotonic
+
         # 线程锁（保护去重状态的并发访问）
         self._dedup_lock = Lock()
 
@@ -368,7 +381,7 @@ class AlarmManager:
         self._rules_index: dict[tuple, list[tuple[str, dict]]] = {}
 
         # 上次清理过期旁路的时间戳
-        self._last_shelf_cleanup: float = 0
+        self._last_shelf_cleanup: float = float('-inf')
 
         # 报警升级定时器（后台自动检查）
         self._escalation_timer: threading.Timer | None = None
@@ -1053,7 +1066,11 @@ class AlarmManager:
             return
 
         # 清理过期的旁路（低频执行）
-        now_ts = time.time()
+        # round 258：节流用单调时钟。初值必须是 -inf 而不是 0 ——
+        # `time.monotonic()` 在 Windows 上是**开机以来的秒数**，
+        # 开机不足 60 秒时 `now - 0` 还不满 60，首次清理会被跳过；
+        # 更糟的是墙钟回拨会让它整整一个跳变量都不再清理。
+        now_ts = time.monotonic()
         if now_ts - self._last_shelf_cleanup > 60:
             self._cleanup_expired_shelves()
             self._last_shelf_cleanup = now_ts
@@ -1290,6 +1307,31 @@ class AlarmManager:
                 if self._escalation_manager:
                     self._escalation_manager.remove_alarm(rule_id, device_id, register_name)
 
+    def _dedup_now(self) -> float:
+        """去重窗口用的时钟：**单调时钟**，不是墙钟。
+
+        round 258：原来这里用 `time.time()`。去重窗口（冷却 300s / 确认抑制 600s）
+        表达的是**时长**，而 `time.time()` 是**墙钟** —— 系统时间被改动一次，
+        窗口就整体错位：
+          * NTP 校时 / 现场机没电池开机后校时 / 手工改时间，向后跳 8 小时 →
+            `now` 比 `ack_time` 还小，`suppress_until = ack_time + 600` 远在未来，
+            **这些报警 key 会被静默抑制整整一个跳变量**；
+            `_prune_dedup_history` 也算不出过期（`now - ts` 为负），连淘汰都做不到。
+          * 向前跳 → 窗口瞬间失效，同一报警重复轰炸。
+
+        后果最坏的一种是「操作员确认过的那条报警，校时之后再也没弹过」——
+        在真实厂区里等于漏掉一条已经确认过、但仍未恢复的报警。
+
+        单调时钟不受系统时间调整影响（Windows 上是开机以来秒数）。
+        ⚠️ 因此这个值**只能用于算差值**，绝不能落库、也不能当时间戳展示。
+
+        时钟走 `self._clock`（默认 `time.monotonic`）：测试要模拟"时间流逝"
+        只能替换这个缝，**不能** monkeypatch 全局的 `time.monotonic` ——
+        那是进程级的，会把后台线程里的 `Event.wait(timeout)` 一起改掉，
+        导致 teardown join 卡死（round 258 实测踩过）。
+        """
+        return self._clock()
+
     def _should_emit(self, rule_id: str, device_id: str, register_name: str) -> bool:
         """
         检查是否应该推送报警通知（去重核心逻辑）
@@ -1306,7 +1348,7 @@ class AlarmManager:
             return True
 
         alarm_key = (rule_id, device_id, register_name)
-        now = time.time()
+        now = self._dedup_now()
 
         with self._dedup_lock:
             # 检查确认后抑制
@@ -1331,7 +1373,7 @@ class AlarmManager:
         """记录报警推送时间（仅在确实推送成功后调用）"""
         alarm_key = (rule_id, device_id, register_name)
         with self._dedup_lock:
-            now = time.time()
+            now = self._dedup_now()
             self._emit_history[alarm_key] = now
             self._prune_dedup_history(
                 self._emit_history, self.dedup_config.emit_cooldown_seconds, now)
@@ -1340,7 +1382,7 @@ class AlarmManager:
         """记录报警确认时间"""
         alarm_key = (rule_id, device_id, register_name)
         with self._dedup_lock:
-            now = time.time()
+            now = self._dedup_now()
             self._acknowledge_history[alarm_key] = now
             self._prune_dedup_history(
                 self._acknowledge_history,
