@@ -14,6 +14,7 @@ from 用户层.auth import role_required, jwt_required
 from ._common import load_yaml_config, save_yaml_config, api_error
 import paths
 from core.version import get_version
+from core.config_io import dump_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +92,19 @@ def toggle_simulation_mode():
         config['system'] = {}
     config['system']['simulation_mode'] = new_mode
 
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    # round 256：原子写 + 就地合并。原来 `open(..., 'w')` 先截断再 dump，
+    # 序列化一失败就把 system.yaml 清成 0 字节（端口、数据库、JWT 密钥段全没），
+    # 而异常被上层吞成 500 —— 运行中的进程还能用，重启直接起不来。
+    if not dump_yaml(config_path, config):
+        logger.error("模拟模式已热切换，但写入 %s 失败（重启后不会保持）", config_path)
+        # 注意顺序：`**result` 在前 —— 它在失败分支里必须被显式的
+        # success/message 覆盖（`switch_simulation_mode` 自己会回 success: true）。
+        return jsonify({
+            **result,
+            'success': False,
+            'message': '模式已热切换，但配置持久化失败（重启后会恢复原模式）',
+            'persisted': False,
+        }), 500
 
     return jsonify(result)
 

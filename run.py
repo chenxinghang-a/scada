@@ -42,6 +42,45 @@ logger = get_logger(__name__)
 from core.config_validator import validate_startup_configs
 
 
+def _persisted_simulation_mode():
+    """读取 ``配置/system.yaml`` 的 ``system.simulation_mode``。
+
+    round 256：`POST /api/system/simulation-mode` 一直在把新值写进这个字段，
+    而**启动侧从来没人读** —— 运行时切到真实模式、重启又回到模拟，
+    接口却回 `success: true`（典型「写了个没人读的字段」）。
+    这里补上读取方，返回 True/False；没有该键或读不出来返回 None。
+
+    优先级：命令行 `--simulator` / `--real` > 本字段 > 默认模拟。
+    """
+    try:
+        path = paths.resolve('配置/system.yaml')
+        if not path.exists():
+            return None
+        import yaml as _yaml
+        with open(path, encoding='utf-8') as f:
+            cfg = _yaml.safe_load(f) or {}
+        value = (cfg.get('system') or {}).get('simulation_mode')
+        return value if isinstance(value, bool) else None
+    except Exception as e:
+        logger.warning("读取 system.simulation_mode 失败，按默认模拟模式处理: %s", e)
+        return None
+
+
+def _real_devices_ready() -> bool:
+    """``devices_real.yaml`` 是否存在且 ``devices`` 非空（不带 --real 时的软检查）。"""
+    try:
+        import yaml as _yaml
+        path = paths.resolve(paths.get_config_path('devices_real.yaml'))
+        if not path.exists():
+            return False
+        with open(path, encoding='utf-8') as f:
+            cfg = _yaml.safe_load(f) or {}
+        return bool(cfg.get('devices'))
+    except Exception as e:
+        logger.warning("检查 devices_real.yaml 失败: %s", e)
+        return False
+
+
 def main():
     """主函数"""
     try:
@@ -106,10 +145,27 @@ def main():
                     sys.exit(1)
             logger.info("真实设备模式：使用真实设备配置")
         else:
-            simulation_mode = True
-            config_path = paths.get_config_path('devices_simulated.yaml')
-            db_path = paths.get_db_path('simulated')
-            logger.info("模拟模式：使用模拟设备配置")
+            # round 256：没带模式参数时，尊重上次在界面上切换后持久化的选择。
+            # 注意这里**故意不做硬失败**：`--real` 是显式意图，配置为空就该报错退出；
+            # 而"界面上点过真实模式"属于上次会话的意图，设备清单没准备好时
+            # 宁可响亮地退回模拟（ERROR 日志），也不能让整个服务起不来。
+            persisted = _persisted_simulation_mode()
+            if persisted is False and _real_devices_ready():
+                simulation_mode = False
+                config_path = paths.get_config_path('devices_real.yaml')
+                db_path = paths.get_db_path('real')
+                logger.info("按 配置/system.yaml 的 system.simulation_mode=false "
+                            "进入真实设备模式（命令行 --simulator 可强制模拟）")
+            else:
+                if persisted is False:
+                    logger.error(
+                        "配置要求真实模式（system.simulation_mode=false），但 "
+                        "devices_real.yaml 缺失或 devices 为空 —— 已退回模拟模式。"
+                        "要真正上生产请填写清单后带 --real 启动。")
+                simulation_mode = True
+                config_path = paths.get_config_path('devices_simulated.yaml')
+                db_path = paths.get_db_path('simulated')
+                logger.info("模拟模式：使用模拟设备配置")
 
         # 初始化数据库
         logger.info("初始化数据库...")

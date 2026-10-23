@@ -21,6 +21,7 @@ from pathlib import Path
 from threading import Lock
 import paths
 from core.safe_numeric import to_finite_float, try_finite_float
+from core.config_io import dump_yaml, ConfigPersistError
 
 logger = logging.getLogger(__name__)
 
@@ -1790,39 +1791,62 @@ class AlarmManager:
         """
         更新去重配置
 
+        round 256：原来不管落盘成不成功都返回"更新后的配置"，接口照样回
+        `success: true` —— 磁盘没写进去，重启就恢复旧值，用户以为改好了。
+        现在**写失败就回滚内存**（否则内存与磁盘长期不一致，更难查）。
+
         Args:
             data: 新配置数据
 
         Returns:
             dict: 更新后的配置
+
+        Raises:
+            ConfigPersistError: 配置文件存在但写入失败（内存已回滚）
         """
+        previous = self.dedup_config.to_dict()
         self.dedup_config.update(data)
 
-        # 持久化到配置文件
-        self._save_dedup_config()
+        if not self._save_dedup_config():
+            # 回滚：宁可让本次修改整体失败，也不要留下「内存改了、磁盘没改」
+            self.dedup_config = AlarmDedupConfig(previous)
+            raise ConfigPersistError(
+                f'去重配置写入失败（已回滚）：{self.config_path}')
 
         logger.info(f"去重配置已更新: {self.dedup_config.to_dict()}")
         return self.dedup_config.to_dict()
 
-    def _save_dedup_config(self):
-        """保存去重配置到alarms.yaml"""
+    def _save_dedup_config(self) -> bool:
+        """保存去重配置到 alarms.yaml。
+
+        round 256：原来 `open(..., 'w')` + `yaml.dump` —— 先截断再序列化，
+        dump 抛异常就把整份配置清成 0 字节（所有规则一起没），而异常被
+        吞成一条日志。改走 `core.config_io.dump_yaml`：原子写 + 只重写
+        `dedup` 这一段，文件里其它注释/段落逐字保留。
+        """
         try:
             config_file = Path(self.config_path)
             if not config_file.exists():
-                return
+                # 没有配置文件 = 这个部署本来就不从文件读去重配置（测试夹具 /
+                # 嵌入式装配）。此时内存态就是唯一真源，不算失败；
+                # 但也不凭空造一份残缺的配置出来。
+                logger.warning("去重配置未落盘：配置文件不存在 %s", config_file)
+                return True
 
             with open(config_file, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f) or {}
 
             config['dedup'] = self.dedup_config.to_dict()
 
-            with open(config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+            if not dump_yaml(config_file, config):
+                return False
 
             logger.info("去重配置已保存到配置文件")
+            return True
 
         except Exception as e:
             logger.error(f"保存去重配置异常: {e}")
+            return False
 
     def add_rule(self, rule_config: dict[str, Any]) -> bool:
         """
@@ -1846,11 +1870,21 @@ class AlarmManager:
 
             # 添加到内存 (线程安全)
             with self._state_lock:
+                previous = self.rules.get(rule_id)
                 self.rules[rule_id] = rule_config
             self._rebuild_rules_index()
 
-            # 保存到配置文件
-            self._save_config()
+            # 保存到配置文件。round 256：落盘失败必须回滚 —— 否则接口回
+            # `success: true`、规则只在内存里活着，重启就没了（用户以为已生效）。
+            if not self._save_config():
+                with self._state_lock:
+                    if previous is None:
+                        self.rules.pop(rule_id, None)
+                    else:
+                        self.rules[rule_id] = previous
+                self._rebuild_rules_index()
+                logger.error("添加报警规则失败（配置落盘失败，已回滚）: %s", rule_id)
+                return False
 
             logger.info(f"添加报警规则: {rule_id}")
             return True
@@ -1872,11 +1906,17 @@ class AlarmManager:
         try:
             if rule_id in self.rules:
                 with self._state_lock:
-                    del self.rules[rule_id]
+                    removed = self.rules.pop(rule_id)
                 self._rebuild_rules_index()
 
-                # 保存到配置文件
-                self._save_config()
+                # 保存到配置文件。round 256：落盘失败回滚，避免「内存删了、
+                # 磁盘还在 → 重启后规则复活」这种更难查的不一致。
+                if not self._save_config():
+                    with self._state_lock:
+                        self.rules[rule_id] = removed
+                    self._rebuild_rules_index()
+                    logger.error("移除报警规则失败（配置落盘失败，已回滚）: %s", rule_id)
+                    return False
 
                 logger.info(f"移除报警规则: {rule_id}")
                 return True
@@ -1939,8 +1979,14 @@ class AlarmManager:
 
             config['alarm_rules'] = list(self.rules.values())
 
-            with open(config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+            # round 256：原来 `open(..., 'w')` 先截断再 dump —— 序列化一抛异常
+            # （规则里有不可序列化的值 / 磁盘满），文件就成 0 字节：上面刚做的
+            # 损坏备份保护全部白费，规则连同 dedup/escalation 一起没了。
+            # 改走原子写 + 就地合并：只重写 alarm_rules 这一段，其余段落
+            # （含注释）逐字保留。
+            if not dump_yaml(config_file, config):
+                logger.error("报警配置写入失败（原文件保持不变）: %s", config_file)
+                return False
 
             logger.info("报警配置已保存")
             return True

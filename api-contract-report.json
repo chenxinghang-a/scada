@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-22T15:32:38+00:00",
+  "generated_at": "2026-10-23T13:52:11+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -403,7 +403,7 @@
       "source_path": "/config",
       "backend_path": "/api/config",
       "status": "match",
-      "detail": "精确匹配 api_system.py:103",
+      "detail": "精确匹配 api_system.py:114",
       "source_file": "system.ts",
       "source_line": 162
     },
@@ -413,7 +413,7 @@
       "source_path": "/config",
       "backend_path": "/api/config",
       "status": "match",
-      "detail": "精确匹配 api_system.py:153",
+      "detail": "精确匹配 api_system.py:164",
       "source_file": "system.ts",
       "source_line": 166
     },
@@ -1323,7 +1323,7 @@
       "source_path": "/system/client-errors",
       "backend_path": "/api/system/client-errors",
       "status": "match",
-      "detail": "精确匹配 api_system.py:191",
+      "detail": "精确匹配 api_system.py:202",
       "source_file": "useErrorLogger.ts",
       "source_line": 45
     },
@@ -1333,7 +1333,7 @@
       "source_path": "/system/database",
       "backend_path": "/api/system/database",
       "status": "match",
-      "detail": "精确匹配 api_system.py:50",
+      "detail": "精确匹配 api_system.py:51",
       "source_file": "system.ts",
       "source_line": 150
     },
@@ -1343,7 +1343,7 @@
       "source_path": "/system/ha-force-role",
       "backend_path": "/api/system/ha-force-role",
       "status": "match",
-      "detail": "精确匹配 api_system.py:134",
+      "detail": "精确匹配 api_system.py:145",
       "source_file": "system.ts",
       "source_line": 202
     },
@@ -1353,7 +1353,7 @@
       "source_path": "/system/ha-status",
       "backend_path": "/api/system/ha-status",
       "status": "match",
-      "detail": "精确匹配 api_system.py:124",
+      "detail": "精确匹配 api_system.py:135",
       "source_file": "system.ts",
       "source_line": 198
     },
@@ -1363,7 +1363,7 @@
       "source_path": "/system/simulation-mode",
       "backend_path": "/api/system/simulation-mode",
       "status": "match",
-      "detail": "精确匹配 api_system.py:57",
+      "detail": "精确匹配 api_system.py:58",
       "source_file": "system.ts",
       "source_line": 154
     },
@@ -1373,7 +1373,7 @@
       "source_path": "/system/simulation-mode",
       "backend_path": "/api/system/simulation-mode",
       "status": "match",
-      "detail": "精确匹配 api_system.py:66",
+      "detail": "精确匹配 api_system.py:67",
       "source_file": "system.ts",
       "source_line": 158
     },
@@ -1383,7 +1383,7 @@
       "source_path": "/system/status",
       "backend_path": "/api/system/status",
       "status": "match",
-      "detail": "精确匹配 api_system.py:25",
+      "detail": "精确匹配 api_system.py:26",
       "source_file": "system.ts",
       "source_line": 146
     }

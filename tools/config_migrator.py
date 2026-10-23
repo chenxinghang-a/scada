@@ -84,8 +84,9 @@ class ConfigMigrator:
                         device['zone'] = 'default'
                         changes.append(f"设备 {device.get('id', '?')} 添加默认zone")
 
-                with open(devices_file, 'w', encoding='utf-8') as f:
-                    yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+                # round 256：原子写 + 就地合并（迁移不该把整份注释抹掉）
+                from core.config_io import dump_yaml
+                dump_yaml(devices_file, config)
 
         # 2. alarms.yaml 添加默认dedup配置
         alarms_file = self.config_dir / 'alarms.yaml'
@@ -101,8 +102,9 @@ class ConfigMigrator:
                 }
                 changes.append("添加报警去重默认配置")
 
-                with open(alarms_file, 'w', encoding='utf-8') as f:
-                    yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+                # round 256：同上
+                from core.config_io import dump_yaml
+                dump_yaml(alarms_file, config)
 
         # 3. 更新版本号
         self.save_config_version('2.0.0')

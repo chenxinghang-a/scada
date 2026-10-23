@@ -11,6 +11,7 @@ from flask import current_app, jsonify, make_response
 
 import paths
 from core.safe_numeric import to_finite_float, to_int, try_int
+from core.config_io import dump_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -152,18 +153,17 @@ def get_pagination_params(default_page: int = 1, default_per_page: int = 20, max
 
 
 def save_yaml_config(config_path: str, config: dict[str, Any]) -> bool:
-    """保存YAML配置文件（原子写入：先写临时文件再 rename）
+    """保存YAML配置文件（原子写 + 就地合并，规则收在 `core/config_io.py`）
 
     相对路径同样走 env-aware 解析，理由见 ``load_yaml_config``。
+
+    round 256：原来自己拼 `.tmp` 再 rename —— 路径是 `xxx.tmp`（固定名），
+    两个请求同时写同一个配置文件时共用一个临时文件，内容会互相穿插。
+    且 `yaml.dump` 整份重写会抹掉注释、按字母重排键。
     """
     try:
         path = paths.resolve_config_file(config_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix('.tmp')
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
-        tmp_path.replace(path)
-        return True
+        return dump_yaml(path, config)
     except Exception as e:
         logger.error(f"保存配置文件失败: {e}")
         return False

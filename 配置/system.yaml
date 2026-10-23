@@ -84,11 +84,17 @@ performance:
   connection_pool:
     size: 10
     timeout: 30
+# round 256：`simulation_mode` 现在是**启动时真的会读**的字段。
+# 优先级：命令行 `--simulator` / `--real` > 本字段 > 默认模拟。
+#   · true  → 模拟模式（开箱默认，不连现场设备）
+#   · false → 真实设备模式；但仅当 devices_real.yaml 的 devices 非空才生效，
+#             否则启动时打 ERROR 并退回模拟（避免"点了真实模式，服务却起不来"）
+# 界面上切换模拟/真实模式会写这个字段，重启后保持上次选择。
 system:
   author: 陈星行
   description: 基于Python的工业数据采集与监控系统（四层漏斗架构）
   name: 工业数据采集与监控系统
-  simulation_mode: false
+  simulation_mode: true
   version: 2.1.0
 mqtt:
   broker_host: localhost

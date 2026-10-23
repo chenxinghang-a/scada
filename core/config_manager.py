@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from core.safe_numeric import try_int
+from core.config_io import dump_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -113,20 +114,30 @@ class ConfigManager:
             return {}
     
     @classmethod
-    def save_yaml(cls, config_path: str, config: Dict[str, Any]):
+    def save_yaml(cls, config_path: str, config: Dict[str, Any]) -> bool:
         """
         保存配置到YAML文件
-        
+
+        round 256：两处修正 ——
+        1. 原来 `open(..., 'w')` 先截断再 dump，序列化异常会留下 0 字节文件；
+           改走 `core.config_io.dump_yaml`（原子写 + 只重写变化的键、保留注释）。
+        2. 原来**不管写没写成功**都更新缓存并通知观察者 —— 磁盘失败而内存说
+           "已保存"，进程内读到的都是新值、重启全丢。现在写成功才更新。
+
         Args:
             config_path: 配置文件路径
             config: 配置字典
+
+        Returns:
+            bool: 是否真的落盘成功。
         """
         try:
             path = Path(config_path)
             path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(path, 'w', encoding='utf-8') as f:
-                yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+            if not dump_yaml(path, config):
+                logger.error(f"保存配置文件失败（原文件保持不变）: {config_path}")
+                return False
 
             # 更新缓存
             with cls._lock:
@@ -135,8 +146,10 @@ class ConfigManager:
 
             # 通知观察者
             cls._notify_watchers(config_path, config)
+            return True
         except Exception as e:
             logger.error(f"保存配置文件失败: {config_path}, 错误: {e}")
+            return False
     
     @classmethod
     def get(cls, config_path: str, key: str, default: Any = None) -> Any:

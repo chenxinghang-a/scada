@@ -407,6 +407,46 @@ def restore_polluted_configs():
         print(f"\n[conftest] 已还原被测试写脏的配置文件: {', '.join(restored)}")
 
 
+@pytest.fixture(scope="session", autouse=True)
+def isolate_config_writes(tmp_path_factory):
+    """把「写进仓库里的配置文件」整体重定向到临时目录（round 256）。
+
+    上一个 fixture 是**事后还原**，它有个致命盲区：会话被 Ctrl-C / SIGKILL
+    打断时 teardown 不跑，污染就永久留在工作区，下次会话还会把脏状态当"原状"。
+    实际已经踩过两次（`配置/alarms.yaml` 被 `yaml.dump` 抹平注释后留在盘上）。
+
+    这里改成**事前拦截**：所有配置写入现在都收敛到
+    `core.config_io.atomic_write_text`（唯一写盘点），在这里按「相对仓库根的
+    路径」改写到临时镜像目录。仓库里的配置文件在整个测试会话中保持只读。
+
+    只拦「仓库内」的路径；tmp_path 下的写入原样放行。
+    """
+    import core.config_io as cio
+
+    root = Path(PROJECT_ROOT).resolve()
+    mirror = tmp_path_factory.mktemp('config-mirror')
+    real_write = cio.atomic_write_text
+
+    def redirected(path, text, encoding='utf-8', eol='\n'):
+        target = Path(path)
+        try:
+            rel = target.resolve().relative_to(root)
+        except (ValueError, OSError):
+            return real_write(target, text, encoding=encoding, eol=eol)
+        # 测试自己的临时目录（`.pytest_tmp-<pid>/`、`tests/`）本来就在仓库里，
+        # 必须原样放行 —— 否则用例"写进去再读回来"会读到旧内容。
+        if rel.parts and (rel.parts[0] == 'tests'
+                          or rel.parts[0].startswith('.pytest_tmp')):
+            return real_write(target, text, encoding=encoding, eol=eol)
+        return real_write(mirror / rel, text, encoding=encoding, eol=eol)
+
+    cio.atomic_write_text = redirected
+    try:
+        yield mirror
+    finally:
+        cio.atomic_write_text = real_write
+
+
 def _differs_from_git_head(rel: str) -> bool:
     """工作区里的 ``rel`` 是否与 git HEAD 版本不同。
 

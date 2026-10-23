@@ -227,8 +227,9 @@ class AlertRuleGenerator:
             'total_rules': len(rules),
         }
 
-        with open(output_path, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+        # round 256：原子写（原来 open('w') 先截断，dump 一抛异常就留 0 字节）
+        from core.config_io import dump_yaml
+        dump_yaml(output_path, config)
 
         print(f"已生成 {len(rules)} 条告警规则")
         print(f"保存到: {output_path}")
