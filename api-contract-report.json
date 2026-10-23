@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-21T23:44:09+00:00",
+  "generated_at": "2026-10-22T15:32:38+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -35,14 +35,14 @@
   },
   "summary": {
     "frontend_endpoints": 134,
-    "backend_routes": 183,
+    "backend_routes": 184,
     "matched": 134,
     "missing_backend": 0,
     "prefixed_mismatch": 0,
     "param_mismatch": 0,
     "unmatched": 0,
     "match_rate": "100.00%",
-    "unused_backend_endpoints": 42,
+    "unused_backend_endpoints": 43,
     "excluded_frontend_endpoints": 0,
     "result": "pass"
   },
@@ -613,7 +613,7 @@
       "source_path": "/api/csrf-token",
       "backend_path": "/api/csrf-token",
       "status": "match",
-      "detail": "精确匹配 routes.py:359",
+      "detail": "精确匹配 routes.py:420",
       "source_file": "request.ts",
       "source_line": 54
     },
@@ -973,7 +973,7 @@
       "source_path": "/health/available",
       "backend_path": "/api/health/available",
       "status": "match",
-      "detail": "精确匹配 api_health.py:311",
+      "detail": "精确匹配 api_health.py:324",
       "source_file": "system.ts",
       "source_line": 190
     },
@@ -983,7 +983,7 @@
       "source_path": "/health/checks",
       "backend_path": "/api/health/checks",
       "status": "match",
-      "detail": "精确匹配 api_health.py:257",
+      "detail": "精确匹配 api_health.py:270",
       "source_file": "system.ts",
       "source_line": 182
     },
@@ -993,7 +993,7 @@
       "source_path": "/health/checks/:checkName",
       "backend_path": "/api/health/checks/<check_name>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_health.py:280",
+      "detail": "结构匹配（参数名归一）api_health.py:293",
       "source_file": "system.ts",
       "source_line": 186
     },
@@ -1003,7 +1003,7 @@
       "source_path": "/health/modules",
       "backend_path": "/api/health/modules",
       "status": "match",
-      "detail": "精确匹配 api_health.py:200",
+      "detail": "精确匹配 api_health.py:213",
       "source_file": "system.ts",
       "source_line": 174
     },
@@ -1013,7 +1013,7 @@
       "source_path": "/health/modules/:moduleName",
       "backend_path": "/api/health/modules/<module_name>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_health.py:226",
+      "detail": "结构匹配（参数名归一）api_health.py:239",
       "source_file": "system.ts",
       "source_line": 178
     },
@@ -1033,7 +1033,7 @@
       "source_path": "/health/unavailable",
       "backend_path": "/api/health/unavailable",
       "status": "match",
-      "detail": "精确匹配 api_health.py:331",
+      "detail": "精确匹配 api_health.py:344",
       "source_file": "system.ts",
       "source_line": 194
     },
@@ -1043,7 +1043,7 @@
       "source_path": "/industry40/devices/status",
       "backend_path": "/api/industry40/devices/status",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:453",
+      "detail": "精确匹配 api_industry40.py:591",
       "source_file": "industry40.ts",
       "source_line": 427
     },
@@ -1053,7 +1053,7 @@
       "source_path": "/industry40/edge/log",
       "backend_path": "/api/industry40/edge/log",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:433",
+      "detail": "精确匹配 api_industry40.py:571",
       "source_file": "industry40.ts",
       "source_line": 422
     },
@@ -1063,7 +1063,7 @@
       "source_path": "/industry40/edge/rules",
       "backend_path": "/api/industry40/edge/rules",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:416",
+      "detail": "精确匹配 api_industry40.py:554",
       "source_file": "industry40.ts",
       "source_line": 419
     },
@@ -1073,7 +1073,7 @@
       "source_path": "/industry40/edge/status",
       "backend_path": "/api/industry40/edge/status",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:399",
+      "detail": "精确匹配 api_industry40.py:537",
       "source_file": "industry40.ts",
       "source_line": 416
     },
@@ -1083,7 +1083,7 @@
       "source_path": "/industry40/energy",
       "backend_path": "/api/industry40/energy",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:226",
+      "detail": "精确匹配 api_industry40.py:364",
       "source_file": "industry40.ts",
       "source_line": 386
     },
@@ -1093,7 +1093,7 @@
       "source_path": "/industry40/energy/anomaly-config",
       "backend_path": "/api/industry40/energy/anomaly-config",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:356",
+      "detail": "精确匹配 api_industry40.py:494",
       "source_file": "industry40.ts",
       "source_line": 408
     },
@@ -1103,7 +1103,7 @@
       "source_path": "/industry40/energy/anomaly-config",
       "backend_path": "/api/industry40/energy/anomaly-config",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:372",
+      "detail": "精确匹配 api_industry40.py:510",
       "source_file": "industry40.ts",
       "source_line": 411
     },
@@ -1113,7 +1113,7 @@
       "source_path": "/industry40/energy/carbon",
       "backend_path": "/api/industry40/energy/carbon",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:260",
+      "detail": "精确匹配 api_industry40.py:398",
       "source_file": "industry40.ts",
       "source_line": 392
     },
@@ -1123,7 +1123,7 @@
       "source_path": "/industry40/energy/cost",
       "backend_path": "/api/industry40/energy/cost",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:243",
+      "detail": "精确匹配 api_industry40.py:381",
       "source_file": "industry40.ts",
       "source_line": 389
     },
@@ -1133,7 +1133,7 @@
       "source_path": "/industry40/energy/power",
       "backend_path": "/api/industry40/energy/power",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:277",
+      "detail": "精确匹配 api_industry40.py:415",
       "source_file": "industry40.ts",
       "source_line": 395
     },
@@ -1143,7 +1143,7 @@
       "source_path": "/industry40/energy/tariff",
       "backend_path": "/api/industry40/energy/tariff",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:299",
+      "detail": "精确匹配 api_industry40.py:437",
       "source_file": "industry40.ts",
       "source_line": 398
     },
@@ -1153,7 +1153,7 @@
       "source_path": "/industry40/energy/tariff",
       "backend_path": "/api/industry40/energy/tariff",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:316",
+      "detail": "精确匹配 api_industry40.py:454",
       "source_file": "industry40.ts",
       "source_line": 405
     },
@@ -1163,7 +1163,7 @@
       "source_path": "/industry40/health",
       "backend_path": "/api/industry40/health",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:69",
+      "detail": "精确匹配 api_industry40.py:198",
       "source_file": "industry40.ts",
       "source_line": 340
     },
@@ -1173,7 +1173,7 @@
       "source_path": "/industry40/health/:deviceId",
       "backend_path": "/api/industry40/health/<device_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:86",
+      "detail": "结构匹配（参数名归一）api_industry40.py:222",
       "source_file": "industry40.ts",
       "source_line": 343
     },
@@ -1183,7 +1183,7 @@
       "source_path": "/industry40/maintenance-alerts",
       "backend_path": "/api/industry40/maintenance-alerts",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:106",
+      "detail": "精确匹配 api_industry40.py:244",
       "source_file": "industry40.ts",
       "source_line": 346
     },
@@ -1193,7 +1193,7 @@
       "source_path": "/industry40/oee",
       "backend_path": "/api/industry40/oee",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:143",
+      "detail": "精确匹配 api_industry40.py:281",
       "source_file": "industry40.ts",
       "source_line": 367
     },
@@ -1203,7 +1203,7 @@
       "source_path": "/industry40/oee/:deviceId",
       "backend_path": "/api/industry40/oee/<device_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:160",
+      "detail": "结构匹配（参数名归一）api_industry40.py:298",
       "source_file": "industry40.ts",
       "source_line": 370
     },
@@ -1213,7 +1213,7 @@
       "source_path": "/industry40/overview",
       "backend_path": "/api/industry40/overview",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:552",
+      "detail": "精确匹配 api_industry40.py:739",
       "source_file": "industry40.ts",
       "source_line": 335
     },
@@ -1223,7 +1223,7 @@
       "source_path": "/industry40/spc/:deviceId/:registerName",
       "backend_path": "/api/industry40/spc/<device_id>/<register_name>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:182",
+      "detail": "结构匹配（参数名归一）api_industry40.py:320",
       "source_file": "industry40.ts",
       "source_line": 375
     },
@@ -1233,7 +1233,7 @@
       "source_path": "/industry40/spc/violations",
       "backend_path": "/api/industry40/spc/violations",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:205",
+      "detail": "精确匹配 api_industry40.py:343",
       "source_file": "industry40.ts",
       "source_line": 381
     },
@@ -1243,7 +1243,7 @@
       "source_path": "/industry40/trend/:deviceId/:registerName",
       "backend_path": "/api/industry40/trend/<device_id>/<register_name>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:124",
+      "detail": "结构匹配（参数名归一）api_industry40.py:262",
       "source_file": "industry40.ts",
       "source_line": 351
     },
@@ -1253,7 +1253,7 @@
       "source_path": "/industry40/vibration",
       "backend_path": "/api/industry40/vibration",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:472",
+      "detail": "精确匹配 api_industry40.py:657",
       "source_file": "industry40.ts",
       "source_line": 432
     },
@@ -1263,7 +1263,7 @@
       "source_path": "/industry40/vibration/:deviceId",
       "backend_path": "/api/industry40/vibration/<device_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:489",
+      "detail": "结构匹配（参数名归一）api_industry40.py:676",
       "source_file": "industry40.ts",
       "source_line": 435
     },
@@ -1273,7 +1273,7 @@
       "source_path": "/industry40/vibration/:deviceId/bearing",
       "backend_path": "/api/industry40/vibration/<device_id>/bearing",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:529",
+      "detail": "结构匹配（参数名归一）api_industry40.py:716",
       "source_file": "industry40.ts",
       "source_line": 441
     },
@@ -1283,7 +1283,7 @@
       "source_path": "/industry40/vibration/:deviceId/spectrum",
       "backend_path": "/api/industry40/vibration/<device_id>/spectrum",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:509",
+      "detail": "结构匹配（参数名归一）api_industry40.py:696",
       "source_file": "industry40.ts",
       "source_line": 438
     },
@@ -1293,7 +1293,7 @@
       "source_path": "/performance/metrics/history",
       "backend_path": "/api/performance/metrics/history",
       "status": "match",
-      "detail": "精确匹配 api_performance.py:232",
+      "detail": "精确匹配 api_performance.py:290",
       "source_file": "performance.ts",
       "source_line": 12
     },
@@ -1303,7 +1303,7 @@
       "source_path": "/performance/metrics/realtime",
       "backend_path": "/api/performance/metrics/realtime",
       "status": "match",
-      "detail": "精确匹配 api_performance.py:221",
+      "detail": "精确匹配 api_performance.py:279",
       "source_file": "performance.ts",
       "source_line": 7
     },
@@ -1313,7 +1313,7 @@
       "source_path": "/performance/metrics/summary",
       "backend_path": "/api/performance/metrics/summary",
       "status": "match",
-      "detail": "精确匹配 api_performance.py:248",
+      "detail": "精确匹配 api_performance.py:306",
       "source_file": "performance.ts",
       "source_line": 17
     },
@@ -1393,19 +1393,19 @@
       "method": "GET",
       "backend_path": "/api/alarms/escalation/rules",
       "source_file": "api_alarms.py",
-      "source_line": 591
+      "source_line": 632
     },
     {
       "method": "PUT",
       "backend_path": "/api/alarms/escalation/rules",
       "source_file": "api_alarms.py",
-      "source_line": 602
+      "source_line": 641
     },
     {
       "method": "GET",
       "backend_path": "/api/alarms/escalation/status",
       "source_file": "api_alarms.py",
-      "source_line": 580
+      "source_line": 623
     },
     {
       "method": "GET",
@@ -1417,133 +1417,139 @@
       "method": "GET",
       "backend_path": "/api/health/tasks/<task_id>",
       "source_file": "api_health.py",
-      "source_line": 351
+      "source_line": 364
+    },
+    {
+      "method": "GET",
+      "backend_path": "/api/industry40/freshness",
+      "source_file": "api_industry40.py",
+      "source_line": 617
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/audit",
       "source_file": "api_ops.py",
-      "source_line": 486
+      "source_line": 540
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/cleanup/backups",
       "source_file": "api_ops.py",
-      "source_line": 426
+      "source_line": 463
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/cleanup/history",
       "source_file": "api_ops.py",
-      "source_line": 407
+      "source_line": 416
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/cleanup/logs",
       "source_file": "api_ops.py",
-      "source_line": 442
+      "source_line": 488
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/config",
       "source_file": "api_ops.py",
-      "source_line": 125
+      "source_line": 129
     },
     {
       "method": "PUT",
       "backend_path": "/api/ops/config",
       "source_file": "api_ops.py",
-      "source_line": 143
+      "source_line": 147
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/config/<key>",
       "source_file": "api_ops.py",
-      "source_line": 191
+      "source_line": 195
     },
     {
       "method": "PUT",
       "backend_path": "/api/ops/config/<key>",
       "source_file": "api_ops.py",
-      "source_line": 210
+      "source_line": 214
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/config/history",
       "source_file": "api_ops.py",
-      "source_line": 249
+      "source_line": 253
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/db/analyze",
       "source_file": "api_ops.py",
-      "source_line": 355
+      "source_line": 364
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/db/integrity",
       "source_file": "api_ops.py",
-      "source_line": 374
+      "source_line": 383
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/db/reindex",
       "source_file": "api_ops.py",
-      "source_line": 334
+      "source_line": 343
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/db/tables",
       "source_file": "api_ops.py",
-      "source_line": 388
+      "source_line": 397
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/db/vacuum",
       "source_file": "api_ops.py",
-      "source_line": 315
+      "source_line": 324
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/diagnostics/export",
       "source_file": "api_ops.py",
-      "source_line": 462
+      "source_line": 516
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/maintenance/tasks",
       "source_file": "api_ops.py",
-      "source_line": 502
+      "source_line": 556
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/maintenance/tasks/<name>/run",
       "source_file": "api_ops.py",
-      "source_line": 518
+      "source_line": 572
     },
     {
       "method": "GET",
       "backend_path": "/api/resilience/chaos",
       "source_file": "api_resilience.py",
-      "source_line": 322
+      "source_line": 364
     },
     {
       "method": "POST",
       "backend_path": "/api/resilience/chaos/experiment",
       "source_file": "api_resilience.py",
-      "source_line": 334
+      "source_line": 376
     },
     {
       "method": "GET",
       "backend_path": "/api/resilience/chaos/experiment/<name>/report",
       "source_file": "api_resilience.py",
-      "source_line": 378
+      "source_line": 420
     },
     {
       "method": "POST",
       "backend_path": "/api/resilience/chaos/experiment/<name>/run",
       "source_file": "api_resilience.py",
-      "source_line": 363
+      "source_line": 405
     },
     {
       "method": "GET",
@@ -1555,91 +1561,91 @@
       "method": "GET",
       "backend_path": "/api/resilience/circuit-breaker/<name>",
       "source_file": "api_resilience.py",
-      "source_line": 41
+      "source_line": 83
     },
     {
       "method": "POST",
       "backend_path": "/api/resilience/circuit-breaker/<name>/reset",
       "source_file": "api_resilience.py",
-      "source_line": 55
+      "source_line": 97
     },
     {
       "method": "POST",
       "backend_path": "/api/resilience/circuit-breaker/reset-all",
       "source_file": "api_resilience.py",
-      "source_line": 72
+      "source_line": 114
     },
     {
       "method": "GET",
       "backend_path": "/api/resilience/degradation",
       "source_file": "api_resilience.py",
-      "source_line": 150
+      "source_line": 192
     },
     {
       "method": "POST",
       "backend_path": "/api/resilience/degradation/degrade",
       "source_file": "api_resilience.py",
-      "source_line": 174
+      "source_line": 216
     },
     {
       "method": "GET",
       "backend_path": "/api/resilience/degradation/feature/<feature_name>",
       "source_file": "api_resilience.py",
-      "source_line": 215
+      "source_line": 257
     },
     {
       "method": "GET",
       "backend_path": "/api/resilience/degradation/levels",
       "source_file": "api_resilience.py",
-      "source_line": 162
+      "source_line": 204
     },
     {
       "method": "POST",
       "backend_path": "/api/resilience/degradation/restore",
       "source_file": "api_resilience.py",
-      "source_line": 202
+      "source_line": 244
     },
     {
       "method": "GET",
       "backend_path": "/api/resilience/fault-injection",
       "source_file": "api_resilience.py",
-      "source_line": 235
+      "source_line": 277
     },
     {
       "method": "DELETE",
       "backend_path": "/api/resilience/fault-injection/<target>",
       "source_file": "api_resilience.py",
-      "source_line": 290
+      "source_line": 332
     },
     {
       "method": "POST",
       "backend_path": "/api/resilience/fault-injection/clear",
       "source_file": "api_resilience.py",
-      "source_line": 305
+      "source_line": 347
     },
     {
       "method": "POST",
       "backend_path": "/api/resilience/fault-injection/inject",
       "source_file": "api_resilience.py",
-      "source_line": 247
+      "source_line": 289
     },
     {
       "method": "GET",
       "backend_path": "/api/resilience/rate-limiter",
       "source_file": "api_resilience.py",
-      "source_line": 90
+      "source_line": 132
     },
     {
       "method": "PUT",
       "backend_path": "/api/resilience/rate-limiter/profile",
       "source_file": "api_resilience.py",
-      "source_line": 114
+      "source_line": 156
     },
     {
       "method": "GET",
       "backend_path": "/api/resilience/rate-limiter/profiles",
       "source_file": "api_resilience.py",
-      "source_line": 102
+      "source_line": 144
     }
   ],
   "exclusions": {

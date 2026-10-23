@@ -5,6 +5,7 @@
 
 import jwt
 import uuid
+import hashlib
 import bcrypt
 import logging
 from datetime import datetime, timedelta, timezone
@@ -366,14 +367,15 @@ class AuthManager:
                 return None
 
             # 检查令牌是否在黑名单中 (GB/T 35718)
-            jti = payload.get('jti')
-            if jti:
-                with self.database.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute('SELECT 1 FROM jwt_blacklist WHERE token_jti = ?', (jti,))
-                    if cursor.fetchone():
-                        logger.warning(f"JWT令牌已被撤销: jti={jti}")
-                        return None
+            # round 255：没有 jti 的令牌也要查 —— 用同样的哈希键规则，
+            # 否则「撤销了但校验时不查」= 令牌仍然可用（假撤销）。
+            bl_key = self._token_blacklist_key(token, payload)
+            with self.database.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT 1 FROM jwt_blacklist WHERE token_jti = ?', (bl_key,))
+                if cursor.fetchone():
+                    logger.warning(f"JWT令牌已被撤销: key={bl_key}")
+                    return None
 
             # 检查用户是否仍然活跃
             with self.database.get_connection() as conn:
@@ -403,6 +405,44 @@ class AuthManager:
             logger.warning(f"无效JWT令牌: {e}")
             return None
 
+    @staticmethod
+    def _token_blacklist_key(token: str, payload: dict | None = None) -> str | None:
+        """黑名单键：优先用 jti，没有 jti 时退化为 token 的 SHA-256。
+
+        round 255：原来 `blacklist_token` 在没有 `jti` 时**直接返回 False** ——
+        而 `POST /api/auth/logout` 拿到 False 会回 500「登出失败，请重试」。
+        对**没有 jti 的令牌**（历史版本签发的、第三方集成手签的）来说，
+        重试一万次也不会成功：这个令牌**天生不可撤销**，用户永远登不出去。
+
+        用哈希兜底后，**签名有效**的令牌都能被撤销：
+        - 有 jti → 用 jti（不变，兼容已有黑名单数据）；
+        - 无 jti → `sha256:<hex>`（前缀避免与 jti 撞车）。
+        校验侧（`verify_token`）用同样的规则查，两侧必须一致。
+
+        **但签名校验失败的字符串返回 `None`**（不是哈希）：
+        它根本不可能是本系统签发过的会话令牌，撤销它没有意义 ——
+        且 `blacklist_token` 的既有契约是「垃圾串返回 False」。
+        过期令牌仍按签名验证通过处理（`verify_exp=False`）：登出时
+        令牌刚过期是最常见的情况，不能因此让用户登不出去。
+
+        Args:
+            token: 原始令牌字符串。
+            payload: 已解码的载荷（调用方已解过就传进来，省一次签名验算；
+                `verify_token` 每请求都会走这条路）。
+        """
+        if payload is None:
+            try:
+                payload = jwt.decode(
+                    token, JWT_SECRET, algorithms=[JWT_ALGORITHM],
+                    options={'verify_exp': False},
+                )
+            except jwt.InvalidTokenError:
+                return None
+        jti = payload.get('jti')
+        if jti:
+            return str(jti)
+        return 'sha256:' + hashlib.sha256(token.encode('utf-8')).hexdigest()
+
     def blacklist_token(self, token: str, reason: str = 'logout') -> bool:
         """
         将JWT令牌加入黑名单 (GB/T 35718: 令牌撤销)
@@ -412,24 +452,23 @@ class AuthManager:
             reason: 黑名单原因
 
         Returns:
-            bool: 是否成功
+            bool: 是否成功。签名有效的令牌（含已过期）恒可撤销；
+                  连签名都不合法的字符串返回 False（不是本系统的令牌）。
         """
         try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            jti = payload.get('jti')
-            if not jti:
+            key = self._token_blacklist_key(token)
+            if key is None:
+                logger.warning("拒绝撤销非法令牌：签名/格式校验失败")
                 return False
 
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     'INSERT OR IGNORE INTO jwt_blacklist (token_jti, reason) VALUES (?, ?)',
-                    (jti, reason)
+                    (key, reason)
                 )
-            logger.info(f"JWT令牌已加入黑名单: jti={jti}, reason={reason}")
+            logger.info(f"JWT令牌已加入黑名单: key={key}, reason={reason}")
             return True
-        except jwt.InvalidTokenError:
-            return False
         except Exception as e:
             logger.error(f"令牌黑名单操作失败: {e}")
             return False

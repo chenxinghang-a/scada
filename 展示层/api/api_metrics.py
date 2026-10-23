@@ -20,6 +20,12 @@ def prometheus_metrics():
         metrics_collector.update_alarm_metrics(current_app.alarm_manager)
     if hasattr(current_app, 'data_collector'):
         metrics_collector.update_queue_metrics(current_app.data_collector)
+    # 智能层评分（round 255）：这两个 gauge 此前从未被设置，恒 0。
+    # 用 hasattr 而不是硬取：不是所有装配都会挂智能层（测试夹具/精简部署）。
+    if hasattr(current_app, 'predictive_maintenance'):
+        metrics_collector.update_health_scores(current_app.predictive_maintenance)
+    if hasattr(current_app, 'oee_calculator'):
+        metrics_collector.update_oee_scores(current_app.oee_calculator)
 
     return Response(
         metrics_collector.get_metrics(),

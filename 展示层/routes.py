@@ -239,6 +239,49 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     app.device_control = device_control
     app.vibration_analyzer = vibration_analyzer
 
+    # 运维工具的单例接线（round 255）。
+    #
+    # 此前 `data_cleaner` / `db_maintainer` 的 `set_db_path()` 只写在 `run.py` 里，
+    # 于是**任何不走 run.py 的入口**（测试夹具、WSGI 部署、嵌入式调用）都会
+    # 拿到 `_db_path=None` 的单例 —— `/api/ops/db/*` 与 `/api/ops/cleanup/*`
+    # 直接 500「数据库路径未设置」。
+    #
+    # 接线位置应该在**创建 app 的地方**（这里能拿到 database），
+    # 而不是某一个入口脚本。run.py 里那句调用保留（幂等），
+    # 但正确性不再依赖它。
+    try:
+        from core.ops_tools import data_cleaner, db_maintainer
+        db_path = getattr(database, 'db_path', None)
+        if db_path:
+            data_cleaner.set_db_path(str(db_path))
+            db_maintainer.set_db_path(str(db_path))
+            logger.debug("运维工具已接线: %s", db_path)
+        else:
+            logger.warning(
+                "数据库实例没有 db_path —— 运维清理/维护接口会返回"
+                "「数据库路径未设置」。这属于装配问题，请检查 database 的构造")
+    except Exception as e:      # noqa: BLE001 —— 接线失败不该阻断建 app
+        logger.error("运维工具接线失败（/api/ops/db/* 将不可用）: %s", e, exc_info=True)
+
+    # 模拟初始化器（设备预设浏览/添加）。
+    #
+    # round 255：此前**只在 run.py 的模拟模式分支里创建**，于是真实模式
+    # （simulation_mode=False）下 `app.simulation_initializer` 不存在 →
+    # `GET /api/devices/presets` 直接 500「模拟初始化器未加载」，
+    # 而设备预设是"添加设备"用的**模板**，与模拟/真实模式无关。
+    #
+    # `initialize_simulation_data()` 重写后只创建实例、不再预设设备
+    # （见其 docstring），成本极低，所以这里无条件创建。
+    try:
+        if getattr(app, 'simulation_initializer', None) is None:
+            from core.simulation_initializer import initialize_simulation_data
+            app.simulation_initializer = initialize_simulation_data(
+                device_manager, oee_calculator, predictive_maintenance,
+                spc_analyzer, energy_manager)
+    except Exception as e:      # noqa: BLE001
+        logger.error("模拟初始化器创建失败（/api/devices/presets 将不可用）: %s",
+                     e, exc_info=True)
+
     # 安全响应头 (GB/T 22239 等保2.0)
     @app.after_request
     def add_security_headers(response):

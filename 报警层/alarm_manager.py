@@ -1562,6 +1562,12 @@ class AlarmManager:
             return
         try:
             self._websocket_emit(alarm_data)
+            # Prometheus（round 255）：推送方向的消息计数。
+            try:
+                from core.metrics import WS_MESSAGES
+                WS_MESSAGES.labels(direction='out').inc()
+            except Exception as e:      # noqa: BLE001
+                logger.debug(f"WebSocket 消息指标打点失败: {e}")
         except Exception as e:
             self._record_output_failure('websocket', f"前端推送异常: {e}")
 
@@ -1646,6 +1652,21 @@ class AlarmManager:
 
         if success:
             logger.info(f"报警已确认: {alarm_id} by {acknowledged_by}")
+
+            # Prometheus（round 255）：确认计数 + 报警持续时长。
+            # 此前 `scada_alarms_acknowledged_total` 与
+            # `scada_alarm_duration_seconds` 都是恒 0 的线 —— 看板上
+            # 看不出"报警多久才被确认"，而这正是 ISA-18.2 最关心的指标之一。
+            try:
+                from core.metrics import ALARMS_ACKNOWLEDGED, ALARM_DURATION
+                ALARMS_ACKNOWLEDGED.inc()
+                started = state.get('first_trigger_time') if state else None
+                if isinstance(started, datetime):
+                    elapsed = max(0.0, (datetime.now() - started).total_seconds())
+                    level = (self.rules.get(alarm_id) or {}).get('level', 'warning')
+                    ALARM_DURATION.labels(level=level).observe(elapsed)
+            except Exception as e:      # noqa: BLE001 —— 指标失败不影响确认
+                logger.debug(f"报警确认指标打点失败: {e}")
 
             # 记录确认时间（用于去重抑制）
             self._record_acknowledge(alarm_id, device_id, register_name)

@@ -232,9 +232,15 @@ class TestRegistryConsistency:
     @pytest.mark.parametrize('metric,location,const', [
         ('scada_data_collected_total', '采集层/data_collector.py', 'DATA_COLLECTED'),
         ('scada_data_errors_total', '采集层/data_collector.py', 'DATA_ERRORS'),
+        ('scada_collection_duration_seconds', '采集层/data_collector.py', 'COLLECTION_DURATION'),
         ('scada_alarms_total', '报警层/alarm_manager.py', 'ALARMS_TOTAL'),
+        ('scada_alarms_acknowledged_total', '报警层/alarm_manager.py', 'ALARMS_ACKNOWLEDGED'),
+        ('scada_alarm_duration_seconds', '报警层/alarm_manager.py', 'ALARM_DURATION'),
         ('scada_websocket_connections', '展示层/websocket.py', 'WS_CONNECTIONS'),
+        ('scada_websocket_messages_total', '报警层/alarm_manager.py', 'WS_MESSAGES'),
         ('scada_http_requests_total', '展示层/routes.py', 'HTTP_REQUESTS'),
+        ('scada_device_health_score', 'core/metrics.py', 'HEALTH_SCORE'),
+        ('scada_oee_score', 'core/metrics.py', 'OEE_SCORE'),
     ])
     def test_wired_metric_has_real_writer(self, metric, location, const):
         """WIRED_METRICS 声称的写入点必须真实存在（防止声明漂移）。

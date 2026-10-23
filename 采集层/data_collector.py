@@ -876,7 +876,19 @@ class DataCollector:
             """在线程池中执行的采集工作"""
             if not self.running:
                 return
-            return self._collect_device_data(device_id, device_config, protocol)
+            # Prometheus（round 255）：采集耗时直方图。
+            # 此前 `scada_collection_duration_seconds` 恒无数据 —— 看板上
+            # 看不出"采集变慢了"，而那往往是设备开始不稳定的第一信号。
+            _t0 = time.monotonic()
+            try:
+                return self._collect_device_data(device_id, device_config, protocol)
+            finally:
+                try:
+                    from core.metrics import COLLECTION_DURATION
+                    COLLECTION_DURATION.labels(device_id=device_id).observe(
+                        max(0.0, time.monotonic() - _t0))
+                except Exception as e:      # noqa: BLE001
+                    logger.debug(f"采集耗时指标打点失败: {e}")
 
         def _schedule_next(interval):
             """安全地调度下一次采集。

@@ -537,11 +537,16 @@ def main():
         if simulation_mode:
             logger.info("模拟模式：初始化工业4.0模块数据...")
             from core.simulation_initializer import initialize_simulation_data
-            simulation_initializer = initialize_simulation_data(
-                device_manager, oee_calculator, predictive_maintenance,
-                spc_analyzer, energy_manager
-            )
-            app.simulation_initializer = simulation_initializer
+            # round 255：create_app 已无条件创建（真实模式也需要它来浏览设备预设），
+            # 这里只在缺失时补建，避免建两个实例。
+            if getattr(app, 'simulation_initializer', None) is None:
+                simulation_initializer = initialize_simulation_data(
+                    device_manager, oee_calculator, predictive_maintenance,
+                    spc_analyzer, energy_manager
+                )
+                app.simulation_initializer = simulation_initializer
+            else:
+                simulation_initializer = app.simulation_initializer
 
         # 立即启动Web服务（不等待设备连接）
 

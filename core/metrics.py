@@ -18,6 +18,7 @@ import threading
 import logging
 
 from .version import get_version
+from .safe_numeric import try_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,40 @@ class MetricsCollector:
         except Exception as e:
             logger.debug(f"队列指标更新失败: {e}")
 
+    def update_health_scores(self, predictive_maintenance):
+        """设备健康评分（round 255：此前该 gauge 从未被设置，恒 0）。"""
+        try:
+            scores = predictive_maintenance.get_health_scores() or {}
+            for key, item in scores.items():
+                if not isinstance(item, dict):
+                    continue
+                device_id = item.get('device_id')
+                value = try_finite_float(item.get('health_score'))
+                if device_id is None or value is None:
+                    # NaN/Inf 会让 gauge 变成 nan —— Prometheus 侧聚合全被污染，
+                    # 比「没这个样本」更糟，直接跳过。
+                    continue
+                HEALTH_SCORE.labels(device_id=str(device_id)).set(value)
+        except Exception as e:
+            logger.debug(f"健康评分指标更新失败: {e}")
+
+    def update_oee_scores(self, oee_calculator):
+        """OEE 评分（round 255：此前恒 0）。"""
+        try:
+            summary = oee_calculator.get_all_oee() or {}
+            for device_id, metrics in summary.items():
+                if not isinstance(metrics, dict):
+                    continue
+                for metric in ('oee', 'availability', 'performance', 'quality'):
+                    value = try_finite_float(metrics.get(metric))
+                    if value is None:
+                        # 同上：NaN/Inf 不许进 gauge
+                        continue
+                    OEE_SCORE.labels(device_id=str(device_id),
+                                     metric=metric).set(value)
+        except Exception as e:
+            logger.debug(f"OEE 指标更新失败: {e}")
+
     def get_metrics(self) -> bytes:
         """获取所有指标（Prometheus格式）"""
         return generate_latest()
@@ -134,40 +169,42 @@ metrics_collector = MetricsCollector()
 #: **已接线**的指标 → 写入点（`文件:位置`）。
 #: 守卫 `tests/test_metrics_wiring.py` 会核对这里的消费方真实存在。
 WIRED_METRICS = {
+    # —— 采集路径 ——
     'scada_data_collected_total': '采集层/data_collector.py:_enqueue_drop_oldest',
     'scada_data_errors_total': '采集层/data_collector.py:_collect_device_data',
+    'scada_collection_duration_seconds': '采集层/data_collector.py:_run_collection',
+    # —— 报警路径 ——
     'scada_alarms_total': '报警层/alarm_manager.py:_trigger_alarm',
+    'scada_alarms_acknowledged_total': '报警层/alarm_manager.py:acknowledge_alarm',
+    'scada_alarm_duration_seconds': '报警层/alarm_manager.py:acknowledge_alarm',
+    # —— 连接 / 接口 ——
     'scada_websocket_connections': '展示层/websocket.py:connect/disconnect',
+    'scada_websocket_messages_total': '报警层/alarm_manager.py:_emit_websocket_alarm',
     'scada_http_requests_total': '展示层/routes.py:record_http_metrics',
     'scada_http_request_duration_seconds': '展示层/routes.py:record_http_metrics',
+    # —— 每次 /metrics 请求时刷新（由 MetricsCollector 从各模块现取） ——
+    'scada_devices_total': 'core/metrics.py:update_device_metrics',
+    'scada_devices_connected': 'core/metrics.py:update_device_metrics',
+    'scada_devices_fault': 'core/metrics.py:update_device_metrics',
+    'scada_alarms_active': 'core/metrics.py:update_alarm_metrics',
+    'scada_data_queue_size': 'core/metrics.py:update_queue_metrics',
+    'scada_device_health_score': 'core/metrics.py:update_health_scores',
+    'scada_oee_score': 'core/metrics.py:update_oee_scores',
 }
 
 #: **未接线**的指标 → 为什么不接。
 #:
-#: 这些指标仍然导出（保持与既有 Grafana 看板的兼容），但它们是**恒 0 的线**。
+#: 仍然导出（保持与既有 Grafana 看板兼容），但**恒为 0**。
 #: 与其假装它们在监控什么，不如把原因写在这里。
+#: 守卫要求：`DEFINED_METRICS` 里每个指标必须二选一（WIRED 或 UNWIRED+原因）。
 UNWIRED_METRICS = {
-    'scada_devices_total': '由 MetricsCollector.update_device_metrics 按需设置，'
-                           '/metrics 每次请求时刷新（非零，属已接线）',
-    'scada_devices_connected': '由 MetricsCollector 每次 /metrics 请求时刷新（非零，属已接线）',
-    'scada_devices_fault': '由 MetricsCollector 每次 /metrics 请求时刷新（非零，属已接线）',
-    'scada_alarms_active': '由 MetricsCollector 每次 /metrics 请求时刷新（非零，属已接线）',
-    'scada_data_queue_size': '由 MetricsCollector 每次 /metrics 请求时刷新（非零，属已接线）',
-    'scada_collection_duration_seconds': '采集耗时直方图：需要在 _run_collection '
-                                         '里计时并按 device_id 打点，本轮未做（采集路径已很重）',
-    'scada_alarms_acknowledged_total': '确认动作在 acknowledge_alarm 里，'
-                                       '但该路径有多个入口（API/前端/自动），本轮未逐一接线',
-    'scada_alarm_duration_seconds': '需要记录报警持续时长（确认/清除时算差），'
-                                    '报警状态机里没有保留 started_at，本轮未做',
-    'scada_modbus_requests_total': 'Modbus 客户端层（采集层/base_client.py）未引入指标，'
-                                   '逐请求打点会侵入协议实现',
-    'scada_modbus_errors_total': '同 modbus_requests：需在协议实现里逐请求打点，本轮未做',
-    'scada_modbus_rtt_seconds': '同 modbus_requests：需在协议实现里逐请求计时，本轮未做',
-    'scada_websocket_messages_total': 'WebSocket 收发计数需要包住 emit/on，'
-                                      '与离线补发逻辑耦合，本轮未做',
-    'scada_device_health_score': '预测性维护的健康评分（get_health_scores）未被轮询写入指标，'
-                                 '本轮未做（属智能层，需按设备逐个 set）',
-    'scada_oee_score': 'OEE 评分同理：需按设备逐个 set，属智能层，本轮未做',
+    'scada_modbus_requests_total': (
+        '需要包住 Modbus 客户端的每一次请求（采集层/base_client.py 及各协议实现），'
+        '逐请求打点会侵入协议层；本轮未做'),
+    'scada_modbus_errors_total': (
+        '同上：Modbus 异常码分类打点需要改协议层，本轮未做'),
+    'scada_modbus_rtt_seconds': (
+        '同上：往返耗时计时需要在协议层记录起止时刻，本轮未做'),
 }
 
 #: 一致性守卫用：本模块定义的全部指标家族名

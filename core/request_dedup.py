@@ -76,6 +76,10 @@ def init_request_dedup(app: Flask):
             '/api/system/client-errors',
             # 登录请求不是重复写入；同一凭据的快速重试必须交给认证/限流层处理。
             '/api/auth/login',
+            # 登出天然幂等（round 255）：用户双击登出、或「登出→重新登录→再登出」
+            # 在去重窗口内发生时，第二次会被判成"重复提交"回 409，
+            # 而它本来该成功（令牌已撤销 / 再撤一次也无害）。
+            '/api/auth/logout',
         )
         if any(request.path.startswith(p) for p in skip_paths):
             return None
