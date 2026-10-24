@@ -281,6 +281,14 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
+            # ⚠️ 迁移必须放在**最前面**（round 260）：下面有一堆索引引用
+            # `alarm_records` 的 `acknowledged` / `cleared` 等列，
+            # 而 `CREATE TABLE IF NOT EXISTS` 遇到老库会直接跳过 ——
+            # 老库缺列时先建索引会抛 "no such column"，Database 初始化失败、
+            # 服务起不来。先补列、再建表/建索引才对。
+            self._migrate_alarm_table(cursor)
+            self._migrate_realtime_quality(cursor)
+
             # 创建实时数据表（每个设备+寄存器只保留最新一条）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS realtime_data (
@@ -327,6 +335,10 @@ class Database:
                     acknowledged BOOLEAN DEFAULT 0,
                     acknowledged_at DATETIME,
                     acknowledged_by TEXT,
+                    -- round 260：条件是否已恢复正常（与"是否已确认"是两件事：
+                    -- 一条报警可以没被任何人确认、自己恢复了）
+                    cleared BOOLEAN DEFAULT 0,
+                    cleared_at DATETIME,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -420,7 +432,12 @@ class Database:
                 ON {ARCHIVE_TABLE}(device_id, register_name, archive_date)
             ''')
 
+            # realtime_data 的唯一约束迁移：必须放在**表创建之后**
+            # （新库的建表语句里已带 UNIQUE，这条只对老库生效）。
+            self._migrate_realtime_unique(cursor)
+
             # 复合索引优化常见查询模式
+            # （列补齐迁移已在 `_init_database` 开头做过）
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_alarm_device_ack
                 ON alarm_records(device_id, acknowledged)
@@ -434,11 +451,6 @@ class Database:
                 ON history_data(device_id, register_name, timestamp)
             ''')
 
-            # 迁移：给旧表添加新列（如果不存在）
-            self._migrate_alarm_table(cursor)
-            self._migrate_realtime_quality(cursor)
-            self._migrate_realtime_unique(cursor)
-
             logger.info("数据库初始化完成")
 
     # 预构建迁移SQL（避免f-string拼接，消除SQL注入风险）
@@ -446,6 +458,23 @@ class Database:
         ('trigger_count', 'ALTER TABLE alarm_records ADD COLUMN trigger_count INTEGER DEFAULT 1'),
         ('last_trigger_time', 'ALTER TABLE alarm_records ADD COLUMN last_trigger_time DATETIME'),
         ('last_value', 'ALTER TABLE alarm_records ADD COLUMN last_value REAL'),
+        # round 260：确认三列原先**不在迁移清单里** —— 一旦遇到更老的库
+        # （建表时还没有这三列），后面的 `CREATE INDEX ... (alarm_level,
+        # acknowledged)` 会直接抛 "no such column: acknowledged"，
+        # 整个 Database 初始化失败，服务起不来。补上。
+        ('acknowledged', 'ALTER TABLE alarm_records ADD COLUMN acknowledged BOOLEAN DEFAULT 0'),
+        ('acknowledged_at', 'ALTER TABLE alarm_records ADD COLUMN acknowledged_at DATETIME'),
+        ('acknowledged_by', 'ALTER TABLE alarm_records ADD COLUMN acknowledged_by TEXT'),
+        # round 260：报警「恢复」状态。此前表里根本没有"已恢复"这个概念 ——
+        # 条件恢复正常时只删内存里的 alarm_states，数据库那行永远是
+        # `acknowledged = 0`，于是：
+        #   · 历史里每条报警看起来都"还没结束"，分不清已恢复与仍在报警；
+        #   · `get_database_stats()` 的「未确认报警」是个**只增不减**的数；
+        #   · 同一条报警几小时后再触发时，`insert_alarm` 会把它当成
+        #     "同一条未确认记录"，只把 trigger_count +1 —— 第二次报警
+        #     连开始时间都留不下来。
+        ('cleared', 'ALTER TABLE alarm_records ADD COLUMN cleared BOOLEAN DEFAULT 0'),
+        ('cleared_at', 'ALTER TABLE alarm_records ADD COLUMN cleared_at DATETIME'),
     ]
 
     def _migrate_alarm_table(self, cursor):
@@ -949,8 +978,13 @@ class Database:
         """
         插入或更新报警记录
 
-        同一报警（alarm_id + device_id + register_name）未确认时只更新计数和最新值，
-        不重复插入新记录。确认后再次触发才新建记录。
+        同一报警（alarm_id + device_id + register_name）**仍处于活跃状态**
+        （未确认 **且** 未恢复）时只更新计数和最新值，不重复插入新记录。
+        确认后、或条件已恢复正常后再次触发，才新建记录。
+
+        round 260：判据里补了 `cleared = 0` —— 否则一条「自己恢复了、没人确认」
+        的报警会被后来的触发当成"同一条还没结束的记录"，只把 trigger_count +1，
+        第二次报警的开始时间、持续时间全都丢失。
 
         Args:
             alarm_id: 报警ID
@@ -965,11 +999,11 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 查找同一报警的未确认记录
+            # 查找同一报警**仍然活跃**的记录（未确认 且 未恢复）
             cursor.execute('''
                 SELECT id, trigger_count FROM alarm_records
                 WHERE alarm_id = ? AND device_id = ? AND register_name = ?
-                  AND acknowledged = 0
+                  AND acknowledged = 0 AND cleared = 0
                 ORDER BY timestamp DESC LIMIT 1
             ''', (alarm_id, device_id, register_name))
 
@@ -1080,6 +1114,49 @@ class Database:
                     WHERE alarm_id = ? AND acknowledged = 0
                 ''', (datetime.now(), acknowledged_by, alarm_id))
 
+            return cursor.rowcount > 0
+
+    def clear_alarm(self, alarm_id: str, device_id: str | None = None,
+                    register_name: str | None = None,
+                    cleared_at: datetime | None = None) -> bool:
+        """标记报警**已恢复正常**（round 260）。
+
+        与 `acknowledge_alarm` 是两件事：确认 = 有人看过了；恢复 = 条件已回到
+        正常范围。一条报警可以没人确认就自己恢复，也可以确认之后仍在持续。
+
+        此前**没有任何地方记录"恢复"**：条件正常时只删掉内存里的
+        `alarm_states`，数据库那行永远停在 `acknowledged = 0`。后果：
+        * 历史里每条报警都像"还没结束"，报表分不清活跃与历史；
+        * `get_db_stats()` 的「未确认报警」只增不减；
+        * 同一报警几小时后再触发会被 `insert_alarm` 当成"同一条未结束的记录"，
+          只把 trigger_count +1 —— 第二次报警的开始时间直接丢掉。
+
+        Args:
+            alarm_id: 报警ID
+            device_id: 设备ID（给了就精确定位，否则按 alarm_id 匹配）
+            register_name: 寄存器名称
+            cleared_at: 恢复时刻，缺省取当前时间
+
+        Returns:
+            bool: 是否真的更新到了记录（没有活跃记录时返回 False ——
+                例如进程重启后内存里没状态，或重复清除）
+        """
+        cleared_at = cleared_at or datetime.now()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if device_id and register_name:
+                cursor.execute('''
+                    UPDATE alarm_records
+                    SET cleared = 1, cleared_at = ?
+                    WHERE alarm_id = ? AND device_id = ? AND register_name = ?
+                      AND cleared = 0
+                ''', (cleared_at, alarm_id, device_id, register_name))
+            else:
+                cursor.execute('''
+                    UPDATE alarm_records
+                    SET cleared = 1, cleared_at = ?
+                    WHERE alarm_id = ? AND cleared = 0
+                ''', (cleared_at, alarm_id))
             return cursor.rowcount > 0
 
     def get_device_summary(self) -> list[dict[str, Any]]:
@@ -1193,9 +1270,15 @@ class Database:
             cursor.execute('SELECT COUNT(*) FROM alarm_records')
             alarm_count = cursor.fetchone()[0]
 
-            # 未确认报警统计
-            cursor.execute('SELECT COUNT(*) FROM alarm_records WHERE acknowledged = 0')
+            # 未确认报警统计（round 260：只算**仍然活跃**的 —— 已恢复的报警
+            # 不该再算"当前未确认"，否则这个数只增不减）
+            cursor.execute('SELECT COUNT(*) FROM alarm_records '
+                           'WHERE acknowledged = 0 AND cleared = 0')
             unacknowledged_count = cursor.fetchone()[0]
+
+            # 当前活跃报警（未恢复，不论是否已确认）
+            cursor.execute('SELECT COUNT(*) FROM alarm_records WHERE cleared = 0')
+            active_alarm_count = cursor.fetchone()[0]
 
             # 归档数据统计
             try:
@@ -1216,6 +1299,7 @@ class Database:
             'history_records': history_count,
             'alarm_records': alarm_count,
             'unacknowledged_alarms': unacknowledged_count,
+            'active_alarms': active_alarm_count,
             'archive_records': archive_count,
             'total_records': total_records,
         }

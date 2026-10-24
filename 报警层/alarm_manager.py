@@ -1306,6 +1306,28 @@ class AlarmManager:
                 # 按超时升级（且其 _states 会无界增长）
                 if self._escalation_manager:
                     self._escalation_manager.remove_alarm(rule_id, device_id, register_name)
+                # round 260：把"已恢复"落到数据库。
+                # 此前这里只删内存状态，数据库里那行永远停在 `acknowledged = 0`：
+                # 历史里每条报警都像"还没结束"、未确认数只增不减、
+                # 同一条报警几小时后再触发还会被当成"同一条未结束记录"只 +1
+                # （第二次报警的开始时间直接丢掉）。
+                self._clear_alarm_record(rule_id, device_id, register_name, timestamp)
+
+    def _clear_alarm_record(self, rule_id: str, device_id: str,
+                            register_name: str, cleared_at) -> None:
+        """把「报警已恢复正常」写进数据库（失败只记日志，绝不影响报警链路）。"""
+        try:
+            ok = self.database.clear_alarm(rule_id, device_id, register_name,
+                                           cleared_at=cleared_at)
+            if ok:
+                logger.info("报警恢复已落库: %s - %s/%s", rule_id, device_id, register_name)
+            else:
+                logger.debug(
+                    "报警恢复没有对应记录可更新（可能进程重启后内存重建、"
+                    "或重复清除）: %s - %s/%s", rule_id, device_id, register_name)
+        except Exception as e:      # noqa: BLE001 —— 落库失败不能炸掉报警清除
+            logger.error("报警恢复落库失败: %s - %s/%s: %s",
+                         rule_id, device_id, register_name, e)
 
     def _dedup_now(self) -> float:
         """去重窗口用的时钟：**单调时钟**，不是墙钟。
@@ -1753,6 +1775,13 @@ class AlarmManager:
             for rid, dev, reg in cleared_rules:
                 if rid:
                     self._escalation_manager.remove_alarm(rid, dev, reg)
+
+        # round 260：复位也要把「已恢复」落到数据库。否则运维点一次"复位"，
+        # 界面上报警消失了，数据库里那行仍然活跃 —— 未确认数不降反升
+        # （下次触发还会被当成同一条未结束记录）。
+        for rid, dev, reg in cleared_rules:
+            if rid:
+                self._clear_alarm_record(rid, dev, reg, datetime.now())
 
         # 清除去重历史（复位后允许重新推送）
         with self._dedup_lock:
