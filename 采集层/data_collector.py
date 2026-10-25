@@ -65,6 +65,66 @@ BACKOFF_CEILING_S = 60              # 退避上限
 #: 崩溃恢复清单（`pending_data.jsonl` + `_pending`）的硬上限。
 #: 消费端停摆时如果不管，这个文件会一直涨到把磁盘写满（2026-09-20 实测 160MB）。
 PENDING_COMPACT_EVERY = 1000        # 累计淘汰多少条后真正重写一次文件（摊薄 O(n) 重写）
+#: 调度最小延迟：即使本轮采集已经超时，也不要 0 延迟忙等
+SCHEDULE_MIN_DELAY_S = 0.5
+#: 启动抖动的上限（秒）：25 台设备同时启动时把相位打散，避免同一秒一起打网关
+STARTUP_JITTER_MAX_S = 5.0
+
+
+def compute_next_delay(interval: float, elapsed: float = 0.0,
+                       min_delay: float = SCHEDULE_MIN_DELAY_S) -> float:
+    """算下一次采集该等多久（**含漂移补偿**）。
+
+    round 272：原实现是 `threading.Timer(interval, ...)` 固定等 interval ——
+    但本轮采集本身还要花时间（连设备、读寄存器、写队列），于是**实际周期
+    = interval + 采集耗时**。设备慢一点（2s 采集 / 5s 周期）实际就是 7s，
+    长期采样率比配置低 30%，历史曲线的间隔与配置不符，基于采样数的 KPI 也跟着偏。
+
+    补偿后长期平均周期 ≈ interval：本轮花了多少，下次就少等多少。
+
+    Args:
+        interval: 目标周期（秒）
+        elapsed: 本轮已经花掉的时间（秒）
+        min_delay: 最小延迟（防止超时后 0 延迟忙等）
+
+    Returns:
+        下次调度延迟（秒），恒 >= `min_delay`。
+    """
+    # 用 safe_numeric 而不是裸 float()：`float('inf')` 不抛异常，
+    # 会让"周期无穷大"静默通过（闸门 test_non_finite_input_guard 会拦）。
+    from core.safe_numeric import try_finite_float
+
+    period = try_finite_float(interval)
+    if period is None or period <= 0:
+        period = 5.0
+    used = try_finite_float(elapsed)
+    if used is None:
+        used = 0.0
+    used = max(0.0, used)
+    floor = try_finite_float(min_delay)
+    if floor is None or floor <= 0:
+        floor = float(SCHEDULE_MIN_DELAY_S)
+    return max(period - used, floor)
+
+
+def startup_jitter(interval: float, rng=None) -> float:
+    """首次调度的随机延迟：把各设备的相位打散。
+
+    原实现所有设备都是 `Timer(0.1, ...)` —— 启动后 0.1 秒**一起**开始，
+    之后每 5 秒**一起**打网关和数据库：25 台设备形成脉冲式负载，
+    峰值是平均值的 25 倍，而低谷完全空闲。加 0~min(interval, 5s) 的随机
+    偏移后，负载被摊平到整个周期里。
+    """
+    import random as _random
+
+    from core.safe_numeric import try_finite_float
+
+    period = try_finite_float(interval)
+    if period is None or period <= 0:
+        period = 5.0
+    upper = min(max(period, 0.1), STARTUP_JITTER_MAX_S)
+    generator = rng or _random
+    return generator.uniform(0.0, upper)
 
 
 def compute_backoff_interval(failures: int, base_interval: float) -> float:
@@ -973,16 +1033,24 @@ class DataCollector:
                 except Exception as e:      # noqa: BLE001
                     logger.debug(f"采集耗时指标打点失败: {e}")
 
-        def _schedule_next(interval):
+        def _schedule_next(interval, elapsed: float = 0.0):
             """安全地调度下一次采集。
 
             除 `self.running` 外还要检查「已取消」标记：设备被删除时，
             当前这一轮可能正跑在线程池里（`remove_device_task` 取消不到它），
             它结束后若无条件 `_schedule_next`，就会把刚删掉的设备**重新挂上定时器**。
+
+            round 272：`elapsed` 传本轮已耗时，做**漂移补偿**（见
+            `compute_next_delay`）。不传则按固定 interval（退避/断路器路径用）。
             """
+            delay = compute_next_delay(interval, elapsed)
+            if elapsed > interval > 0:
+                logger.warning(
+                    "设备 %s 采集耗时 %.2fs 超过周期 %.2fs —— 采样率已低于配置",
+                    device_id, elapsed, interval)
             with self._tasks_lock:
                 if self.running and device_id not in self._cancelled_devices:
-                    timer = threading.Timer(interval, collect_task)
+                    timer = threading.Timer(delay, collect_task)
                     timer.daemon = True
                     timer.start()
                     self.tasks[device_id] = timer
@@ -1049,6 +1117,7 @@ class DataCollector:
 
         def _handle_normal_collection():
             """正常采集路径：提交到线程池 + 失败退避"""
+            cycle_started = time.monotonic()
             try:
                 future = self._pool.submit(_run_collection)
                 success = future.result(timeout=30)
@@ -1058,6 +1127,8 @@ class DataCollector:
 
             if not self.running:
                 return
+
+            elapsed = time.monotonic() - cycle_started
 
             if success:
                 with self._tracking_lock:
@@ -1084,7 +1155,9 @@ class DataCollector:
                     logger.debug(f"设备 {device_id} 连续失败 {failures} 次，"
                                  f"{interval}s 后重试（基础间隔 {base_interval}s）")
 
-            _schedule_next(interval)
+            # 只有成功路径做漂移补偿：失败/退避路径的间隔是"额外等待"，
+            # 不该因为本轮耗时而被压缩。
+            _schedule_next(interval, elapsed if success else 0.0)
 
         def collect_task():
             try:
@@ -1106,8 +1179,13 @@ class DataCollector:
                 recovery_interval = min(2 ** crash_failures, BACKOFF_CEILING_S)
                 _schedule_next(recovery_interval)
 
+        # round 272：首次调度**随机抖动**，把各设备相位打散。
+        # 原来固定 0.1s → 所有设备启动后同时开始，之后每 N 秒一起打网关/DB，
+        # 25 台设备就是 25 倍的脉冲负载、其余时间全空。
+        initial_delay = startup_jitter(base_interval)
+        logger.debug("设备 %s 首次采集在 %.2fs 后（抖动打散相位）", device_id, initial_delay)
         with self._tasks_lock:
-            self.tasks[device_id] = threading.Timer(0.1, collect_task)
+            self.tasks[device_id] = threading.Timer(initial_delay, collect_task)
             self.tasks[device_id].daemon = True
             self.tasks[device_id].start()
 
