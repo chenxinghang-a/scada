@@ -1835,7 +1835,23 @@ class AlarmManager:
                 logger.debug(f"报警确认指标打点失败: {e}")
 
             # 记录确认时间（用于去重抑制）
-            self._record_acknowledge(alarm_id, device_id, register_name)
+            #
+            # round 279：**只有"当时还在报警"才开抑制窗口**。
+            # 操作员在历史列表里确认一条**已恢复**的报警时，`alarm_states` 里
+            # 已经没有它了（`state is None`）—— 这时再记抑制，会把**下一次
+            # 真正的新报警**在 600 秒内静默压掉：设备又越限了，界面不弹、
+            # 声光不响，而日志里只有一行 debug。
+            #
+            # 已恢复报警的确认仍然要落库（历史记录里 `acknowledged=1`，
+            # ISA-18.2 要求"已恢复但未确认"能被单独统计，人工补确认是合法的），
+            # 只是不该产生"未来 10 分钟不许再报"的效果。
+            if state is not None:
+                self._record_acknowledge(alarm_id, device_id, register_name)
+            else:
+                logger.info(
+                    "确认的是**已恢复**的报警（不在活跃列表中）: %s - %s/%s by %s"
+                    " —— 已落库，但不设去重抑制窗口",
+                    alarm_id, device_id, register_name, acknowledged_by)
 
             # 声光消音（关蜂鸣器，灯保持）
             if self.alarm_output and self.alarm_output.enabled:
