@@ -113,6 +113,53 @@ def validate_alarm_rationalization(config: dict) -> list[str]:
     return problems
 
 
+def validate_alarm_uniqueness(config: dict) -> list[str]:
+    """检查报警规则有没有**重复定义**（round 262）。
+
+    同一个 (设备, 寄存器, 条件) 挂两条规则，一次越限会弹两条报警 ——
+    在真实库里这不是理论问题：`data/scada.db` 里 `boiler_temperature`
+    同时挂着 `temp_high` 和 `boiler_temp_high`，`boiler_pressure` 同时挂着
+    `pressure_high` 和 `boiler_pressure_high`，两条各自计数，
+    合计占全库报警的一大块。
+
+    判据：同 (device_id, register_name, condition) 只允许**一条启用**的规则。
+    停用的规则不参与（现场常见：先停掉旧的，观察一段时间再删）。
+
+    Args:
+        config: `配置/alarms.yaml` 解析结果
+
+    Returns:
+        问题列表（空 = 无重复）
+    """
+    problems: list[str] = []
+    rules = config.get('alarm_rules') if isinstance(config, dict) else None
+    if not isinstance(rules, list):
+        return []
+
+    seen_ids: dict[str, int] = {}
+    seen_keys: dict[tuple, str] = {}
+    for idx, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            continue
+        rule_id = rule.get('id') or f'#{idx + 1}'
+        if rule_id in seen_ids:
+            problems.append(f'规则 id 重复: {rule_id}（第 {seen_ids[rule_id]} 条与第 {idx + 1} 条）')
+        seen_ids[rule_id] = idx + 1
+
+        if not rule.get('enabled', True):
+            continue
+        key = (rule.get('device_id'), rule.get('register_name') or rule.get('register'),
+               rule.get('condition'))
+        if key in seen_keys:
+            problems.append(
+                f'重复定义: {key[0]}/{key[1]} 的 `{key[2]}` 条件同时由 '
+                f'`{seen_keys[key]}` 与 `{rule_id}` 两条启用规则监控 —— '
+                f'一次越限会弹两条报警')
+        else:
+            seen_keys[key] = rule_id
+    return problems
+
+
 # 告警配置Schema
 ALARM_SCHEMA = {
     "type": "object",
@@ -286,6 +333,13 @@ def validate_startup_configs(config_dir: str = "配置") -> bool:
             else:
                 logger.info("报警合理性检查通过（%d 条规则全部有 cause/consequence/action/时限）",
                             len(alarm_cfg.get('alarm_rules') or []))
+
+            dups = validate_alarm_uniqueness(alarm_cfg)
+            if dups:
+                logger.warning("报警规则重复定义，共 %d 项：%s",
+                               len(dups), '；'.join(dups[:5]))
+            else:
+                logger.info("报警规则唯一性检查通过（同一寄存器+条件只有一条启用规则）")
         except Exception as e:      # noqa: BLE001 —— 合理性检查失败不能阻断启动
             logger.warning("报警合理性检查失败（不影响启动）: %s", e)
 

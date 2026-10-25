@@ -115,6 +115,75 @@ def test_real_config_passes_structural_validation():
     assert ok, f'配置结构校验失败: {errors}'
 
 
+def test_real_config_has_no_duplicate_rules():
+    """仓库里的规则不许同一 (设备, 寄存器, 条件) 挂两条启用规则。
+
+    真实库里出现过：`boiler_temperature` 同时挂 `temp_high` 和
+    `boiler_temp_high`，一次越限弹两条，合计占全库报警一大块。
+    """
+    from core.config_validator import validate_alarm_uniqueness
+
+    cfg = yaml.safe_load(ALARMS_YAML.read_text(encoding='utf-8')) or {}
+    assert validate_alarm_uniqueness(cfg) == []
+
+
+def test_uniqueness_detects_duplicate_rule():
+    from core.config_validator import validate_alarm_uniqueness
+
+    cfg = {'alarm_rules': [
+        {'id': 'a', 'device_id': 'd1', 'register_name': 't',
+         'condition': 'greater_than', 'threshold': 100, 'enabled': True},
+        {'id': 'b', 'device_id': 'd1', 'register_name': 't',
+         'condition': 'greater_than', 'threshold': 120, 'enabled': True},
+    ]}
+    problems = validate_alarm_uniqueness(cfg)
+    assert len(problems) == 1 and '重复定义' in problems[0]
+
+
+def test_uniqueness_allows_opposite_conditions():
+    """同一点位的"过高"和"过低"是两条合法规则，不是重复。"""
+    from core.config_validator import validate_alarm_uniqueness
+
+    cfg = {'alarm_rules': [
+        {'id': 'hi', 'device_id': 'd1', 'register_name': 't',
+         'condition': 'greater_than', 'threshold': 100, 'enabled': True},
+        {'id': 'lo', 'device_id': 'd1', 'register_name': 't',
+         'condition': 'less_than', 'threshold': 10, 'enabled': True},
+    ]}
+    assert validate_alarm_uniqueness(cfg) == []
+
+
+def test_uniqueness_ignores_disabled_rules():
+    from core.config_validator import validate_alarm_uniqueness
+
+    cfg = {'alarm_rules': [
+        {'id': 'old', 'device_id': 'd1', 'register_name': 't',
+         'condition': 'greater_than', 'threshold': 100, 'enabled': False},
+        {'id': 'new', 'device_id': 'd1', 'register_name': 't',
+         'condition': 'greater_than', 'threshold': 100, 'enabled': True},
+    ]}
+    assert validate_alarm_uniqueness(cfg) == []
+
+
+def test_real_rules_have_damping_configured():
+    """每条启用规则都必须配 delay 与 deadband（round 262）。
+
+    真实数据回放证明：全部 delay=0 / deadband=0 时，同一份历史数据会产生
+    2017 次报警；配上 5~15s 延迟 + 按量纲的死区后降到 145 次（-93%）。
+    所以"没配抑制"本身就是缺陷，不能只靠默认值兜着。
+    """
+    cfg = yaml.safe_load(ALARMS_YAML.read_text(encoding='utf-8')) or {}
+    missing = []
+    for rule in cfg['alarm_rules']:
+        if not rule.get('enabled', True):
+            continue
+        if not rule.get('delay'):
+            missing.append(f'{rule["id"]}: delay 为 0')
+        if not rule.get('deadband'):
+            missing.append(f'{rule["id"]}: deadband 为 0')
+    assert not missing, '以下规则没有配置抖动抑制：\n  ' + '\n  '.join(missing)
+
+
 # ---------------------------------------------------------------------------
 # 2. 外部报警：稳定 ID + 走完整链路
 # ---------------------------------------------------------------------------

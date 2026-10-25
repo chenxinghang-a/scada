@@ -22,6 +22,16 @@ from threading import Lock
 import paths
 from core.safe_numeric import to_finite_float, try_finite_float
 from core.config_io import dump_yaml, ConfigPersistError
+from 报警层.alarm_engine import (
+    CLEAR as _ACT_CLEAR,
+    FIRE as _ACT_FIRE,
+    PENDING as _ACT_PENDING,
+    UPDATE as _ACT_UPDATE,
+    decide,
+    evaluate_condition,
+    new_state,
+    normalize_delay,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1107,73 +1117,32 @@ class AlarmManager:
 
     def _check_condition(self, value: float, condition: str, threshold: float,
                          rule_id: str = None, alarm_state: dict = None) -> bool:
-        """
-        检查报警条件（含非对称死区/迟滞支持）
+        """检查报警条件（含非对称死区/迟滞）。
 
-        死区（Deadband）防止阈值附近信号抖动导致报警反复触发/清除。
-        非对称逻辑：
-        - 触发（alarm not active）：精确阈值判断
-        - 清除（alarm active）：阈值 ± deadband，需要更大偏移才能清除
-
-        例如：阈值100，死区2，gt条件
-        - 触发：value > 100
-        - 清除：value < 98（需要降到 threshold - deadband 以下）
-
-        Args:
-            value: 实际值
-            condition: 条件类型
-            threshold: 阈值
-            rule_id: 规则ID（用于查找死区配置）
-            alarm_state: 当前告警状态（用于区分触发/清除逻辑）
-
-        Returns:
-            bool: 是否触发报警
+        round 262：判定逻辑已抽到 `报警层/alarm_engine.py`（纯函数，运行时/
+        离线回放/测试共用同一份）。这里只做"从 self 里取死区"的适配，
+        避免出现第二份实现 —— 项目历史上吃过"平行实现"的亏。
         """
         deadband = self._deadbands.get(rule_id, 0) if rule_id else 0
-        is_active = alarm_state and alarm_state.get('alarm_id') is not None
-
-        if condition == 'greater_than':
-            if is_active:
-                return value > threshold - deadband  # 清除需降到 threshold - deadband 以下
-            return value > threshold
-        elif condition == 'less_than':
-            if is_active:
-                return value < threshold + deadband  # 清除需升到 threshold + deadband 以上
-            return value < threshold
-        elif condition == 'equal_to':
-            return abs(value - threshold) <= deadband if deadband > 0 else value == threshold
-        elif condition == 'not_equal_to':
-            return abs(value - threshold) > deadband if deadband > 0 else value != threshold
-        elif condition == 'greater_equal':
-            if is_active:
-                return value >= threshold - deadband
-            return value >= threshold
-        elif condition == 'less_equal':
-            if is_active:
-                return value <= threshold + deadband
-            return value <= threshold
-        else:
-            logger.warning(f"未知的报警条件: {condition}")
-            return False
+        is_active = bool(alarm_state) and alarm_state.get('alarm_id') is not None
+        return evaluate_condition(
+            {'condition': condition, 'threshold': threshold},
+            value, active=is_active, deadband=deadband)
 
     @staticmethod
     def _normalize_delay(raw: Any, rule_id: str = '') -> float:
         """把规则的 delay 配置归一为秒数（float，非负）。
 
-        配置里写成字符串（`delay: "30"`）时，旧实现的 `delay > 0` 会直接抛
-        TypeError，把整条报警检查路径打断（调用方 except 吞掉 → 报警丢失）。
+        判定逻辑已抽到 `alarm_engine.normalize_delay`（round 262），这里保留
+        方法名作为适配层，避免调用方与测试大改。
         """
-        if raw is None:
-            return 0.0
-        try:
-            # `delay: .inf`（YAML 合法字面量）会让 `max(0.0, inf)` = inf，
-            # 即**报警永不触发** —— 这是静默失效，必须当非法值处理。
-            delay = to_finite_float(raw, 'delay')
-        except (TypeError, ValueError):
-            logger.warning("报警规则 %s 的 delay 配置非法(%r)，按 0（不延迟）处理",
-                           rule_id, raw)
-            return 0.0
-        return max(0.0, delay)
+        normalized = normalize_delay(raw, rule_id)
+        if raw is not None and normalized == 0.0:
+            parsed = try_finite_float(raw)
+            if parsed is None or parsed != 0:
+                logger.warning("报警规则 %s 的 delay 配置非法(%r)，按 0（不延迟）处理",
+                               rule_id, raw)
+        return normalized
 
     @staticmethod
     def _elapsed_seconds(start, end) -> float | None:
@@ -1220,98 +1189,57 @@ class AlarmManager:
         """
         # 每条规则独立一个状态槽位（见 __init__ 里 alarm_states 的说明）
         state_key = (rule_id, device_id, register_name)
+        fire = False
+        cleared = False
+        decision = None
 
+        # round 262：判定（触发/挂起/更新/清除）全部交给
+        # `alarm_engine.decide()` —— 纯函数，运行时与离线回放共用同一份逻辑。
+        # 这里只负责"拿锁 → 应用状态 → 锁外做副作用"。
         with self._state_lock:
-            current_state = self.alarm_states.get(state_key, {})
+            current = self.alarm_states.get(state_key)
+            if current is not None and current.get('alarm_id') != rule_id:
+                # 槽位被别的规则占着（历史上会出现），按新报警处理
+                current = None
 
-        # 获取延迟时间
-        delay = self._normalize_delay(rule_config.get('delay', 0), rule_id)
+            decision = decide(rule_config, current, value, timestamp)
 
-        if triggered:
-            # C1修复: 整个 read-modify-write 在同一锁块内，消除 TOCTOU 竞态
-            fire = False
-            with self._state_lock:
-                live_state = self.alarm_states.get(state_key)
-                if live_state and live_state.get('alarm_id') == rule_id:
-                    if live_state.get('pending'):
-                        # 延迟确认中：只有条件持续成立满 delay 秒才真正产生报警
-                        anchor = live_state.get('confirm_time') or live_state.get('first_trigger_time')
-                        elapsed = self._elapsed_seconds(anchor, timestamp)
-                        if elapsed is None:
-                            # 时间戳缺失/类型或时区不一致导致无法计时：旧实现会让
-                            # 报警永远停在 pending —— 即"配置了 delay 的规则永不报警"。
-                            # 计时不可用属数据问题，但必须报警（fail-open）且留痕。
-                            logger.warning(
-                                "延迟报警无法计算持续时间，按到期处理以规避静默漏报: "
-                                "%s - %s/%s (anchor=%r timestamp=%r)",
-                                rule_id, device_id, register_name, anchor, timestamp)
-                            elapsed = delay
-                        if elapsed >= delay:
-                            live_state['pending'] = False
-                            live_state['confirmed'] = True
-                            live_state['first_trigger_time'] = timestamp
-                            live_state['last_trigger_time'] = timestamp
-                            live_state['last_value'] = value
-                            fire = True
-                            logger.info(f"延迟报警到期触发: {rule_id} - {device_id}/{register_name} "
-                                        f"(持续{elapsed:.1f}s >= delay {delay}s)")
-                        else:
-                            # 未到期：只刷新数值，不触发声光/弹窗
-                            live_state['last_trigger_time'] = timestamp
-                            live_state['last_value'] = value
-                    else:
-                        # 已经在报警，只更新时间和数值，不重复触发声光/弹窗
-                        live_state['last_trigger_time'] = timestamp
-                        live_state['trigger_count'] = live_state.get('trigger_count', 0) + 1
-                        live_state['last_value'] = value
+            if decision.action == _ACT_CLEAR:
+                del self.alarm_states[state_key]
+                cleared = True
+            elif decision.action in (_ACT_FIRE, _ACT_PENDING, _ACT_UPDATE):
+                if current is None:
+                    self.alarm_states[state_key] = new_state(
+                        rule_id, device_id, register_name, decision, timestamp)
                 else:
-                    logger.debug(f"新报警触发: rule={rule_id} device={device_id} reg={register_name} "
-                               f"current_alarm_id={current_state.get('alarm_id')} state_key={state_key}")
-                    alarm_state = {
-                        'alarm_id': rule_id,
-                        'device_id': device_id,
-                        'register_name': register_name,
-                        'first_trigger_time': timestamp,
-                        'last_trigger_time': timestamp,
-                        'trigger_count': 1,
-                        'confirmed': False,
-                        'acknowledged': False
-                    }
-                    if delay > 0:
-                        # 延迟确认：先挂起，等条件持续满 delay 秒后由上面的分支消费
-                        alarm_state['pending'] = True
-                        alarm_state['confirm_time'] = timestamp
-                    else:
-                        alarm_state['pending'] = False
-                    self.alarm_states[state_key] = alarm_state
-                    fire = delay <= 0
+                    current.update(decision.updates)
+                fire = decision.action == _ACT_FIRE
+                if decision.action == _ACT_PENDING and decision.elapsed is None:
+                    # 计时不可用（时间戳缺失/类型或时区不一致）：按到期处理，
+                    # 宁可多报一次也不静默漏报 —— 但必须留痕
+                    logger.warning(
+                        "延迟报警无法计算持续时间，按到期处理以规避静默漏报: "
+                        "%s - %s/%s", rule_id, device_id, register_name)
+                elif decision.action == _ACT_FIRE and decision.reason == '延迟到期':
+                    logger.info("延迟报警到期触发: %s - %s/%s (持续%.1fs)",
+                                rule_id, device_id, register_name,
+                                decision.elapsed or 0.0)
 
-            # 锁外触发（避免回调死锁）
-            if fire:
-                # 去重记账只在 _trigger_alarm 内、且**确实推送成功后**发生。
-                # 这里再记一次会把"被洪水/冷却抑制、根本没推送"的报警也记成已推送，
-                # 于是冷却窗口内真正该推送的报警被压掉 —— 静默漏报。
-                self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
-        else:
-            # 未触发，检查是否需要清除报警（只清除自己规则的状态）
-            cleared = False
-            with self._state_lock:
-                live_state = self.alarm_states.get(state_key)
-                if live_state and live_state.get('alarm_id') == rule_id:
-                    del self.alarm_states[state_key]
-                    cleared = True
-            if cleared:
-                logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
-                # 同步撤销升级跟踪：否则已恢复正常的报警仍会被升级管理器
-                # 按超时升级（且其 _states 会无界增长）
-                if self._escalation_manager:
-                    self._escalation_manager.remove_alarm(rule_id, device_id, register_name)
-                # round 260：把"已恢复"落到数据库。
-                # 此前这里只删内存状态，数据库里那行永远停在 `acknowledged = 0`：
-                # 历史里每条报警都像"还没结束"、未确认数只增不减、
-                # 同一条报警几小时后再触发还会被当成"同一条未结束记录"只 +1
-                # （第二次报警的开始时间直接丢掉）。
-                self._clear_alarm_record(rule_id, device_id, register_name, timestamp)
+        # 锁外副作用（避免回调死锁）
+        if fire:
+            # 去重记账只在 _trigger_alarm 内、且**确实推送成功后**发生。
+            # 这里再记一次会把"被洪水/冷却抑制、根本没推送"的报警也记成已推送，
+            # 于是冷却窗口内真正该推送的报警被压掉 —— 静默漏报。
+            self._trigger_alarm(rule_config, device_id, register_name, value, timestamp)
+
+        if cleared:
+            logger.info(f"报警清除: {rule_id} - {device_id}/{register_name}")
+            # 同步撤销升级跟踪：否则已恢复正常的报警仍会被升级管理器
+            # 按超时升级（且其 _states 会无界增长）
+            if self._escalation_manager:
+                self._escalation_manager.remove_alarm(rule_id, device_id, register_name)
+            # round 260：把"已恢复"落到数据库。
+            self._clear_alarm_record(rule_id, device_id, register_name, timestamp)
 
     def _clear_alarm_record(self, rule_id: str, device_id: str,
                             register_name: str, cleared_at) -> None:
