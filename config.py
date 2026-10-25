@@ -174,43 +174,49 @@ class FlaskConfig:
 
 # 数据库配置
 class DatabaseConfig:
-    # SQLite数据库路径
+    """数据库配置。
+
+    round 270：删掉 `RETENTION_DAYS` / `COMPRESSION_INTERVAL` —— 两个都零消费，
+    真源分别是 `配置/system.yaml` 的 `database.retention`（由归档任务执行）
+    与 SQLite 自己的 WAL/checkpoint 策略。
+
+    `DB_PATH` 保留：`tests/test_frozen_layout_paths.py` 用它断言冻结产物的
+    路径布局（与 `paths.DB_PATH` 必须一致），是**布局单一真源**而非运行期旋钮。
+    """
+
+    # SQLite 数据库路径（冻结布局断言的单一真源；运行期请用 paths.DB_PATH）
     DB_PATH = _DEFAULT_DB_PATH
-
-    # 数据保留天数
-    RETENTION_DAYS = 30
-
-    # 数据压缩间隔（小时）
-    COMPRESSION_INTERVAL = 24
 
 # Modbus配置
 class ModbusConfig:
-    # 默认采集间隔（秒）
-    DEFAULT_INTERVAL = 5
+    """已清空（round 270）。
 
-    # 连接超时（秒）
-    CONNECTION_TIMEOUT = 10
+    原来这里有 DEFAULT_INTERVAL / CONNECTION_TIMEOUT / MAX_RETRIES /
+    RETRY_INTERVAL 四个常量，**生产代码一个都没读**：
 
-    # 重试次数
-    MAX_RETRIES = 3
+    * 采集间隔真源是 `配置/devices*.yaml` 的 `collection_interval`
+      （兜底值在 `core/config_manager.COLLECTION_DEFAULTS`）；
+    * 超时/重试/退避真源是 `采集层/modbus_client.py` 与
+      `采集层/data_collector.py` 的 `compute_backoff_interval()`。
 
-    # 重试间隔（秒）
-    RETRY_INTERVAL = 5
+    留着它们只会让人以为"改这里能调超时"。类本身保留，避免外部脚本
+    `from config import ModbusConfig` 直接 ImportError。
+    """
 
 # 报警配置
 class AlarmConfig:
-    # 报警检查间隔（秒）
-    CHECK_INTERVAL = 10
+    """已清空（round 270）。
 
-    # 报警记录保留天数
-    RETENTION_DAYS = 90
+    原内容全部零消费，且**真源另有其处**：
 
-    # 邮件通知配置
-    EMAIL_ENABLED = False
-    SMTP_SERVER = 'smtp.example.com'
-    SMTP_PORT = 587
-    SMTP_USERNAME = ''
-    SMTP_PASSWORD = ''
+    | 原常量 | 真源 |
+    |---|---|
+    | CHECK_INTERVAL | 报警没有"轮询间隔"——每次采集到样本就 check_alarm |
+    | RETENTION_DAYS | `配置/system.yaml` 的 `database.retention` + 归档任务 |
+    | EMAIL_ENABLED / SMTP_* | `配置/alarms.yaml` 的 `notification.email` 段 |
+
+    保留空类是为了兼容 `from config import AlarmConfig` 这种外部引用。
+    """
 
 
 # 报警输出配置（声光报警器 + 广播系统）
@@ -288,11 +294,16 @@ WebConfig = FlaskConfig
 
 # 导出配置
 class ExportConfig:
-    # 导出目录
-    EXPORT_DIR = _EXPORT_DIR
+    """导出配置。
 
-    # 支持的导出格式
-    FORMATS = ['csv', 'excel', 'json']
+    round 270：删掉 `FORMATS` —— 导出格式由 `存储层/data_export.py` 自己校验
+    （非法格式直接 400），这里列一份清单只会与实际支持的能力脱节。
+
+    `EXPORT_DIR` 保留：冻结布局断言的单一真源（运行期用 `paths.EXPORT_DIR`）。
+    """
+
+    # 导出目录（冻结布局断言的单一真源；运行期请用 paths.EXPORT_DIR）
+    EXPORT_DIR = _EXPORT_DIR
 
 # JWT认证配置
 class AuthConfig:

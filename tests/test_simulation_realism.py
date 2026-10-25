@@ -161,20 +161,34 @@ class TestThermalInertia:
         sim_low.state = DeviceState.RUNNING
         sim_low._running = True
 
-        # Run both for 5 seconds
-        high_deltas = []
-        low_deltas = []
+        # Run both for 50 步（原来只跑 5 步）。
+        #
+        # ⚠️ round 270：模拟器每步都会叠加 `random.gauss(0, 0.3)` 的温度噪声，
+        # 而两个模型每步的确定性增量很小 —— **5 个样本时噪声占主导**，
+        # 断言 `avg_high <= avg_low * 3` 会随机翻车（实测：单跑 3 次全过、
+        # 全量套件里偶发失败）。这类"偶发"不是环境抖动，是样本量不足。
+        # 现在：① 固定随机种子（用完还原全局状态，不污染其它用例）；
+        #       ② 步数提到 50，让噪声在均值上互相抵消。
+        import random as _random
 
-        prev_high = sim_high.update(1.0).get('temperature', 0)
-        prev_low = sim_low.update(1.0).get('temperature', 0)
+        _rng_state = _random.getstate()
+        _random.seed(20261025)
+        try:
+            high_deltas = []
+            low_deltas = []
 
-        for _ in range(5):
-            high_temp = sim_high.update(1.0).get('temperature', 0)
-            low_temp = sim_low.update(1.0).get('temperature', 0)
-            high_deltas.append(abs(high_temp - prev_high))
-            low_deltas.append(abs(low_temp - prev_low))
-            prev_high = high_temp
-            prev_low = low_temp
+            prev_high = sim_high.update(1.0).get('temperature', 0)
+            prev_low = sim_low.update(1.0).get('temperature', 0)
+
+            for _ in range(50):
+                high_temp = sim_high.update(1.0).get('temperature', 0)
+                low_temp = sim_low.update(1.0).get('temperature', 0)
+                high_deltas.append(abs(high_temp - prev_high))
+                low_deltas.append(abs(low_temp - prev_low))
+                prev_high = high_temp
+                prev_low = low_temp
+        finally:
+            _random.setstate(_rng_state)
 
         avg_high = sum(high_deltas) / len(high_deltas)
         avg_low = sum(low_deltas) / len(low_deltas)

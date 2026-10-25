@@ -75,14 +75,14 @@ KNOWN_UNREAD = {
     # （AlarmOutputConfig / BroadcastConfig / MQTTConfig / TDengineConfig）
     # 与 FlaskConfig 的三个无主旋钮都已**接线**，因此从清单里删除
     # —— 清单只增不减就失去意义（本文件有双向断言盯着）。
-    "AlarmConfig": {
-        "CHECK_INTERVAL", "EMAIL_ENABLED", "RETENTION_DAYS",
-        "SMTP_PASSWORD", "SMTP_PORT", "SMTP_SERVER", "SMTP_USERNAME",
-    },
+    # round 270：AlarmConfig / ModbusConfig 里零消费的常量已**删除**
+    # （真源分别在 alarms.yaml、devices*.yaml + modbus_client 的退避实现），
+    # 只剩空类用于兼容外部 `from config import ...`。
     "AuthConfig": {"_DEV_DEFAULT_ADMIN_PW"},
-    "DatabaseConfig": {"COMPRESSION_INTERVAL", "DB_PATH", "RETENTION_DAYS"},
-    "ExportConfig": {"EXPORT_DIR", "FORMATS"},
-    "ModbusConfig": {"CONNECTION_TIMEOUT", "DEFAULT_INTERVAL", "MAX_RETRIES", "RETRY_INTERVAL"},
+    # 这两个是**冻结布局断言的单一真源**（tests/test_frozen_layout_paths.py），
+    # 运行期实际用 paths.DB_PATH / paths.EXPORT_DIR（同一个值）。
+    "DatabaseConfig": {"DB_PATH"},
+    "ExportConfig": {"EXPORT_DIR"},
     # round 266：日志参数已由 `core.config_manager.load_logging_settings()`
     # 统一接管（环境变量 > system.yaml > 默认值）。`LogConfig` 里只留 LOG_DIR，
     # 它是**冻结布局断言**的单一真源（tests/test_frozen_layout_paths.py），
