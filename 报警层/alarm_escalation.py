@@ -37,7 +37,14 @@ class EscalationState:
     device_id: str
     register_name: str
     current_level: int = 0
+    #: **墙钟**首次触发时刻 —— 仅用于展示（`get_status` 会算 elapsed）
     first_trigger_time: float = 0
+    #: **单调时钟**首次触发时刻 —— 升级超时判断用它。
+    #: round 280：`check_escalations` 原来用 `time.time() - first_trigger_time`
+    #: 算"过了多久"。升级超时表达的是**时长**，墙钟被回拨一次（NTP 校时 /
+    #: 现场机开机后校时 / 手工改时间）→ `elapsed` 变负 → **永不升级**，
+    #: on-call 永远收不到电话；向前跳则一次补跑所有级别，半夜给三级主管连环打电话。
+    first_trigger_mono: float = 0
     last_escalation_time: float = 0
     escalation_history: List[Dict[str, Any]] = field(default_factory=list)
     acknowledged: bool = False
@@ -186,6 +193,7 @@ class AlarmEscalationManager:
                     register_name=register_name,
                     current_level=0,
                     first_trigger_time=time.time(),
+                    first_trigger_mono=time.monotonic(),
                 )
                 logger.debug(f"记录告警升级跟踪: {key}")
 
@@ -221,14 +229,15 @@ class AlarmEscalationManager:
         正常路径（每级阈值之间都有检查）行为完全不变，只是一次检查
         最多触发多级。
         """
-        now = time.time()
+        now = time.monotonic()
         to_escalate = []
 
         with self._lock:
             for key, state in self._states.items():
                 if state.acknowledged:
                     continue
-                elapsed = now - state.first_trigger_time
+                # 单调时钟：升级超时是时长语义（墙钟回拨会让它永不升级）
+                elapsed = now - state.first_trigger_mono
                 # 逐级补跑：按 level 升序，把已超时且未触发过的级都挑出来
                 for rule in sorted(self._rules, key=lambda r: r.level):
                     if rule.level <= state.current_level:
@@ -238,6 +247,16 @@ class AlarmEscalationManager:
 
         # 执行升级（按级别从低到高，保证通知顺序）
         for key, state, target_level in sorted(to_escalate, key=lambda t: t[2]):
+            # round 280：**执行前重新校验**。`to_escalate` 是锁内快照，
+            # 而 `_do_escalation` 会调回调（发短信/打电话，可能耗时数秒）——
+            # 这段时间里报警可能已经恢复（`remove_alarm`）或被确认。
+            # 不重查的话，会对一条**已经不存在的报警**执行升级：
+            # 半夜把值班电话打起来，而现场早就正常了。
+            with self._lock:
+                live = self._states.get(key)
+                if live is None or live.acknowledged:
+                    logger.debug("升级前复核：报警已恢复/已确认，跳过 %s", key)
+                    continue
             self._do_escalation(key, state, target_level)
 
     def _do_escalation(self, key: str, state: EscalationState, target_level: int):
@@ -295,7 +314,8 @@ class AlarmEscalationManager:
                         'register_name': v.register_name,
                         'current_level': v.current_level,
                         'acknowledged': v.acknowledged,
-                        'elapsed_seconds': time.time() - v.first_trigger_time,
+                        # 时长用单调时钟（墙钟回拨会算出负数）
+                        'elapsed_seconds': time.monotonic() - v.first_trigger_mono,
                         'escalation_count': len(v.escalation_history),
                     }
                     for k, v in self._states.items()

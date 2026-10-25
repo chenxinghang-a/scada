@@ -427,7 +427,9 @@ class TestEscalationSingleTrack:
             'r_esc', rule, 'd1', 'temp', 90.0, datetime.now(), True)
         # 把升级计时回拨到超过首级规则（600s）之后
         tracked = manager._escalation_manager._states['r_esc:d1:temp']
-        tracked.first_trigger_time -= 601
+        # round 280：升级超时改用**单调时钟**计时（墙钟回拨会让它永不升级），
+        # 所以这里要把单调时刻往前推，而不是改墙钟字段。
+        tracked.first_trigger_mono -= 601
 
         manager.check_escalation()
         manager.check_escalation()  # 同一级不得重复升级

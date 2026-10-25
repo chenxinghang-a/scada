@@ -366,7 +366,8 @@ class TestMultiLevelEndToEnd:
 
             am._escalation_manager.record_alarm('r1', 'D1', 'temp')
             state = am._escalation_manager._states['r1:D1:temp']
-            state.first_trigger_time = time.time() - 5      # 5 秒前触发
+            # round 280：升级超时改用单调时钟，造数据也要用它
+            state.first_trigger_mono = time.monotonic() - 5      # 5 秒前触发
 
             am._escalation_manager.check_escalations()
 
@@ -384,7 +385,7 @@ class TestMultiLevelEndToEnd:
             am._escalation_manager.record_alarm('r1', 'D1', 'temp')
             am._escalation_manager.acknowledge_alarm('r1', 'D1', 'temp')
             state = am._escalation_manager._states['r1:D1:temp']
-            state.first_trigger_time = time.time() - 9999
+            state.first_trigger_mono = time.monotonic() - 9999
             am._escalation_manager.check_escalations()
             assert fired == [], '已确认的报警不应再升级'
         finally:
@@ -425,7 +426,7 @@ class TestMultiLevelEndToEnd:
 
             am._escalation_manager.record_alarm('r1', 'D1', 'temp')
             state = am._escalation_manager._states['r1:D1:temp']
-            state.first_trigger_time = time.time() - 10   # 远超所有阈值
+            state.first_trigger_mono = time.monotonic() - 10   # 远超所有阈值
 
             am._escalation_manager.check_escalations()
 
@@ -473,7 +474,7 @@ class TestTrackingCoverage:
                 '洪水抑制的报警没进升级跟踪 —— 它永远不会升级')
 
             state = am._escalation_manager._states['r_flood:D1:temp']
-            state.first_trigger_time = time.time() - 5
+            state.first_trigger_mono = time.monotonic() - 5
             am.check_escalation()
             assert fired, '被洪水抑制的报警超时后没有升级'
         finally:
