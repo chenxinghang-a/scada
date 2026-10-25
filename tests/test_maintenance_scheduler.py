@@ -91,11 +91,18 @@ def _make_database(tmp_path):
 
 
 def test_build_maintenance_tasks_covers_all_known_structures(tmp_path, auth_manager):
-    """审计点名的每个无界增长结构都要有对应任务。"""
+    """审计点名的每个无界增长结构都要有对应任务。
+
+    round 263：新增的 `data_freshness_watch`（采集中断看门狗）**依赖报警管理器** ——
+    没有它只能改健康状态、不能报警，属于半成品，所以 `alarm_manager=None` 时刻意不注册
+    （见 `test_freshness_watch.test_task_registered_only_with_alarm_manager`）。
+    因此这里要带着依赖来断言"全集"，否则会把"依赖缺失时不注册"误判成"任务缺失"。
+    """
     from core.maintenance import DEFAULT_INTERVALS, build_maintenance_tasks
 
     tasks = build_maintenance_tasks(
-        database=_make_database(tmp_path), auth_manager=auth_manager)
+        database=_make_database(tmp_path), auth_manager=auth_manager,
+        alarm_manager=object())
     names = {t[0] for t in tasks}
 
     assert names == set(DEFAULT_INTERVALS), (

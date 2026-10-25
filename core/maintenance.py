@@ -48,11 +48,13 @@ DEFAULT_INTERVALS: Dict[str, float] = {
     'ws_offline_queue_cleanup': 300,      # 5 分钟
     'performance_metrics': 300,           # 5 分钟（性能历史采样）
     'data_archive': 86400,                # 24 小时
+    'data_freshness_watch': 30,           # 30 秒（采集中断看门狗）
 }
 
 
-def build_maintenance_tasks(database=None, auth_manager=None, *, archive_days: int = 7,
-                            delete_days: int = 30) -> List[tuple]:
+def build_maintenance_tasks(database=None, auth_manager=None, *,
+                            archive_days: int = 7, delete_days: int = 30,
+                            alarm_manager=None) -> List[tuple]:
     """组装 (名称, 间隔, 说明, 可调用对象) 列表。
 
     依赖为 None 的任务会被跳过（并记录 debug 日志），这样调用方可以只传
@@ -110,6 +112,34 @@ def build_maintenance_tasks(database=None, auth_manager=None, *, archive_days: i
          _performance_metrics_sample),
     ])
 
+    if database is not None and alarm_manager is not None:
+        def _data_freshness_watch():
+            """采集中断看门狗（round 263）。
+
+            为什么不能只靠 `/api/health/status`：那条检查是**全局**口径
+            （`MAX(timestamp)` 全库最新一条），25 台设备里只要还有一台在写就
+            一直"新鲜"，**单台设备失联完全发现不了**；而且它只改 JSON 里的
+            状态，不进报警历史、不响铃、不推送。
+
+            这里按设备看，超时就走 `raise_external_alarm`（与其它报警同一条
+            链路：去重 → 落库 → 声光 → 广播 → WebSocket → 升级），恢复自动清除。
+            """
+            # 刻意**不**做降级跳过：降级往往正是因为采集出了问题，
+            # 这时候更需要知道"是哪台设备断了"。本任务只做一条聚合查询 + 状态比较。
+            from core.freshness_watch import run_once
+            result = run_once(database, alarm_manager)
+            if result['raised'] or result['cleared']:
+                logger.warning("采集新鲜度看门狗: 新失联 %s，恢复 %s",
+                               result['raised'], result['cleared'])
+            return result
+
+        tasks.append((
+            'data_freshness_watch',
+            DEFAULT_INTERVALS['data_freshness_watch'],
+            '按设备检查采集中断并报警（全局口径发现不了单台失联）',
+            _data_freshness_watch,
+        ))
+
     if database is not None:
         def _data_archive():
             # 降级到 EMERGENCY 时跳过归档：归档是「跨天范围删除 + WAL checkpoint」
@@ -141,8 +171,8 @@ def build_maintenance_tasks(database=None, auth_manager=None, *, archive_days: i
 
 def register_maintenance_tasks(database=None, auth_manager=None, *,
                                archive_days: int = 7, delete_days: int = 30,
-                               intervals: Optional[Dict[str, float]] = None
-                               ) -> List[str]:
+                               intervals: Optional[Dict[str, float]] = None,
+                               alarm_manager=None) -> List[str]:
     """把所有维护任务注册到 ``task_manager``（不启动）。
 
     Args:
@@ -159,7 +189,7 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
     names: List[str] = []
     for name, interval, description, func in build_maintenance_tasks(
             database, auth_manager, archive_days=archive_days,
-            delete_days=delete_days):
+            delete_days=delete_days, alarm_manager=alarm_manager):
         task_manager.add(name, func, overrides.get(name, interval), description)
         names.append(name)
 
@@ -172,7 +202,8 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
 
 def start_maintenance(database=None, auth_manager=None, *,
                       archive_days: int = 7, delete_days: int = 30,
-                      intervals: Optional[Dict[str, float]] = None) -> List[str]:
+                      intervals: Optional[Dict[str, float]] = None,
+                      alarm_manager=None) -> List[str]:
     """注册并启动全部维护任务（幂等）。
 
     重复调用不会产生第二套线程 —— 已处于 running 状态的任务会被
@@ -180,7 +211,8 @@ def start_maintenance(database=None, auth_manager=None, *,
     """
     names = register_maintenance_tasks(
         database, auth_manager, archive_days=archive_days,
-        delete_days=delete_days, intervals=intervals)
+        delete_days=delete_days, intervals=intervals,
+        alarm_manager=alarm_manager)
     started = [n for n in names if task_manager.start(n)]
     logger.info("维护任务已启动: %s", ', '.join(started) or '（无）')
     return started
