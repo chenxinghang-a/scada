@@ -265,23 +265,23 @@ class BroadcastConfig:
 
 # 日志配置
 class LogConfig:
-    # 日志级别
-    LEVEL = os.environ.get('SCADA_LOG_LEVEL', 'INFO')
+    """日志目录（**唯一**保留在这里的日志常量）。
+
+    round 266：`LEVEL` / `LOG_JSON` / `LOG_ROTATION` / `LOG_RETENTION` 已删除 ——
+    日志参数改由 `core.config_manager.load_logging_settings()` 统一读取
+    （优先级：环境变量 > `配置/system.yaml` 的 `logging` 段 > 兜底默认值）。
+
+    为什么删而不是留着：留着就会有两个真源 —— 配置文件里写着 `max_size_mb: 10`，
+    这里写着 `100 MB`，运维改哪个都不确定生效，实际两边都没生效（历史缺陷）。
+    环境变量 `SCADA_LOG_*` 仍然有效，只是读取点挪到了 `load_logging_settings`。
+    """
 
     # 日志文件路径。**直接委托 paths**（paths.LOG_DIR 自己读 SCADA_LOG_DIR 并按
     # PROJECT_ROOT 解析相对路径）—— 这里若再读一遍环境变量，就会在设置了
     # SCADA_LOG_DIR 时出现「config 拿到相对串、paths 拿到绝对路径」的静默分叉，
     # 正是 round 173 那条注释警告的「第二个真源」。
+    # 保留它是因为 `tests/test_frozen_layout_paths.py` 用它断言冻结布局一致性。
     LOG_DIR = str(_LOG_DIR)
-
-    # 是否输出JSON格式（用于SIEM集成）
-    LOG_JSON = os.environ.get('SCADA_LOG_JSON', 'true').lower() == 'true'
-
-    # 日志轮转大小
-    LOG_ROTATION = os.environ.get('SCADA_LOG_ROTATION', '100 MB')
-
-    # 日志保留时间
-    LOG_RETENTION = os.environ.get('SCADA_LOG_RETENTION', '30 days')
 
 # Web服务器配置（兼容别名）
 WebConfig = FlaskConfig

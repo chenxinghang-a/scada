@@ -70,15 +70,28 @@ database:
 #      · 单次导出行数上限由导出器按查询粒度判断（超限回 400 并说明怎么改）。
 #    把这三项写在配置文件里，只会让人以为"改这里能生效"。
 logging:
+  # ⚠️ round 266：这一段此前是**装饰品** —— 值写在这里，实际生效的是
+  #    `config.LogConfig`（轮转 100 MB、保留 30 天、级别 INFO），改这里没反应。
+  #    现在由 `core.config_manager.load_logging_settings()` 真正读取，
+  #    优先级：**环境变量 > 本文件 > 兜底默认值**。
   console:
+    # 是否输出到 stderr（容器/服务方式部署时通常关掉，只留文件）
     enabled: true
   file:
+    # 保留几个历史文件（loguru retention，按"个"计，不是按天）
     backup_count: 5
     enabled: true
+    # 单个文件多大开始轮转（MB）。⚠️ 改这里会真的生效（round 266 之前不会）
     max_size_mb: 10
+    # 只取**目录**部分；文件名由结构化日志模块按日期生成
+    # （`scada_2026-10-25.log`），这样"按天分文件 + 按大小轮转"可以并存
     path: logs/scada.log
-  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-  level: DEBUG
+  # ⚠️ `format` 段已删除（round 266）：这里写的是 Python logging 的
+  #    `%(asctime)s...` 语法，而本项目用 loguru，格式串由
+  #    `core/structured_logging.py` 决定，这一段从来没有被读过。
+  # 级别：TRACE/DEBUG/INFO/SUCCESS/WARNING/ERROR/CRITICAL
+  # ⚠️ 不要在生产开 DEBUG：每秒钟的采集/推送日志会把磁盘写满（约 10x~50x 量增）
+  level: INFO
 performance:
   # ⚠️ round 257：原有 `cache:` 子段（enabled / type / ttl_seconds）**已删除** ——
   #    缓存模块在 round 247 就整块删掉了（`core/api_cache.py` / `cache_tier.py`

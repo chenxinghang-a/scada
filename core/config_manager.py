@@ -5,6 +5,7 @@
 
 import logging
 import os
+import pathlib
 import re
 import threading
 import yaml
@@ -337,6 +338,104 @@ def load_system_config(reload: bool = True) -> Dict[str, Any]:
     except Exception as e:  # noqa: BLE001 —— 配置读不到不能把调用方搞死
         logger.warning("读取 %s 失败（用兜底默认值）：%s", SYSTEM_CONFIG_REL, e)
         return {}
+
+
+#: `logging` 段的兜底默认值（**必须与 `配置/system.yaml` 一致**）。
+#:
+#: round 266：这一段此前是彻底的装饰品 —— 文件里写着
+#: `max_size_mb: 10` / `backup_count: 5` / `level: DEBUG`，
+#: 而真正的轮转参数来自 `config.LogConfig.LOG_ROTATION`（默认 **100 MB**，
+#: 只认环境变量 `SCADA_LOG_ROTATION`）。也就是说运维把 10 改成 5 再重启，
+#: 日志照旧 100MB 才轮转 —— 配置在骗人。
+LOGGING_DEFAULTS: Dict[str, Any] = {
+    'level': 'INFO',
+    'rotation': '100 MB',
+    'retention': 5,
+    'file_enabled': True,
+    'console_enabled': True,
+    'log_dir': 'logs',
+    'json_format': True,
+}
+
+#: 日志级别白名单（loguru 支持的自定义级别不在其中，只接受标准五档）
+_LOG_LEVELS = ('TRACE', 'DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL')
+
+
+def load_logging_settings() -> Dict[str, Any]:
+    """读取 `配置/system.yaml` 的 `logging` 段（日志参数）。
+
+    优先级：**环境变量 > 配置文件 > 兜底默认值**。
+    环境变量优先是为了兼容既有部署脚本（`SCADA_LOG_LEVEL` 等早已在使用）。
+
+    Returns:
+        `{'level','rotation','retention','file_enabled','console_enabled',
+           'log_dir','json_format'}`，非法值逐项回退默认。
+    """
+    import os
+
+    cfg = load_system_config()
+    section = cfg.get('logging') if isinstance(cfg, dict) else None
+    out = dict(LOGGING_DEFAULTS)
+    if not isinstance(section, dict):
+        section = {}
+
+    # --- level ---
+    raw_level = section.get('level')
+    if isinstance(raw_level, str) and raw_level.strip().upper() in _LOG_LEVELS:
+        out['level'] = raw_level.strip().upper()
+    elif raw_level is not None:
+        logger.warning("logging.level=%r 非法，回退 %s", raw_level, out['level'])
+
+    # --- 文件输出 ---
+    file_cfg = section.get('file') if isinstance(section.get('file'), dict) else {}
+    if 'enabled' in file_cfg:
+        out['file_enabled'] = bool(file_cfg.get('enabled'))
+
+    size_mb = try_int(file_cfg.get('max_size_mb'))
+    if size_mb is not None and size_mb > 0:
+        out['rotation'] = f'{size_mb} MB'
+    elif file_cfg.get('max_size_mb') is not None:
+        logger.warning("logging.file.max_size_mb=%r 非法，回退 %s",
+                       file_cfg.get('max_size_mb'), out['rotation'])
+
+    backup = try_int(file_cfg.get('backup_count'))
+    if backup is not None and backup > 0:
+        out['retention'] = backup
+    elif file_cfg.get('backup_count') is not None:
+        logger.warning("logging.file.backup_count=%r 非法，回退 %s",
+                       file_cfg.get('backup_count'), out['retention'])
+
+    path_raw = file_cfg.get('path')
+    if isinstance(path_raw, str) and path_raw.strip():
+        # 只取目录部分：文件名由结构化日志模块按日期生成
+        # （`scada_{time:YYYY-MM-DD}.log`），这样按天分文件 + 按大小轮转可以并存。
+        parent = str(pathlib.PurePath(path_raw.strip()).parent)
+        if parent and parent not in ('.', ''):
+            out['log_dir'] = parent
+
+    # --- 控制台输出 ---
+    console_cfg = section.get('console') if isinstance(section.get('console'), dict) else {}
+    if 'enabled' in console_cfg:
+        out['console_enabled'] = bool(console_cfg.get('enabled'))
+
+    # --- 环境变量覆盖（兼容既有部署） ---
+    env_level = os.environ.get('SCADA_LOG_LEVEL')
+    if env_level and env_level.strip().upper() in _LOG_LEVELS:
+        out['level'] = env_level.strip().upper()
+    env_dir = os.environ.get('SCADA_LOG_DIR')
+    if env_dir:
+        out['log_dir'] = env_dir
+    env_rotation = os.environ.get('SCADA_LOG_ROTATION')
+    if env_rotation:
+        out['rotation'] = env_rotation
+    env_retention = os.environ.get('SCADA_LOG_RETENTION')
+    if env_retention:
+        out['retention'] = env_retention
+    env_json = os.environ.get('SCADA_LOG_JSON')
+    if env_json:
+        out['json_format'] = env_json.strip().lower() == 'true'
+
+    return out
 
 
 def load_collection_settings() -> Dict[str, int]:

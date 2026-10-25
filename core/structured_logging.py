@@ -142,7 +142,9 @@ def setup_logging(
     json_format: bool = True,
     rotation: str = "100 MB",
     retention: str = "30 days",
-    compression: str = "gz"
+    compression: str = "gz",
+    enable_console: bool = True,
+    enable_file: bool = True,
 ):
     """配置结构化日志
 
@@ -197,14 +199,21 @@ def setup_logging(
         )
 
     # 控制台输出（人类可读，无颜色标记避免环境兼容问题）
-    logger.add(
-        sys.stderr,
-        format="{time:HH:mm:ss} | {level: <8} | {module}:{line} | {message}",
-        level=log_level,
-        colorize=False
-    )
+    # round 266：`配置/system.yaml` 的 `logging.console.enabled` 现在真的生效
+    if enable_console:
+        logger.add(
+            sys.stderr,
+            format="{time:HH:mm:ss} | {level: <8} | {module}:{line} | {message}",
+            level=log_level,
+            colorize=False
+        )
 
     # 应用日志文件（JSON格式）
+    # round 266：`logging.file.enabled=false` 时不再写文件（容器里只收 stdout 的场景）
+    if not enable_file:
+        logger.info("日志文件输出已关闭（logging.file.enabled=false）")
+        return
+
     logger.add(
         str(log_path / "scada_{time:YYYY-MM-DD}.log"),
         format=formatter,

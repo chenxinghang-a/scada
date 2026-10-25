@@ -26,15 +26,24 @@ SYSTEM_START_TIME = datetime.now()
 
 # 配置结构化日志（等保2.0 GB/T 22239）
 from core.structured_logging import setup_logging, get_logger
+from core.config_manager import load_logging_settings
 from config import (
     AlarmOutputConfig, BroadcastConfig, FlaskConfig, LogConfig, TDengineConfig,
 )
+
+# round 266：日志参数改从 `配置/system.yaml` 的 `logging` 段读
+# （优先级：环境变量 > 配置文件 > 兜底默认值）。
+# 此前这一段是**装饰品** —— 文件里写 `max_size_mb: 10`，实际轮转按
+# `LogConfig.LOG_ROTATION` 的 100 MB，运维改了没反应。
+_log_settings = load_logging_settings()
 setup_logging(
-    log_dir=str(LogConfig.LOG_DIR),
-    log_level=LogConfig.LEVEL,
-    json_format=LogConfig.LOG_JSON,
-    rotation=LogConfig.LOG_ROTATION,
-    retention=LogConfig.LOG_RETENTION,
+    log_dir=_log_settings['log_dir'],
+    log_level=_log_settings['level'],
+    json_format=_log_settings['json_format'],
+    rotation=_log_settings['rotation'],
+    retention=_log_settings['retention'],
+    enable_console=_log_settings['console_enabled'],
+    enable_file=_log_settings['file_enabled'],
 )
 logger = get_logger(__name__)
 

@@ -61,6 +61,12 @@ CLASS_REASONS = {
         "_DEV_DEFAULT_ADMIN_PW 是 config.py 内部用于「弱口令检测」的私有常量，"
         "在类体里自用，不对外。"
     ),
+    "LogConfig": (
+        "round 266 起日志参数的真源是 `core.config_manager.load_logging_settings()`"
+        "（环境变量 > `配置/system.yaml` 的 logging 段 > 默认值）。"
+        "本类只剩 LOG_DIR，它是冻结布局断言的单一真源（tests/test_frozen_layout_paths.py），"
+        "生产实际用 paths.LOG_DIR（同一个值）。"
+    ),
 }
 
 # 当前已知的未读配置（2026-10-20 基线，round 218 修完 8 项后的余量）
@@ -77,6 +83,11 @@ KNOWN_UNREAD = {
     "DatabaseConfig": {"COMPRESSION_INTERVAL", "DB_PATH", "RETENTION_DAYS"},
     "ExportConfig": {"EXPORT_DIR", "FORMATS"},
     "ModbusConfig": {"CONNECTION_TIMEOUT", "DEFAULT_INTERVAL", "MAX_RETRIES", "RETRY_INTERVAL"},
+    # round 266：日志参数已由 `core.config_manager.load_logging_settings()`
+    # 统一接管（环境变量 > system.yaml > 默认值）。`LogConfig` 里只留 LOG_DIR，
+    # 它是**冻结布局断言**的单一真源（tests/test_frozen_layout_paths.py），
+    # 生产实际用的是 paths.LOG_DIR（同一个值）。
+    "LogConfig": {"LOG_DIR"},
 }
 
 
