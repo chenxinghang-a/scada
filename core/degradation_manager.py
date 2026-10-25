@@ -169,6 +169,9 @@ class DegradationManager:
         self._history: List[Dict[str, Any]] = []
         self._max_history = 100
 
+        #: 连续"可以恢复"的评估次数（防抖；变差时清零）
+        self._recovery_streak = 0
+
         # 监控
         self._stop_event = threading.Event()
         self._monitor_thread: Optional[threading.Thread] = None
@@ -245,14 +248,39 @@ class DegradationManager:
                 logger.debug("触发器执行异常: %s", e)
 
         with self._lock:
-            if requested_level != self._level:
+            if requested_level > self._level:
+                # 变差：**立即生效**（安全方向不能等）
                 old = self._level
-                self._set_level(requested_level, reason="自动触发")
+                self._recovery_streak = 0
+                self._set_level(requested_level, reason="自动触发（变差）")
                 logger.warning(
                     "自动降级变更: %s → %s",
                     DegradationLevel(old).name,
                     DegradationLevel(requested_level).name,
                 )
+            elif requested_level < self._level:
+                # 恢复：连续 N 次确认才执行，防止阈值附近抖动导致反复横跳
+                self._recovery_streak += 1
+                if self._recovery_streak >= RECOVERY_CONFIRM_COUNT:
+                    old = self._level
+                    self._recovery_streak = 0
+                    self._set_level(requested_level,
+                                    reason=f"自动恢复（连续 {RECOVERY_CONFIRM_COUNT} 次确认）")
+                    logger.warning(
+                        "自动恢复: %s → %s",
+                        DegradationLevel(old).name,
+                        DegradationLevel(requested_level).name,
+                    )
+                else:
+                    logger.info(
+                        "降级恢复待确认（%d/%d）：当前 %s，触发器建议 %s",
+                        self._recovery_streak, RECOVERY_CONFIRM_COUNT,
+                        DegradationLevel(self._level).name,
+                        DegradationLevel(requested_level).name,
+                    )
+            else:
+                # 建议与现状一致 → 清空恢复计数（避免"隔着几轮又凑够"）
+                self._recovery_streak = 0
 
     def _set_level(self, new_level: int, reason: str = ""):
         """设置降级等级（必须在锁内调用）"""
@@ -349,6 +377,9 @@ class DegradationManager:
                 'enforced_features': sorted(ENFORCED_FEATURES),
                 'frequency_multiplier': FREQUENCY_MULTIPLIERS.get(self._level, 1.0),
                 'trigger_count': len(self._triggers),
+                # 恢复防抖进度（0 表示没有待确认的恢复）
+                'recovery_streak': self._recovery_streak,
+                'recovery_confirm_count': RECOVERY_CONFIRM_COUNT,
                 'recent_changes': self._history[-10:],
                 'running': self._monitor_thread is not None and self._monitor_thread.is_alive(),
             }
@@ -363,6 +394,22 @@ class DegradationManager:
                 'frequency_multiplier': FREQUENCY_MULTIPLIERS.get(level, 1.0),
             }
         return result
+
+
+#: 恢复（降级 → 更轻等级）需要**连续**多少次评估确认才真的执行。
+#:
+#: round 271：`_auto_evaluate()` 原来是"触发器说变就变" —— 没有滞回、没有驻留时间。
+#: 一个在阈值附近抖动的触发器（例如连接池使用率刚好压在 0.8 上下）会让降级等级
+#: **每 15 秒翻一次**，后果不只是日志刷屏：
+#:   · `is_feature_enabled()` 反复开关 → 数据导出/归档/边缘决策 时开时关；
+#:   · `get_frequency_multiplier()` 反复变化 → 采集周期抖动；
+#:   · `_history` 被来回切换的记录填满，真正的变更被淹没。
+#:
+#: 现在的策略是**非对称**的：
+#:   · 变差（等级升高）→ **立即生效**，安全方向不能等；
+#:   · 恢复（等级降低）→ 需连续 `RECOVERY_CONFIRM_COUNT` 次确认，防止抖动。
+#: 这也是标准的 fail-safe 做法：宁可多降一会儿，也不要反复横跳。
+RECOVERY_CONFIRM_COUNT = 3
 
 
 # 全局降级管理器
