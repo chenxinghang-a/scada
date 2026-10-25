@@ -272,6 +272,13 @@ class AlarmPriorityMatrix:
         return cls.PRIORITY_ORDER.get(p1, 99) < cls.PRIORITY_ORDER.get(p2, 99)
 
 
+#: 输出通道**连续**失败多少次，就把"这个通道坏了"本身当成一条报警。
+#: 为什么需要：邮件/短信投递失败只记 `output_errors` 计数与 ERROR 日志 ——
+#: 运维不主动翻统计页就永远不知道"报警发不出去"。而通知通道坏了意味着
+#: **报警到不了人**，这本身必须是报警（ISA-18.2 也要求监控报警系统自身）。
+NOTIFY_FAILURE_ALARM_THRESHOLD = 3
+
+
 class AlarmManager:
     """
     报警管理器（重写版）
@@ -376,6 +383,11 @@ class AlarmManager:
             'alarm_output': 0, 'broadcast': 0, 'websocket': 0,
             'email': 0, 'sms': 0}
         self._output_error_lock = Lock()
+        #: 各通道**连续**失败次数（成功即清零）。达到
+        #: `NOTIFY_FAILURE_ALARM_THRESHOLD` 时把通道故障本身报成报警。
+        self._output_consecutive: dict[str, int] = {}
+        #: 已因"通道故障"报过警的通道（避免每次失败都重复登记）
+        self._output_broken: set[str] = set()
 
         # 状态锁（保护 alarm_states, rules, _shelved_alarms, _deadbands）
         self._state_lock = Lock()
@@ -678,7 +690,9 @@ class AlarmManager:
             ok, err = future.result()
         except Exception as e:
             ok, err = False, f'邮件线程异常: {e}'
-        if not ok:
+        if ok:
+            self._record_output_success('email')
+        else:
             self._record_output_failure('email', err or '邮件发送失败')
 
     def _notify_by_email(self, alarm_data: dict[str, Any]) -> None:
@@ -741,7 +755,9 @@ class AlarmManager:
             ok, err = future.result()
         except Exception as e:
             ok, err = False, f'短信线程异常: {e}'
-        if not ok:
+        if ok:
+            self._record_output_success('sms')
+        else:
             self._record_output_failure('sms', err or '短信发送失败')
 
     def _notify_by_sms(self, alarm_data: dict[str, Any]) -> None:
@@ -1359,7 +1375,8 @@ class AlarmManager:
                            overflow, self._DEDUP_MAX_ENTRIES)
 
     def _trigger_alarm(self, rule_config: dict[str, Any], device_id: str,
-                       register_name: str, value: float, timestamp: datetime):
+                       register_name: str, value: float, timestamp: datetime,
+                       notify: bool = True):
         """
         触发报警 → 三级联动输出
 
@@ -1455,22 +1472,86 @@ class AlarmManager:
         except Exception as e:      # noqa: BLE001 —— 指标失败不影响报警
             logger.debug(f"报警指标打点失败: {e}")
 
-        # 5. 邮件通知（异步，不阻塞上面的声光/广播/前端推送）。
+        # 5/6. 邮件 + 短信（异步，不阻塞上面的声光/广播/前端推送）。
         #    放在去重点**之后**是刻意的：复用同一套冷却与确认抑制，
         #    否则报警风暴会把收件人邮箱打爆（同一条报警每 10 秒一封）。
-        self._notify_by_email(alarm_payload)
-
-        # 6. 短信通知（round 250，异步 + 失败记账）。
-        #    `send_sms` 目前是占位实现 —— 启用它会收到**响亮的失败**
-        #    （ERROR + output_errors['sms']），而不是此前的静默无底洞。
-        self._notify_by_sms(alarm_payload)
+        #
+        #    round 267：`notify=False` 时**跳过**这两个通道 —— 用于
+        #    「通知通道本身坏了」这类系统报警，否则会自指递归
+        #    （发邮件失败 → 报警 → 再发邮件 → 再失败 …）。
+        if notify:
+            self._notify_by_email(alarm_payload)
+            self._notify_by_sms(alarm_payload)
 
     def _record_output_failure(self, channel: str, detail: str) -> None:
-        """输出通道失败必须可见：ERROR 日志 + 计数（绝不静默吞掉）"""
+        """输出通道失败必须可见：ERROR 日志 + 计数（绝不静默吞掉）。
+
+        round 267：**连续**失败达到阈值时，把"这个通道坏了"本身报成一条报警。
+        此前只计数 + 打日志 —— 运维不主动翻统计页就永远不知道"报警发不出去"，
+        而通知通道坏了意味着**报警到不了人**，这本身就是必须报警的事。
+        """
         with self._output_error_lock:
             self._output_errors[channel] = self._output_errors.get(channel, 0) + 1
-        logger.error("报警输出失败[%s]（第%d次）: %s",
-                     channel, self._output_errors.get(channel, 0), detail)
+            consecutive = self._output_consecutive.get(channel, 0) + 1
+            self._output_consecutive[channel] = consecutive
+            already = channel in self._output_broken
+            if consecutive >= NOTIFY_FAILURE_ALARM_THRESHOLD and not already:
+                self._output_broken.add(channel)
+                should_alarm = True
+            else:
+                should_alarm = False
+
+        logger.error("报警输出失败[%s]（累计%d次，连续%d次）: %s",
+                     channel, self._output_errors.get(channel, 0), consecutive, detail)
+
+        if should_alarm:
+            self._raise_channel_broken_alarm(channel, detail, consecutive)
+
+    def _record_output_success(self, channel: str) -> None:
+        """输出成功：清零连续失败；若此前报过"通道故障"，现在把它清掉。"""
+        with self._output_error_lock:
+            had = self._output_consecutive.get(channel, 0)
+            self._output_consecutive[channel] = 0
+            was_broken = channel in self._output_broken
+            self._output_broken.discard(channel)
+
+        if was_broken:
+            logger.warning("报警输出通道恢复[%s]（此前连续失败 %d 次）", channel, had)
+            try:
+                self.clear_external_alarm(f'notify_broken_{channel}',
+                                          'alarm_notification', channel)
+            except Exception as e:      # noqa: BLE001
+                logger.debug("清除通道故障报警失败: %s", e)
+
+    def _raise_channel_broken_alarm(self, channel: str, detail: str,
+                                    consecutive: int) -> None:
+        """把"输出通道连续失败"报成一条系统报警。
+
+        ⚠️ 必须 `notify=False`：这条报警讲的就是"通知通道坏了"，
+        再走邮件/短信会形成自指（失败 → 报警 → 再发邮件 → 再失败 …）。
+        声光/广播/WebSocket 仍然会触发 —— 现场该知道。
+        """
+        label = {
+            'email': '邮件通知', 'sms': '短信通知',
+            'alarm_output': '声光报警器', 'broadcast': '语音广播',
+            'websocket': '前端推送',
+        }.get(channel, channel)
+        try:
+            self.raise_external_alarm(
+                alarm_id=f'notify_broken_{channel}',
+                message=f'{label}通道连续失败 {consecutive} 次，报警可能到不了人：{detail}',
+                level='critical',
+                device_id='alarm_notification',
+                register_name=channel,
+                notify=False,
+            )
+        except Exception as e:      # noqa: BLE001 —— 自检报警失败不能反过来炸掉主链路
+            logger.error("通道故障报警登记失败[%s]: %s", channel, e)
+
+    def _get_output_consecutive(self) -> dict[str, int]:
+        """各通道当前连续失败次数（统计接口用）。"""
+        with self._output_error_lock:
+            return dict(self._output_consecutive)
 
     def _get_output_error_counts(self) -> dict[str, int]:
         """获取各输出通道累计失败次数"""
@@ -1499,6 +1580,8 @@ class AlarmManager:
         if result is False or (isinstance(result, dict) and result.get('success') is False):
             self._record_output_failure(channel, f"{method_name}() 报告失败: {result!r}")
             return False
+        # round 267：成功即清零连续失败（否则"坏了又好了"的通道永远停在已报警状态）
+        self._record_output_success(channel)
         return True
 
     def _invoke_alarm_output(self, level: str, message: str, device_id: str) -> bool:
@@ -1581,7 +1664,8 @@ class AlarmManager:
                              device_id: str = 'external',
                              register_name: str = 'event',
                              value: float = 0.0,
-                             timestamp: datetime | None = None) -> bool:
+                             timestamp: datetime | None = None,
+                             notify: bool = True) -> bool:
         """把**外部事件**（边缘决策、上位机联动、脚本）当作一等报警处理。
 
         round 261：`run.py` 的 `edge_set_alarm` 原来是直接
@@ -1647,7 +1731,7 @@ class AlarmManager:
                 state['trigger_count'] = state.get('trigger_count', 0) + 1
 
         self._trigger_alarm(self.rules[alarm_id], device_id, register_name,
-                            value, timestamp)
+                            value, timestamp, notify=notify)
         return True
 
     def clear_external_alarm(self, alarm_id: str, device_id: str = 'external',
@@ -1857,6 +1941,10 @@ class AlarmManager:
             'broadcast': self.broadcast_system.get_status() if self.broadcast_system else None,
             # 各通道累计调用失败次数（>0 即存在声光/广播/前端漏报，必须可观测）
             'errors': self._get_output_error_counts(),
+            # 各通道**当前连续**失败次数（达到阈值会把"通道坏了"报成报警）
+            'consecutive_failures': self._get_output_consecutive(),
+            'failure_alarm_threshold': NOTIFY_FAILURE_ALARM_THRESHOLD,
+            'broken_channels': sorted(self._output_broken),
         }
 
         # 去重统计

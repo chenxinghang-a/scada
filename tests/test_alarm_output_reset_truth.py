@@ -152,6 +152,9 @@ def _bare_alarm_manager(output):
     mgr.alarm_output = output
     mgr._output_errors = {}
     mgr._output_error_lock = threading.Lock()
+    # round 267：连续失败计数与"通道已报警"集合（`_record_output_failure` 要用）
+    mgr._output_consecutive = {}
+    mgr._output_broken = set()
     return mgr
 
 
