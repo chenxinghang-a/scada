@@ -417,6 +417,20 @@ class HealthChecker:
                 interval=30,
             )
 
+        # 备份可用性（round 276）：演练每天跑一次，这里只读缓存结果 ——
+        # 不在健康页里跑完整性校验（那是几百 MB 的 IO）。
+        if database:
+            cls.register('backup_readiness', _check_backup_readiness, interval=300)
+
+        # 按设备的数据新鲜度（round 263 的看门狗）：全局 data_freshness 只看得见
+        # "全库最新一条"，单台设备失联它发现不了。这里把逐设备结论搬到健康页。
+        if database:
+            cls.register(
+                'device_freshness',
+                lambda: _check_device_freshness(database),
+                interval=30,
+            )
+
         cls.register('disk', _check_disk_space, interval=60)
         cls.register('memory', _check_memory, interval=30)
 
@@ -456,6 +470,72 @@ def _check_devices(dm):
         return {'status': HealthStatus.HEALTHY, 'message': f'{connected}/{total}设备在线'}
     except Exception as e:
         return {'status': HealthStatus.UNHEALTHY, 'message': f'设备检查失败: {e}'}
+
+
+def _check_backup_readiness():
+    """备份可用性 —— 读最近一次恢复演练的结果（不在这里跑演练）。
+
+    为什么要单独一项：`backup_database()` 有没有跑、备份能不能用，此前
+    只能翻日志或等出事。演练结果现在同时出现在健康页，运维一眼能看出
+    "最近一次演练什么时候、过没过、哪个备份"。
+    """
+    from core.backup_drill import get_last_result, STALE_BACKUP_HOURS
+
+    last = get_last_result()
+    if last is None:
+        return {
+            'status': HealthStatus.UNKNOWN,
+            'message': '本次进程尚未执行备份恢复演练（每日维护任务会跑）',
+        }
+
+    details = {
+        'checked_at': last.get('checked_at'),
+        'backup': last.get('backup'),
+        'age_hours': last.get('age_hours'),
+        'problems': last.get('problems', []),
+        'stale_threshold_hours': STALE_BACKUP_HOURS,
+    }
+    if last.get('ok'):
+        return {'status': HealthStatus.HEALTHY,
+                'message': f"备份可用（{last.get('age_hours')} 小时前）",
+                'details': details}
+    return {'status': HealthStatus.UNHEALTHY,
+            'message': '备份不可用：' + '；'.join((last.get('problems') or [])[:3]),
+            'details': details}
+
+
+def _check_device_freshness(database):
+    """逐设备的数据新鲜度（单台失联在这里必须能看见）。
+
+    与 `_check_data_freshness` 的区别：后者看 `MAX(timestamp)`（全库最新一条），
+    25 台设备只要有一台在写就一直"新鲜"。这里按设备看。
+    """
+    from core.freshness_watch import scan
+
+    try:
+        snapshot = scan(database)
+    except Exception as e:      # noqa: BLE001 —— 查不了库本身要报出来
+        return {'status': HealthStatus.UNHEALTHY,
+                'message': f'逐设备新鲜度检查失败: {e}'}
+
+    if not snapshot:
+        return {'status': HealthStatus.UNKNOWN,
+                'message': '历史表里还没有任何设备数据'}
+
+    stale = {dev: round(info['age'], 1) for dev, info in snapshot.items()
+             if info['stale']}
+    details = {'devices': len(snapshot), 'stale': stale}
+    if not stale:
+        return {'status': HealthStatus.HEALTHY,
+                'message': f'{len(snapshot)} 台设备数据均新鲜',
+                'details': details}
+    return {
+        'status': HealthStatus.DEGRADED if len(stale) < len(snapshot)
+                  else HealthStatus.UNHEALTHY,
+        'message': f'{len(stale)}/{len(snapshot)} 台设备数据陈旧：'
+                   + '、'.join(list(stale)[:5]),
+        'details': details,
+    }
 
 
 # 数据新鲜度阈值（秒）：超过 STALE_UNHEALTHY 说明落库链路已经断了

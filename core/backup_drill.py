@@ -40,6 +40,16 @@ STALE_BACKUP_HOURS = 48
 #: 恢复时必须存在的表
 REQUIRED_TABLES = ('realtime_data', 'history_data', 'alarm_records')
 
+#: 最近一次演练结果（供 `/api/health` 详情读取）。
+#: 演练是每天一次的维护任务，健康页却是随时查的 —— 不缓存的话，
+#: 要么健康页看不到这项，要么每次请求都去跑一遍完整性校验（几百 MB IO）。
+_LAST_RESULT: dict | None = None
+
+
+def get_last_result() -> dict | None:
+    """最近一次演练结果（`None` 表示本次进程还没跑过）。"""
+    return _LAST_RESULT
+
 
 def find_latest_backup(backup_dir: str | Path) -> Path | None:
     """在备份目录里找最新的 `.db` 文件（按修改时间）。"""
@@ -123,8 +133,7 @@ def run_drill(database=None, backup_dir: str = DEFAULT_BACKUP_DIR,
     latest = find_latest_backup(backup_dir)
     if latest is None:
         result['problems'].append(f'备份目录里没有任何 .db 文件: {backup_dir}')
-        _report(result, alarm_manager)
-        return result
+        return _finish(result, alarm_manager)
 
     result['backup'] = str(latest)
     age_hours = (now.timestamp() - latest.stat().st_mtime) / 3600.0
@@ -154,6 +163,17 @@ def run_drill(database=None, backup_dir: str = DEFAULT_BACKUP_DIR,
             logger.debug('备份行数对比失败: %s', exc)
 
     result['ok'] = not result['problems']
+    return _finish(result, alarm_manager)
+
+
+def _finish(result: dict, alarm_manager) -> dict:
+    """统一收尾：落日志/报警 + 缓存结果（供健康页读取）。
+
+    ⚠️ 所有返回路径都必须走这里 —— 早退（找不到备份）如果绕过缓存，
+    健康页会一直显示"尚未执行演练"，而实际上演练每天都跑、每天都在失败。
+    """
+    global _LAST_RESULT
+    _LAST_RESULT = result
     _report(result, alarm_manager)
     return result
 
