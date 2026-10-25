@@ -62,6 +62,9 @@ _count_kw = ('_count', 'quantity', 'output', 'production', 'yield', 'shot_count'
 
 # --- 命名常量（替代魔法数字） ---
 BACKOFF_CEILING_S = 60              # 退避上限
+#: 崩溃恢复清单（`pending_data.jsonl` + `_pending`）的硬上限。
+#: 消费端停摆时如果不管，这个文件会一直涨到把磁盘写满（2026-09-20 实测 160MB）。
+PENDING_COMPACT_EVERY = 1000        # 累计淘汰多少条后真正重写一次文件（摊薄 O(n) 重写）
 
 
 def compute_backoff_interval(failures: int, base_interval: float) -> float:
@@ -211,7 +214,8 @@ class DiskBackedQueue:
 
     DEFAULT_PERSIST_DIR = 'data/queue'
 
-    def __init__(self, maxsize: int = 50000, persist_dir: str | None = None):
+    def __init__(self, maxsize: int = 50000, persist_dir: str | None = None,
+                 pending_cap: int | None = None):
         self.maxsize = maxsize
         self._queue = queue.Queue(maxsize=maxsize)
         if persist_dir is None:
@@ -240,6 +244,15 @@ class DiskBackedQueue:
         # 落盘失败计数：>0 表示「崩溃保护已失效」（数据只在内存里）。
         # 必须可观测 —— 见 _persist_item 的说明。
         self._persist_failures = 0
+        #: 崩溃恢复清单的硬上限。**默认比内存队列大**：
+        #: 内存队列是"待写库的缓冲"，磁盘文件是"崩溃后还能救回来的底账"，
+        #: 后者本来就该容纳更多。取 `max(maxsize, 1000)` 保证小容量场景
+        #: （测试里的 maxsize=1）不会一落盘就被自己的上限淘汰。
+        self._pending_cap = int(pending_cap) if pending_cap else max(int(maxsize), 1000)
+        #: 因为"清单满了"而被淘汰的条数（这些数据彻底丢失，必须可观测）
+        self._dropped_persisted = 0
+        #: 自上次重写文件以来淘汰/丢弃了多少条（用于摊薄重写成本）
+        self._dirty_since_rewrite = 0
         # 启动时恢复
         self._recover_from_disk()
 
@@ -290,10 +303,18 @@ class DiskBackedQueue:
             with self._lock:
                 if id(item) in self._pending_ids:
                     return True
+                # round 265：清单有硬上限。消费端停摆时不清的话，
+                # `pending_data.jsonl` 会一直涨到把磁盘写满（2026-09-20 实测 160MB），
+                # 而磁盘满之后连数据库都写不进去 —— 从"数据积压"升级成"整机不可用"。
+                trimmed = self._trim_if_over_cap()
                 with open(self._persist_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(item, default=str, ensure_ascii=False) + '\n')
                 self._pending.append(item)
                 self._pending_ids.add(id(item))
+                if trimmed or self._dirty_since_rewrite >= PENDING_COMPACT_EVERY:
+                    # 淘汰只发生在内存清单里，磁盘文件要靠重写才会变小
+                    self._rewrite_persist_file()
+                    self._dirty_since_rewrite = 0
                 return True
         except Exception as e:
             with self._lock:
@@ -306,6 +327,34 @@ class DiskBackedQueue:
                     n, self._persist_dir, e,
                 )
             return False
+
+    def _trim_if_over_cap(self) -> bool:
+        """清单超上限时淘汰最旧的一批（调用方须持有 `_lock`）。返回是否发生了淘汰。"""
+        if len(self._pending) < self._pending_cap:
+            return False
+        trim = max(1, self._pending_cap // 10)      # 一次淘汰 10%，避免每条都重写
+        dropped = self._pending[:trim]
+        self._pending[:] = self._pending[trim:]
+        self._pending_ids = {id(x) for x in self._pending}
+        self._dropped_persisted += len(dropped)
+        self._dirty_since_rewrite += len(dropped)
+        if self._dropped_persisted == len(dropped) or self._dropped_persisted % 1000 < len(dropped):
+            logger.error(
+                "崩溃恢复清单已满（上限 %d 条），淘汰最旧 %d 条 —— "
+                "这些数据永久丢失。累计淘汰 %d 条。请检查数据库写入是否停滞。",
+                self._pending_cap, len(dropped), self._dropped_persisted)
+        return True
+
+    @property
+    def pending_count(self) -> int:
+        """当前崩溃恢复清单条数（>上限 说明淘汰逻辑没生效）。"""
+        with self._lock:
+            return len(self._pending)
+
+    @property
+    def dropped_persisted(self) -> int:
+        """因清单满而被淘汰、永久丢失的条数。"""
+        return self._dropped_persisted
 
     @property
     def persist_failures(self) -> int:
@@ -614,10 +663,18 @@ class DataCollector:
         if self.data_queue.full():
             try:
                 self.data_queue.get_nowait()
-                # ⚠️ 被淘汰的最旧一条同样是**真实的数据丢失**，必须计数。
+                # ⚠️ 被淘汰的最旧一条同样是**真实的数据丢失**（内存里没了），必须计数。
                 # round 214 前这里不计数（只计"被拒"那一半）→ dropped_items 少报。
                 self._inc_stat('dropped_items')
                 self._inc_stat('dropped_oldest')
+                # round 265：**刻意不删它的磁盘副本**。
+                # 内存队列扔掉只是"这一轮送不进库"，磁盘副本还在
+                # `pending_data.jsonl` 里 —— 下次启动可以恢复，数据不丢。
+                # （曾试图"丢弃即删磁盘副本"，被
+                #   tests/test_collector_db_failure.py 当场拦下：那条用例明确要求
+                #   「队列满而未能重新入队的数据，磁盘副本必须仍在」。）
+                # 文件不会因此无界增长 —— 由 `_persist_item` 里的**硬上限**兜住，
+                # 超限淘汰是显式策略：计 `dropped_persisted` + ERROR 日志。
             except queue.Empty:
                 # 安全忽略：full() 与 get_nowait() 之间消费线程可能已把队列取空，
                 # 此时无需再丢弃，直接走下面的入队即可
@@ -1954,6 +2011,14 @@ class DataCollector:
         failures = getattr(self.data_queue, 'persist_failures', 0)
         if failures:
             stats['queue_persist_failures'] = failures
+        # round 265：崩溃恢复清单的规模与"因满而淘汰"的条数。
+        # 后者是**真实的数据丢失**，不报出来就等于静默丢数据。
+        pending = getattr(self.data_queue, 'pending_count', None)
+        if pending is not None:
+            stats['queue_pending_count'] = pending
+        dropped_persisted = getattr(self.data_queue, 'dropped_persisted', 0)
+        if dropped_persisted:
+            stats['queue_dropped_persisted'] = dropped_persisted
         # 各设备当前**实际生效**的采集间隔（含降级倍数）。
         # `_device_intervals` 原来只写不读 —— 降级后运维想确认「到底降频了没有」
         # 在界面上找不到任何依据，只能靠猜。
