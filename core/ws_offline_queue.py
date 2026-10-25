@@ -24,7 +24,13 @@ class OfflineMessage:
         self.event = event
         self.data = data
         self.priority = priority
+        #: **墙钟**入队时刻 —— 只用于展示（`to_dict()` 会带给前端）
         self.timestamp = time.time()
+        #: **单调时钟**入队时刻 —— 排序与过期判断用它。
+        #: round 275：过期是"多久以前"的**时长**语义，用墙钟时一次校时回拨
+        #: 会让 `now - timestamp` 变负 → 消息**永不过期**（一直占内存、
+        #: 客户端重连时被投递一堆几小时前的旧状态）；向前跳则全部立即过期。
+        self.monotonic = time.monotonic()
         self.attempts = 0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -48,6 +54,9 @@ class OfflineMessageQueue:
             'total_enqueued': 0,
             'total_delivered': 0,
             'total_expired': 0,
+            #: 因为单客户端队列满而被丢弃的条数（round 275 前**没有计数**，
+            #: 等于静默丢消息 —— 客户端会缺一段状态而没人知道）
+            'total_dropped': 0,
         }
 
     def enqueue(self, client_id: str, event: str, data: Any, priority: int = 0) -> bool:
@@ -68,9 +77,10 @@ class OfflineMessageQueue:
 
             # 检查队列大小限制
             if len(queue) >= self._max_messages:
-                # 移除最旧的低优先级消息
-                queue.sort(key=lambda m: (m.priority, m.timestamp))
+                # 移除最旧的低优先级消息（排序用**单调时钟**，见 OfflineMessage）
+                queue.sort(key=lambda m: (m.priority, m.monotonic))
                 queue.pop(0)
+                self._stats['total_dropped'] += 1
 
             message = OfflineMessage(event, data, priority)
             queue.append(message)
@@ -96,14 +106,14 @@ class OfflineMessageQueue:
             if not queue:
                 return []
 
-            # 清理过期消息
-            now = time.time()
-            valid_messages = [m for m in queue if now - m.timestamp < self._max_age]
+            # 清理过期消息（单调时钟：过期是时长语义）
+            now = time.monotonic()
+            valid_messages = [m for m in queue if now - m.monotonic < self._max_age]
             expired_count = len(queue) - len(valid_messages)
             self._stats['total_expired'] += expired_count
 
-            # 按优先级和时间排序
-            valid_messages.sort(key=lambda m: (-m.priority, m.timestamp))
+            # 按优先级和时间排序（同优先级按入队先后）
+            valid_messages.sort(key=lambda m: (-m.priority, m.monotonic))
 
             # 取出指定数量
             to_deliver = valid_messages[:limit]
@@ -159,6 +169,7 @@ class OfflineMessageQueue:
                 'total_enqueued': self._stats['total_enqueued'],
                 'total_delivered': self._stats['total_delivered'],
                 'total_expired': self._stats['total_expired'],
+                'total_dropped': self._stats['total_dropped'],
                 'max_messages_per_client': self._max_messages,
                 'max_age_seconds': self._max_age,
             }
@@ -166,14 +177,14 @@ class OfflineMessageQueue:
     def cleanup_expired(self) -> int:
         """清理所有过期消息"""
         with self._lock:
-            now = time.time()
+            now = time.monotonic()
             total_expired = 0
 
             for client_id in list(self._queues.keys()):
                 queue = self._queues[client_id]
                 original_len = len(queue)
                 self._queues[client_id] = [
-                    m for m in queue if now - m.timestamp < self._max_age
+                    m for m in queue if now - m.monotonic < self._max_age
                 ]
                 expired = original_len - len(self._queues[client_id])
                 total_expired += expired
