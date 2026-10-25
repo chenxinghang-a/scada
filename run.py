@@ -527,7 +527,9 @@ def main():
                     database=database,
                     auth_manager=getattr(app, 'auth_manager', None),
                     # round 263：采集中断看门狗需要报警管理器才能"报警"而不只是改状态
-                    alarm_manager=alarm_manager)
+                    alarm_manager=alarm_manager,
+                    # round 277：还要设备清单，否则已删设备的"幽灵报警"永远清不掉
+                    device_manager=device_manager)
                 logger.info(f"后台维护任务已启动: {', '.join(maintenance_started) or '（无）'}")
             except Exception as _mt_err:
                 logger.error("后台维护任务启动失败: %s", _mt_err, exc_info=True)

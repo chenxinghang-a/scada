@@ -125,11 +125,16 @@ def scan(database, *, now: datetime | None = None,
 
 
 def run_once(database, alarm_manager, *, now: datetime | None = None,
-             threshold_seconds: float | None = None) -> dict:
+             threshold_seconds: float | None = None,
+             known_devices: set[str] | None = None) -> dict:
     """扫一遍并对**状态变化**做报警/恢复（幂等：同一状态重复调用不会重复报警）。
 
+    Args:
+        known_devices: **当前仍然存在**的设备 id 集合。传了就启用"幽灵报警"清理
+            （见下面的说明）；不传则只按历史数据判断。
+
     Returns:
-        {'threshold': 秒, 'stale': [device_id...], 'raised': [...], 'cleared': [...]}
+        {'threshold': 秒, 'stale': [...], 'raised': [...], 'cleared': [...]}
     """
     from core.config_manager import load_collection_settings
 
@@ -138,6 +143,25 @@ def run_once(database, alarm_manager, *, now: datetime | None = None,
         threshold_seconds = stale_threshold_seconds(settings.get('default_interval', 5))
 
     snapshot = scan(database, now=now, threshold_seconds=threshold_seconds)
+
+    # round 277：**已删除设备的"幽灵报警"**。
+    # `scan()` 按 history_data 分组，设备删了历史还在 → 它仍会被判为"陈旧"，
+    # 而它再也不会产生新数据，所以那条 `data_stale_<dev>` 报警**永远不会恢复**：
+    # 活跃报警列表里永久挂着一个不存在的设备，操作员点确认也没用。
+    ghost_devices: list[str] = []
+    if known_devices is not None:
+        for dev in list(snapshot):
+            if dev not in known_devices:
+                ghost_devices.append(dev)
+                snapshot.pop(dev, None)
+        # 已经在报警、但设备已不存在 → 直接清掉
+        for entry in list(alarm_manager.get_active_alarms()):
+            alarm_id = entry.get('alarm_id') or ''
+            if not alarm_id.startswith('data_stale_'):
+                continue
+            dev = entry.get('register_name') or ''
+            if dev and dev not in known_devices and dev not in ghost_devices:
+                ghost_devices.append(dev)
 
     stale_devices = [dev for dev, info in snapshot.items() if info['stale']]
     healthy_devices = [dev for dev, info in snapshot.items() if not info['stale']]
@@ -164,6 +188,17 @@ def run_once(database, alarm_manager, *, now: datetime | None = None,
         logger.warning("采集中断报警: %s（最新数据距今 %.0fs，阈值 %.0fs）",
                        device_id, info['age'], threshold_seconds)
 
+    # 已删除设备：清掉它的报警（不列入 raised/cleared 的正常语义，单独返回）
+    cleared_ghosts: list[str] = []
+    for device_id in ghost_devices:
+        alarm_id = f'data_stale_{device_id}'
+        try:
+            if alarm_manager.clear_external_alarm(alarm_id, ALARM_DEVICE_ID, device_id):
+                cleared_ghosts.append(device_id)
+                logger.info("设备已删除，清除其采集中断报警: %s", device_id)
+        except Exception as e:      # noqa: BLE001
+            logger.debug("清除幽灵报警失败 %s: %s", device_id, e)
+
     # 恢复：只清"曾经因本看门狗报过、现在又正常"的那些
     for device_id in healthy_devices:
         alarm_id = f'data_stale_{device_id}'
@@ -178,4 +213,6 @@ def run_once(database, alarm_manager, *, now: datetime | None = None,
         'stale': stale_devices,
         'raised': raised,
         'cleared': cleared,
+        #: 因设备已删除而被清掉的报警（不是"采集恢复"，别混在一起统计）
+        'cleared_ghosts': cleared_ghosts,
     }

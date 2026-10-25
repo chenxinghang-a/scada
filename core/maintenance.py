@@ -55,7 +55,7 @@ DEFAULT_INTERVALS: Dict[str, float] = {
 
 def build_maintenance_tasks(database=None, auth_manager=None, *,
                             archive_days: int = 7, delete_days: int = 30,
-                            alarm_manager=None) -> List[tuple]:
+                            alarm_manager=None, device_manager=None) -> List[tuple]:
     """组装 (名称, 间隔, 说明, 可调用对象) 列表。
 
     依赖为 None 的任务会被跳过（并记录 debug 日志），这样调用方可以只传
@@ -128,10 +128,19 @@ def build_maintenance_tasks(database=None, auth_manager=None, *,
             # 刻意**不**做降级跳过：降级往往正是因为采集出了问题，
             # 这时候更需要知道"是哪台设备断了"。本任务只做一条聚合查询 + 状态比较。
             from core.freshness_watch import run_once
-            result = run_once(database, alarm_manager)
-            if result['raised'] or result['cleared']:
-                logger.warning("采集新鲜度看门狗: 新失联 %s，恢复 %s",
-                               result['raised'], result['cleared'])
+            # 传当前设备清单：设备删了历史还在，不传的话它会被永久判为"陈旧"，
+            # 那条 data_stale_<dev> 报警**永远不会恢复**（幽灵报警）。
+            known = None
+            if device_manager is not None:
+                try:
+                    known = set(device_manager.get_all_devices().keys())
+                except Exception as exc:      # noqa: BLE001
+                    logger.debug("获取设备清单失败，按历史数据判断: %s", exc)
+            result = run_once(database, alarm_manager, known_devices=known)
+            if result['raised'] or result['cleared'] or result.get('cleared_ghosts'):
+                logger.warning("采集新鲜度看门狗: 新失联 %s，恢复 %s，已删设备清理 %s",
+                               result['raised'], result['cleared'],
+                               result.get('cleared_ghosts'))
             return result
 
         tasks.append((
@@ -194,7 +203,7 @@ def build_maintenance_tasks(database=None, auth_manager=None, *,
 def register_maintenance_tasks(database=None, auth_manager=None, *,
                                archive_days: int = 7, delete_days: int = 30,
                                intervals: Optional[Dict[str, float]] = None,
-                               alarm_manager=None) -> List[str]:
+                               alarm_manager=None, device_manager=None) -> List[str]:
     """把所有维护任务注册到 ``task_manager``（不启动）。
 
     Args:
@@ -211,7 +220,8 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
     names: List[str] = []
     for name, interval, description, func in build_maintenance_tasks(
             database, auth_manager, archive_days=archive_days,
-            delete_days=delete_days, alarm_manager=alarm_manager):
+            delete_days=delete_days, alarm_manager=alarm_manager,
+            device_manager=device_manager):
         task_manager.add(name, func, overrides.get(name, interval), description)
         names.append(name)
 
@@ -225,7 +235,7 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
 def start_maintenance(database=None, auth_manager=None, *,
                       archive_days: int = 7, delete_days: int = 30,
                       intervals: Optional[Dict[str, float]] = None,
-                      alarm_manager=None) -> List[str]:
+                      alarm_manager=None, device_manager=None) -> List[str]:
     """注册并启动全部维护任务（幂等）。
 
     重复调用不会产生第二套线程 —— 已处于 running 状态的任务会被
@@ -234,7 +244,7 @@ def start_maintenance(database=None, auth_manager=None, *,
     names = register_maintenance_tasks(
         database, auth_manager, archive_days=archive_days,
         delete_days=delete_days, intervals=intervals,
-        alarm_manager=alarm_manager)
+        alarm_manager=alarm_manager, device_manager=device_manager)
     started = [n for n in names if task_manager.start(n)]
     logger.info("维护任务已启动: %s", ', '.join(started) or '（无）')
     return started
