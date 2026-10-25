@@ -247,15 +247,24 @@ def test_remove_device_task_clears_tracking_data(collector):
 
 
 def test_tracking_lock_is_held_during_cleanup(collector):
-    """静态守卫：remove_device_task 的清理必须**真的**在 `_tracking_lock` 内。
+    """静态守卫：设备状态清理必须**真的**在 `_tracking_lock` 内。
 
     注意要匹配 `with self._tracking_lock:` 这个**语句**，
     而不是 `'_tracking_lock' in src` —— 后者会被注释/文档字符串里的同名词
     误判为通过（本测试第一版就是这么写的，变异测试时才发现它抓不到问题）。
+
+    round 274：清理逻辑从 `remove_device_task` 抽到了 `_forget_device_state`
+    （统一入口，顺带补上漏掉的 `_device_intervals`）。守卫跟着**不变量**走，
+    不跟着函数位置走：现在断言"清理入口持有锁"+"删除路径走这个入口"。
     """
     import inspect
-    src = inspect.getsource(collector.remove_device_task)
-    assert 'with self._tracking_lock:' in src, (
-        'remove_device_task 没有真的对追踪字典加锁 —— 会与采集线程竞态，'
+    helper = inspect.getsource(collector._forget_device_state)
+    assert 'with self._tracking_lock:' in helper, (
+        '_forget_device_state 没有真的对追踪字典加锁 —— 会与采集线程竞态，'
         '导致设备删除失败、追踪数据残留'
+    )
+
+    caller = inspect.getsource(collector.remove_device_task)
+    assert '_forget_device_state(device_id)' in caller, (
+        'remove_device_task 没有走统一的清理入口 —— 会漏掉某些按设备状态'
     )

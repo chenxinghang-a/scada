@@ -937,15 +937,35 @@ class DataCollector:
         # 不加锁时，这里对 `_last_values` 的迭代会和采集线程的写入撞上，
         # 抛 `RuntimeError: dictionary changed size during iteration`，
         # 导致**设备删除失败、追踪数据残留**（也就是这段代码本来要防的内存泄漏）。
+        self._forget_device_state(device_id)
+
+    #: 所有「按设备索引」的运行期状态容器 —— 删除设备时必须逐个清理。
+    #: round 274：`_device_intervals` 之前**漏了**，于是 `get_stats()` 里
+    #: `device_intervals` 会一直列出已删除的设备（运维在界面上看到一台
+    #: 不存在的设备"间隔 5s"），重新添加同名设备时也会短暂继承旧值。
+    #: `tests/test_device_state_cleanup.py` 会扫源码里的
+    #: `self._xxx[device_id] = ...` 赋值，发现新容器没登记就红。
+    PER_DEVICE_STATE_ATTRS = (
+        '_last_values', '_last_times',
+        '_circuit_state', '_failure_counts',
+        '_device_intervals',
+    )
+
+    def _forget_device_state(self, device_id: str) -> None:
+        """清掉某台设备的**全部**运行期状态（删除设备时调用）。
+
+        `_last_values` / `_last_times` 的键是 `"{device_id}:{register}"`，
+        其余是 `device_id` 本身 —— 两种都要清。
+        """
+        prefix = f"{device_id}:"
         with self._tracking_lock:
-            prefix = f"{device_id}:"
             stale_keys = [k for k in self._last_values if k.startswith(prefix)]
             for k in stale_keys:
                 self._last_values.pop(k, None)
                 self._last_times.pop(k, None)
-            # 清理断路器和失败计数
             self._circuit_state.pop(device_id, None)
             self._failure_counts.pop(device_id, None)
+            self._device_intervals.pop(device_id, None)
 
     def _setup_push_device(self, device_id: str, device_config: dict[str, Any]):
         """设置推送型设备（OPC UA / MQTT）的回调和连接。
