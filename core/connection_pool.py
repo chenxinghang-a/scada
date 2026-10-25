@@ -63,7 +63,15 @@ class ConnectionPool:
         auto_scale: bool = True,
     ):
         self._factory = factory
+        #: **配置**上限 —— 不可变。自动扩缩容只动 `_dynamic_max`。
+        #: round 268 之前这里会被 `_check_auto_scale` 直接改写：
+        #: 「扩容」分支 `new_max = min(total + 5, self._max_size)` 在
+        #: `total < max_size` 时**把配置值改小**（max_size=50、池里 10 条
+        #: 满载 → `_max_size=15`），于是运维配的 50 永远达不到 ——
+        #: 名字叫扩容，实际是永久缩容。
         self._max_size = max_size
+        #: 当前**生效**上限（自动扩缩容调整这个，范围 [下限, `_max_size`]）
+        self._dynamic_max = max_size
         self._min_idle = min_idle
         self._max_idle_time = max_idle_time
         self._max_lifetime = max_lifetime
@@ -72,6 +80,7 @@ class ConnectionPool:
         self._scale_down_threshold = 0.3  # 使用率低于30%时缩容
         self._last_scale_time = 0
         self._scale_cooldown = 60  # 扩缩容冷却时间（秒）
+        self._scale_step = 5       # 每次扩/缩容调整几个连接（原为散落的魔法数字 5）
         self._health_check = health_check
         self._name = name
 
@@ -179,12 +188,13 @@ class ConnectionPool:
                     # 空闲但不健康：先销毁再重建，避免覆盖时泄漏旧连接
                     self._destroy_connection(key, conn)
 
-            # 创建新连接
-            if len(self._pool) < self._max_size:
+            # 创建新连接（受**动态**上限约束，扩容时它能回到配置上限）
+            if len(self._pool) < self._dynamic_max:
                 self._stats['misses'] += 1
                 return self._create_connection(key)
 
-            logger.warning(f"连接池 {self._name} 已满 ({self._max_size})")
+            logger.warning(f"连接池 {self._name} 已满 (动态上限 {self._dynamic_max}"
+                           f"/配置 {self._max_size})")
             self._stats['misses'] += 1
             return None
 
@@ -339,19 +349,23 @@ class ConnectionPool:
                 return
 
             usage_rate = active / total
+            # 下限：至少能容纳 min_idle + 5（留一点余量，避免上限贴到 min_idle）
+            floor = min(self._max_size, self._min_idle + 5)
 
-            # 扩容：使用率高且未达上限
-            if usage_rate > self._scale_up_threshold and total < self._max_size:
-                new_max = min(total + 5, self._max_size)
-                logger.info(f"连接池 {self._name} 扩容: {total} -> {new_max} (使用率 {usage_rate:.1%})")
-                self._max_size = new_max
+            # 扩容：使用率高且动态上限还没到配置上限
+            if usage_rate > self._scale_up_threshold and self._dynamic_max < self._max_size:
+                new_max = min(self._dynamic_max + self._scale_step, self._max_size)
+                logger.info("连接池 %s 扩容: 动态上限 %d -> %d（池内 %d，使用率 %.1f%%）",
+                            self._name, self._dynamic_max, new_max, total, usage_rate * 100)
+                self._dynamic_max = new_max
                 self._last_scale_time = now
 
-            # 缩容：使用率低且超过最小值
-            elif usage_rate < self._scale_down_threshold and total > self._min_idle + 5:
-                new_max = max(total - 5, self._min_idle + 5)
-                logger.info(f"连接池 {self._name} 缩容: {total} -> {new_max} (使用率 {usage_rate:.1%})")
-                self._max_size = new_max
+            # 缩容：使用率低且动态上限还有下调空间（不关闭已有连接，交给空闲回收）
+            elif usage_rate < self._scale_down_threshold and self._dynamic_max > floor:
+                new_max = max(self._dynamic_max - self._scale_step, floor)
+                logger.info("连接池 %s 缩容: 动态上限 %d -> %d（池内 %d，使用率 %.1f%%）",
+                            self._name, self._dynamic_max, new_max, total, usage_rate * 100)
+                self._dynamic_max = new_max
                 self._last_scale_time = now
 
     # ------------------------------------------------------------------
@@ -378,7 +392,13 @@ class ConnectionPool:
                     active, idle)
                 self._stats['active'] = active
                 self._stats['idle'] = idle
-            return {**self._stats, 'total': len(self._pool)}
+            return {
+                **self._stats,
+                'total': len(self._pool),
+                # 配置上限（运维设的，不变）与当前生效上限（自动扩缩容在调）
+                'max_size': self._max_size,
+                'dynamic_max': self._dynamic_max,
+            }
 
     def contains(self, key: str) -> bool:
         """检查池中是否存在某 key 的连接"""
