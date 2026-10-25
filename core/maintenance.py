@@ -49,6 +49,7 @@ DEFAULT_INTERVALS: Dict[str, float] = {
     'performance_metrics': 300,           # 5 分钟（性能历史采样）
     'data_archive': 86400,                # 24 小时
     'data_freshness_watch': 30,           # 30 秒（采集中断看门狗）
+    'backup_restore_drill': 86400,        # 24 小时（备份恢复演练）
 }
 
 
@@ -141,6 +142,27 @@ def build_maintenance_tasks(database=None, auth_manager=None, *,
         ))
 
     if database is not None:
+        def _backup_restore_drill():
+            """每日备份恢复演练（round 273）。
+
+            备份"有没有"和"能不能用"是两件事。生产上没人每天去点一次恢复，
+            于是坏备份/备份停了/备份是空库这三种情况，**只会在真要恢复的那天**
+            才暴露。这里每天只读校验一次最新备份（完整性 + 必需表 + 行数 +
+            新鲜度），失败就报警。
+            """
+            from core.backup_drill import run_drill
+            result = run_drill(database=database, alarm_manager=alarm_manager)
+            if not result['ok']:
+                logger.error("备份恢复演练未通过: %s", result['problems'])
+            return result
+
+        tasks.append((
+            'backup_restore_drill',
+            DEFAULT_INTERVALS['backup_restore_drill'],
+            '每日校验最新备份可用（完整性/必需表/行数/新鲜度），失败报警',
+            _backup_restore_drill,
+        ))
+
         def _data_archive():
             # 降级到 EMERGENCY 时跳过归档：归档是「跨天范围删除 + WAL checkpoint」
             # 这类重操作，恰恰是在数据库已经吃紧时最不该跑的东西。
