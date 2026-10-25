@@ -461,22 +461,26 @@ class TestDataQualityAssessor:
         assert q == DataQualityAssessor.BAD_SENSOR_FAILURE
 
     def test_uncertain_stale_data(self):
-        """Unchanged value for >300s returns UNCERTAIN_LAST_USABLE"""
+        """Unchanged value for >300s returns UNCERTAIN_LAST_USABLE
+
+        round 264：卡死窗口改成**单调时钟**计时（墙钟回拨会让卡死永远检测不出来），
+        所以这里造数据也要用 `time.monotonic()`。
+        """
         q = DataQualityAssessor.assess(
             value=25.0, register_name='temperature',
             device_status='running',
             last_value=25.0,
-            last_time=time.time() - 301
+            last_time=time.monotonic() - 301
         )
         assert q == DataQualityAssessor.UNCERTAIN_LAST_USABLE
 
     def test_good_recent_same_value(self):
-        """Same value within 300s returns GOOD"""
+        """Same value within 300s returns GOOD（round 264：时间基准改为单调时钟）"""
         q = DataQualityAssessor.assess(
             value=25.0, register_name='temperature',
             device_status='running',
             last_value=25.0,
-            last_time=time.time() - 100
+            last_time=time.monotonic() - 100
         )
         assert q == DataQualityAssessor.GOOD
 

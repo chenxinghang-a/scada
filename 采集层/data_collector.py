@@ -62,6 +62,31 @@ _count_kw = ('_count', 'quantity', 'output', 'production', 'yield', 'shot_count'
 
 # --- 命名常量（替代魔法数字） ---
 BACKOFF_CEILING_S = 60              # 退避上限
+
+
+def compute_backoff_interval(failures: int, base_interval: float) -> float:
+    """连续失败 `failures` 次后，下一次采集该等多久（秒）。
+
+    round 264：原实现是 `min(2 ** failures, BACKOFF_CEILING_S)` —— 第 1 次失败
+    得到 **2 秒**，比正常采集间隔（默认 5 秒）**还短**：所谓"退避"反而让一台
+    已经出问题的设备被更频繁地打。正确语义是：
+
+    * 退避间隔**不得小于基础采集间隔**（不能比正常时更激进）；
+    * 在基础间隔之上按 2^n 指数增长；
+    * 封顶 `BACKOFF_CEILING_S`。
+
+    例（base=5）：1 次 → 5s，2 次 → 5s，3 次 → 8s，4 次 → 16s，5 次 → 32s。
+    """
+    from core.safe_numeric import try_int
+
+    parsed = try_int(failures)
+    n = 1 if parsed is None else max(1, parsed)
+    # `collection.default_interval: .inf` 是 YAML 合法字面量 → 基础间隔无穷大 →
+    # 退避也无穷大 → 设备失败一次就再也不采了。统一用 safe_numeric 挡住。
+    base = try_finite_float(base_interval)
+    if base is None or base <= 0:
+        base = 5.0
+    return float(min(max(base, 2 ** n), BACKOFF_CEILING_S))
 SENSOR_STUCK_WINDOW_S = 300         # 传感器卡死窗口
 BATCH_MAX = 1000                    # 批处理最大条数（100设备场景下提高到1000）
 BATCH_TIMEOUT_S = 0.5               # 批处理超时
@@ -168,7 +193,8 @@ class DataQualityAssessor:
 
         # 值长时间不变 = UNCERTAIN（可能传感器卡死）
         if last_value is not None and last_time is not None:
-            if abs(value - last_value) < 0.001 and time.time() - last_time > SENSOR_STUCK_WINDOW_S:
+            # round 264：卡死窗口是时长 → 单调时钟（墙钟回拨会让卡死永远检测不出来）
+            if abs(value - last_value) < 0.001 and time.monotonic() - last_time > SENSOR_STUCK_WINDOW_S:
                 return DataQualityAssessor.UNCERTAIN_LAST_USABLE
 
         # 正常
@@ -910,7 +936,10 @@ class DataCollector:
             if not cb or not cb.get('opened_at'):
                 return None  # 无断路器，继续正常采集
 
-            elapsed = time.time() - cb['opened_at']
+            # round 264：冷却窗口是**时长**，必须用单调时钟。
+            # 用墙钟时一次校时回拨就会让 elapsed 变负 → 永远处于冷却期 →
+            # 该设备**再也不被探测**（采集永久停摆，只能重启进程）。
+            elapsed = time.monotonic() - cb['opened_at']
 
             if elapsed < CIRCUIT_BREAKER_COOLDOWN_S:
                 # 冷却期内：生成模拟数据兜底（默认关闭，见 FALLBACK_SIMULATION_ENABLED）
@@ -951,7 +980,10 @@ class DataCollector:
                 interval = self._get_dynamic_interval(device_id, base_interval)
                 logger.info(f"设备 {device_id} 试探读成功，断路器关闭，恢复采集")
             else:
-                self._circuit_state[device_id] = {'opened_at': time.time()}
+                self._circuit_state[device_id] = {
+                    'opened_at': time.monotonic(),      # 窗口计时
+                    'opened_at_wall': time.time(),      # 展示用
+                }
                 interval = CIRCUIT_BREAKER_COOLDOWN_S
                 logger.warning(f"设备 {device_id} 试探读失败，断路器重新打开")
 
@@ -980,12 +1012,20 @@ class DataCollector:
                     failures = self._failure_counts.get(device_id, 0) + 1
                     self._failure_counts[device_id] = failures
                 if failures >= CIRCUIT_BREAKER_THRESHOLD:
-                    self._circuit_state[device_id] = {'opened_at': time.time()}
+                    self._circuit_state[device_id] = {
+                        'opened_at': time.monotonic(),      # 窗口计时
+                        'opened_at_wall': time.time(),      # 展示用
+                    }
                     interval = CIRCUIT_BREAKER_COOLDOWN_S
                     logger.warning(f"设备 {device_id} 连续失败 {failures} 次，断路器打开，{CIRCUIT_BREAKER_COOLDOWN_S}s 后重试")
                 else:
-                    interval = min(2 ** failures, BACKOFF_CEILING_S)
-                    logger.debug(f"设备 {device_id} 连续失败 {failures} 次，{interval}s 后重试")
+                    # round 264：原来写的是 `min(2 ** failures, CEILING)` ——
+                    # 第 1 次失败得到 2s，**比正常采集间隔（5s）还短**：
+                    # 「退避」反而让一台已经出问题的设备被**更频繁**地打。
+                    # 正确语义：退避间隔不得小于基础间隔，再按 2^n 指数增长。
+                    interval = compute_backoff_interval(failures, base_interval)
+                    logger.debug(f"设备 {device_id} 连续失败 {failures} 次，"
+                                 f"{interval}s 后重试（基础间隔 {base_interval}s）")
 
             _schedule_next(interval)
 
@@ -1039,7 +1079,9 @@ class DataCollector:
             # 降级前的旧快照 —— 拿陈旧健康分去判定「设备故障 → 1 秒快采」，
             # 恰好和降级「降低轮询压力」的目的相反，所以这里也要跟着闸门走。
             if self.predictive_maintenance and self._intel_enabled('predictive_maintenance'):
-                now = time.time()
+                # round 264：5 秒缓存也是时长 → 单调时钟（墙钟回拨会让缓存
+                # 永远不刷新，拿着几小时前的健康分去决定采集频率）
+                now = time.monotonic()
                 if not hasattr(self, '_health_cache') or now - getattr(self, '_health_cache_ts', 0) > 5:
                     self._health_cache = self.predictive_maintenance.get_health_scores()
                     self._health_cache_ts = now
@@ -1485,13 +1527,13 @@ class DataCollector:
                 continue
 
             # 非阻塞取剩余（凑满批次或等超时）
-            deadline = time.time() + BATCH_TIMEOUT_S
-            while len(batch) < BATCH_MAX and time.time() < deadline:
+            deadline = time.monotonic() + BATCH_TIMEOUT_S
+            while len(batch) < BATCH_MAX and time.monotonic() < deadline:
                 try:
                     batch.append(self.data_queue.get_nowait())
                 except queue.Empty:
                     # 队列空了，等一小会再试
-                    remaining = deadline - time.time()
+                    remaining = deadline - time.monotonic()
                     if remaining > 0.01:
                         time.sleep(min(remaining, 0.05))
                         continue
@@ -1558,7 +1600,8 @@ class DataCollector:
                     if value is not None and not (isinstance(value, float) and math.isnan(value)):
                         with self._tracking_lock:
                             self._last_values[key] = value
-                            self._last_times[key] = time.time()
+                            # 与 QualityAssessor 的卡死判断同一时钟（单调）
+                            self._last_times[key] = time.monotonic()
 
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
                 db_write_ok = True
@@ -1859,7 +1902,7 @@ class DataCollector:
             只包含「已熔断」或「有连续失败」的设备 —— 全健康时
             ``devices`` 为空、``summary.open == 0``，调用方可以据此判断。
         """
-        now = time.time()
+        now = time.monotonic()
         open_states = dict(getattr(self, '_circuit_state', None) or {})
         failure_counts = dict(getattr(self, '_failure_counts', None) or {})
 
@@ -1875,7 +1918,9 @@ class DataCollector:
             }
             if opened_at:
                 elapsed = max(0.0, now - opened_at)
-                entry['opened_at'] = opened_at
+                # `opened_at` 对外保持"墙钟时刻"的语义（前端/接口契约），
+                # 内部计时用单调值；老状态没有 wall 字段时退回单调值。
+                entry['opened_at'] = cb.get('opened_at_wall', opened_at)
                 entry['opened_for_sec'] = round(elapsed, 1)
                 entry['cooldown_remaining_sec'] = round(
                     max(0.0, CIRCUIT_BREAKER_COOLDOWN_S - elapsed), 1)

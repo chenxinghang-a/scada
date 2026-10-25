@@ -65,7 +65,7 @@ class TestStatesReadable:
 
     def test_open_breaker_is_visible_with_cooldown(self):
         dc = _make_collector()
-        dc._circuit_state['dev1'] = {'opened_at': time.time() - 10}
+        dc._circuit_state['dev1'] = {'opened_at': time.monotonic() - 10, 'opened_at_wall': time.time() - 10}
         dc._failure_counts['dev1'] = 7
 
         out = dc.get_circuit_breaker_states()
@@ -79,7 +79,7 @@ class TestStatesReadable:
     def test_half_open_phase_after_cooldown(self):
         """冷却结束后进入半开试探阶段 —— 运维能看到"正在试探恢复"。"""
         dc = _make_collector()
-        dc._circuit_state['dev1'] = {'opened_at': time.time() - 31}
+        dc._circuit_state['dev1'] = {'opened_at': time.monotonic() - 31, 'opened_at_wall': time.time() - 31}
         out = dc.get_circuit_breaker_states()
         assert out['devices']['dev1']['phase'] == 'half_open_probe'
         assert out['devices']['dev1']['cooldown_remaining_sec'] == 0
@@ -96,7 +96,7 @@ class TestStatesReadable:
     def test_stats_includes_summary(self):
         """`get_stats()` 必须带汇总 —— /api/system/status 与健康检查读它。"""
         dc = _make_collector()
-        dc._circuit_state = {'dev1': {'opened_at': time.time()}}
+        dc._circuit_state = {'dev1': {'opened_at': time.monotonic(), 'opened_at_wall': time.time()}}
         dc._failure_counts = {'dev1': 5}
         dc.running = True
         dc.stats = {}
@@ -118,7 +118,7 @@ class TestResilienceApi:
                                                        auth_headers):
         """修复前这里永远回 {'breakers': {}, 'total': 0}。"""
         dc = _make_collector()
-        dc._circuit_state = {'dev1': {'opened_at': time.time() - 5}}
+        dc._circuit_state = {'dev1': {'opened_at': time.monotonic() - 5, 'opened_at_wall': time.time() - 5}}
         dc._failure_counts = {'dev1': 6}
         app.data_collector = dc
 
@@ -156,7 +156,7 @@ class TestResilienceApi:
 class TestHealthDetail:
     def test_health_detail_shows_real_breakers(self, app, client, auth_headers):
         dc = _make_collector()
-        dc._circuit_state = {'dev9': {'opened_at': time.time() - 40}}
+        dc._circuit_state = {'dev9': {'opened_at': time.monotonic() - 40, 'opened_at_wall': time.time() - 40}}
         dc._failure_counts = {'dev9': 9}
         app.data_collector = dc
 
