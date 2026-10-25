@@ -388,6 +388,9 @@ class AlarmManager:
         self._output_consecutive: dict[str, int] = {}
         #: 已因"通道故障"报过警的通道（避免每次失败都重复登记）
         self._output_broken: set[str] = set()
+        #: 最近一次确认的**声光消音**结果（`True` = 蜂鸣器确实被关掉）。
+        #: 供 API 如实回给操作员 —— 见 `acknowledge_alarm()` 里的说明。
+        self._last_ack_output_ok: bool = True
 
         # 状态锁（保护 alarm_states, rules, _shelved_alarms, _deadbands）
         self._state_lock = Lock()
@@ -1854,9 +1857,28 @@ class AlarmManager:
                     alarm_id, device_id, register_name, acknowledged_by)
 
             # 声光消音（关蜂鸣器，灯保持）
+            #
+            # round 281：**消音结果必须能让调用方看到**。
+            # 原来这一行丢弃了返回值：DO 写失败时蜂鸣器还在响，而接口照样回
+            # `success: true`「报警已确认」—— 操作员站在盘前，界面说确认了、
+            # 现场还在叫，只会以为界面卡了，或者干脆去拔电源。
+            # 与 `reset_alarm()` 的语义对齐：软件侧成功、硬件侧如实上报。
             if self.alarm_output and self.alarm_output.enabled:
-                self._call_output_method('alarm_output', self.alarm_output, 'acknowledge')
+                self._last_ack_output_ok = self._call_output_method(
+                    'alarm_output', self.alarm_output, 'acknowledge')
+            else:
+                # 没配声光输出 → 不存在"消音失败"，按成功算
+                self._last_ack_output_ok = True
         return success
+
+    def get_last_ack_output_ok(self) -> bool:
+        """最近一次确认时，声光消音是否**真的**成功（DO 写入成功）。
+
+        为什么单独一个读取器而不是改 `acknowledge_alarm` 的返回值：
+        那个返回值是"报警有没有被确认"（数据库层面），语义不该被硬件状态污染；
+        而调用方（API）需要同时知道两件事。
+        """
+        return bool(getattr(self, '_last_ack_output_ok', True))
 
     def reset_alarm(self, device_id: str | None = None) -> bool:
         """

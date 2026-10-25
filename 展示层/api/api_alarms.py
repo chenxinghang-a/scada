@@ -56,13 +56,28 @@ def get_active_alarms():
 def acknowledge_alarm(alarm_id):
     """确认报警（需要 admin/engineer/operator 角色）"""
     data = request.get_json() or {}
-    success = bool(current_app.alarm_manager.acknowledge_alarm(
+    manager = current_app.alarm_manager
+    success = bool(manager.acknowledge_alarm(
         alarm_id=alarm_id,
         device_id=data.get('device_id'),
         register_name=data.get('register_name'),
         acknowledged_by=request.current_user.get('username', 'unknown')
     ))
-    return jsonify({'success': success, 'message': '报警已确认' if success else '确认失败'})
+
+    # round 281：确认成功 ≠ 蜂鸣器停了。DO 写失败时蜂鸣器还在响，
+    # 旧实现照样回「报警已确认」—— 操作员站在盘前，界面说确认了、现场还在叫，
+    # 只会以为界面卡了。这里与 `/alarm-output/reset` 对齐：如实分开报两件事。
+    output_ok = manager.get_last_ack_output_ok() if success else True
+    if not success:
+        return jsonify({'success': False, 'message': '确认失败'})
+    if not output_ok:
+        return jsonify({
+            'success': True,
+            'output_ok': False,
+            'message': '报警已确认，但声光消音失败（蜂鸣器可能仍在响）。'
+                       '请检查 DO 通道与通信链路，必要时到现场确认。',
+        }), 200
+    return jsonify({'success': True, 'output_ok': True, 'message': '报警已确认'})
 
 
 @alarms_bp.route('/alarms/statistics', methods=['GET'])
