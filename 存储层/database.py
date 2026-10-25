@@ -1715,6 +1715,111 @@ class Database:
             logger.error(f"数据库备份失败: {e}")
             return None
 
+    #: 恢复时必须存在的表（缺任何一个说明备份不是本系统的库）
+    _REQUIRED_TABLES = ('realtime_data', 'history_data', 'alarm_records')
+
+    def restore_database(self, backup_file: str, *,
+                         safety_copy: bool = True) -> tuple[bool, str]:
+        """从备份文件恢复数据库（round 261）。
+
+        为什么必须补这一步：`backup_database()` 早就有了，但**从来没有恢复路径** ——
+        现场出事后只能手工拷文件，而手工拷有三个坑，每一个都能把数据彻底弄丢：
+
+        1. **备份本身可能是坏的**（备份时磁盘满、进程被杀），从没人验证过；
+        2. **WAL 模式**下只拷 `.db`、留下旧的 `-wal`，SQLite 会把旧日志应用到
+           新文件上 → 库直接损坏；
+        3. 直接覆盖正在使用的库，替换到一半失败就**两头空**。
+
+        所以这里按顺序做：校验备份 → 备份当前库（可选）→ 写临时文件 →
+        `os.replace` 原子替换 → 清掉残留的 `-wal`/`-shm`。
+
+        ⚠️ 调用前必须**停掉写入方**（服务/采集线程），并关闭本实例的连接；
+        运行中恢复会得到"database is locked"或更糟的半新半旧状态。
+
+        Args:
+            backup_file: 备份文件路径。
+            safety_copy: 是否先把当前库另存为 `<db>.pre-restore-<时间>.db`。
+
+        Returns:
+            `(是否成功, 说明)`。失败时**不动**当前库。
+        """
+        import os
+        import shutil
+        from pathlib import Path
+
+        src = Path(backup_file)
+        if not src.exists():
+            return False, f'备份文件不存在: {src}'
+        if src.stat().st_size == 0:
+            return False, f'备份文件是空的（0 字节）: {src}'
+
+        # 1) 备份必须能打开、完整、且有本系统的表
+        try:
+            probe = sqlite3.connect(f'file:{src.as_posix()}?mode=ro', uri=True)
+            try:
+                check = probe.execute('PRAGMA integrity_check').fetchone()[0]
+                if check != 'ok':
+                    return False, f'备份完整性校验失败: {check}'
+                tables = {r[0] for r in probe.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                missing = [t for t in self._REQUIRED_TABLES if t not in tables]
+                if missing:
+                    return False, f'备份缺少必需的表: {missing}'
+            finally:
+                probe.close()
+        except sqlite3.Error as exc:
+            return False, f'备份无法读取: {exc}'
+
+        target = Path(self.db_path)
+        try:
+            # 2) 先把当前库另存一份（万一新备份是"更早但更糟"的状态）
+            if safety_copy and target.exists():
+                stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                safety = target.with_name(f'{target.stem}.pre-restore-{stamp}{target.suffix}')
+                # ⚠️ `with sqlite3.connect(...)` **不会关闭连接**（只提交事务），
+                #    Windows 上留着句柄会让后面的 os.replace 报 WinError 5。
+                live = sqlite3.connect(str(target))
+                dst = sqlite3.connect(str(safety))
+                try:
+                    live.backup(dst)
+                finally:
+                    dst.close()
+                    live.close()
+                logger.warning("恢复前已保存当前库副本: %s", safety)
+
+            # 3) 写到临时文件再原子替换 —— 替换失败时当前库仍然完好
+            staging = target.with_name(target.name + '.restoring')
+            shutil.copyfile(src, staging)
+            # Windows 上偶发句柄未释放（杀毒/索引服务短暂持有），重试几次
+            last_exc: Exception | None = None
+            for attempt in range(5):
+                try:
+                    os.replace(staging, target)
+                    last_exc = None
+                    break
+                except PermissionError as exc:
+                    last_exc = exc
+                    time.sleep(0.1 * (attempt + 1))
+            if last_exc is not None:
+                try:
+                    staging.unlink()
+                except OSError:
+                    pass
+                raise last_exc
+
+            # 4) 清掉残留的 WAL/SHM：否则旧日志会被应用到新文件上，直接损坏
+            for suffix in ('-wal', '-shm'):
+                stale = Path(str(target) + suffix)
+                if stale.exists():
+                    stale.unlink()
+                    logger.warning("恢复后清理了残留文件: %s", stale.name)
+
+            logger.warning("数据库已从备份恢复: %s → %s", src, target)
+            return True, f'已恢复: {src} → {target}'
+        except Exception as exc:      # noqa: BLE001 —— 恢复失败必须原样报给调用方
+            logger.error("数据库恢复失败: %s", exc)
+            return False, f'恢复失败: {exc}'
+
     def _cleanup_old_backups(self, backup_dir: Path, db_name: str, keep: int = 7):
         """清理旧备份文件"""
         try:

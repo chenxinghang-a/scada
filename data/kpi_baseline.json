@@ -1,0 +1,356 @@
+[
+  {
+    "db": "data\\scada.db",
+    "generated_at": "2026-10-25T10:40:32",
+    "has_cleared_column": false,
+    "total": 47751,
+    "first_alarm": "2026-04-29 17:29:02.111239",
+    "last_alarm": "2026-05-08 17:38:45.094872",
+    "span_hours": 216.16,
+    "span_days": 9.01,
+    "alarms_per_hour": 220.9,
+    "alarms_per_day": 5301.69,
+    "rate_within_isa_target": false,
+    "by_level": {
+      "warning": 40378,
+      "critical": 7373
+    },
+    "critical_share": 0.1544,
+    "acknowledged": 81,
+    "ack_rate": 0.0017,
+    "cleared": null,
+    "clear_rate": null,
+    "still_active": null,
+    "note": "该库没有 cleared 列（round 260 之前建的库），\"仍在报警\"无法判定",
+    "bad_actors": [
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_pressure",
+        "alarm_id": "boiler_pressure_high",
+        "count": 362,
+        "share": 0.0076
+      },
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_pressure",
+        "alarm_id": "pressure_high",
+        "count": 231,
+        "share": 0.0048
+      },
+      {
+        "device_id": "schneider_m340_01",
+        "register_name": "ph_value",
+        "alarm_id": "ph_low",
+        "count": 171,
+        "share": 0.0036
+      },
+      {
+        "device_id": "power_meter_01",
+        "register_name": "current",
+        "alarm_id": "current_high",
+        "count": 130,
+        "share": 0.0027
+      },
+      {
+        "device_id": "pressure_sensor_01",
+        "register_name": "pressure",
+        "alarm_id": "pressure_high",
+        "count": 103,
+        "share": 0.0022
+      },
+      {
+        "device_id": "pressure_sensor_01",
+        "register_name": "pressure",
+        "alarm_id": "pressure_low",
+        "count": 92,
+        "share": 0.0019
+      },
+      {
+        "device_id": "temp_sensor_01",
+        "register_name": "temperature",
+        "alarm_id": "temp_low",
+        "count": 76,
+        "share": 0.0016
+      },
+      {
+        "device_id": "temp_sensor_01",
+        "register_name": "temperature",
+        "alarm_id": "temp_high",
+        "count": 74,
+        "share": 0.0015
+      },
+      {
+        "device_id": "siemens_plc_01",
+        "register_name": "pressure",
+        "alarm_id": "pressure_high",
+        "count": 61,
+        "share": 0.0013
+      },
+      {
+        "device_id": "temp_sensor_01",
+        "register_name": "temperature_ch5",
+        "alarm_id": "env_temp_high",
+        "count": 46,
+        "share": 0.001
+      }
+    ],
+    "bad_actor_share": 0.0282,
+    "bad_actor_within_limit": true,
+    "duplicate_definitions": [
+      {
+        "device_id": "edge_decision",
+        "register_name": "auto",
+        "rule_count": 20931,
+        "sample_ids": [
+          "edge_1778170434",
+          "edge_1778170435",
+          "edge_1778170436",
+          "edge_1778170437",
+          "edge_1778170439"
+        ],
+        "truncated": true
+      },
+      {
+        "device_id": "power_meter_01",
+        "register_name": "voltage",
+        "rule_count": 2,
+        "sample_ids": [
+          "voltage_low",
+          "voltage_high"
+        ],
+        "truncated": false
+      },
+      {
+        "device_id": "pressure_sensor_01",
+        "register_name": "pressure",
+        "rule_count": 2,
+        "sample_ids": [
+          "pressure_low",
+          "pressure_high"
+        ],
+        "truncated": false
+      },
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_pressure",
+        "rule_count": 2,
+        "sample_ids": [
+          "boiler_pressure_high",
+          "pressure_high"
+        ],
+        "truncated": false
+      },
+      {
+        "device_id": "siemens_plc_01",
+        "register_name": "pressure",
+        "rule_count": 2,
+        "sample_ids": [
+          "pressure_high",
+          "pressure_low"
+        ],
+        "truncated": false
+      },
+      {
+        "device_id": "temp_sensor_01",
+        "register_name": "temperature",
+        "rule_count": 2,
+        "sample_ids": [
+          "temp_low",
+          "temp_high"
+        ],
+        "truncated": false
+      }
+    ],
+    "chatter_pairs": 26096,
+    "chatter_share": 0.5465,
+    "worst_10min_buckets": [
+      {
+        "bucket": "2026-05-08 14:30",
+        "count": 3330
+      },
+      {
+        "bucket": "2026-05-08 14:20",
+        "count": 3045
+      },
+      {
+        "bucket": "2026-05-08 14:00",
+        "count": 1958
+      },
+      {
+        "bucket": "2026-05-08 14:10",
+        "count": 1929
+      },
+      {
+        "bucket": "2026-05-08 14:40",
+        "count": 1866
+      }
+    ],
+    "level_ack_cross": {
+      "critical|unack": 7373,
+      "warning|unack": 40297,
+      "warning|ack": 81
+    }
+  },
+  {
+    "db": "data\\scada_simulated.db",
+    "generated_at": "2026-10-25T10:40:32",
+    "has_cleared_column": false,
+    "total": 105028,
+    "first_alarm": "2026-05-08 17:57:11.673444",
+    "last_alarm": "2026-05-31 22:19:59.608076",
+    "span_hours": 556.38,
+    "span_days": 23.18,
+    "alarms_per_hour": 188.77,
+    "alarms_per_day": 4530.49,
+    "rate_within_isa_target": false,
+    "by_level": {
+      "critical": 101680,
+      "warning": 3348
+    },
+    "critical_share": 0.9681,
+    "acknowledged": 103509,
+    "ack_rate": 0.9855,
+    "cleared": null,
+    "clear_rate": null,
+    "still_active": null,
+    "note": "该库没有 cleared 列（round 260 之前建的库），\"仍在报警\"无法判定",
+    "bad_actors": [
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_temperature",
+        "alarm_id": "temp_high",
+        "count": 43505,
+        "share": 0.4142
+      },
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_temperature",
+        "alarm_id": "boiler_temp_high",
+        "count": 43501,
+        "share": 0.4142
+      },
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_pressure",
+        "alarm_id": "boiler_pressure_high",
+        "count": 7309,
+        "share": 0.0696
+      },
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_pressure",
+        "alarm_id": "pressure_high",
+        "count": 7309,
+        "share": 0.0696
+      },
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_temperature",
+        "alarm_id": "temp_low",
+        "count": 1066,
+        "share": 0.0101
+      },
+      {
+        "device_id": "schneider_m340_01",
+        "register_name": "ph_value",
+        "alarm_id": "ph_low",
+        "count": 952,
+        "share": 0.0091
+      },
+      {
+        "device_id": "abb_m4m_01",
+        "register_name": "voltage_a",
+        "alarm_id": "voltage_low",
+        "count": 656,
+        "share": 0.0062
+      },
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_pressure",
+        "alarm_id": "pressure_low",
+        "count": 375,
+        "share": 0.0036
+      },
+      {
+        "device_id": "hollysys_lk_01",
+        "register_name": "distill_temperature",
+        "alarm_id": "env_temp_high",
+        "count": 299,
+        "share": 0.0028
+      },
+      {
+        "device_id": "abb_m4m_01",
+        "register_name": "voltage_a",
+        "alarm_id": "voltage_high",
+        "count": 56,
+        "share": 0.0005
+      }
+    ],
+    "bad_actor_share": 1.0,
+    "bad_actor_within_limit": false,
+    "duplicate_definitions": [
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_pressure",
+        "rule_count": 3,
+        "sample_ids": [
+          "pressure_high",
+          "boiler_pressure_high",
+          "pressure_low"
+        ],
+        "truncated": false
+      },
+      {
+        "device_id": "siemens_1500_01",
+        "register_name": "boiler_temperature",
+        "rule_count": 3,
+        "sample_ids": [
+          "temp_low",
+          "temp_high",
+          "boiler_temp_high"
+        ],
+        "truncated": false
+      },
+      {
+        "device_id": "abb_m4m_01",
+        "register_name": "voltage_a",
+        "rule_count": 2,
+        "sample_ids": [
+          "voltage_high",
+          "voltage_low"
+        ],
+        "truncated": false
+      }
+    ],
+    "chatter_pairs": 101945,
+    "chatter_share": 0.9706,
+    "worst_10min_buckets": [
+      {
+        "bucket": "2026-05-29 05:10",
+        "count": 1204
+      },
+      {
+        "bucket": "2026-05-29 04:00",
+        "count": 1197
+      },
+      {
+        "bucket": "2026-05-29 02:00",
+        "count": 1196
+      },
+      {
+        "bucket": "2026-05-29 01:30",
+        "count": 1194
+      },
+      {
+        "bucket": "2026-05-29 18:50",
+        "count": 1194
+      }
+    ],
+    "level_ack_cross": {
+      "critical|unack": 1435,
+      "critical|ack": 100245,
+      "warning|unack": 84,
+      "warning|ack": 3264
+    }
+  }
+]

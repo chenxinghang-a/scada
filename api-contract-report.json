@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-24T03:33:17+00:00",
+  "generated_at": "2026-10-25T02:50:03+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -625,7 +625,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_data.py:103",
       "source_file": "data.ts",
-      "source_line": 99
+      "source_line": 105
     },
     {
       "method": "GET",
@@ -635,7 +635,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_data.py:91",
       "source_file": "data.ts",
-      "source_line": 73
+      "source_line": 79
     },
     {
       "method": "GET",
@@ -645,7 +645,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_data.py:91",
       "source_file": "data.ts",
-      "source_line": 77
+      "source_line": 83
     },
     {
       "method": "GET",
@@ -655,7 +655,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_data.py:91",
       "source_file": "data.ts",
-      "source_line": 87
+      "source_line": 93
     },
     {
       "method": "GET",
@@ -665,7 +665,7 @@
       "status": "match",
       "detail": "精确匹配 api_data.py:79",
       "source_file": "data.ts",
-      "source_line": 53
+      "source_line": 59
     },
     {
       "method": "GET",
@@ -925,7 +925,7 @@
       "status": "match",
       "detail": "精确匹配 api_data.py:205",
       "source_file": "data.ts",
-      "source_line": 129
+      "source_line": 135
     },
     {
       "method": "POST",
@@ -935,7 +935,7 @@
       "status": "match",
       "detail": "精确匹配 api_data.py:205",
       "source_file": "data.ts",
-      "source_line": 137
+      "source_line": 143
     },
     {
       "method": "POST",
@@ -945,7 +945,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_data.py:165",
       "source_file": "data.ts",
-      "source_line": 105
+      "source_line": 111
     },
     {
       "method": "POST",
@@ -955,7 +955,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_data.py:165",
       "source_file": "data.ts",
-      "source_line": 113
+      "source_line": 119
     },
     {
       "method": "POST",
@@ -965,7 +965,7 @@
       "status": "match",
       "detail": "结构匹配（参数名归一）api_data.py:165",
       "source_file": "data.ts",
-      "source_line": 121
+      "source_line": 127
     },
     {
       "method": "GET",

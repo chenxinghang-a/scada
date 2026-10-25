@@ -1649,6 +1649,95 @@ class AlarmManager:
         alarm_message = rule_config.get('name', '未知报警')
         logger.info(f"报警通知: [{alarm_level}] {alarm_message} - {device_id}/{register_name}")
 
+    def raise_external_alarm(self, alarm_id: str, message: str, level: str = 'warning',
+                             device_id: str = 'external',
+                             register_name: str = 'event',
+                             value: float = 0.0,
+                             timestamp: datetime | None = None) -> bool:
+        """把**外部事件**（边缘决策、上位机联动、脚本）当作一等报警处理。
+
+        round 261：`run.py` 的 `edge_set_alarm` 原来是直接
+        `database.insert_alarm(...)`，**绕开整个报警管理层**：
+
+        * 没有去重 —— 同一事件每秒都能落一条；
+        * 不进升级跟踪 —— 没人确认也不会升级；
+        * 不触发声光/广播/WebSocket —— 现场根本不知道；
+        * `alarm_id` 用的是 `edge_{当前秒}`，**每秒一个新 ID**，
+          `insert_alarm` 那句「同一条未确认记录」永远命中不了，
+          于是 9 天里同一个「管道压力超限」堆了 **20931 条**同义记录
+          （真实库 `data/scada.db` 实测，占全库报警的 44%）。
+
+        这里给它一条正式入口：注册成一条规则（让活跃报警列表能显示名称/级别）、
+        建立报警状态（进得了 `get_active_alarms`）、再走 `_trigger_alarm`
+        的完整链路（去重 → 数据库 → 声光 → 广播 → WebSocket → 升级）。
+
+        Args:
+            alarm_id: 报警ID。**必须稳定**（同一类事件用同一个 ID），
+                否则去重与计数全部失效 —— 用 `hashlib` 从消息内容派生即可。
+            message: 报警文案（现场操作员要照着它动作）。
+            level: 级别（critical/warning/...）。
+            device_id / register_name: 归属（外部事件用 'external'/'event'）。
+            value: 触发值（外部事件通常没有，默认 0）。
+            timestamp: 触发时刻，缺省取当前时间。
+
+        Returns:
+            bool: 是否登记成功（重复/被抑制也算成功登记，返回 True）。
+        """
+        timestamp = timestamp or datetime.now()
+        state_key = (alarm_id, device_id, register_name)
+
+        # 注册成"规则"，否则 get_active_alarms 拿不到名称/级别
+        with self._state_lock:
+            if alarm_id not in self.rules:
+                self.rules[alarm_id] = {
+                    'id': alarm_id,
+                    'name': message,
+                    'level': level,
+                    'device_id': device_id,
+                    'register_name': register_name,
+                    'condition': 'external',
+                    'threshold': 0,
+                    'enabled': True,
+                    'external': True,
+                }
+
+            state = self.alarm_states.get(state_key)
+            if state is None:
+                self.alarm_states[state_key] = {
+                    'alarm_id': alarm_id,
+                    'device_id': device_id,
+                    'register_name': register_name,
+                    'first_trigger_time': timestamp,
+                    'last_trigger_time': timestamp,
+                    'trigger_count': 1,
+                    'confirmed': False,
+                    'acknowledged': False,
+                    'pending': False,
+                }
+            else:
+                state['last_trigger_time'] = timestamp
+                state['trigger_count'] = state.get('trigger_count', 0) + 1
+
+        self._trigger_alarm(self.rules[alarm_id], device_id, register_name,
+                            value, timestamp)
+        return True
+
+    def clear_external_alarm(self, alarm_id: str, device_id: str = 'external',
+                             register_name: str = 'event',
+                             timestamp: datetime | None = None) -> bool:
+        """外部事件恢复：清内存状态 + 落库标记已恢复（与阈值报警同一套语义）。"""
+        state_key = (alarm_id, device_id, register_name)
+        with self._state_lock:
+            existed = self.alarm_states.pop(state_key, None) is not None
+        if not existed:
+            return False
+        if self._escalation_manager:
+            self._escalation_manager.remove_alarm(alarm_id, device_id, register_name)
+        self._clear_alarm_record(alarm_id, device_id, register_name,
+                                 timestamp or datetime.now())
+        logger.info("外部报警已恢复: %s - %s/%s", alarm_id, device_id, register_name)
+        return True
+
     def get_active_alarms(self) -> list[dict[str, Any]]:
         """
         获取活动报警

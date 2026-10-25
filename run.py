@@ -357,23 +357,32 @@ def main():
 
         # 注册边缘决策的动作回调
         def edge_set_alarm(message, level='warning'):
-            """边缘决策报警回调"""
+            """边缘决策报警回调。
+
+            round 261：原来这里直接 `database.insert_alarm(alarm_id=f'edge_{秒}')` ——
+            绕开了报警管理层（无去重、无升级、不触发声光/广播/WebSocket），
+            而且**每秒生成一个新 alarm_id**，`insert_alarm` 的「同一条未确认记录」
+            永远命中不了：真实库 `data/scada.db` 里 9 天堆了 **20931 条**同义记录
+            （同一个「管道压力超限」），占全库报警 44%。
+            现在改为按消息内容派生**稳定 ID**，并走 `raise_external_alarm`
+            的完整链路。
+            """
+            import hashlib
             from datetime import datetime
-            logger.warning(f"[边缘决策报警] [{level.upper()}] {message}")
-            # 记录到数据库
+
+            logger.warning(f"[边缘决策报警] [{str(level).upper()}] {message}")
+            digest = hashlib.sha1(str(message).encode('utf-8')).hexdigest()[:10]
             try:
-                database.insert_alarm(
-                    alarm_id=f'edge_{int(datetime.now().timestamp())}',
+                alarm_manager.raise_external_alarm(
+                    alarm_id=f'edge_{digest}',
+                    message=str(message),
+                    level=level,
                     device_id='edge_decision',
                     register_name='auto',
-                    alarm_level=level,
-                    alarm_message=message,
-                    threshold=0,
-                    actual_value=0,
-                    timestamp=datetime.now()
+                    timestamp=datetime.now(),
                 )
             except Exception as e:
-                logger.error(f"边缘决策报警记录失败: {e}")
+                logger.error(f"边缘决策报警登记失败: {e}")
 
         edge_decision.register_action('set_alarm', edge_set_alarm)
 
