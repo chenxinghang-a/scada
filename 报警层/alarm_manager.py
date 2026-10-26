@@ -1406,12 +1406,22 @@ class AlarmManager:
         if self._escalation_manager:
             self._escalation_manager.record_alarm(rule_id, device_id, register_name)
 
-        # ISA-18.2: 告警洪水检测 — 抑制低优先级告警
+        # ISA-18.2: 告警洪水检测 —— 抑制的是**播报**，不是**记录**。
+        #
+        # round 282：原实现在这里直接 `return`，于是被抑制的报警：
+        #   · **不落库** —— 历史/审计里根本没有这一条，而洪水期恰恰是最需要
+        #     事后复盘的时候；报表上的"报警总数"也会比现场真实发生的少；
+        #   · 不进报警统计；
+        #   · 但上面 1406 行**已经**登记了升级跟踪 → 升级链照样往下走。
+        # 而 `acknowledge_alarm()` 以数据库行是否被更新为准
+        # （`database.acknowledge_alarm` → `cursor.rowcount > 0`）：
+        # 没有行 → 确认**永远失败** → 升级管理器收不到确认 →
+        # 一条**看不见、也关不掉**的报警一路升到最高级，半夜给三级主管打电话。
+        #
+        # 正确语义：抑制"声光/广播/前端/邮件短信"这些**播报**通道，
+        # 落库与统计照旧（ISA-18.2：抑制播报不得丢失记录）。
         severity = rule_config.get('level', 'medium')
-        should_emit, reason = self._flood_detector.record_alarm(severity)
-        if not should_emit:
-            logger.debug(f"告警被洪水检测器抑制: {rule_id} ({device_id}/{register_name})")
-            return
+        annunciate, flood_reason = self._flood_detector.record_alarm(severity)
         alarm_level = rule_config.get('level', 'warning')
 
         alarm_message = rule_config.get('name', '未知报警')
@@ -1419,6 +1429,7 @@ class AlarmManager:
         alarm_area = rule_config.get('area', 'all')
 
         # 1. 记录数据库（同一报警未确认时只更新计数，不重复插入）
+        #    **洪水抑制也走这里** —— 见上面的说明。
         self.database.insert_alarm(
             alarm_id=rule_id,
             device_id=device_id,
@@ -1430,11 +1441,23 @@ class AlarmManager:
             timestamp=timestamp
         )
 
-        logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")
+        if annunciate:
+            logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")
+        else:
+            # 用 WARNING 而不是 DEBUG：被抑制的报警必须能在日志里查到 id，
+            # 否则"这条报警为什么没弹窗/没响"永远查不清。
+            logger.warning(
+                f"报警已记录但**抑制播报**（{flood_reason}）: "
+                f"{alarm_message} - {device_id}/{register_name} = {value}"
+            )
 
-        # 记录到统计分析器
+        # 记录到统计分析器（抑制也统计：报警率指标要反映真实发生量）
         if self._alarm_statistics:
             self._alarm_statistics.record_alarm_trigger(rule_id, device_id, register_name, timestamp)
+
+        # 洪水期：到此为止。落库 + 统计 + 升级跟踪都已就位，只跳过下面的播报。
+        if not annunciate:
+            return
 
         # 2. 声光报警器输出（Modbus DO -> 灯塔+蜂鸣器）
         if self.alarm_output and self.alarm_output.enabled:
@@ -1869,6 +1892,18 @@ class AlarmManager:
             else:
                 # 没配声光输出 → 不存在"消音失败"，按成功算
                 self._last_ack_output_ok = True
+        else:
+            # round 282：确认**失败**必须留痕。
+            # `database.acknowledge_alarm` 以 `cursor.rowcount > 0` 判定成功 ——
+            # 数据库里没有这条记录时它返回 False，而失败分支此前**一声不响**。
+            # 后果是连锁的：升级管理器只在成功时才收到确认
+            # （见上面 `if success and self._escalation_manager`），
+            # 于是一条"活跃列表里有、历史表里没有"的报警会被**永久**升级跟踪，
+            # 而操作员在界面上点确认毫无反应、也看不到任何原因。
+            logger.warning(
+                "报警确认失败（数据库未更新任何行）: %s - %s/%s by %s"
+                " —— 该报警可能没有落库，升级跟踪不会停止，请检查报警记录写入链路",
+                alarm_id, device_id, register_name, acknowledged_by)
         return success
 
     def get_last_ack_output_ok(self) -> bool:
