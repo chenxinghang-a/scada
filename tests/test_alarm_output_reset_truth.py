@@ -37,6 +37,11 @@ def _bare_output(fail_channels=()):
 
     ao = AlarmOutput.__new__(AlarmOutput)
     ao._lock = threading.RLock()
+    # round 286：I/O 改成用独立的 `_io_lock`（状态锁不再跨网络调用持有），
+    # 以及 DO 通道的熔断状态。裸对象必须把这些字段也备齐。
+    ao._io_lock = threading.RLock()
+    ao._fail_streak = 0
+    ao._circuit_open_until = None
     ao.simulation = False          # 走硬件分支，_write_do 才会真的「失败」
     ao.do_red, ao.do_yellow, ao.do_green, ao.do_buzzer = 0, 1, 2, 3
     ao.current_state = {

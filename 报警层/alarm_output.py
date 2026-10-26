@@ -25,6 +25,16 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+#: Modbus 连接/读写超时（秒）。**必须短** —— 闪烁线程每 250ms 写一次 DO，
+#: 网关断电时默认超时（3~20s）会让 I/O 通道长期被占满（round 286）。
+DEFAULT_MODBUS_TIMEOUT_S = 1.0
+
+#: 连续多少次 DO 写失败后打开熔断
+CIRCUIT_FAIL_THRESHOLD = 3
+
+#: 熔断持续多久（秒）—— 期间不碰 socket、不重连
+CIRCUIT_OPEN_SECONDS = 10.0
+
 
 class AlarmLightPattern:
     """报警灯闪烁模式"""
@@ -90,7 +100,16 @@ class AlarmOutput:
 
         # Modbus客户端（延迟创建）
         self._modbus_client = None
+        #: 状态锁 —— 只保护 `current_state` 这类内存字段，**绝不跨网络 I/O 持有**
         self._lock = threading.Lock()
+        #: DO 写串行锁（round 286）。网络 I/O 只在这把锁里做，与状态锁分开：
+        #: 网关断线时写操作会阻塞数秒，若还持着状态锁，`get_status()`（API）
+        #: 和 `trigger_alarm()`（报警主链路）会一起被堵死。
+        self._io_lock = threading.Lock()
+        #: 连续 DO 写失败次数（成功即清零）
+        self._fail_streak = 0
+        #: 熔断到期时刻（**单调时钟**；None 表示未熔断）
+        self._circuit_open_until: float | None = None
 
         # 闪烁线程（灯）
         self._flash_thread: threading.Thread | None = None
@@ -109,13 +128,26 @@ class AlarmOutput:
             modbus_cfg = self.config.get('modbus', {})
             host = modbus_cfg.get('host', '192.168.1.100')
             port = modbus_cfg.get('port', 502)
-            slave_id = modbus_cfg.get('slave_id', 1)
+            timeout = modbus_cfg.get('timeout', DEFAULT_MODBUS_TIMEOUT_S)
 
             try:
                 from pymodbus.client import ModbusTcpClient
-                self._modbus_client = ModbusTcpClient(host, port=port)
+                try:
+                    # round 286：**必须显式给短超时**。默认超时下，
+                    # 网关断电/网线拔掉时一次 connect 能卡 3~20 秒，
+                    # 而闪烁线程每 250ms 就要写一次 DO —— 见模块顶部说明。
+                    self._modbus_client = ModbusTcpClient(host, port=port,
+                                                          timeout=timeout)
+                except TypeError:
+                    # 老版本 pymodbus 不接受 timeout 关键字
+                    self._modbus_client = ModbusTcpClient(host, port=port)
                 if not self._modbus_client.connect():
                     logger.error(f"报警输出Modbus连接失败: {host}:{port}")
+                    # 连不上的 client 也要关掉，否则每次重试都漏一个 socket
+                    try:
+                        self._modbus_client.close()
+                    except Exception as e:      # noqa: BLE001
+                        logger.debug("关闭失败的 Modbus 客户端时异常（忽略）: %s", e)
                     self._modbus_client = None
                     return None
             except ImportError:
@@ -124,20 +156,66 @@ class AlarmOutput:
 
         return self._modbus_client
 
+    # ==================== DO 写失败熔断（round 286） ====================
+
+    def _circuit_is_open(self) -> bool:
+        """熔断是否处于打开状态（期间**不碰 socket**）。"""
+        until = self._circuit_open_until
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            # 半开：允许下一次尝试（成功则关闭，失败则重新打开）
+            self._circuit_open_until = None
+            logger.info("报警输出 DO 通道熔断到期，恢复尝试（此前连续失败 %d 次）",
+                        self._fail_streak)
+            return False
+        return True
+
+    def _record_do_failure(self, detail: str) -> None:
+        """记录一次 DO 写失败；连续失败达到阈值即打开熔断。"""
+        self._fail_streak += 1
+        if self._fail_streak >= CIRCUIT_FAIL_THRESHOLD and self._circuit_open_until is None:
+            self._circuit_open_until = time.monotonic() + CIRCUIT_OPEN_SECONDS
+            logger.error(
+                "报警输出 DO 通道连续失败 %d 次（%s）—— 熔断 %.0f 秒，"
+                "期间不再尝试连接网关；现场声光可能完全不动作，请检查 DO 通道",
+                self._fail_streak, detail, CIRCUIT_OPEN_SECONDS)
+
+    def _record_do_success(self) -> None:
+        """DO 写成功：清零失败计数并关闭熔断。"""
+        if self._fail_streak or self._circuit_open_until is not None:
+            logger.warning("报警输出 DO 通道恢复（此前连续失败 %d 次）",
+                           self._fail_streak)
+        self._fail_streak = 0
+        self._circuit_open_until = None
+
     def _write_do(self, address: int, value: bool):
         """写DO线圈（硬件/模拟双模式）"""
         if self.simulation:
             logger.debug(f"[模拟] DO{address} -> {'ON' if value else 'OFF'}")
             return True
 
+        # 熔断打开时直接失败返回：不重连、不写 socket。
+        # 这是现场最常见的情形（网关断电），而调用方（闪烁线程每 250ms 一次）
+        # 如果每次都去 connect，会长时间占住 I/O 通道、把整个报警链路拖死。
+        if self._circuit_is_open():
+            logger.debug("报警输出 DO 通道熔断中，跳过写 DO%d", address)
+            return False
+
         try:
             client = self._get_modbus_client()
             if client is None:
+                self._record_do_failure('客户端不可用（连接失败）')
                 return False
             slave_id = self.config.get('modbus', {}).get('slave_id', 1)
             result = client.write_coil(address, value, slave=slave_id)
-            return not result.isError()
+            if result.isError():
+                self._record_do_failure(f'DO{address} 写入返回错误: {result}')
+                return False
+            self._record_do_success()
+            return True
         except Exception as e:
+            self._record_do_failure(f'DO{address} 写入异常: {e}')
             logger.error(f"写DO{address}失败: {e}")
             return False
 
@@ -151,8 +229,13 @@ class AlarmOutput:
         「报警输出已复位（绿灯正常）」，于是 Modbus DO 写失败时——
         **现场红灯/蜂鸣器还在响，界面却说已恢复正常**。声光报警是这个系统的
         安全出口，这种假成功比没有功能更危险。
+
+        round 286：这里**不再持 `self._lock`**（状态锁），改用只串行化 I/O 的
+        `_io_lock`。原来在状态锁内做 4 次网络写，网关一断线就把
+        `trigger_alarm()` / `get_status()` / `acknowledge()` 全部堵在锁上 ——
+        报警链路和 API 一起卡死。
         """
-        with self._lock:
+        with self._io_lock:
             results = [
                 self._write_do(self.do_red, red),
                 self._write_do(self.do_yellow, yellow),
@@ -386,16 +469,17 @@ class AlarmOutput:
     def _buzzer_pulse_loop(self, on_time: float, off_time: float):
         """蜂鸣器脉冲循环（响-停-响-停...）"""
         while self._buzzer_running:
-            with self._lock:
+            # round 286：I/O 用 `_io_lock`，状态锁不跨网络调用持有
+            with self._io_lock:
                 self._write_do(self.do_buzzer, True)
             time.sleep(on_time)
             if not self._buzzer_running:
                 break
-            with self._lock:
+            with self._io_lock:
                 self._write_do(self.do_buzzer, False)
             time.sleep(off_time)
         # 退出时关蜂鸣器
-        with self._lock:
+        with self._io_lock:
             self._write_do(self.do_buzzer, False)
 
     # ==================== 闪烁控制 ====================
@@ -428,12 +512,13 @@ class AlarmOutput:
 
         while self._flash_running:
             self._flash_state = not self._flash_state
-            with self._lock:
+            # round 286：I/O 用 `_io_lock`，状态锁不跨网络调用持有
+            with self._io_lock:
                 self._write_do(do_addr, self._flash_state)
             time.sleep(interval)
 
         # 退出时灭灯（加锁）
-        with self._lock:
+        with self._io_lock:
             self._write_do(do_addr, False)
 
     # ==================== 接口兼容 ====================
@@ -455,8 +540,17 @@ class AlarmOutput:
     # ==================== 状态查询 ====================
 
     def get_status(self) -> dict[str, Any]:
-        """获取当前输出状态"""
+        """获取当前输出状态
+
+        round 286：加上 `do_channel` —— 运维必须能看出"声光通道是不是坏了"。
+        此前网关断线时，状态接口照样显示"红灯亮/蜂鸣器响"（那是**意图**，
+        不是**事实**），没有任何地方能看出 DO 写其实一直在失败。
+        """
         with self._lock:
+            circuit_open = self._circuit_open_until is not None
+            remaining = 0.0
+            if circuit_open:
+                remaining = max(0.0, self._circuit_open_until - time.monotonic())
             return {
                 'enabled': self.enabled,
                 'simulation': self.simulation,
@@ -466,7 +560,14 @@ class AlarmOutput:
                     'yellow_light': self.do_yellow,
                     'green_light': self.do_green,
                     'buzzer': self.do_buzzer
-                }
+                },
+                #: DO 通道健康度（round 286）
+                'do_channel': {
+                    'fail_streak': self._fail_streak,
+                    'circuit_open': circuit_open,
+                    'circuit_remaining_seconds': round(remaining, 1),
+                    'fail_threshold': CIRCUIT_FAIL_THRESHOLD,
+                },
             }
 
     def disconnect(self):
