@@ -49,13 +49,15 @@ DEFAULT_INTERVALS: Dict[str, float] = {
     'performance_metrics': 300,           # 5 分钟（性能历史采样）
     'data_archive': 86400,                # 24 小时
     'data_freshness_watch': 30,           # 30 秒（采集中断看门狗）
+    'device_config_watch': 10,            # 10 秒（devices.yaml 热重载）
     'backup_restore_drill': 86400,        # 24 小时（备份恢复演练）
 }
 
 
 def build_maintenance_tasks(database=None, auth_manager=None, *,
                             archive_days: int = 7, delete_days: int = 30,
-                            alarm_manager=None, device_manager=None) -> List[tuple]:
+                            alarm_manager=None, device_manager=None,
+                            data_collector=None) -> List[tuple]:
     """组装 (名称, 间隔, 说明, 可调用对象) 列表。
 
     依赖为 None 的任务会被跳过（并记录 debug 日志），这样调用方可以只传
@@ -112,6 +114,31 @@ def build_maintenance_tasks(database=None, auth_manager=None, *,
          '采样性能指标（写 metrics.jsonl，供 /performance/metrics/history 读取）',
          _performance_metrics_sample),
     ])
+
+    if device_manager is not None:
+        # 跨轮次保存的 mtime 基线（放闭包里，任务重启即重新建立基线）
+        _device_cfg_state: Dict[str, Any] = {}
+
+        def _device_config_watch():
+            """设备配置文件自动热重载（round 285）。
+
+            round 283 给了 `POST /api/devices/reload`，但那要**人去点一下**。
+            现场改设备清单（加一台仪表、停一台旧设备）本质是"改配置 → 生效"，
+            不该要求运维记得调接口、更不该重启进程。
+
+            敢做成自动，是因为 round 284 的 fail-closed 守卫：
+            写坏/清空的配置会被拒绝并保留原表，**最坏情况只是这次改动不生效**。
+            """
+            from core.device_config_watch import watch_once
+            return watch_once(device_manager, data_collector,
+                              state=_device_cfg_state)
+
+        tasks.append((
+            'device_config_watch',
+            DEFAULT_INTERVALS['device_config_watch'],
+            '监视 devices.yaml 的 mtime，变化即重载配置并同步采集任务',
+            _device_config_watch,
+        ))
 
     if database is not None and alarm_manager is not None:
         def _data_freshness_watch():
@@ -203,7 +230,8 @@ def build_maintenance_tasks(database=None, auth_manager=None, *,
 def register_maintenance_tasks(database=None, auth_manager=None, *,
                                archive_days: int = 7, delete_days: int = 30,
                                intervals: Optional[Dict[str, float]] = None,
-                               alarm_manager=None, device_manager=None) -> List[str]:
+                               alarm_manager=None, device_manager=None,
+                               data_collector=None) -> List[str]:
     """把所有维护任务注册到 ``task_manager``（不启动）。
 
     Args:
@@ -235,7 +263,8 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
 def start_maintenance(database=None, auth_manager=None, *,
                       archive_days: int = 7, delete_days: int = 30,
                       intervals: Optional[Dict[str, float]] = None,
-                      alarm_manager=None, device_manager=None) -> List[str]:
+                      alarm_manager=None, device_manager=None,
+                      data_collector=None) -> List[str]:
     """注册并启动全部维护任务（幂等）。
 
     重复调用不会产生第二套线程 —— 已处于 running 状态的任务会被
@@ -244,7 +273,8 @@ def start_maintenance(database=None, auth_manager=None, *,
     names = register_maintenance_tasks(
         database, auth_manager, archive_days=archive_days,
         delete_days=delete_days, intervals=intervals,
-        alarm_manager=alarm_manager, device_manager=device_manager)
+        alarm_manager=alarm_manager, device_manager=device_manager,
+        data_collector=data_collector)
     started = [n for n in names if task_manager.start(n)]
     logger.info("维护任务已启动: %s", ', '.join(started) or '（无）')
     return started
