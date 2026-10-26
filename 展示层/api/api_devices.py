@@ -195,6 +195,19 @@ def reload_device_config():
             'message': f'设备配置重载失败（配置文件可能有语法错误）: {e}',
         }), 400
 
+    # round 284：**被拒绝的重载绝不能继续往下走**。
+    # `reload_config` 在解析失败 / 解析成 0 台设备时保留原配置表并给出
+    # `rejected` —— 如果这里还去 `sync_device_tasks()`，差集就是"全部移除"，
+    # 采集任务被全部停掉，**现场所有设备停止采集**，而接口回的是成功。
+    rejected = diff.get('rejected')
+    if rejected:
+        logger.error("设备配置重载被拒绝，未做任何变更: %s", rejected)
+        return jsonify({
+            'success': False,
+            'message': f'设备配置未生效：{rejected}',
+            'config_diff': diff,
+        }), 400
+
     sync = {'started': [], 'stopped': [], 'unchanged': [], 'skipped': True}
     if data_collector is not None:
         try:

@@ -157,24 +157,53 @@ class DeviceManager:
         # 加载设备配置
         self.load_config()
 
-    def _load_config_into(self, target: dict) -> None:
+    def _load_config_into(self, target: dict) -> bool:
         """把配置文件解析进 `target`（**不触碰 `self.devices`**）。
 
         之所以拆出来：热重载必须「先解析完、再原子替换」，
         不能直接往正在被别的线程迭代的 `self.devices` 里写。
+
+        Returns:
+            bool: **是否解析成功**。
+
+        round 284：原实现 `except Exception: logger.error(...)` 把失败**吞掉**，
+        调用方完全不知道 `target` 是空的。于是热重载遇到写坏的 yaml / 文件被清空 /
+        文件不存在时，会拿一张**空表**去替换 `self.devices` ——
+        **全部设备从配置表里消失**，紧接着采集任务被全部停掉，
+        而接口回的是 `success: true`「移除 N 台设备」。
+
+        一次保存失误 = 现场全部设备停止采集，且没有任何错误提示。
+        失败必须能被调用方看见（fail-closed）。
         """
         try:
             config_file = paths.resolve(self.config_path)
             if not config_file.exists():
                 logger.error(f"配置文件不存在: {self.config_path}")
-                return
+                return False
 
             with open(config_file, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f) or {}
 
+            if not isinstance(config, dict):
+                logger.error(
+                    "设备配置文件顶层不是映射（期望 `devices:` 列表），拒绝使用: %s",
+                    type(config).__name__)
+                return False
+
             # 解析设备配置
             devices_config = config.get('devices', [])
+            if devices_config is None:
+                devices_config = []
+            if not isinstance(devices_config, list):
+                logger.error(
+                    "设备配置文件的 `devices` 不是列表（实际是 %s），拒绝使用",
+                    type(devices_config).__name__)
+                return False
+
             for device_config in devices_config:
+                if not isinstance(device_config, dict):
+                    logger.error("设备配置条目不是映射，跳过: %r", device_config)
+                    continue
                 device_id = device_config.get('id')
                 if device_id:
                     target[device_id] = device_config
@@ -188,18 +217,31 @@ class DeviceManager:
                 proto_count[p] = proto_count.get(p, 0) + 1
             summary = ', '.join(f"{k}:{v}" for k, v in proto_count.items())
             logger.info(f"共加载 {len(target)} 个设备 ({summary})")
+            return True
 
         except Exception as e:
             logger.error(f"加载配置文件异常: {e}")
+            return False
 
-    def load_config(self):
-        """加载设备配置文件（整体替换，保证读取方永远看到完整的一张表）"""
+    def load_config(self) -> bool:
+        """加载设备配置文件（整体替换，保证读取方永远看到完整的一张表）
+
+        Returns:
+            bool: 是否加载成功。**失败时保留原设备表**（round 284）——
+            启动阶段解析失败还能靠"表是空的"看出来，运行期热重载失败时
+            把表清空就等于把所有设备删了。
+        """
         new_devices: dict[str, Any] = {}
-        self._load_config_into(new_devices)
+        if not self._load_config_into(new_devices):
+            logger.error(
+                "设备配置加载失败，保留原有设备表（%d 台）: %s",
+                len(self.devices), self.config_path)
+            return False
         with self._lock:
             self.devices = new_devices
+        return True
 
-    def reload_config(self) -> dict[str, Any]:
+    def reload_config(self, allow_empty: bool = False) -> dict[str, Any]:
         """热重载设备配置（运行时调用，不会中断已有连接）
 
         实现要点：**先在临时字典里解析完，再一次性原子替换** `self.devices`。
@@ -210,17 +252,43 @@ class DeviceManager:
         `RuntimeError: dictionary changed size during iteration`，
         或者静默漏掉一整批设备（表现为「重载后一段时间内某些设备不采集」）。
 
+        Args:
+            allow_empty: 允许把设备表重载成**空表**。默认 False ——
+                见下面的 `rejected` 说明。
+
         Returns:
-            dict: `{'added': [...], 'removed': [...], 'kept': [...]}`
+            dict: `{'added': [...], 'removed': [...], 'kept': [...],
+                   'rejected': str | None}`
             —— round 283：返回值是给**采集器**用的。重载只改配置表，
             采集器的定时器不会自己跟着变（删掉的设备会一直重试采集、
             新增的设备永远不采），调用方必须拿这个差集去
             `DataCollector.sync_device_tasks()`。
+
+            `rejected` 非空表示**本次重载被拒绝、配置表原样保留**
+            （round 284）。两种拒绝情形：
+            · 配置文件解析失败（写坏的 yaml / 顶层不是映射 / devices 不是列表 /
+              文件不存在）；
+            · 解析结果是 0 台设备，而原配置有设备 —— 典型是文件被清空、
+              或编辑器"先清空再写入"的中间态。此时若照旧替换，采集任务会被
+              全部停掉，**现场所有设备停止采集**，而接口还会报成功。
         """
         old_ids = set(self.devices.keys())
 
         new_devices: dict[str, Any] = {}
-        self._load_config_into(new_devices)
+        if not self._load_config_into(new_devices):
+            reason = (f'配置文件解析失败（{self.config_path}），已保留原配置'
+                      f'（{len(old_ids)} 台设备）')
+            logger.error("设备配置重载被拒绝: %s", reason)
+            return {'added': [], 'removed': [], 'kept': sorted(old_ids),
+                    'rejected': reason}
+
+        if not new_devices and old_ids and not allow_empty:
+            reason = (f'解析结果为 0 台设备，而原配置有 {len(old_ids)} 台 —— '
+                      f'疑似文件被清空或写坏，已保留原配置')
+            logger.error("设备配置重载被拒绝: %s", reason)
+            return {'added': [], 'removed': [], 'kept': sorted(old_ids),
+                    'rejected': reason}
+
         with self._lock:
             self.devices = new_devices
 
@@ -239,6 +307,7 @@ class DeviceManager:
             'added': added,
             'removed': removed,
             'kept': sorted(new_ids & old_ids),
+            'rejected': None,
         }
 
     def get_device_config(self, device_id: str) -> dict[str, Any] | None:
