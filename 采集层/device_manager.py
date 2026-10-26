@@ -199,7 +199,7 @@ class DeviceManager:
         with self._lock:
             self.devices = new_devices
 
-    def reload_config(self):
+    def reload_config(self) -> dict[str, Any]:
         """热重载设备配置（运行时调用，不会中断已有连接）
 
         实现要点：**先在临时字典里解析完，再一次性原子替换** `self.devices`。
@@ -209,6 +209,13 @@ class DeviceManager:
         中间态（空表或半张表）会让它抛
         `RuntimeError: dictionary changed size during iteration`，
         或者静默漏掉一整批设备（表现为「重载后一段时间内某些设备不采集」）。
+
+        Returns:
+            dict: `{'added': [...], 'removed': [...], 'kept': [...]}`
+            —— round 283：返回值是给**采集器**用的。重载只改配置表，
+            采集器的定时器不会自己跟着变（删掉的设备会一直重试采集、
+            新增的设备永远不采），调用方必须拿这个差集去
+            `DataCollector.sync_device_tasks()`。
         """
         old_ids = set(self.devices.keys())
 
@@ -219,14 +226,20 @@ class DeviceManager:
 
         new_ids = set(self.devices.keys())
 
-        added = new_ids - old_ids
-        removed = old_ids - new_ids
+        added = sorted(new_ids - old_ids)
+        removed = sorted(old_ids - new_ids)
         if added:
             logger.info(f"新增设备: {added}")
         if removed:
             for did in removed:
                 self.disconnect_device(did)
             logger.info(f"移除设备: {removed}")
+
+        return {
+            'added': added,
+            'removed': removed,
+            'kept': sorted(new_ids & old_ids),
+        }
 
     def get_device_config(self, device_id: str) -> dict[str, Any] | None:
         """获取设备配置"""

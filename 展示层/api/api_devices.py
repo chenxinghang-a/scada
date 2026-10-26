@@ -166,6 +166,65 @@ def update_device(device_id):
     return jsonify({'success': True, 'message': f'设备 {device_id} 更新成功'})
 
 
+@devices_bp.route('/devices/reload', methods=['POST'])
+@_require_engineer
+def reload_device_config():
+    """热重载设备配置（`配置/devices.yaml`）并**同步采集任务**。
+
+    round 283：此前改设备配置只能重启进程。`DeviceManager.reload_config()`
+    虽然存在，但没有任何调用方；而且它只替换配置表 —— 采集器的定时器
+    不会跟着变：
+
+    * 配置里删掉/禁用的设备 → 定时器照旧跑，`get_client()` 找不到配置 →
+      每次采集失败 → 退避 → **无限重试**（日志刷「设备 xxx 配置不存在」，
+      还给一台不存在的设备累计失败计数、可能触发「设备离线」报警）；
+    * 配置里新增的设备 → 没有定时器，**永远不采集**（界面上有配置没数据，
+      看起来像设备坏了）。
+
+    所以这里必须两步一起做：先 reload 配置表，再按差集同步采集任务。
+    """
+    device_manager = current_app.device_manager
+    data_collector = getattr(current_app, 'data_collector', None)
+
+    try:
+        diff = device_manager.reload_config() or {}
+    except Exception as e:      # noqa: BLE001 —— 配置文件坏了要如实报给运维
+        logger.error("设备配置热重载失败: %s", e)
+        return jsonify({
+            'success': False,
+            'message': f'设备配置重载失败（配置文件可能有语法错误）: {e}',
+        }), 400
+
+    sync = {'started': [], 'stopped': [], 'unchanged': [], 'skipped': True}
+    if data_collector is not None:
+        try:
+            sync = data_collector.sync_device_tasks()
+        except Exception as e:      # noqa: BLE001
+            logger.error("设备任务同步失败: %s", e)
+            return jsonify({
+                'success': False,
+                'message': f'配置已重载，但同步采集任务失败: {e}',
+                'config_diff': diff,
+            }), 500
+
+    get_auth_manager().log_operation(
+        request.current_user['username'], 'reload_device_config',
+        f"重载设备配置: 新增{diff.get('added')}, 移除{diff.get('removed')}, "
+        f"采集启动{sync.get('started')}, 停止{sync.get('stopped')}")
+
+    return jsonify({
+        'success': True,
+        'message': (
+            f"设备配置已重载：新增 {len(diff.get('added') or [])} 台，"
+            f"移除 {len(diff.get('removed') or [])} 台；"
+            f"采集任务启动 {len(sync.get('started') or [])} 个，"
+            f"停止 {len(sync.get('stopped') or [])} 个"
+        ),
+        'config_diff': diff,
+        'task_sync': sync,
+    })
+
+
 @devices_bp.route('/devices/<device_id>', methods=['DELETE'])
 @_require_engineer
 def delete_device(device_id):

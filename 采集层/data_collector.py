@@ -939,8 +939,72 @@ class DataCollector:
         # 导致**设备删除失败、追踪数据残留**（也就是这段代码本来要防的内存泄漏）。
         self._forget_device_state(device_id)
 
-    #: 所有「按设备索引」的运行期状态容器 —— 删除设备时必须逐个清理。
-    #: round 274：`_device_intervals` 之前**漏了**，于是 `get_stats()` 里
+    def sync_device_tasks(self) -> dict[str, Any]:
+        """把正在跑的采集任务对齐到**当前设备配置**（配置热重载用）。
+
+        round 283：`DeviceManager.reload_config()` 早就存在，但它只替换配置表 ——
+        采集器完全不知道，于是：
+
+        * 配置里**删掉 / 禁用**的设备：定时器照旧每 N 秒跑一次，而
+          `get_client()` 已经找不到它的配置 → 每次采集都失败 → 退避 →
+          **无限重试**。日志刷 `设备 xxx 配置不存在`，还给一台不存在的设备
+          累计失败计数、可能触发「设备离线」报警；
+        * 配置里**新增**的设备：没有定时器，**永远不采集** ——
+          界面上有配置、没有数据，看起来像设备坏了，实际是没人拉它。
+
+        本方法按 `get_all_devices()`（只算 `enabled` 的）做一次差集：
+        缺的补 `start_device_task`，多的调 `remove_device_task`。
+
+        Returns:
+            dict: `{'started': [...], 'stopped': [...], 'unchanged': [...],
+                   'skipped': bool}`
+            `skipped=True` 表示采集器没在跑（启动流程自己会全量拉起，
+            这里什么都不该做）。
+        """
+        if not self.running:
+            logger.info("采集器未运行，跳过设备任务同步（启动时会全量拉起）")
+            return {'started': [], 'stopped': [], 'unchanged': [], 'skipped': True}
+
+        manager = getattr(self, 'device_manager', None)
+        if manager is None:
+            return {'started': [], 'stopped': [], 'unchanged': [], 'skipped': True}
+
+        devices = manager.get_all_devices() or {}
+        desired = {
+            dev_id for dev_id, cfg in devices.items()
+            if (cfg or {}).get('enabled', True)
+        }
+
+        # ⚠️ 差集在锁内算完就放锁：`start_device_task` / `remove_device_task`
+        # 自己也会拿 `_tasks_lock`，而它是**非可重入**的 Lock ——
+        # 持锁调用会直接把自己锁死（表现为整个采集器静默停摆）。
+        with self._tasks_lock:
+            running = set(self.tasks)
+
+        to_start = sorted(desired - running)
+        to_stop = sorted(running - desired)
+        unchanged = sorted(desired & running)
+
+        for device_id in to_stop:
+            self.remove_device_task(device_id)
+            logger.info("设备配置已移除/禁用，停止采集任务: %s", device_id)
+
+        for device_id in to_start:
+            self.start_device_task(device_id, devices.get(device_id) or {})
+            logger.info("设备配置新增，启动采集任务: %s", device_id)
+
+        if to_start or to_stop:
+            logger.warning("设备采集任务已按配置同步: 启动 %s，停止 %s",
+                           to_start, to_stop)
+
+        return {
+            'started': to_start,
+            'stopped': to_stop,
+            'unchanged': unchanged,
+            'skipped': False,
+        }
+
+    #: 所有「按设备索引」的运行期状态容器 —— 删除设备时必须逐个清理。    #: round 274：`_device_intervals` 之前**漏了**，于是 `get_stats()` 里
     #: `device_intervals` 会一直列出已删除的设备（运维在界面上看到一台
     #: 不存在的设备"间隔 5s"），重新添加同名设备时也会短暂继承旧值。
     #: `tests/test_device_state_cleanup.py` 会扫源码里的
