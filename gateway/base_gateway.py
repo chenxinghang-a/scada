@@ -112,11 +112,23 @@ class BaseGateway(ABC):
         self._on_alarm_callback: Callable[..., Any] | None = None
 
         # 注册到全局信号处理器（避免多个实例互相覆盖）
+        #
+        # round 292 实测：这里缺 `global _signal_registered` —— 函数体里对它赋值
+        # 会让它在整个 `__init__` 里变成**局部变量**，于是 `if not _signal_registered`
+        # 读的是未初始化局部变量，**任何网关一实例化就抛 UnboundLocalError**。
+        # 换句话说：`gateway/` 这 4400 行在运行时根本起不来，而此前没有任何
+        # 一条测试实例化过 BaseGateway（只测了各协议的 decode 函数）。
+        global _signal_registered
         _active_gateways.append(self)
         if not _signal_registered:
-            signal.signal(signal.SIGINT, _global_signal_handler)
-            signal.signal(signal.SIGTERM, _global_signal_handler)
-            _signal_registered = True
+            try:
+                signal.signal(signal.SIGINT, _global_signal_handler)
+                signal.signal(signal.SIGTERM, _global_signal_handler)
+                _signal_registered = True
+            except ValueError as e:
+                # 非主线程里注册信号处理器会抛 ValueError —— 那不是错误，
+                # 网关在子线程里构造是合法用法（run_gateway 就可能在子线程起）。
+                logger.debug("非主线程，跳过信号处理器注册: %s", e)
 
     def _signal_handler(self, signum, frame):
         """信号处理函数，用于优雅关闭"""
@@ -275,39 +287,64 @@ class BaseGateway(ABC):
         """MQTT发布回调"""
         self.stats['messages_published'] += 1
 
-    def publish_telemetry(self, telemetry: DeviceTelemetry):
+    def _note_publish_failure(self, message: str) -> None:
+        """统一的发布失败记账（日志 + 计数 + 最后一次错误）。
+
+        round 292：此前三条发布通道各有各的写法 —— 一条只计数不返回、
+        两条**连返回码都不看**。失败必须留痕，否则"网关发出去了没有"
+        永远只能靠猜。
+        """
+        self.logger.error(message)
+        self.stats['errors'] += 1
+        self.stats['last_error'] = message
+        self.stats['last_error_time'] = datetime.now()
+
+    def _publish(self, topic: str, payload: str, what: str) -> bool:
+        """统一的 MQTT 发布：返回值 = **真的发出去了吗**，不是"我尝试过了"。
+
+        判据（承接 283-291 同一族）：
+          * `publish()` 返回码不是 `MQTT_ERR_SUCCESS` → 失败；
+          * 抛异常 → 失败；
+          * 客户端没初始化 → 失败（原先 `publish_status`/`publish_alarm`
+            在这里**静默 return**，连计数都没有）。
+        """
+        if not self.mqtt_client:
+            self._note_publish_failure(f"{what} 发布失败: MQTT客户端未初始化")
+            return False
+
+        try:
+            result = self.mqtt_client.publish(topic, payload, qos=1)
+        except Exception as e:
+            self._note_publish_failure(f"{what} 发布异常: {e}")
+            return False
+
+        rc = getattr(result, 'rc', None)
+        if rc != mqtt.MQTT_ERR_SUCCESS:
+            self._note_publish_failure(f"{what} 发布失败: rc={rc}")
+            return False
+        return True
+
+    def publish_telemetry(self, telemetry: DeviceTelemetry) -> bool:
         """
         发布遥测数据到MQTT
 
         Args:
             telemetry: 统一物模型数据
+
+        Returns:
+            bool: 是否真的发布成功（round 292 起有返回值）
         """
-        if not self.mqtt_client:
-            self.logger.error("MQTT客户端未初始化")
-            return
-
         topic = MQTTTopics.get_telemetry_topic(telemetry.DeviceID)
-        payload = telemetry.to_json()
-
-        try:
-            result = self.mqtt_client.publish(topic, payload, qos=1)
-            if result.rc != mqtt.MQTT_ERR_SUCCESS:
-                self.logger.error(f"发布失败: {result.rc}")
-                self.stats['errors'] += 1
-        except Exception as e:
-            self.logger.error(f"发布异常: {e}")
-            self.stats['errors'] += 1
-            self.stats['last_error'] = str(e)
-            self.stats['last_error_time'] = datetime.now()
+        return self._publish(topic, telemetry.to_json(), '遥测')
 
     def publish_status(self, device_id: str, online: bool, status: str, 
-                       error_code: int = 0, error_message: str = ""):
+                       error_code: int = 0, error_message: str = "") -> bool:
         """
         发布设备状态到MQTT
-        """
-        if not self.mqtt_client:
-            return
 
+        Returns:
+            bool: 是否真的发布成功（round 292：此前**完全不看返回码**）
+        """
         status_msg = DeviceStatus(
             DeviceID=device_id,
             Timestamp=time.time(),
@@ -318,16 +355,16 @@ class BaseGateway(ABC):
         )
 
         topic = MQTTTopics.get_status_topic(device_id)
-        self.mqtt_client.publish(topic, status_msg.to_json(), qos=1)
+        return self._publish(topic, status_msg.to_json(), f'状态({device_id})')
 
     def publish_alarm(self, device_id: str, level: str, alarm_type: str, 
-                      message: str, value: float = 0, threshold: float = 0):
+                      message: str, value: float = 0, threshold: float = 0) -> bool:
         """
         发布报警到MQTT
-        """
-        if not self.mqtt_client:
-            return
 
+        Returns:
+            bool: 是否真的发布成功（round 292：此前**完全不看返回码**）
+        """
         alarm = AlarmMessage(
             AlarmID=f"{device_id}_{int(time.time())}",
             DeviceID=device_id,
@@ -340,7 +377,7 @@ class BaseGateway(ABC):
         )
 
         topic = MQTTTopics.get_alarm_topic(level)
-        self.mqtt_client.publish(topic, alarm.to_json(), qos=1)
+        return self._publish(topic, alarm.to_json(), f'报警({device_id}/{level})')
 
     def _poll_loop(self):
         """数据轮询循环"""
