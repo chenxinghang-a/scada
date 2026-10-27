@@ -14,7 +14,9 @@ def mock_tdengine():
         {'value': 25.5, 'timestamp': '2024-01-01T00:00:00'},
         {'value': 26.0, 'timestamp': '2024-01-01T00:01:00'},
     ]
-    te.write_telemetry_batch.return_value = None
+    # round 291：`write_telemetry_batch` 的契约改成**返回 bool**（真的写进去才算成功）。
+    # 这里原本写 None —— 那是旧契约（"不抛异常就算成功"），也正是静默丢数据的来源。
+    te.write_telemetry_batch.return_value = True
     te.write_oee.return_value = None
     te.write_predictive.return_value = None
     te.write_energy.return_value = None

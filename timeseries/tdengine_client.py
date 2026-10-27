@@ -299,15 +299,24 @@ class TDengineClient:
         else:
             self.logger.error(f"写入遥测数据失败: {record.device_id}.{record.register_name}")
 
-    def write_telemetry_batch(self, records: list[TelemetryRecord]):
+    def write_telemetry_batch(self, records: list[TelemetryRecord]) -> bool:
         """
         批量写入遥测数据
 
         Args:
             records: 遥测数据记录列表
+
+        Returns:
+            bool: **每张表都真的写进去了**才返回 True。
+
+        round 291：原先这个方法失败时只打一行日志就 `return`（返回 None），
+        调用方 `RealtimeDataBridge._flush_buffer()` 因此把它当成成功 ——
+        计数 `records_written` 照涨、记录不回填、离线缓存与内存回退那整套兜底
+        **永远不会被触发**。TDengine 挂掉时表现为"写入一直在增长、时序库里什么都没有"。
+        判据：通道的返回值是"真的发出去了吗"，不是"我尝试过了"。
         """
         if not records:
-            return
+            return True
 
         # 按表分组
         table_groups: dict[str, list[TelemetryRecord]] = {}
@@ -318,6 +327,7 @@ class TDengineClient:
             table_groups[table_name].append(record)
 
         # 批量写入每个表
+        all_ok = True
         for table_name, table_records in table_groups.items():
             # 确保表存在
             first = table_records[0]
@@ -343,7 +353,11 @@ class TDengineClient:
             if result:
                 self.stats['writes'] += len(table_records)
             else:
+                # 任一表失败 → 整批按失败上报（调用方据此回填重试，宁可重复不可丢）
+                all_ok = False
                 self.logger.error(f"批量写入失败: {table_name}")
+
+        return all_ok
 
     def write_alarm(self, record: AlarmRecord):
         """写入报警记录"""

@@ -413,6 +413,16 @@ class RealtimeDataBridge:
     #: 与采集队列 `_enqueue_drop_oldest` 同一策略。
     DEFAULT_MAX_BUFFER_SIZE = 50000
 
+    #: 连续失败多少次后熔断（round 291）。
+    #:
+    #: TDengine 的 REST 调用超时是 30s，而刷新周期是 5s —— 库挂掉时
+    #: 每轮 flush 都会阻塞 30s，flush 线程被拖住、缓冲被填满、最后开始丢最旧。
+    #: 熔断期间**不发起写**，记录留在缓冲里等下一轮，既不让线程卡死也不丢数据。
+    CIRCUIT_FAIL_THRESHOLD = 3
+
+    #: 熔断冷却时长（秒，**单调时钟**；初值用 -inf，绝不用 0.0）。
+    CIRCUIT_COOLDOWN_S = 30.0
+
     def __init__(self, tdengine: TDengineClient, offline_buffer=None,
                  max_buffer_size: int | None = None):
         """
@@ -456,9 +466,20 @@ class RealtimeDataBridge:
             'records_received': 0,
             'records_written': 0,
             'errors': 0,
+            # 写失败而被回填重试的条数（与 errors 区分：errors 是"失败轮次"）
+            'records_requeued': 0,
             # 内存回退缓冲溢出被丢弃的条数（>0 说明 TDengine 长时间不可用且数据在丢）
             'dropped_buffer_full': 0,
         }
+
+        # 熔断状态（round 291）。`-inf` = 从未熔断过；绝不能用 0.0 ——
+        # 单调时钟在部分平台是"开机以来的秒数"，0.0 会让首次判定恒为"已过期"。
+        self._fail_streak = 0
+        self._circuit_open_until = float('-inf')
+        self._last_write_error: str | None = None
+        #: 单调时钟缝（测试要模拟"冷却期过去"只能替换它，不能 monkeypatch 全局
+        #: `time.monotonic` —— 那会波及后台线程的 `Event.wait(timeout)`）。
+        self._clock = time.monotonic
 
     def start(self):
         """启动桥接器"""
@@ -563,6 +584,46 @@ class RealtimeDataBridge:
                     self._max_buffer_size, dropped, total,
                 )
 
+    def _circuit_open(self) -> bool:
+        """熔断是否处于打开状态（冷却期内不发起写）。"""
+        return self._clock() < self._circuit_open_until
+
+    def _on_write_failed(self, records, error: str) -> None:
+        """统一处理一次写失败：计数、熔断判定、回填重试。"""
+        self.stats['errors'] += 1
+        self.stats['records_requeued'] += len(records)
+        self._last_write_error = error
+        self._fail_streak += 1
+
+        if self._fail_streak >= self.CIRCUIT_FAIL_THRESHOLD and not self._circuit_open():
+            self._circuit_open_until = self._clock() + self.CIRCUIT_COOLDOWN_S
+            self.logger.error(
+                "TDengine 连续写失败 %d 次 → 熔断 %.0fs（期间不发起写，数据留在内存缓冲，"
+                "不丢弃；最后错误：%s）",
+                self._fail_streak, self.CIRCUIT_COOLDOWN_S, error,
+            )
+
+        # 优先写入离线缓存，否则放回内存缓冲（带上限）
+        if self.offline_buffer:
+            try:
+                serialized = [{
+                    'device_id': r.device_id,
+                    'register_name': r.register_name,
+                    'timestamp': r.timestamp.isoformat(),
+                    'value': r.value,
+                    'quality': r.quality,
+                    'unit': r.unit,
+                    'protocol': r.protocol,
+                    'gateway_id': r.gateway_id,
+                } for r in records]
+                self.offline_buffer.buffer_records('telemetry', serialized)
+                self.logger.info(f"已转入离线缓存 {len(records)} 条")
+                return
+            except Exception as be:
+                self.logger.error(f"离线缓存写入失败: {be}")
+
+        self._requeue_to_memory(records)
+
     def _flush_buffer(self):
         """刷新缓冲区"""
         with self._buffer_lock:
@@ -572,40 +633,47 @@ class RealtimeDataBridge:
             records = list(self._buffer)
             self._buffer.clear()
 
+        # 熔断冷却期内：不发起写，直接把本批放回缓冲（不丢），下一轮再试。
+        if self._circuit_open():
+            self._requeue_to_memory(records)
+            return
+
         try:
-            self.tdengine.write_telemetry_batch(records)
-            self.stats['records_written'] += len(records)
-            self.logger.debug(f"写入 {len(records)} 条数据到TDengine")
+            # round 291：判据是**返回值**，不是"没抛异常"。
+            # `write_telemetry_batch` 原先失败时只打日志并返回 None，
+            # 这里却无条件 +len(records) → TDengine 挂掉时 `records_written`
+            # 照涨、记录不回填，整条兜底链路（离线缓存/内存回退/溢出告警）
+            # 永远不会被触发 = 时序库静默丢数据。
+            ok = self.tdengine.write_telemetry_batch(records)
         except Exception as e:
             self.logger.error(f"写入TDengine失败: {e}")
-            self.stats['errors'] += 1
+            self._on_write_failed(records, str(e))
+            return
 
-            # 优先写入离线缓存，否则放回内存缓冲（带上限）
-            if self.offline_buffer:
-                try:
-                    serialized = [{
-                        'device_id': r.device_id,
-                        'register_name': r.register_name,
-                        'timestamp': r.timestamp.isoformat(),
-                        'value': r.value,
-                        'quality': r.quality,
-                        'unit': r.unit,
-                        'protocol': r.protocol,
-                        'gateway_id': r.gateway_id,
-                    } for r in records]
-                    self.offline_buffer.buffer_records('telemetry', serialized)
-                    self.logger.info(f"已转入离线缓存 {len(records)} 条")
-                except Exception as be:
-                    self.logger.error(f"离线缓存写入失败: {be}")
-                    self._requeue_to_memory(records)
-            else:
-                self._requeue_to_memory(records)
+        if ok:
+            self.stats['records_written'] += len(records)
+            self._fail_streak = 0
+            self._circuit_open_until = float('-inf')
+            self._last_write_error = None
+            self.logger.debug(f"写入 {len(records)} 条数据到TDengine")
+        else:
+            # 返回假值（False/None）= 没真的写进去。宁可按失败回填重试（可能重复），
+            # 也不能当成功记账（必丢）。
+            self.logger.error("写入TDengine失败: 客户端返回失败（未真正写入）")
+            self._on_write_failed(records, 'write_telemetry_batch 返回失败')
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         stats = self.stats.copy()
         stats['running'] = self._running
         stats['buffer_size'] = len(self._buffer)
+        # 熔断与失败链必须可观测：只增不减/只算不报的东西，运维看不见（round 291）。
+        stats['fail_streak'] = self._fail_streak
+        stats['circuit_open'] = self._circuit_open()
+        remaining = self._circuit_open_until - self._clock()
+        stats['circuit_remaining_seconds'] = round(max(0.0, remaining), 3)
+        if self._last_write_error:
+            stats['last_write_error'] = self._last_write_error
         return stats
 
 
