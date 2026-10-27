@@ -116,17 +116,31 @@ def _containers_assigned_by_device_id() -> set[str]:
 
 
 def test_every_per_device_container_is_registered():
-    """任何按设备索引的状态容器都必须出现在清理清单里。"""
+    """任何按设备索引的状态容器都必须出现在清理清单里。
+
+    round 289 起有两个类别，生命周期**相反**，都要登记，但登记到不同清单：
+
+    * `PER_DEVICE_STATE_ATTRS` —— 设备活着时积累、删除时清空；
+    * `CANCELLED_REGISTRY_ATTRS` —— **删除时才写入**（挡住复活），靠
+      `_prune_cancelled()` 到期回收。塞进前者会让删除瞬间抹掉刚写的登记，
+      round 219 的僵尸采集会全部回归。
+
+    所以这里的判据是「落在两个清单之一」，而不是「落在清理清单里」。
+    """
     from 采集层.data_collector import DataCollector
 
     assigned = _containers_assigned_by_device_id()
     registered = set(DataCollector.PER_DEVICE_STATE_ATTRS)
+    registry = set(DataCollector.CANCELLED_REGISTRY_ATTRS)
 
-    missing = assigned - registered
+    missing = assigned - registered - registry
     assert not missing, (
-        f'这些按设备索引的容器没有登记进 PER_DEVICE_STATE_ATTRS：{sorted(missing)}\n'
-        '删设备时会残留 —— 加一行到 PER_DEVICE_STATE_ATTRS，并在 '
-        '_forget_device_state() 里清掉')
+        f'这些按设备索引的容器没有登记：{sorted(missing)}\n'
+        '删设备时清理的 → 加进 PER_DEVICE_STATE_ATTRS 并在 _forget_device_state() 里清；\n'
+        '删除时才写入的登记表 → 加进 CANCELLED_REGISTRY_ATTRS 并由 _prune_cancelled() 回收')
+    # 反向：登记在「取消登记表」里的，不能同时又出现在清理清单里（生命周期互斥）
+    both = registered & registry
+    assert not both, f'同一容器被登记进两个生命周期互斥的清单：{sorted(both)}'
 
 
 def test_registered_containers_are_actually_cleared():

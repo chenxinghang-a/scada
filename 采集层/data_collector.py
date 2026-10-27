@@ -161,6 +161,22 @@ CIRCUIT_BREAKER_COOLDOWN_S = 30     # 断路器：冷却时间（30秒后试探�
 # 才允许生成兜底数据，且即便开启，其质量码也会被标为 BAD 并明确告警。
 FALLBACK_SIMULATION_ENABLED = False
 
+#: 「已取消设备」登记的最短保留时长（秒，**单调时钟**）。
+#:
+#: 为什么需要保留期而不是删完就扔：`remove_device_task()` 只能 cancel 还没触发的
+#: Timer；正在线程池里跑的那一轮（最长 = 单次采集超时）结束后仍会走
+#: `_schedule_next()`，必须让它看见「已取消」才不复活。所以登记不能删得太早。
+#:
+#: 为什么必须有上限（round 289）：这个集合此前**只在 `start()` 清空**，运行期
+#: 每删一台设备（含 `sync_device_tasks` 因配置热重载停掉的）就 `.add()` 一个 id，
+#: 永不移除 —— 长时间运行 + 频繁增删设备就是无界增长。单条 id 很小，但它同时
+#: 是「幽灵数据」的判据（推送型设备的残留回调靠它拦截），无界增长意味着
+#: 这个判据表永远只增不减。
+#:
+#: 取 300s：远大于任何一次在途采集（Modbus 1s × 寄存器轮次、REST 十几秒），
+#: 又远小于「一天」这种运行尺度。裁剪条件见 `_prune_cancelled()`。
+CANCELLED_RETENTION_S = 300.0
+
 
 def _has_keyword(register_name: str, keywords: tuple) -> bool:
     """检查寄存器名是否包含指定关键字"""
@@ -588,6 +604,9 @@ class DataCollector:
         #        「已有任务，跳过」→ **删掉再重新添加同一台设备，采集永远不启动**，
         #        必须重启进程才恢复。
         self._cancelled_devices: set[str] = set()
+        # 登记时刻（单调时钟），供 `_prune_cancelled()` 判过期。
+        # 与 `_cancelled_devices` 同生同灭：mark 时写入，discard/clear/prune 时删除。
+        self._cancelled_at: dict[str, float] = {}
         self.running = False
 
         # 失败计数器（用于退避）
@@ -772,6 +791,7 @@ class DataCollector:
         # 会被永久挡住调度（见 __init__ 里 _cancelled_devices 的说明）。
         with self._tasks_lock:
             self._cancelled_devices.clear()
+            self._cancelled_registry().clear()
 
         # 启动数据处理线程
         self.process_thread = threading.Thread(target=self._process_data, daemon=True)
@@ -906,6 +926,7 @@ class DataCollector:
             # 重新添加同一台设备（此前被删除）时，必须解除「已取消」标记，
             # 否则 _schedule_next 会一直拒绝调度 → 采集中断且无任何报错。
             self._cancelled_devices.discard(device_id)
+            self._cancelled_registry().pop(device_id, None)
 
         # 确保客户端已创建（device_manager.add_device 只存配置，不创建客户端）
         client = self.device_manager.get_client(device_id)
@@ -921,13 +942,68 @@ class DataCollector:
             self._start_device_collection(device_id, device_config)
         logger.info(f"已启动设备 {device_id} [{protocol}] 的采集任务")
 
+    def _cancelled_registry(self) -> dict[str, float]:
+        """返回 `device_id → 登记时刻(monotonic)`，必要时补建。
+
+        用 `getattr` 而不是直接 `self._cancelled_at`：一批测试用
+        `DataCollector.__new__` 绕过 `__init__` 只装配需要的字段（与
+        `get_stats()` 的 `_device_intervals` 同一种兼容方式）。
+        """
+        registry = getattr(self, '_cancelled_at', None)
+        if registry is None:
+            registry = {}
+            self._cancelled_at = registry
+        return registry
+
+    def _mark_cancelled(self, device_id: str) -> None:
+        """登记「已取消」并打时间戳（须在 `_tasks_lock` 内调用）。
+
+        round 289：原来只有 `self._cancelled_devices.add()`，没有时刻信息，
+        于是「什么时候能安全地把它删掉」无从判断 → 这个集合只增不减。
+        """
+        self._cancelled_devices.add(device_id)
+        now = time.monotonic()
+        self._cancelled_registry()[device_id] = now
+        # 每次登记顺便裁一次：集合规模的上界因此是「保留期内的删除次数」，
+        # 而不是「进程生命周期内的删除次数」。
+        self._prune_cancelled(now=now)
+
+    def _prune_cancelled(self, now: float | None = None) -> int:
+        """裁掉过期的「已取消」登记，返回裁掉的条数（须在 `_tasks_lock` 内调用）。
+
+        保留条件（满足其一就不裁）：
+          * 年龄 < `CANCELLED_RETENTION_S` —— 在途采集/残留回调可能还需要它挡着；
+          * `device_id` 仍在 `self.tasks` 里 —— 理论上不该发生（登记即摘 Timer），
+            但它一旦发生就说明还有活的定时器，此时删登记等于放它复活。
+
+        裁掉之后的行为差异**只在「设备已删且早就不可能还有在途动作」这一种情形下**
+        才可能出现，此时登记已无保护对象；而它挡住的「重新添加」路径由
+        `start_device_task()` 的 discard 负责，不依赖过期与否。
+        """
+        if not self._cancelled_devices:
+            return 0
+        registry = self._cancelled_registry()
+        now = time.monotonic() if now is None else now
+        stale = [
+            device_id for device_id in self._cancelled_devices
+            if now - registry.get(device_id, now) >= CANCELLED_RETENTION_S
+            and device_id not in self.tasks
+        ]
+        for device_id in stale:
+            self._cancelled_devices.discard(device_id)
+            registry.pop(device_id, None)
+        if stale:
+            logger.debug("已裁剪过期的「已取消」设备登记 %d 条: %s",
+                         len(stale), stale[:10])
+        return len(stale)
+
     def remove_device_task(self, device_id: str):
         """删除设备的采集任务（设备被删除时调用）"""
         with self._tasks_lock:
             timer = self.tasks.pop(device_id, None)
             # 登记「已取消」：正在线程池里跑的那一轮结束后会走 _schedule_next，
             # 必须让它看到这个标记而不再复活（否则删了还在采，见 __init__ 注释）。
-            self._cancelled_devices.add(device_id)
+            self._mark_cancelled(device_id)
         if timer:
             timer.cancel()
             logger.info(f"已停止设备 {device_id} 的采集任务")
@@ -1014,6 +1090,14 @@ class DataCollector:
         '_circuit_state', '_failure_counts',
         '_device_intervals',
     )
+
+    #: 「已取消设备」登记表 —— 与上面**反向**的生命周期，必须分开登记。
+    #:
+    #: `PER_DEVICE_STATE_ATTRS` 里的容器是「设备活着时积累、删除时清空」；
+    #: 这两个恰好相反：**删除时才写入**，靠 `_prune_cancelled()` 到期回收。
+    #: 若把它们塞进 `_forget_device_state()`，删除瞬间就会把刚写的登记抹掉 ——
+    #: 在途采集重新挂上定时器（round 219 的僵尸采集全部回归）。
+    CANCELLED_REGISTRY_ATTRS = ('_cancelled_devices', '_cancelled_at')
 
     def _forget_device_state(self, device_id: str) -> None:
         """清掉某台设备的**全部**运行期状态（删除设备时调用）。
@@ -2188,6 +2272,22 @@ class DataCollector:
         intervals = dict(getattr(self, '_device_intervals', None) or {})
         if intervals:
             stats['device_intervals'] = intervals
+        # round 289：「已取消」登记的规模。
+        # 这个集合此前只在 `start()` 清空，运行期每删一台设备就 +1 —— 无界增长；
+        # 而它同时是推送型设备「幽灵数据」的拦截判据，涨到多大没人知道。
+        # 读统计时顺带裁剪一次：即使长期没有新的删除动作，过期登记也会被回收。
+        # 计数直接看集合本身（不依赖 `_cancelled_at` 是否存在，兼容绕过 __init__ 的对象）。
+        cancelled = 0
+        if getattr(self, '_cancelled_devices', None):
+            with self._tasks_lock:
+                if getattr(self, '_cancelled_at', None) is not None:
+                    try:
+                        self._prune_cancelled()
+                    except Exception as e:      # noqa: BLE001 —— 统计不该因裁剪失败而 500
+                        logger.debug(f"裁剪「已取消」登记失败: {e}")
+                cancelled = len(self._cancelled_devices)
+        if cancelled:
+            stats['cancelled_devices'] = cancelled
         # 真实熔断状态（round 251）。此前 `/api/resilience/circuit-breaker`
         # 读的是从未被实例化的通用熔断器管理器，恒为空 —— 看板显示"一切正常"，
         # 而设备可能早已熔断。这里把内联熔断器的真实状态暴露出来。
