@@ -233,8 +233,12 @@ class MQTTToTSDBService:
 
         try:
             # 批量写入
-            self.tdengine.write_telemetry_batch(records)
-            self.stats['telemetry_written'] += len(records)
+            # round 298：写失败必须回填并计数（原来返回值被丢弃，
+            # 失败时 except 分支永远不进 —— 数据在 clear() 之后彻底消失）
+            if self.tdengine.write_telemetry_batch(records):
+                self.stats['telemetry_written'] += len(records)
+            else:
+                self.stats['errors'] += len(records)
             self.logger.debug(f"写入 {len(records)} 条遥测数据")
         except Exception as e:
             self.logger.error(f"写入遥测数据失败: {e}")
@@ -255,8 +259,10 @@ class MQTTToTSDBService:
 
         try:
             for record in records:
-                self.tdengine.write_alarm(record)
-            self.stats['alarms_written'] += len(records)
+                if not self.tdengine.write_alarm(record):
+                    self.stats['errors'] += 1
+                    continue
+                self.stats['alarms_written'] += 1
             self.logger.debug(f"写入 {len(records)} 条报警数据")
         except Exception as e:
             self.logger.error(f"写入报警数据失败: {e}")

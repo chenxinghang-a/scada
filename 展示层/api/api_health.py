@@ -75,14 +75,21 @@ def get_health_status():
         else:
             global_status = 'healthy'
 
-        return success_response({
+        payload = {
             'version': get_version(),
             'global_status': global_status,
             'modules': modules_status,
             'checks': health_status,
             'unhealthy_modules': unhealthy_modules,
             'unhealthy_checks': unhealthy_checks
-        })
+        }
+        # round 298：**探活接口必须用状态码表达不健康**。
+        # 原来无条件 200 —— 而调用方（负载均衡 / K8s readiness）只看状态码：
+        # 磁盘写满、数据库探测失败、3 个 check unhealthy 时，
+        # 流量照样被打进来、Pod 永远 Ready，整套健康检查对自动化消费方
+        # 等于不存在。
+        response, _code = success_response(payload)
+        return response, (503 if global_status == 'unhealthy' else 200)
     except Exception as e:
         logger.error(f"获取健康状态失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)

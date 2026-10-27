@@ -799,9 +799,18 @@ class DeviceControlSafety:
 
                 # 检查条件是否匹配
                 triggered = False
+                # round 298：**这次采样是不是本条规则关心的点位**。
+                # 原实现没有这个标记 —— 「D1/temperature 触发联锁」之后，
+                # 下一条任意其它寄存器的数据（D1/pressure、D2/level…）
+                # 走到 `elif not triggered and was_triggered` 就把状态清成 False。
+                # 现场 5s 一轮，联锁存活不超过一个分发周期；
+                # 而 `_interlock_states` 是启机/操作校验的唯一准入依据 ——
+                # 超温状态下运维仍能启动设备，日志还写着「联锁条件解除」。
+                matched = False
                 if cond.get('type') == 'threshold':
                     if (cond.get('device_id') == device_id and
                             cond.get('register') == register_name):
+                        matched = True          # 这条规则关心的点位到了
                         op = cond.get('operator', '>')
                         threshold = cond.get('value', 0)
                         if op == '>' and value > threshold:
@@ -824,8 +833,13 @@ class DeviceControlSafety:
                     if (cond.get('device_id') == device_id and
                             cond_address is not None and reg_addr is not None and
                             int(cond_address) == int(reg_addr)):
+                        matched = True          # 这条规则关心的点位到了
                         if value == (1 if cond.get('value') else 0):
                             triggered = True
+
+                # round 298：采样不是这条规则的点位 → 不许动它的状态
+                if not matched:
+                    continue
 
                 # 处理联锁触发
                 was_triggered = self._interlock_states.get(rule_id, False)

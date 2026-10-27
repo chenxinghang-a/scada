@@ -319,8 +319,11 @@ class TSDBAdapter:
                     downtime=oee_data.get('downtime', 0)
                 )
 
-                self.tdengine.write_oee(record)
-                self.stats['results_written'] += 1
+                # round 298：只有**真的写进去**才计数
+                if self.tdengine.write_oee(record):
+                    self.stats['results_written'] += 1
+                else:
+                    self.stats['errors'] += 1
 
         except Exception as e:
             logger.error(f"写入OEE结果失败: {e}")
@@ -356,8 +359,10 @@ class TSDBAdapter:
                     trend=score_data.get('trend', {}).get('direction', 'stable')
                 )
 
-                self.tdengine.write_predictive(record)
-                self.stats['results_written'] += 1
+                if self.tdengine.write_predictive(record):
+                    self.stats['results_written'] += 1
+                else:
+                    self.stats['errors'] += 1
 
         except Exception as e:
             logger.error(f"写入预测性维护结果失败: {e}")
@@ -382,8 +387,10 @@ class TSDBAdapter:
                         power_factor=power_data.get('power_factor', 1.0)
                     )
 
-                    self.tdengine.write_energy(record)
-                    self.stats['results_written'] += 1
+                    if self.tdengine.write_energy(record):
+                        self.stats['results_written'] += 1
+                    else:
+                        self.stats['errors'] += 1
 
         except Exception as e:
             logger.error(f"写入能源数据失败: {e}")

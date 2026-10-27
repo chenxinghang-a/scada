@@ -296,8 +296,15 @@ class TDengineClient:
         result = self._execute_sql(sql)
         if result:
             self.stats['writes'] += 1
-        else:
-            self.logger.error(f"写入遥测数据失败: {record.device_id}.{record.register_name}")
+            return True
+        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
+        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
+        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
+        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
+        # 没人读的 stats 里）。
+        self.stats['errors'] += 1
+        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
+        return False
 
     def write_telemetry_batch(self, records: list[TelemetryRecord]) -> bool:
         """
@@ -373,6 +380,15 @@ class TDengineClient:
         result = self._execute_sql(sql)
         if result:
             self.stats['writes'] += 1
+            return True
+        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
+        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
+        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
+        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
+        # 没人读的 stats 里）。
+        self.stats['errors'] += 1
+        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
+        return False
 
     def write_oee(self, record: OEERecord):
         """写入OEE记录"""
@@ -387,6 +403,15 @@ class TDengineClient:
         result = self._execute_sql(sql)
         if result:
             self.stats['writes'] += 1
+            return True
+        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
+        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
+        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
+        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
+        # 没人读的 stats 里）。
+        self.stats['errors'] += 1
+        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
+        return False
 
     def write_energy(self, record: EnergyRecord):
         """写入能源记录"""
@@ -401,6 +426,15 @@ class TDengineClient:
         result = self._execute_sql(sql)
         if result:
             self.stats['writes'] += 1
+            return True
+        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
+        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
+        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
+        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
+        # 没人读的 stats 里）。
+        self.stats['errors'] += 1
+        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
+        return False
 
     def write_predictive(self, record: PredictiveRecord):
         """写入预测性维护记录"""
@@ -415,6 +449,15 @@ class TDengineClient:
         result = self._execute_sql(sql)
         if result:
             self.stats['writes'] += 1
+            return True
+        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
+        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
+        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
+        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
+        # 没人读的 stats 里）。
+        self.stats['errors'] += 1
+        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
+        return False
 
     # ==================== 数据查询 ====================
 

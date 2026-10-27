@@ -2101,18 +2101,26 @@ class DataCollector:
 
         # 能源管理
         if self.energy_manager and self._intel_enabled('energy_manager'):
-            if _has_keyword(name_lower, _power_kw):
+            # round 298：**顺序与词边界都得对**。
+            # `_power_kw` 里含 'kwh'，而它原来排在 `_energy_kw` 之前 ——
+            # 所有 `*_kwh` 电量寄存器都被当成**瞬时功率 kW** 做梯形积分：
+            # 仿真预设 energy_meter_01 的 5 个 kWh 寄存器（120/450/180/50/320）
+            # 每 60s 被当作功率积分 → 约 1120 kWh/h，而真实总功率只有 320 kW，
+            # 电费/碳排放约 3.5 倍；同时 realtime_power 被轮流覆盖，
+            # 页面上「总功率 320 kW」与「每小时 1120 kWh」并存且互相矛盾。
+            # 判据：**kWh 类必须走 energy_kwh 差分路径**，不能只靠子串包含。
+            if _has_keyword(name_lower, _energy_kw):
+                self._safe_intel(
+                    'energy_manager', self.energy_manager.feed_power_data,
+                    device_id, 0, energy_kwh=value, timestamp=timestamp,
+                )
+            elif _has_keyword(name_lower, _power_kw):
                 power_value = value
                 if 'w' in name_lower and 'kw' not in name_lower:
                     power_value = value / 1000
                 self._safe_intel(
                     'energy_manager', self.energy_manager.feed_power_data,
                     device_id, power_value, timestamp=timestamp,
-                )
-            elif _has_keyword(name_lower, _energy_kw):
-                self._safe_intel(
-                    'energy_manager', self.energy_manager.feed_power_data,
-                    device_id, 0, energy_kwh=value, timestamp=timestamp,
                 )
 
         # SPC
@@ -2183,9 +2191,13 @@ class DataCollector:
             # 缺陷数：从总产量中扣除
             self.oee_calculator.record_production(device_id, count=count)
         else:
-            # 总产量：同时记录合格品（98%合格率模拟）
-            good = max(0, count - round(count * 0.02))  # 用round避免小批量截断为0
-            self.oee_calculator.record_production(device_id, count=count, good_count=good)
+            # 总产量：**只记总数，不推算合格数**（round 298）。
+            # 原实现 `good = count - round(count*0.02)`，注释写着「98%合格率模拟」——
+            # 这个假值会进 TDengine 的 OEERecord、再经 OEE_SCORE 导出到 Grafana：
+            # 真实良率 80% 的产线看板显示 98%，不合格品混在 total_count 里无标记。
+            # 判据：没有独立合格品计数时，合格数就是"不可用"，
+            # 不能编一个 0.98 —— 由 `calculate_oee` 把 quality 置 None。
+            self.oee_calculator.record_production(device_id, count=count)
 
     def get_circuit_breaker_states(self) -> dict[str, Any]:
         """各设备**真实生效**的熔断器状态（round 251）。

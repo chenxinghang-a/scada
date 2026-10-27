@@ -17,9 +17,12 @@ def mock_tdengine():
     # round 291：`write_telemetry_batch` 的契约改成**返回 bool**（真的写进去才算成功）。
     # 这里原本写 None —— 那是旧契约（"不抛异常就算成功"），也正是静默丢数据的来源。
     te.write_telemetry_batch.return_value = True
-    te.write_oee.return_value = None
-    te.write_predictive.return_value = None
-    te.write_energy.return_value = None
+    # round 298：四个**单条**写入的契约也改成返回 bool（原来恒 None，
+    # 调用方「调用完就计数 +1」—— 写失败时 results_written 照涨、errors=0）。
+    # 这里跟着改成 True，语义是"这次写成功了"。
+    te.write_oee.return_value = True
+    te.write_predictive.return_value = True
+    te.write_energy.return_value = True
     return te
 
 

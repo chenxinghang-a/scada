@@ -1861,7 +1861,13 @@ class Database:
                 try:
                     cursor.execute(query)
                     result[table] = cursor.fetchone()[0]
-                except Exception:
-                    result[table] = 0
+                except Exception as e:
+                    # round 298：**查询失败 ≠ 表里 0 行**。
+                    # 原来填 0，而 `core/backup_drill.py` 恰好把
+                    # `live_rows == 0` 当成"跳过对比" → 生产库行数查不出来时，
+                    # 备份完整性对比被整段跳过，演练仍然报 ok=True。
+                    # 库被锁/损坏 + 备份其实是空的 = 演练通过，真出事才发现。
+                    # 现在不写这个 key，让调用方能把"查不到"与"空表"分开。
+                    logger.warning("查询表 %s 行数失败（不写入结果，供调用方区分"                                   "「空表」与「查不到」）: %s", table, e)
 
         return result

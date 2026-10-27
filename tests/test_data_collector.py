@@ -305,12 +305,18 @@ class TestDispatchIntelligence:
         oee.update_device_state.assert_called_once_with('d1', 'running')
 
     def test_dispatch_oee_count_update(self):
-        """Dispatch routes count register to OEE calculator with auto good_count"""
+        """总产量只记 count，**不推算 good_count**（round 298）。
+
+        原实现按"98% 合格率"编了个 `good_count=98`，这条用例当时正是在固化它。
+        那个假值会进 TDengine 的 OEERecord、再经 OEE_SCORE 导出到 Grafana：
+        真实良率 80% 的产线看板显示 98%，不合格品混在 total_count 里无标记。
+        判据：没有独立的合格品计数时，合格数就是"不可用"，不能编一个数。
+        """
         oee = MagicMock()
         collector = self._make_collector(oee_calculator=oee)
         data = {'device_id': 'd1', 'register_name': 'production_count', 'value': 100, 'timestamp': datetime.now()}
         collector._dispatch_intelligence(data)
-        oee.record_production.assert_called_once_with('d1', count=100, good_count=98)
+        oee.record_production.assert_called_once_with('d1', count=100)
 
     def test_dispatch_spc_temperature(self):
         """Dispatch routes temperature to SPC analyzer"""

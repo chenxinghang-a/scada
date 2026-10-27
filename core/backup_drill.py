@@ -153,7 +153,15 @@ def run_drill(database=None, backup_dir: str = DEFAULT_BACKUP_DIR,
             live = database.get_table_sizes()
             for table, backup_rows in detail['rows'].items():
                 live_rows = live.get(table)
-                if live_rows is None or live_rows == 0:
+                if live_rows is None:
+                    # round 298：`get_table_sizes()` 现在**不再**把查询失败填成 0，
+                    # 所以 None 明确表示"生产库这张表查不到"。
+                    # 这时不能说"没得比就跳过" —— 备份完整性无法校验本身
+                    # 就是演练要报的问题（否则空备份 + 库被锁 = 演练通过）。
+                    result['problems'].append(
+                        f'{table} 生产库行数查不到 —— 备份完整性无法校验')
+                    continue
+                if live_rows == 0:
                     continue
                 if backup_rows < live_rows * 0.5:
                     result['problems'].append(

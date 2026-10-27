@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-27T17:31:32+00:00",
+  "generated_at": "2026-10-27T18:16:27+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -973,7 +973,7 @@
       "source_path": "/health/available",
       "backend_path": "/api/health/available",
       "status": "match",
-      "detail": "精确匹配 api_health.py:324",
+      "detail": "精确匹配 api_health.py:331",
       "source_file": "system.ts",
       "source_line": 190
     },
@@ -983,7 +983,7 @@
       "source_path": "/health/checks",
       "backend_path": "/api/health/checks",
       "status": "match",
-      "detail": "精确匹配 api_health.py:270",
+      "detail": "精确匹配 api_health.py:277",
       "source_file": "system.ts",
       "source_line": 182
     },
@@ -993,7 +993,7 @@
       "source_path": "/health/checks/:checkName",
       "backend_path": "/api/health/checks/<check_name>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_health.py:293",
+      "detail": "结构匹配（参数名归一）api_health.py:300",
       "source_file": "system.ts",
       "source_line": 186
     },
@@ -1003,7 +1003,7 @@
       "source_path": "/health/modules",
       "backend_path": "/api/health/modules",
       "status": "match",
-      "detail": "精确匹配 api_health.py:213",
+      "detail": "精确匹配 api_health.py:220",
       "source_file": "system.ts",
       "source_line": 174
     },
@@ -1013,7 +1013,7 @@
       "source_path": "/health/modules/:moduleName",
       "backend_path": "/api/health/modules/<module_name>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_health.py:239",
+      "detail": "结构匹配（参数名归一）api_health.py:246",
       "source_file": "system.ts",
       "source_line": 178
     },
@@ -1033,7 +1033,7 @@
       "source_path": "/health/unavailable",
       "backend_path": "/api/health/unavailable",
       "status": "match",
-      "detail": "精确匹配 api_health.py:344",
+      "detail": "精确匹配 api_health.py:351",
       "source_file": "system.ts",
       "source_line": 194
     },
@@ -1417,13 +1417,13 @@
       "method": "GET",
       "backend_path": "/api/health/status/detail",
       "source_file": "api_health.py",
-      "source_line": 91
+      "source_line": 98
     },
     {
       "method": "GET",
       "backend_path": "/api/health/tasks/<task_id>",
       "source_file": "api_health.py",
-      "source_line": 364
+      "source_line": 371
     },
     {
       "method": "GET",
