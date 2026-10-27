@@ -32,6 +32,10 @@ import paths
 #: 网关类型 → 实现类。**唯一真源**：argparse 的 choices 与 --all 的分发都用它，
 #: 避免出现「choices 里列了 mqtt、但 map 里没有 → 一选就报『不支持的网关类型』」
 #: 这种幽灵选项。新增网关时只改这一处。
+#: 模块级 logger —— `start_gateways()` 是模块级函数，不能用 `main()` 里的局部 logger。
+#: （`main()` 里仍会建一个同名局部变量，作用域互不影响。）
+logger = logging.getLogger("GatewayMain")
+
 GATEWAY_TYPES: dict[str, Any] = {
     'modbus': ModbusGateway,
     's7': S7Gateway,
@@ -107,6 +111,33 @@ def _declared_gateway_types(config: dict[str, Any]) -> str:
     return ', '.join(types) if types else '（无）'
 
 
+def start_gateways(gateways: list) -> tuple[list, list]:
+    """逐个启动网关，返回 (启动成功的 id 列表, 失败的 id 列表)。
+
+    round 293：原先 `main()` 里写的是
+        try: gateway.start()
+        except Exception as e: logger.error(...)
+    而 `BaseGateway.start()` 既没有返回值、失败时也只是打日志 ——
+    于是"全部启动失败"和"全部启动成功"在外部表现完全一致：
+    进程活着、退出码 0、最后一行日志写的是「网关服务已启动」。
+    """
+    started: list[str] = []
+    failed: list[str] = []
+    for gateway in gateways:
+        gw_id = getattr(gateway, 'gateway_id', repr(gateway))
+        try:
+            ok = gateway.start()
+        except Exception as e:      # noqa: BLE001 —— 单个网关崩溃不能带崩其余
+            logger.error("启动网关 %s 异常: %s", gw_id, e)
+            failed.append(gw_id)
+            continue
+        if ok:
+            started.append(gw_id)
+        else:
+            failed.append(gw_id)
+    return started, failed
+
+
 def main():
     parser = argparse.ArgumentParser(description='工业SCADA协议网关服务')
     # `--protocol` 是 `--type` 的兼容别名：README 一直写的是 `--protocol modbus`，
@@ -168,14 +199,16 @@ def main():
         logger.error("没有可用的网关配置")
         sys.exit(1)
 
-    # 启动所有网关
-    logger.info(f"启动 {len(gateways)} 个网关...")
-
-    for gateway in gateways:
-        try:
-            gateway.start()
-        except Exception as e:
-            logger.error(f"启动网关失败: {e}")
+    # 启动所有网关，并按**真实结果**统计（round 293）
+    started, failed = start_gateways(gateways)
+    logger.info("网关启动结果：成功 %d / 共 %d", len(started), len(gateways))
+    if failed:
+        # 一个都没起来 → 退出码 1：让 systemd / 服务管理器 / 容器编排
+        # 看见"这不是在运行、而是启动失败"，而不是对着一个空转进程干等。
+        logger.error("以下网关启动失败: %s", failed)
+        if not started:
+            logger.error("没有任何网关启动成功，退出（退出码 1）")
+            sys.exit(1)
 
     # 信号处理
     def signal_handler(signum, frame):

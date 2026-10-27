@@ -178,22 +178,40 @@ class BaseGateway(ABC):
         """
         pass
 
-    def start(self):
-        """启动网关"""
+    def start(self) -> bool:
+        """启动网关。
+
+        Returns:
+            bool: **真的起来了**（MQTT 连上 + 设备全连上 + 轮询线程已起）才返回 True。
+
+        round 293：此前 `start()` 无返回值，且：
+          * `_connect_mqtt()` 失败会**抛出**异常，而 `run_gateway` 的
+            `try/except` 只打一行日志就继续 —— 进程照常存活；
+          * `connect()` 返回 False 时这里只 `logger.error` 然后 `return`；
+        两者叠加的结果：MQTT/设备一个都没连上时，**进程仍然活着**、
+        最后一行日志还是「网关服务已启动」—— 服务管理器和运维都以为它在跑。
+        现在把"起没起来"如实返回，由调用方决定退出码。
+        """
         if self.running:
             self.logger.warning("网关已在运行")
-            return
+            return True
 
         self.logger.info(f"启动网关 {self.gateway_id}...")
         self.stats['start_time'] = datetime.now()
 
-        # 连接MQTT
-        self._connect_mqtt()
+        # 连接MQTT（失败即"没起来"）
+        try:
+            self._connect_mqtt()
+        except Exception as e:
+            self.stats['start_time'] = None
+            self._note_publish_failure(f"MQTT 连接失败，网关未启动: {e}")
+            return False
 
         # 连接设备
         if not self.connect():
-            self.logger.error("设备连接失败")
-            return
+            self.stats['start_time'] = None
+            self._note_publish_failure("设备连接失败，网关未启动")
+            return False
 
         # 启动轮询线程
         self.running = True
@@ -202,6 +220,7 @@ class BaseGateway(ABC):
         self._poll_thread.start()
 
         self.logger.info(f"网关 {self.gateway_id} 已启动")
+        return True
 
     def stop(self):
         """停止网关"""
