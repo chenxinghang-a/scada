@@ -153,7 +153,9 @@ class TestReadDeviceDataNonePaths:
         g = self._gw2()
         g._clients = {"d1": MagicMock()}
         g._node_configs = {"d1": [{"name": "a", "node_id": "n", "type": "double"}]}
-        # _loop 是 MagicMock → run_coroutine_threadsafe 抛异常 → except 分支
+        # _loop 是 MagicMock → run_coroutine_threadsafe 抛异常 → except 分支。
+        # round 296：生产代码在 except 里 `coro.close()`，所以这里不会再出现
+        # `RuntimeWarning: coroutine ... was never awaited`（原来每次跑都刷一条）。
         g._loop = MagicMock()
         assert g.read_device_data("d1") is None
 

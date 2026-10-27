@@ -235,14 +235,17 @@ class OPCUAGateway(BaseGateway):
             self._note_read_failure(device_id, "*", "无节点配置")
             return None
 
+        # round 296：协程对象先拿到手里。`run_coroutine_threadsafe` 可能在
+        # **协程创建之后**才抛异常（loop 已关闭 / 已停止），那个协程就永远没人
+        # await —— 每次都漏一个未 await 的协程对象，pytest 会报
+        # `RuntimeWarning: coroutine ... was never awaited`（生产里就是纯泄漏）。
+        coro = self._read_device_data_async(client, node_configs, device_id)
         try:
-            future = asyncio.run_coroutine_threadsafe(
-                self._read_device_data_async(client, node_configs, device_id),
-                self._loop
-            )
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
             return future.result(timeout=30)
 
         except Exception as e:
+            coro.close()          # 没跑起来就关掉，别留未 await 协程
             self.logger.error(f"OPC UA设备 {device_id} 读取异常: {e}")
             self._note_read_failure(device_id, "*", f"读取异常: {e}")
             return None

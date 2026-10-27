@@ -92,7 +92,13 @@ class MQTTSubscriber:
             'messages_received': 0,
             'errors': 0,
             'last_message_time': None,
-            'connected_since': None
+            'connected_since': None,
+            # round 296：质量码消费。网关侧在"部分点读不到"时会把整条遥测降级成
+            # UNCERTAIN 并在 Metadata.read_failures 写明丢了哪些点 ——
+            # 但订阅端此前**完全不看 quality**，降级了也没人知道。
+            'degraded_telemetry': 0,
+            'degraded_metrics': 0,
+            'last_degraded_devices': [],
         }
 
         # 运行状态
@@ -205,6 +211,35 @@ class MQTTSubscriber:
             self.logger.error(f"处理消息异常: {e}")
             self.stats['errors'] += 1
 
+    def _note_quality(self, telemetry: DeviceTelemetry) -> None:
+        """统计非 GOOD 的质量码（round 296）。
+
+        `quality` 是 OPC UA 标准质量戳（192 GOOD / 104 UNCERTAIN / 0 BAD）。
+        网关在"这台设备有寄存器读不到"时会把本轮所有点降为 UNCERTAIN，
+        并在 `Metadata['read_failures']` 里列出丢失的点位与原因。
+        """
+        metrics = getattr(telemetry, 'Metrics', None) or {}
+        bad = 0
+        for metric in metrics.values():
+            if isinstance(metric, dict) and metric.get('quality') not in (None, 192):
+                bad += 1
+        if not bad:
+            return
+
+        self.stats['degraded_telemetry'] = self.stats.get('degraded_telemetry', 0) + 1
+        self.stats['degraded_metrics'] = self.stats.get('degraded_metrics', 0) + bad
+
+        failures = (getattr(telemetry, 'Metadata', None) or {}).get('read_failures') or {}
+        devices = self.stats.setdefault('last_degraded_devices', [])
+        if telemetry.DeviceID not in devices:
+            devices.append(telemetry.DeviceID)
+            # 只保留最近 20 台，避免这个列表本身变成无界增长
+            del devices[:-20]
+
+        self.logger.warning(
+            "遥测质量降级: 设备 %s 有 %d 个指标非 GOOD，丢失点位 %s",
+            telemetry.DeviceID, bad, sorted(failures) or '（网关未提供明细）')
+
     def _handle_telemetry(self, topic: str, payload: str):
         """处理遥测数据"""
         try:
@@ -218,6 +253,11 @@ class MQTTSubscriber:
 
             # 转换为对象
             telemetry = DeviceTelemetry.from_dict(data)
+
+            # round 296：消费质量码 —— 部分点读不到时网关会把整条遥测降级成
+            # UNCERTAIN 并在 Metadata.read_failures 里写明丢了哪些点。
+            # 这里把它统计出来，否则"降级了但没人看"等于没降。
+            self._note_quality(telemetry)
 
             # 更新缓存
             with self._cache_lock:

@@ -116,6 +116,11 @@ class BaseGateway(ABC):
             'last_read_error_time': None,
         }
 
+        #: 每台设备**本次读取**丢失的点位（round 296）：{device_id: {register: reason}}。
+        #: 与 `stats['read_failures']` 互补 —— 计数只说"有失败"，
+        #: 这里说"哪几个点"，供遥测质量码降级与排障使用。
+        self._read_failure_marks: dict[str, dict[str, str]] = {}
+
         # 回调函数
         self._on_data_callback: Callable[..., Any] | None = None
         self._on_alarm_callback: Callable[..., Any] | None = None
@@ -357,6 +362,50 @@ class BaseGateway(ABC):
         stats['read_failures'] = stats.get('read_failures', 0) + 1
         stats['last_read_error'] = f"{device_id}/{register_name}: {reason}"
         stats['last_read_error_time'] = datetime.now()
+        # 同时记下"哪个点丢了"，供本轮遥测降级质量码（round 296）
+        marks = getattr(self, '_read_failure_marks', None)
+        if marks is not None:
+            marks.setdefault(device_id, {})[register_name] = reason
+
+    def begin_device_read(self, device_id: str) -> None:
+        """开始一轮读取前清掉该设备上一轮的失败标记（round 296）。
+
+        必须清：否则一次失败会永久留在 marks 里，之后每一轮遥测都被降级成
+        UNCERTAIN —— "一次抖动，永久不可信"，比不降级更糟。
+        """
+        marks = getattr(self, '_read_failure_marks', None)
+        if marks is not None:
+            marks.pop(device_id, None)
+
+    def apply_read_quality(self, device_id: str, telemetry) -> bool:
+        """部分读取失败时把本轮遥测的质量码降级（round 296）。
+
+        Returns:
+            bool: 本轮是否发生了降级。
+
+        为什么降的是**所有**点而不是只标丢失的点：
+        丢失的点根本不在 `Metrics` 里（`read_device_data` 只返回读成功的），
+        而把 `value=None` 塞进去会被 `ThingModelValidator` 判成
+        "value 必须是数字" → **整条遥测被下游丢弃**，比缺几个点更糟。
+        工业语义上，一台设备的通信通道已经出现读失败时，剩下的点也不该
+        再标 GOOD（OPC UA: UNCERTAIN = 值可用但不可全信）。
+
+        丢失了哪些点、为什么，写在 `Metadata['read_failures']` 里。
+        """
+        marks = (getattr(self, '_read_failure_marks', None) or {}).get(device_id) or {}
+        if not marks or telemetry is None:
+            return False
+
+        metrics = getattr(telemetry, 'Metrics', None) or {}
+        for metric in metrics.values():
+            if isinstance(metric, dict):
+                metric['quality'] = DataQuality.UNCERTAIN.value
+
+        metadata = getattr(telemetry, 'Metadata', None)
+        if isinstance(metadata, dict):
+            metadata['read_quality'] = 'partial'
+            metadata['read_failures'] = dict(marks)
+        return True
 
     def _note_publish_failure(self, message: str) -> None:
         """统一的发布失败记账（日志 + 计数 + 最后一次错误）。
@@ -467,11 +516,17 @@ class BaseGateway(ABC):
 
                     try:
                         # 读取数据
+                        # round 296：每轮先清失败标记，避免"一次抖动永久降级"
+                        self.begin_device_read(device_id)
                         raw_data = self.read_device_data(device_id)
 
                         if raw_data is not None:
                             # 转换为统一物模型
                             telemetry = self.convert_to_telemetry(device_id, raw_data)
+
+                            # round 296：部分点读不到 → 质量码降级（否则这轮遥测
+                            # 看着和完全正常一样，只是少了几个指标）
+                            self.apply_read_quality(device_id, telemetry)
 
                             # 发布到MQTT
                             self.publish_telemetry(telemetry)
