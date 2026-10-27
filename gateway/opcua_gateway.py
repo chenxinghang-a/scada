@@ -226,26 +226,30 @@ class OPCUAGateway(BaseGateway):
         client = self._clients.get(device_id)
         if not client:
             self.logger.error(f"OPC UA设备 {device_id} 未连接")
+            self._note_read_failure(device_id, "*", "设备未连接")
             return None
 
         node_configs = self._node_configs.get(device_id, [])
         if not node_configs:
             self.logger.warning(f"OPC UA设备 {device_id} 无节点配置")
+            self._note_read_failure(device_id, "*", "无节点配置")
             return None
 
         try:
             future = asyncio.run_coroutine_threadsafe(
-                self._read_device_data_async(client, node_configs),
+                self._read_device_data_async(client, node_configs, device_id),
                 self._loop
             )
             return future.result(timeout=30)
 
         except Exception as e:
             self.logger.error(f"OPC UA设备 {device_id} 读取异常: {e}")
+            self._note_read_failure(device_id, "*", f"读取异常: {e}")
             return None
 
     async def _read_device_data_async(self, client: Any,
-                                       node_configs: List[Dict[str, Any]]) -> dict[str, float]:
+                                       node_configs: List[Dict[str, Any]],
+                                       device_id: str = "") -> dict[str, float]:
         """异步读取OPC UA节点数据"""
         result = {}
 
@@ -270,6 +274,8 @@ class OPCUAGateway(BaseGateway):
 
             except Exception as e:
                 self.logger.warning(f"OPC UA节点 {node_id} 读取失败: {e}")
+                # round 295：逐点失败此前只打一行日志就从结果里消失
+                self._note_read_failure(device_id, name or node_id, str(e))
 
         return result
 

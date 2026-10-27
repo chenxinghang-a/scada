@@ -186,8 +186,10 @@ class S7Gateway(BaseGateway):
                     result[name] = value
                 else:
                     self.logger.warning(f"S7设备 {device_id} 寄存器 {name} 读取失败")
+                    self._note_read_failure(device_id, name, "读取返回空/错误响应")
             except Exception as e:
                 self.logger.error(f"S7设备 {device_id} 寄存器 {name} 读取异常: {e}")
+                self._note_read_failure(device_id, name, str(e))
 
         return result if result else None
 

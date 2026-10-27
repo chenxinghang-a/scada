@@ -109,6 +109,11 @@ class BaseGateway(ABC):
             # 否则"网关在跑但少了三台设备的数据"只能靠人工对账发现。
             'devices_connected': 0,
             'devices_failed': 0,
+            # 单点读取失败（round 295）：此前只打日志、stats 一直是 0 ——
+            # `/stats` 上"errors=0"与"每次都在读挂"可以同时成立。
+            'read_failures': 0,
+            'last_read_error': None,
+            'last_read_error_time': None,
         }
 
         # 回调函数
@@ -331,6 +336,27 @@ class BaseGateway(ABC):
     def _on_mqtt_publish(self, client, userdata, mid):
         """MQTT发布回调"""
         self.stats['messages_published'] += 1
+
+    def _note_read_failure(self, device_id: str, register_name: str, reason: str) -> None:
+        """单点读取失败记账（round 295）。
+
+        为什么单独记：一个设备的寄存器**逐点**读，失败的点点只打一行日志就从
+        结果里消失了 —— `stats['errors']` 一直是 0，`/stats` 看起来完全健康，
+        而实际上"这台设备的 10 个点里 9 个读不到"。
+        与发布失败分开计数，是因为两者的处置方式不同：发布失败要回填，
+        读取失败要重连/降级质量码。
+
+        ⚠️ 记账本身**绝不许把读取路径搞崩**：这段代码被调用的位置全是
+        "已经失败、马上要 return None" 的分支，如果这里抛异常，
+        "读不到"就会变成"抛出去" —— 上层从"少一个点"变成"整台设备异常"。
+        所以 `stats` 缺失（裸对象 / 未走 __init__ 的测试替身）时静默跳过。
+        """
+        stats = getattr(self, 'stats', None)
+        if stats is None:
+            return
+        stats['read_failures'] = stats.get('read_failures', 0) + 1
+        stats['last_read_error'] = f"{device_id}/{register_name}: {reason}"
+        stats['last_read_error_time'] = datetime.now()
 
     def _note_publish_failure(self, message: str) -> None:
         """统一的发布失败记账（日志 + 计数 + 最后一次错误）。

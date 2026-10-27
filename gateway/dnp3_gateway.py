@@ -598,10 +598,13 @@ class DNP3Gateway(BaseGateway):
         client = self._clients.get(device_id)
         if not client or not client.connected:
             self.logger.error(f"设备 {device_id} 未连接")
+            # round 295：设备级读取失败也要记账，否则 /stats 上 errors=0
+            self._note_read_failure(device_id, "*", "设备未连接")
             return None
 
         data = client.read_data()
         if not data:
+            self._note_read_failure(device_id, "*", "client.read_data() 返回空")
             return None
 
         reverse_map = self._reverse_maps.get(device_id, {})
