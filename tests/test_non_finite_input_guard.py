@@ -377,9 +377,24 @@ def test_write_limits_with_normal_bounds_still_registered():
 # ---------------------------------------------------------------------------
 
 def _iter_py_files() -> list[Path]:
+    """本仓库的 Python 源码；**不含**被 checkout 进来的旁仓库。
+
+    2026-10-27 实测（CI 红）：industrial_scada 的 CI 会把前端仓库 checkout 到
+    `<workspace>/scada-app/`（`tests/test_frontend_contract.py` 要用它的 src/api）。
+    而 scada-app 在 6575d2f 起**把后端源码整份搬进了自己仓库**（为了能独立重打包），
+    于是 `REPO.rglob('*.py')` 会把 `scada-app/backend/src/config.py` 这类
+    **另一份代码**当成我们的源码来判 —— 那些文件按我们的规约当然"违规"，
+    但改它们不是本仓库的事，也不受本仓库控制。表现为：别人推一版前端，我们这边红。
+
+    判据改成"带自己 `.git` 的子目录 = 别人的仓库，整棵跳过"，不硬编码仓库名，
+    以后再多 checkout 一个仓库也不会重演。
+    """
+    nested_repos = {p.name for p in REPO.iterdir() if p.is_dir() and (p / '.git').exists()}
     out = []
     for p in REPO.rglob('*.py'):
         parts = p.relative_to(REPO).parts
+        if parts and parts[0] in nested_repos:
+            continue
         if any(part in SKIP_DIRS for part in parts):
             continue
         if any(part.startswith(SKIP_PREFIXES) for part in parts):
