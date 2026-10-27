@@ -47,6 +47,20 @@ ALARMS_TOTAL = Counter('scada_alarms_total', '告警总数', ['level', 'device_i
 ALARMS_ACTIVE = Gauge('scada_alarms_active', '活跃告警数')
 ALARMS_ACKNOWLEDGED = Counter('scada_alarms_acknowledged_total', '已确认告警数')
 ALARM_DURATION = Histogram('scada_alarm_duration_seconds', '告警持续时间', ['level'])
+# 被**抑制**掉的告警数（round 290）。
+#
+# 为什么必须单独计数：抑制是"把报警压下去"的动作，压下去以后看板上一切安静 ——
+# 而"现场真的安静"和"有 200 条报警被抑制吞了"在看板上长得**一模一样**。
+# 此前抑制只落一行日志（洪水是 WARNING、去重是 DEBUG），既不能聚合也不能告警。
+# 有了这条计数，"报警率下降"才能区分成两种完全不同的原因。
+#
+# reason 取值：
+#   * `flood`           —— 洪水抑制期（ISA-18.2：记录照旧，只压播报）
+#   * `dedup_cooldown`  —— 同一报警在冷却窗口内重复出现，压掉前端推送
+#   * `dedup_acked`     —— 已确认报警在抑制窗口内重复出现，压掉前端推送
+ALARMS_SUPPRESSED = Counter('scada_alarms_suppressed_total',
+                            '被抑制的告警数（记录照旧，播报/推送被压掉）',
+                            ['level', 'reason'])
 
 # 通信指标
 MODBUS_REQUESTS = Counter('scada_modbus_requests_total', 'Modbus请求总数', ['function_code'])

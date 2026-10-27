@@ -291,7 +291,11 @@ class TestDedupInteraction:
         am = make_manager()
         fake = _FakeNotifier()
         am.set_notification(fake)
-        am._should_emit = lambda *a, **kw: False       # 模拟冷却窗口内
+        # round 290：抑制判定改由 `_should_emit_detail()` 返回 (bool, 原因)，
+        # 调用方按原因分桶打点；`_should_emit()` 保留为它的薄封装。
+        # 这里替换的是**真正被调用的那个缝**，否则补丁不生效 ——
+        # 邮件照发，用例变红（本轮就是被它抓到的）。
+        am._should_emit_detail = lambda *a, **kw: (False, 'dedup_cooldown')
 
         am._trigger_alarm(am.rules['r1'], 'D1', 'temp', 123.4, datetime.now())
 

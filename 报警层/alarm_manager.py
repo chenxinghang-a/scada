@@ -1367,19 +1367,29 @@ class AlarmManager:
         return self._clock()
 
     def _should_emit(self, rule_id: str, device_id: str, register_name: str) -> bool:
-        """
-        检查是否应该推送报警通知（去重核心逻辑）
-
-        Args:
-            rule_id: 规则ID
-            device_id: 设备ID
-            register_name: 寄存器名称
+        """检查是否应该推送报警通知（去重核心逻辑）。
 
         Returns:
-            bool: 是否应该推送
+            bool: 是否应该推送。
+        """
+        return self._should_emit_detail(rule_id, device_id, register_name)[0]
+
+    def _should_emit_detail(self, rule_id: str, device_id: str,
+                            register_name: str) -> tuple[bool, str]:
+        """同上，但**带上被压掉的原因**（供 Prometheus 计数分桶，round 290）。
+
+        为什么要把原因分出来：抑制在看板上没有痕迹 —— 前端少推一条、日志多一行
+        DEBUG，"现场安静"和"去重把消息吞了"看起来完全一样。原因落进指标的
+        `reason` 标签，才能回答"报警率为什么降了"。
+
+        Returns:
+            (should_emit, reason)：
+            * `(True, 'ok')` / `(True, 'dedup_disabled')` —— 照常推送
+            * `(False, 'dedup_acked')`    —— 已确认，抑制窗口内
+            * `(False, 'dedup_cooldown')` —— 冷却窗口内重复出现
         """
         if not self.dedup_config.enabled:
-            return True
+            return True, 'dedup_disabled'
 
         alarm_key = (rule_id, device_id, register_name)
         now = self._dedup_now()
@@ -1391,7 +1401,7 @@ class AlarmManager:
                 suppress_until = ack_time + self.dedup_config.acknowledge_suppress_seconds
                 if now < suppress_until:
                     logger.debug(f"报警被确认抑制: {rule_id} (剩余{suppress_until - now:.0f}s)")
-                    return False
+                    return False, 'dedup_acked'
 
             # 检查冷却窗口
             last_emit = self._emit_history.get(alarm_key)
@@ -1399,9 +1409,17 @@ class AlarmManager:
                 cooldown_until = last_emit + self.dedup_config.emit_cooldown_seconds
                 if now < cooldown_until:
                     logger.debug(f"报警在冷却窗口内: {rule_id} (剩余{cooldown_until - now:.0f}s)")
-                    return False
+                    return False, 'dedup_cooldown'
 
-        return True
+        return True, 'ok'
+
+    def _inc_alarm_suppressed(self, level: str, reason: str) -> None:
+        """给"被抑制的报警"打点（失败只 debug，指标问题不能影响报警链路）。"""
+        try:
+            from core.metrics import ALARMS_SUPPRESSED
+            ALARMS_SUPPRESSED.labels(level=str(level).strip().lower(), reason=reason).inc()
+        except Exception as e:      # noqa: BLE001 —— 指标失败不影响报警
+            logger.debug(f"抑制指标打点失败: {e}")
 
     def _record_emit(self, rule_id: str, device_id: str, register_name: str):
         """记录报警推送时间（仅在确实推送成功后调用）"""
@@ -1515,6 +1533,9 @@ class AlarmManager:
                 f"报警已记录但**抑制播报**（{flood_reason}）: "
                 f"{alarm_message} - {device_id}/{register_name} = {value}"
             )
+            # 同时进指标（round 290）：日志能查单条，指标才能回答"压掉了多少"。
+            # 看板上报警率下降时，必须能区分「现场真的安静」与「抑制在吞消息」。
+            self._inc_alarm_suppressed(alarm_level, 'flood')
 
         # 记录到统计分析器（抑制也统计：报警率指标要反映真实发生量）
         if self._alarm_statistics:
@@ -1536,8 +1557,12 @@ class AlarmManager:
                 device_id, alarm_area)
 
         # 4. 前端WebSocket推送（含去重标记 + 冷却/确认抑制检查）
-        if not self._should_emit(rule_id, device_id, register_name):
+        emit, dedup_reason = self._should_emit_detail(rule_id, device_id, register_name)
+        if not emit:
             logger.debug(f"报警WebSocket推送被去重抑制: {rule_id} ({device_id}/{register_name})")
+            # 抑制必须留痕（round 290）：这条报警进了库、也升级了，但前端永远看不到 ——
+            # 看板上"没有新报警"与"新报警被去重吞了"此前无法区分。
+            self._inc_alarm_suppressed(alarm_level, dedup_reason)
             return
         self._record_emit(rule_id, device_id, register_name)
         alarm_payload = {
