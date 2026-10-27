@@ -35,24 +35,30 @@ from gateway.run_gateway import start_gateways
 
 
 class _Gateway(BaseGateway):
-    """可编程网关：connect_ok 决定设备连接成败。"""
+    """可编程网关：分别指定"能连上的设备"与"连不上的设备"。"""
 
-    def __init__(self, config=None, connect_ok=True, mqtt_raises=False):
-        self._connect_ok = connect_ok
+    def __init__(self, ok_devices=('d1',), fail_devices=(), mqtt_raises=False):
+        self._ok_devices = tuple(ok_devices)
+        self._fail_devices = tuple(fail_devices)
         self._mqtt_raises = mqtt_raises
-        super().__init__(config or {'gateway_id': 'gw_t', 'devices': [],
-                                    'poll_interval': 0.01})
+        devices = [{'device_id': d} for d in (*self._ok_devices, *self._fail_devices)]
+        super().__init__({'gateway_id': 'gw_t', 'devices': devices,
+                          'poll_interval': 0.01})
 
     # ---- 覆盖 MQTT 连接：可控失败 ----
     def _connect_mqtt(self):
-
         if self._mqtt_raises:
             raise ConnectionRefusedError('broker 拒绝连接')
         self.mqtt_client = MagicMock()
         self.mqtt_client.publish.return_value = MagicMock(rc=mqtt.MQTT_ERR_SUCCESS)
 
     def connect(self) -> bool:
-        return self._connect_ok
+        """按配置逐台"连接"，并如实写 connected_devices（与真实网关同构）。"""
+        for d in self._ok_devices:
+            self.connected_devices[d] = True
+        for d in self._fail_devices:
+            self.connected_devices[d] = False
+        return not self._fail_devices
 
     def disconnect(self):
         pass
@@ -86,7 +92,7 @@ def test_start_returns_false_when_mqtt_fails(clean_state):
 
 
 def test_start_returns_false_when_devices_fail(clean_state):
-    gw = _Gateway(connect_ok=False)
+    gw = _Gateway(ok_devices=(), fail_devices=('d1',))
 
     ok = gw.start()
 
@@ -190,3 +196,35 @@ def test_main_exits_nonzero_when_no_gateway_started():
         '全部启动失败时没有 sys.exit(1) —— 进程会空转，外部以为网关在跑')
 
     assert 'start_gateways(' in src, 'main() 没有走统一的启动统计'
+
+
+# ---------------------------------------------------------------------------
+# 3. 部分成功也必须跑（round 294）
+# ---------------------------------------------------------------------------
+
+def test_start_continues_when_some_devices_fail(clean_state):
+    """10 台只挂 1 台 → 网关必须照跑，另外 9 台的好数据不能一起丢。
+
+    各协议网关的 `connect()` 返回的是"是否**全部**连上"，293 起 `start()` 把它
+    当生死判据 —— 于是"少连一台"会让整个网关不启动。这是策略过严：
+    现场更常见的是个别设备断线，而不是全部。
+    """
+    gw = _Gateway(ok_devices=('d1', 'd2', 'd3'), fail_devices=('d4',))
+    try:
+        ok = gw.start()
+        assert ok is True, '一台连不上就把整个网关判死 —— 另外三台的数据全丢'
+        assert gw.running is True
+        assert gw.stats['devices_connected'] == 3
+        assert gw.stats['devices_failed'] == 1
+    finally:
+        gw.stop()
+
+
+def test_start_is_ok_when_no_device_configured(clean_state):
+    """反向对照：没配设备的网关不该被"0 台连上"判死（那不是故障，是没有活干）。"""
+    gw = _Gateway(ok_devices=(), fail_devices=())
+    try:
+        assert gw.start() is True
+        assert gw.running is True
+    finally:
+        gw.stop()

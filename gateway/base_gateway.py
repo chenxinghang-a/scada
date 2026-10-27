@@ -104,7 +104,11 @@ class BaseGateway(ABC):
             'messages_published': 0,
             'errors': 0,
             'last_error': None,
-            'last_error_time': None
+            'last_error_time': None,
+            # 设备连接结果（round 294）：部分成功也要跑，因此必须能读出"连上几台"，
+            # 否则"网关在跑但少了三台设备的数据"只能靠人工对账发现。
+            'devices_connected': 0,
+            'devices_failed': 0,
         }
 
         # 回调函数
@@ -208,10 +212,32 @@ class BaseGateway(ABC):
             return False
 
         # 连接设备
-        if not self.connect():
+        #
+        # round 294：**部分成功也要跑**。
+        # 各协议网关的 `connect()` 返回的是「是否**全部**连上」（`all_connected`），
+        # 而 293 起 `start()` 会照这个值判生死 —— 于是"10 台设备只挂了 1 台"
+        # 会让整个网关不启动，另外 9 台的好数据一起没了。
+        # 正确语义（工业现场）：能连上的先跑，连不上的标 fault 并在轮询里重连；
+        # 只有**一台都没连上**才算这个网关起不来。
+        all_connected = self.connect()
+        configured = [d.get('device_id') for d in self.devices_config if d.get('device_id')]
+        connected = [d for d, ok in self.connected_devices.items() if ok]
+        self.stats['devices_connected'] = len(connected)
+        self.stats['devices_failed'] = max(0, len(configured) - len(connected))
+
+        if configured and not connected:
             self.stats['start_time'] = None
-            self._note_publish_failure("设备连接失败，网关未启动")
+            self._note_publish_failure(
+                f"设备全部连接失败（0/{len(configured)}），网关未启动")
             return False
+
+        if configured and not all_connected:
+            # 部分成功：继续跑，但必须说清楚哪几台没连上（否则"少了一台的数据"
+            # 永远只能靠对账发现）。
+            failed_devices = [d for d in configured if not self.connected_devices.get(d)]
+            self.logger.warning(
+                "部分设备连接失败：%d/%d 连上，网关继续运行；未连上: %s",
+                len(connected), len(configured), failed_devices)
 
         # 启动轮询线程
         self.running = True
