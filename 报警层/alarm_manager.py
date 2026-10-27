@@ -278,6 +278,19 @@ class AlarmPriorityMatrix:
 #: **报警到不了人**，这本身必须是报警（ISA-18.2 也要求监控报警系统自身）。
 NOTIFY_FAILURE_ALARM_THRESHOLD = 3
 
+#: 通知投递队列上限（邮件 / 短信各自独立计数）。round 288。
+#:
+#: 为什么必须有上限：`_ensure_notify_executor()` 是 `max_workers=1` 的线程池，
+#: 而 `smtplib.SMTP` 之前**没设超时** —— SMTP 服务器被防火墙丢包时，
+#: 那唯一的 worker 线程会卡在 `starttls()/login()` 上**几分钟甚至永远**。
+#: 这段时间里每条报警都往队列里塞一个任务（`ThreadPoolExecutor` 的队列是
+#: **无界**的）：内存一路涨、邮件一封都发不出去，而 `_record_output_failure`
+#: 一次都不会触发（第一个任务还没返回）—— **通道坏了完全不可见**。
+#:
+#: 现在的语义：队列积压超过上限就**丢弃本条并记失败**。丢一封邮件是可控的，
+#: 无界积压把进程内存吃光不是。
+NOTIFY_QUEUE_MAX = 50
+
 
 class AlarmManager:
     """
@@ -341,6 +354,9 @@ class AlarmManager:
         self.notification = None
         self._notify_executor: ThreadPoolExecutor | None = None
         self._notify_lock = Lock()
+        #: 各通道"已提交但还没回调"的投递任务数（round 288）。
+        #: 超过 `NOTIFY_QUEUE_MAX` 就丢弃新任务并记失败，防止无界积压。
+        self._notify_pending: dict[str, int] = {'email': 0, 'sms': 0}
 
         # WebSocket回调（由外部注入，用于前端推送）
         self._websocket_emit: Callable[..., Any] | None = None
@@ -679,6 +695,37 @@ class AlarmManager:
                     max_workers=1, thread_name_prefix='alarm-email')
             return self._notify_executor
 
+    def _reserve_notify_slot(self, channel: str) -> tuple[bool, str]:
+        """给一次通知投递占一个队列槽位（round 288）。
+
+        Returns:
+            (是否占到位, 拒绝原因)
+
+        为什么不直接 `executor.submit`：`ThreadPoolExecutor` 的队列**无界**。
+        SMTP 服务器挂住时（旧实现没有超时），唯一 worker 卡死，后续每条报警
+        都往队列里塞任务 —— 内存无界增长，而失败计数一次都不涨。
+        """
+        label = '邮件' if channel == 'email' else '短信'
+        with self._notify_lock:
+            pending = self._notify_pending.get(channel, 0)
+            if pending >= NOTIFY_QUEUE_MAX:
+                return False, (
+                    f'{label}投递队列积压 {pending} 条（上限 {NOTIFY_QUEUE_MAX}），'
+                    f'本条报警的{label}被丢弃 —— 通知通道可能已卡死')
+            self._notify_pending[channel] = pending + 1
+            return True, ''
+
+    def _release_notify_slot(self, channel: str) -> None:
+        """投递结束（无论成败）释放槽位。"""
+        with self._notify_lock:
+            pending = self._notify_pending.get(channel, 0)
+            self._notify_pending[channel] = max(0, pending - 1)
+
+    def get_notify_pending(self) -> dict[str, int]:
+        """当前各通道未完成的投递任务数（供状态接口/排障使用）。"""
+        with self._notify_lock:
+            return dict(self._notify_pending)
+
     @staticmethod
     def _send_email_blocking(notifier, payload: dict[str, Any]) -> tuple[bool, str]:
         """在后台线程里真正发邮件；异常转成 (False, 原因)。"""
@@ -689,6 +736,9 @@ class AlarmManager:
             return False, f'邮件发送异常: {e}'
 
     def _on_email_done(self, future) -> None:
+        # round 288：无论成败都要释放槽位，否则队列"只进不出"，
+        # 几次失败后所有邮件都会被误判为积压而丢弃。
+        self._release_notify_slot('email')
         try:
             ok, err = future.result()
         except Exception as e:
@@ -725,13 +775,20 @@ class AlarmManager:
             'timestamp': alarm_data.get('timestamp'),
         }
 
+        ok, reason = self._reserve_notify_slot('email')
+        if not ok:
+            self._record_output_failure('email', reason)
+            return
+
         executor = self._ensure_notify_executor()
         if executor is None:
+            self._release_notify_slot('email')
             return
         try:
             executor.submit(self._send_email_blocking, notifier, payload) \
                     .add_done_callback(self._on_email_done)
         except Exception as e:
+            self._release_notify_slot('email')
             self._record_output_failure('email', f"邮件任务提交失败: {e}")
 
     # ------------------------------------------------------------
@@ -754,6 +811,7 @@ class AlarmManager:
             return False, f'短信发送异常: {e}'
 
     def _on_sms_done(self, future) -> None:
+        self._release_notify_slot('sms')
         try:
             ok, err = future.result()
         except Exception as e:
@@ -791,13 +849,20 @@ class AlarmManager:
             ),
         }
 
+        ok, reason = self._reserve_notify_slot('sms')
+        if not ok:
+            self._record_output_failure('sms', reason)
+            return
+
         executor = self._ensure_notify_executor()
         if executor is None:
+            self._release_notify_slot('sms')
             return
         try:
             executor.submit(self._send_sms_blocking, notifier, payload) \
                     .add_done_callback(self._on_sms_done)
         except Exception as e:
+            self._release_notify_slot('sms')
             self._record_output_failure('sms', f"短信任务提交失败: {e}")
 
     def _rebuild_rules_index(self):

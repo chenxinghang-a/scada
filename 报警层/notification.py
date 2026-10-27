@@ -12,6 +12,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+#: SMTP 连接/读写的默认超时（秒）。round 288：不设超时会让投递线程永久阻塞。
+#: 10 秒足够完成一次正常的 STARTTLS + LOGIN + 发信，也不会让停机等太久。
+SMTP_TIMEOUT_S = 10.0
+
 
 class Notification:
     """
@@ -82,7 +86,20 @@ class Notification:
             msg.attach(MIMEText(message, 'html', 'utf-8'))
 
             # 发送邮件
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
+            # round 288：**必须显式给超时**。`smtplib.SMTP(host, port)` 不传
+            # timeout 时用的是 `socket._GLOBAL_DEFAULT_TIMEOUT`（= 阻塞到永远）。
+            # SMTP 服务器被防火墙丢包 / 断电时，`starttls()` / `login()` 会卡住
+            # 几分钟甚至永远 —— 而报警管理器只有一个投递线程，
+            # 那一条卡死就等于**所有邮件都发不出去**，且失败计数一次都不涨
+            # （第一个任务还没返回），「通知通道坏了」永远报不出来。
+            timeout = self.email_config.get('timeout', SMTP_TIMEOUT_S)
+            # 用 try_finite_float 而不是裸 float()：`float('inf')` 不抛异常，
+            # 会让"超时无穷大"静默通过（`test_non_finite_input_guard` 会拦）。
+            from core.safe_numeric import try_finite_float
+            timeout = try_finite_float(timeout)
+            if timeout is None or timeout <= 0:
+                timeout = SMTP_TIMEOUT_S
+            with smtplib.SMTP(smtp_server, smtp_port, timeout=timeout) as server:
                 server.starttls()
                 server.login(username, password)
                 server.send_message(msg)
