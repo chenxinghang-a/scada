@@ -15,6 +15,10 @@ permissions:
 
 jobs:
   test:
+    # 兜底上限：pytest 内部有 --timeout=180 管单条用例；这一条管的是
+    # "卡在 pytest 之外"（装依赖、上传产物等）。默认 360 分钟意味着
+    # 卡一次要等 6 小时才失败，而且只能收到一封语焉不详的失败邮件。
+    timeout-minutes: 40
     # 为什么跑 windows-latest 而不是 ubuntu-latest
     # ---------------------------------------------------------------
     # 这个产品的交付物是 **Windows 桌面应用**（PyInstaller 打后端 exe +
@@ -78,7 +82,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-cov
+          # pytest-timeout：2026-10-27 实测 `Run test suite` 两次在 runner 上长时间无进展（25/40 分钟，本机同一套用例 14 分钟跑完）。没有单测超时只能等 job 的 6 小时兜底，中间没有任何信号。加上它：卡住的用例 3 分钟内失败并点出用例名。
+          pip install pytest pytest-cov pytest-timeout
 
       - name: Run test suite
         # shell 用 bash：Windows runner 自带 Git Bash，`set -o pipefail` 才能让
@@ -110,8 +115,12 @@ jobs:
         #   见各测试文件头注。
         run: |
           set -o pipefail
+          # --timeout=180：单条用例上限 3 分钟（本机最慢用例约 20 秒，9 倍余量）。
+          # 没有它时，一条开始等网络/等端口/等锁的用例会让整步挂到 job 的 6 小时兜底超时，
+          # 期间没有任何信号，最后只发一封「跑了 6 小时然后失败」的邮件。
           pytest tests/ -q --cov --cov-report=term-missing --cov-report=xml \
-            --cov-fail-under=60 2>&1 | tee pytest.log
+            --cov-fail-under=60 --timeout=180 --timeout-method=thread \
+            2>&1 | tee pytest.log
 
       - name: Publish failure detail as annotation
         # 失败时把 pytest 输出末尾若干行发成 annotation。
