@@ -668,7 +668,23 @@ class DeviceManager:
             # 「配置没存下来」+「这一轮重连整批跳过」，日志里只有一行异常。
             with self._lock:
                 self.devices[device_id] = device_config
-            self._save_config()
+
+            # round 302：**落盘失败必须回滚并如实返回**。
+            # 原来 `self._save_config()` 的返回值直接丢弃、紧接着 `return True`：
+            # 磁盘满 / 只读目录 / 原子写失败时接口回「添加成功」、界面出现设备、
+            # 采集也起来了，**重启后设备消失**（devices.yaml 从来没写进去），
+            # 运维只会认为"系统丢配置"。同文件的 `update_device` 早就是正确写法，
+            # 这一处漏了。
+            if not self._save_config():
+                with self._lock:
+                    self.devices.pop(device_id, None)
+                    self.clients.pop(device_id, None)
+                try:
+                    self._connection_pool.remove(device_id)
+                except Exception as e:      # noqa: BLE001 —— 池里本来就没有时不该二次失败
+                    logger.debug("回滚连接池条目失败: %s", e, exc_info=True)
+                logger.error("添加设备失败：配置落盘失败，已回滚 %s", device_id)
+                return False
 
             # 热添加后自动连接设备
             if device_config.get('enabled', True):
@@ -695,10 +711,20 @@ class DeviceManager:
             self.disconnect_device(device_id)
             # 持锁删除：与 add_device 同理，防「迭代中被删除」
             with self._lock:
-                self.devices.pop(device_id, None)
+                removed = self.devices.pop(device_id, None)
                 self.clients.pop(device_id, None)
             self._connection_pool.remove(device_id)
-            self._save_config()
+
+            # round 302：落盘失败要把设备**放回去**，并如实返回 False。
+            # 否则「删掉了但文件里还在」—— 重启后设备回来，运维以为见鬼；
+            # 而接口当时回的是「已删除」。
+            if not self._save_config():
+                if removed is not None:
+                    with self._lock:
+                        self.devices[device_id] = removed
+                logger.error("移除设备失败：配置落盘失败，已回滚 %s", device_id)
+                return False
+
             logger.info(f"移除设备: {device_id}")
             return True
         except Exception as e:

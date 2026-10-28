@@ -639,7 +639,14 @@ class RealDeviceManager(IDeviceManager):
 
             with self._lock:
                 self.devices[device_id] = device_config
-            self._save_config()
+
+            # round 302：落盘失败必须回滚并如实返回（同 device_manager.add_device）
+            if not self._save_config():
+                with self._lock:
+                    self.devices.pop(device_id, None)
+                    self.clients.pop(device_id, None)
+                logger.error("[真实] 添加设备失败：配置落盘失败，已回滚 %s", device_id)
+                return False
 
             logger.info(f"[真实] 添加设备: {device_id} [{protocol}]")
             return True
@@ -653,9 +660,17 @@ class RealDeviceManager(IDeviceManager):
         try:
             self.disconnect_device(device_id)
             with self._lock:
-                self.devices.pop(device_id, None)
+                removed = self.devices.pop(device_id, None)
                 self.clients.pop(device_id, None)
-            self._save_config()
+
+            # round 302：落盘失败要把设备放回去（同 device_manager.remove_device）
+            if not self._save_config():
+                if removed is not None:
+                    with self._lock:
+                        self.devices[device_id] = removed
+                logger.error("[真实] 移除设备失败：配置落盘失败，已回滚 %s", device_id)
+                return False
+
             logger.info(f"[真实] 移除设备: {device_id}")
             return True
         except Exception as e:

@@ -1153,51 +1153,71 @@ class AlarmManager:
             return
         value = numeric
 
+        # 清理过期的旁路（低频执行）
+        # round 258：节流用单调时钟。初值必须是 -inf 而不是 0 ——
+        # `time.monotonic()` 在 Windows 上是**开机以来的秒数**，
+        # 开机不足 60 秒时 `now - 0` 还不满 60，首次清理会被跳过；
+        # 更糟的是墙钟回拨会让它整整一个跳变量都不再清理。
+        #
+        # round 302：这段必须放在「没有匹配规则就 return」**之前**。
+        # 原来它在 `if not matched_rules: return` 之后，于是「旁路 30 分钟
+        # 自动解除」只在这个点位**仍有匹配规则**时才可能执行 ——
+        # 采集停了、点位改配了、设备删了，旁路就**永不过期**，
+        # 而日志里白纸黑字写着「时长: 30分钟」。清理是全库级别的事，
+        # 不该挂在某一个点位的判定路径上。
+        now_ts = time.monotonic()
+        if now_ts - self._last_shelf_cleanup > 60:
+            self._cleanup_expired_shelves()
+            self._last_shelf_cleanup = now_ts
+
         # 用索引快速查找匹配的规则
         rules_key = (device_id, register_name)
         matched_rules = self._rules_index.get(rules_key)
         if not matched_rules:
             return
 
-        # 清理过期的旁路（低频执行）
-        # round 258：节流用单调时钟。初值必须是 -inf 而不是 0 ——
-        # `time.monotonic()` 在 Windows 上是**开机以来的秒数**，
-        # 开机不足 60 秒时 `now - 0` 还不满 60，首次清理会被跳过；
-        # 更糟的是墙钟回拨会让它整整一个跳变量都不再清理。
-        now_ts = time.monotonic()
-        if now_ts - self._last_shelf_cleanup > 60:
-            self._cleanup_expired_shelves()
-            self._last_shelf_cleanup = now_ts
-
         # 遍历匹配的规则
+        #
+        # round 302：**per-rule try**。一条规则算崩（异常配置、坏的条件表达式、
+        # 下游抛错）不许带走同一个点位上后续的规则 —— 这是 `_safe_intel`
+        # 的同一形状。报警判定的失败必须留痕（日志 + 通道失败计数），
+        # 不能靠采集器外层的 try 变成「报警检查异常」一行字。
         for rule_id, rule_config in matched_rules:
-            # ISA-18.2: 检查是否被旁路/搁置
-            alarm_key = (rule_id, device_id, register_name)
-            if alarm_key in self._shelved_alarms:
-                continue
+            try:
+                # ISA-18.2: 检查是否被旁路/搁置
+                alarm_key = (rule_id, device_id, register_name)
+                if alarm_key in self._shelved_alarms:
+                    continue
 
-            # 检查报警条件（含非对称死区/迟滞）
-            with self._state_lock:
-                # 按**本规则**取状态：迟滞（死区）判断必须只看自己这条规则
-                current_alarm_state = self.alarm_states.get((rule_id, device_id, register_name))
-            alarm_triggered = self._check_condition(
-                value=value,
-                condition=rule_config.get('condition'),
-                threshold=rule_config.get('threshold'),
-                rule_id=rule_id,
-                alarm_state=current_alarm_state
-            )
+                # 检查报警条件（含非对称死区/迟滞）
+                with self._state_lock:
+                    # 按**本规则**取状态：迟滞（死区）判断必须只看自己这条规则
+                    current_alarm_state = self.alarm_states.get(
+                        (rule_id, device_id, register_name))
+                alarm_triggered = self._check_condition(
+                    value=value,
+                    condition=rule_config.get('condition'),
+                    threshold=rule_config.get('threshold'),
+                    rule_id=rule_id,
+                    alarm_state=current_alarm_state
+                )
 
-            # 处理报警状态
-            self._process_alarm_state(
-                rule_id=rule_id,
-                rule_config=rule_config,
-                device_id=device_id,
-                register_name=register_name,
-                value=value,
-                timestamp=timestamp,
-                triggered=alarm_triggered
-            )
+                # 处理报警状态
+                self._process_alarm_state(
+                    rule_id=rule_id,
+                    rule_config=rule_config,
+                    device_id=device_id,
+                    register_name=register_name,
+                    value=value,
+                    timestamp=timestamp,
+                    triggered=alarm_triggered
+                )
+            except Exception as e:      # noqa: BLE001 —— 一条规则崩不许带走其它规则
+                logger.error(
+                    "报警规则 %s 判定失败（同点位其余规则继续）: %s/%s: %s",
+                    rule_id, device_id, register_name, e, exc_info=True)
+                self._record_output_failure(
+                    'alarm_engine', f'规则 {rule_id} 判定异常: {e}')
 
     def _check_condition(self, value: float, condition: str, threshold: float,
                          rule_id: str = None, alarm_state: dict = None) -> bool:
@@ -1513,16 +1533,32 @@ class AlarmManager:
 
         # 1. 记录数据库（同一报警未确认时只更新计数，不重复插入）
         #    **洪水抑制也走这里** —— 见上面的说明。
-        self.database.insert_alarm(
-            alarm_id=rule_id,
-            device_id=device_id,
-            register_name=register_name,
-            alarm_level=alarm_level,
-            alarm_message=alarm_message,
-            threshold=threshold,
-            actual_value=value,
-            timestamp=timestamp
-        )
+        #
+        # round 302：**落库失败不许中断播报**。
+        # 这里原来是裸调用：`insert_alarm` 抛异常（库被锁 / 磁盘满 / 表损坏）时，
+        # 后面的声光、广播、WS 推送、邮件短信**全部不执行** —— 而内存状态
+        # 已经是 FIRE、升级跟踪也已经登记（1489 行）。
+        # 终点和 round 282 修的「洪水抑制提前 return」一模一样：
+        # 内存有、库没有、现场一声没响、升级照打三级主管电话。
+        # 282 修的是正常路径，异常路径没人管；判据相同：**记录与播报分离**。
+        persist_ok = True
+        try:
+            self.database.insert_alarm(
+                alarm_id=rule_id,
+                device_id=device_id,
+                register_name=register_name,
+                alarm_level=alarm_level,
+                alarm_message=alarm_message,
+                threshold=threshold,
+                actual_value=value,
+                timestamp=timestamp
+            )
+        except Exception as e:      # noqa: BLE001 —— 落库失败不许带走播报
+            persist_ok = False
+            logger.error(
+                "报警落库失败（播报继续，现场仍会响）: %s - %s/%s = %r: %s",
+                alarm_message, device_id, register_name, value, e)
+            self._record_output_failure('database', f'报警落库失败: {e}')
 
         if annunciate:
             logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")
@@ -1576,6 +1612,9 @@ class AlarmManager:
             'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
             'area': alarm_area,
             'dedup_key': f"{rule_id}:{device_id}:{register_name}",
+            # round 302：落库失败要能在推送里看出来 —— 否则「界面弹了、历史里查不到」
+            # 会被当成前端 bug，而真实原因是库写不进去。
+            'persisted': persist_ok,
         }
         self._emit_websocket_alarm(alarm_payload)
 

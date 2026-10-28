@@ -69,16 +69,45 @@ def get_simulation_mode():
 def toggle_simulation_mode():
     """切换模拟/真实模式（运行时热切换，无需重启）"""
     data = request.get_json() or {}
-    new_mode = data.get('simulation_mode')
+    raw = data.get('simulation_mode')
 
-    if new_mode is None:
+    if raw is None:
         return jsonify({'success': False, 'message': '缺少simulation_mode参数'}), 400
 
-    new_mode = bool(new_mode)
+    # round 302：**不许把任意真值当 True**。
+    # `bool("false") == True` —— 前端表单/脚本传字符串 `"false"` 会直接切到模拟模式；
+    # `bool([])`、`bool(0)` 又把明确的 0 当 False，语义完全靠 Python 真值表。
+    if isinstance(raw, bool):
+        new_mode = raw
+    elif isinstance(raw, str) and raw.strip().lower() in ('true', 'false'):
+        new_mode = raw.strip().lower() == 'true'
+    elif isinstance(raw, int) and raw in (0, 1):
+        new_mode = bool(raw)
+    else:
+        return jsonify({
+            'success': False,
+            'message': f'simulation_mode 必须是布尔值 true/false（收到 {raw!r}）',
+        }), 400
 
     # 运行时热切换
     dm = current_app.device_manager
-    result = dm.switch_simulation_mode(new_mode)
+    result = dm.switch_simulation_mode(new_mode) or {}
+
+    # round 302：**运行时没切换成功，就绝不写盘**。
+    # 原来完全不看 `result['success']`：`RealDeviceManager.switch_simulation_mode(True)`
+    # 在真实模式下会明确回 `{'success': False, 'message': '...无法切换...'}`，
+    # 但这里照样把 `simulation_mode: true` 写进 `配置/system.yaml`，
+    # 而 `run.py` 启动时正是读这个键 ——
+    # 运维点了「切模拟」当场被拒（界面提示失败），下次重启却真的进了模拟模式：
+    # 采集的是合成数据，看板曲线依然"正常"。这是比报警更坏的一类假成功：
+    # 它静默地换掉了**全部数据源**。反向同理（模拟模式下被拒的 false 会让
+    # 下次启动连上现场真设备）。
+    if not result.get('success', True):
+        return jsonify({
+            **result,
+            'persisted': False,
+            'message': result.get('message') or '模式切换失败，配置未修改',
+        }), 400
 
     # 同时更新配置文件（持久化）
     config_path = paths.resolve('配置/system.yaml')

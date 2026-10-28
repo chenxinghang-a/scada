@@ -357,18 +357,43 @@ class AlarmOutput:
 
     def acknowledge(self):
         """
-        确认/消音 — 关蜂鸣器（停脉冲线程+写DO），灯保持闪烁
+        确认/消音 — 关蜂鸣器（停脉冲线程 + **写 DO**），灯保持当前状态
         操作员到场后按"确认"按钮
 
         注意：确认只消音，不清除报警级别；但会打上 acknowledged 标记，
         使后续同级新报警能重新触发声光（避免一次消音吞掉后续漏报）。
+
+        Returns:
+            bool: 蜂鸣器 DO 是否**真的**写成功。False 表示软件状态已置位，
+            但现场很可能仍在响 —— 调用方必须据此告知操作员。
         """
         self._stop_buzzer()
         with self._lock:
             self.current_state['buzzer'] = False
             self.current_state['acknowledged'] = True
-        logger.info("报警已确认（消音），指示灯保持；同级新报警仍会触发")
-        return True
+            # 灯保持当前状态：确认只消音，不清除报警级别与灯色
+            red = bool(self.current_state.get('red'))
+            yellow = bool(self.current_state.get('yellow'))
+            green = bool(self.current_state.get('green'))
+
+        # round 302：**必须真的写 DO**。
+        # critical 级的蜂鸣器是「DO 常 ON、不起脉冲线程」（见 trigger_alarm 的
+        # critical 分支与它的注释），所以 `_stop_buzzer()` 只是 join 了一个 None
+        # 线程、一个字节都没写；而这里原来无条件 `return True`。
+        # 结果：界面回「已消音」、`get_status()['state']['buzzer']` 也是 False，
+        # **现场蜂鸣器却一直常响到下一次 reset()**。操作员会以为界面卡了，
+        # 或者去拔电源 —— 拔电源会让所有声光输出一起失效。
+        # warning 级反而正常（脉冲线程退出时会写 False），所以这个缺陷只在
+        # 最该消音的那一级出现。
+        # 判据：`_write_all_do` 的返回值不是装饰品（round 281 修的正是这条契约）。
+        ok = self._write_all_do(red=red, yellow=yellow, green=green, buzzer=False)
+        if ok:
+            logger.info("报警已确认（消音），指示灯保持；同级新报警仍会触发")
+        else:
+            logger.error(
+                "报警确认：蜂鸣器 DO 写入失败 —— 现场很可能仍在响，"
+                "请检查 DO 通道与通信链路，必要时到现场处置")
+        return ok
 
     def reset(self):
         """
@@ -421,7 +446,9 @@ class AlarmOutput:
             duration: 持续时间（秒，0=持续）
 
         Returns:
-            dict: {'success': True, 'state': {...}}
+            dict: {'success': bool, 'output_ok': bool, 'state': {...}}
+                `output_ok` 表示 DO 是否真的写成功（round 302：原来恒回 True，
+                DO 断链时界面照样提示「指令已发送」）。
         """
         # 手动操作接管全部DO，停掉自动线程
         self._stop_flash()
@@ -432,7 +459,8 @@ class AlarmOutput:
         g = green if green is not None else self.current_state['green']
         b = buzzer if buzzer is not None else self.current_state['buzzer']
 
-        self._write_all_do(r, y, g, b)
+        # round 302：返回值不能丢 —— 这是调试/巡检接口，最需要「到底写没写进去」
+        ok = self._write_all_do(r, y, g, b)
 
         self.current_state.update({
             'red': r, 'yellow': y, 'green': g, 'buzzer': b,
@@ -448,7 +476,10 @@ class AlarmOutput:
             timer.daemon = True
             timer.start()
 
-        return {'success': True, 'state': self.current_state.copy()}
+        if not ok:
+            logger.error("手动输出：DO 写入失败 —— 现场声光可能没有变化，"
+                         "请检查 DO 通道与通信链路")
+        return {'success': ok, 'output_ok': ok, 'state': self.current_state.copy()}
 
     # ==================== 蜂鸣器脉冲控制 ====================
 

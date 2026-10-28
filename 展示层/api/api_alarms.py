@@ -138,10 +138,23 @@ def alarm_output_acknowledge():
     """消音 — 关闭蜂鸣器，报警灯保持闪烁"""
     alarm_manager = current_app.alarm_manager
     if alarm_manager.alarm_output:
-        alarm_manager.alarm_output.acknowledge()
+        # round 302：**返回值必须往上抛**。
+        # `acknowledge()` 此前对 critical 级根本不写 DO（只停脉冲线程，而
+        # critical 的蜂鸣器是 DO 常 ON），还恒返回 True —— 界面说「已消音」，
+        # 现场一直响。现在它如实返回 DO 结果，这里也不能再无视。
+        output_ok = alarm_manager.alarm_output.acknowledge()
         get_auth_manager().log_operation(
-            request.current_user['username'], 'alarm_acknowledge', '声光报警消音')
-        return jsonify({'success': True, 'message': '已消音，指示灯保持'})
+            request.current_user['username'], 'alarm_acknowledge',
+            '声光报警消音' if output_ok else '声光报警消音（DO 未确认）')
+        if not output_ok:
+            return jsonify({
+                'success': False,
+                'output_ok': False,
+                'message': '软件已消音，但蜂鸣器 DO 写入失败 —— 现场很可能仍在响。'
+                           '请检查 DO 通道与通信链路，必要时到现场处置。',
+            }), 500
+        return jsonify({'success': True, 'output_ok': True,
+                        'message': '已消音，指示灯保持'})
     return jsonify({'success': False, 'message': '声光报警输出未启用'}), 400
 
 
@@ -193,10 +206,23 @@ def alarm_output_manual():
     get_auth_manager().log_operation(
         request.current_user['username'], 'alarm_manual',
         f'手动控制报警灯: {data}')
+
+    # round 302：`success` 默认 True 的写法会把 DO 失败吞成成功
+    # （`result.get('success', True)` —— 缺 key 就当成功，正是"假成功"的模板）。
+    output_ok = bool(result.get('output_ok', result.get('success') is True))
+    if not output_ok:
+        return jsonify({
+            'success': False,
+            'output_ok': False,
+            'state': result.get('state', {}),
+            'message': '手动控制指令已下发，但 DO 写入失败 —— 现场声光可能没有变化，'
+                       '请检查 DO 通道与通信链路',
+        }), 500
     return jsonify({
-        'success': result.get('success', True),
+        'success': True,
+        'output_ok': True,
         'state': result.get('state', {}),
-        'message': '手动控制指令已发送'
+        'message': '手动控制指令已发送',
     })
 
 

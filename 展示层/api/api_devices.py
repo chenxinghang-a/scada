@@ -107,7 +107,17 @@ def add_device():
             'device': device_status
         })
     else:
-        return jsonify({'success': False, 'message': '添加失败'}), 400
+        # round 302：`add_device` 现在会在配置落盘失败时**回滚并返回 False**
+        # （以前它会吞掉 `_save_config()` 的结果，接口回「添加成功」，
+        # 重启后设备消失）。这里仍用 400 —— 该返回值无法区分「参数/协议不合法」
+        # 与「落盘失败」两种情况，改用 500 会把客户端的配置错误误报成服务端故障。
+        # 但文案必须点出「可能没保存」，否则运维会以为只是参数写错、重试就好。
+        return jsonify({
+            'success': False,
+            'persisted': False,
+            'message': f'设备 {data["id"]} 添加失败'
+                       '（若参数无误，则可能是配置未能保存、改动已回滚）',
+        }), 400
 
 
 @devices_bp.route('/devices/<device_id>', methods=['PUT'])
@@ -269,7 +279,15 @@ def delete_device(device_id):
         get_auth_manager().log_operation(
             request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
         return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
-    return jsonify({'success': False, 'message': f'删除设备 {device_id} 失败'}), 400
+    # round 302：删除同样会因落盘失败而回滚（设备被放回内存）。
+    # 保持 400（与 add 一致：该返回值也可能是「设备本就不存在」），
+    # 但文案要说明「已恢复」——否则运维会以为设备真的删掉了。
+    return jsonify({
+        'success': False,
+        'persisted': False,
+        'message': f'删除设备 {device_id} 失败'
+                   '（设备不存在，或配置未能保存、设备已恢复）',
+    }), 400
 
 
 @devices_bp.route('/devices/<device_id>/connect', methods=['POST'])

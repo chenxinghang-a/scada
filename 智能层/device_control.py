@@ -123,6 +123,10 @@ class DeviceControlSafety:
         # ===== 安全联锁规则 =====
         self._interlock_rules: dict[str, dict[str, Any]] = {}
         self._interlock_states: dict[str, bool] = {}  # rule_id -> is_triggered
+        # round 302：条件成立但**动作没发出去**的次数（写停机值失败 / 急停抛异常）。
+        # 状态位此时保持 False（等下一个采样点重试），所以光看 `triggered`
+        # 会以为"没触发"—— 这个计数让「触发过但没执行」在状态接口里可见。
+        self._interlock_action_failures: dict[str, int] = {}
         self._interlock_bypass: Set[str] = set()  # 被旁路的联锁ID
         self._lock = threading.Lock()
 
@@ -789,6 +793,10 @@ class DeviceControlSafety:
             return
         value = numeric
 
+        # round 302：锁内只做「判定 + 排队」，I/O 一律锁外执行（理由见下方执行块）
+        to_execute: list[tuple[str, dict[str, Any]]] = []
+        to_clear: list[str] = []
+
         with self._lock:
             for rule_id, rule in self._interlock_rules.items():
                 # 跳过被旁路的联锁
@@ -844,31 +852,80 @@ class DeviceControlSafety:
                 # 处理联锁触发
                 was_triggered = self._interlock_states.get(rule_id, False)
                 if triggered and not was_triggered:
-                    self._interlock_states[rule_id] = True
-                    self._execute_interlock_action(rule)
+                    # round 302：只**排队**，执行成功后才置位（见锁外执行块）
+                    to_execute.append((rule_id, rule))
                 elif not triggered and was_triggered:
-                    self._interlock_states[rule_id] = False
-                    logger.info(f"联锁条件解除: {rule_id}")
+                    to_clear.append(rule_id)
 
-    def _execute_interlock_action(self, rule: dict[str, Any]):
-        """执行联锁动作"""
+        # 锁外执行 I/O（round 302）
+        #
+        # 1) **状态锁绝不跨 I/O 持有**。`_execute_interlock_action` 要写 Modbus
+        #    寄存器、写 DO 线圈、发 MQTT 广播，`emergency_stop` 还会循环停掉
+        #    所有设备。网关断线时一次写能卡 3–20 秒，而 `self._lock` 同时是
+        #    `get_interlock_status()` / 旁路申请 / **所有设备的联锁判定**的锁 ——
+        #    卡住的是安全判定本身。这与 round 286 给 alarm_output 定的判据同源
+        #    （状态锁 / I/O 锁分离），device_control 此前是唯一没做分离的核心模块。
+        # 2) **动作成功才算触发**。原来先置 `_interlock_states[rule_id] = True`
+        #    再执行动作：动作抛异常（声光网关断线、DO 熔断）后状态已经是 True，
+        #    下一轮 `triggered and not was_triggered` 恒假 → 写停机值、急停、
+        #    `interlock_triggered` 审计**永久跳过**；而界面显示「联锁已触发」、
+        #    启机校验也被拦住 —— 一套看起来生效、实际什么都没做的保护。
+        for rule_id, rule in to_execute:
+            ok = self._execute_interlock_action(rule)
+            with self._lock:
+                if ok:
+                    self._interlock_states[rule_id] = True
+                    self._interlock_action_failures.pop(rule_id, None)
+                else:
+                    # 状态保持 False → 下一个采样点自动重试；
+                    # 累计失败次数在 get_interlock_status() 里可见
+                    self._interlock_action_failures[rule_id] = \
+                        self._interlock_action_failures.get(rule_id, 0) + 1
+
+        for rule_id in to_clear:
+            with self._lock:
+                self._interlock_states[rule_id] = False
+            logger.info(f"联锁条件解除: {rule_id}")
+
+    def _execute_interlock_action(self, rule: dict[str, Any]) -> bool:
+        """执行联锁动作。
+
+        Returns:
+            bool: **核心动作是否真的发出去了**。False 表示调用方不该把
+            `_interlock_states[rule_id]` 置 True —— 下一个采样点会自动重试。
+
+        round 302：
+        · 三个动作分支都可能抛（声光网关断线、DO 熔断、MQTT 掉线），
+          原来 `trigger_alarm` / `speak_alarm` 是**裸调**：抛出去整轮报废，
+          而调用方已经把状态置成 True（见那边注释）。现在逐个隔离，
+          任何一个播报通道失败都不影响「写停机值」这条命脉动作。
+        · 返回值改成 bool：写停机值是安全动作的关键路径，它失败必须让
+          调用方知道 —— 原来只打一行 error，状态照样置位，等于假装执行过。
+        """
         rule_id = rule['id']
         action = rule.get('action', {})
         alarm_info = rule.get('alarm', {})
 
         logger.warning(f"联锁触发: {rule_id} - {rule.get('name')}")
 
-        # 发送报警
+        # 发送报警（声光/广播：尽力而为，失败不阻断停机动作）
         if self.alarm_manager and alarm_info:
             level = alarm_info.get('level', 'critical')
             message = alarm_info.get('message', f'联锁触发: {rule_id}')
             # 通过报警管理器触发声光报警
             if self.alarm_manager.alarm_output:
-                self.alarm_manager.alarm_output.trigger_alarm(level, message, 'interlock')
+                try:
+                    self.alarm_manager.alarm_output.trigger_alarm(level, message, 'interlock')
+                except Exception as e:      # noqa: BLE001
+                    logger.error("联锁声光输出失败（继续执行停机动作）: %s", e)
             if self.alarm_manager.broadcast_system:
-                self.alarm_manager.broadcast_system.speak_alarm(level, message, 'interlock')
+                try:
+                    self.alarm_manager.broadcast_system.speak_alarm(level, message, 'interlock')
+                except Exception as e:      # noqa: BLE001
+                    logger.error("联锁广播失败（继续执行停机动作）: %s", e)
 
         # 执行动作
+        action_ok = True
         action_type = action.get('type')
         if action_type == 'write_register':
             device_id = action.get('device_id')
@@ -884,22 +941,37 @@ class DeviceControlSafety:
                             client.write_single_register(address, int(value))
                             logger.info(f"联锁动作执行: 写入 {device_id}/addr={address} = {value}")
                         else:
+                            action_ok = False
                             logger.error(f"联锁动作: 无法解析寄存器 {register} 的地址")
                     else:
+                        action_ok = False
                         logger.error(f"联锁动作: 设备 {device_id} 不支持写操作")
-                except Exception as e:
+                except Exception as e:      # noqa: BLE001 —— 写失败要能重试，不能吞
+                    action_ok = False
                     logger.error(f"联锁动作执行失败: {e}", exc_info=True)
 
         elif action_type == 'emergency_stop':
-            self.trigger_emergency_stop(f'联锁 {rule_id} 触发紧急停机')
+            try:
+                self.trigger_emergency_stop(f'联锁 {rule_id} 触发紧急停机')
+            except Exception as e:          # noqa: BLE001
+                action_ok = False
+                logger.error("联锁急停执行失败: %s", e, exc_info=True)
 
         elif action_type == 'block_start':
             # 标记设备启动被阻止
             logger.warning(f"联锁阻止设备启动: {rule_id}")
 
-        # 记录审计
-        self._audit('interlock_triggered', 'system',
-                    f'联锁 {rule_id} ({rule.get("name")}) 触发')
+        # 记录审计（写文件也可能失败，不能因为审计挂了就丢掉动作结果）
+        try:
+            self._audit(
+                'interlock_triggered' if action_ok else 'interlock_action_failed',
+                'system',
+                f'联锁 {rule_id} ({rule.get("name")}) '
+                + ('触发' if action_ok else '触发但动作未发出'))
+        except Exception as e:              # noqa: BLE001
+            logger.error("联锁审计写入失败: %s", e)
+
+        return action_ok
 
     def get_interlock_status(self) -> dict[str, Any]:
         """获取所有联锁状态"""
@@ -911,6 +983,10 @@ class DeviceControlSafety:
                     'description': rule.get('description'),
                     'priority': rule.get('priority', 99),
                     'triggered': self._interlock_states.get(rule_id, False),
+                    # round 302：条件已成立但动作没发出去（写寄存器失败/急停抛异常）。
+                    # `triggered` 保持 False 是为了下个采样点重试；没有这个字段，
+                    # 界面上就是"条件没成立"，而事实是"成立过、但没执行成功"。
+                    'action_failures': self._interlock_action_failures.get(rule_id, 0),
                     'bypassed': rule_id in self._interlock_bypass,
                     'condition': rule.get('condition'),
                     'action': rule.get('action'),
