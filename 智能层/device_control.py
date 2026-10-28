@@ -163,6 +163,11 @@ class DeviceControlSafety:
 
         # ===== 通信监控 =====
         self._comm_failures: dict[str, int] = {}  # device_id -> consecutive failures
+        # round 303：已进入故障降级的设备。没有它，`failures >= 阈值` 之后
+        # **每个失败采样点**都会重跑安全状态 handler + 报警 + 审计
+        # （5 分钟掉线 = 60 次重复动作，审计被自己的降级日志刷满）。
+        # 与联锁的 `triggered and not was_triggered` 同一判据：只在边沿迁移。
+        self._degraded_devices: set[str] = set()
         self._comm_threshold = COMM_FAILURE_THRESHOLD
 
         # 加载预置联锁规则
@@ -388,7 +393,11 @@ class DeviceControlSafety:
                 self._device_health[device_id] = {
                     'status': 'connected' if connected else 'disconnected',
                     'last_seen': datetime.now().isoformat() if connected else None,
-                    'consecutive_failures': 0 if connected else 3,
+                    # round 303：**从判据那份派生**，不另写一个数字。
+                    # 原来未连接时直接写死 3 —— 阈值是 3 的话，界面一上来就
+                    # 显示「已经失败 3 次」，而 `_comm_failures` 还是 0；
+                    # 两套数字从第一秒就不一致。
+                    'consecutive_failures': self._comm_failures.get(device_id, 0),
                     'avg_response_ms': 0,
                     'name': config.get('name', device_id),
                     'protocol': config.get('protocol', 'unknown'),
@@ -419,7 +428,15 @@ class DeviceControlSafety:
                 health['status'] = 'connected' if connected else 'disconnected'
                 if connected:
                     health['last_seen'] = datetime.now().isoformat()
+                    # round 303：**同一份真值只能有一个写入口**。
+                    # 原来这里只清 `health['consecutive_failures']`、不清
+                    # `_comm_failures`：界面上的失败次数被抹成 0，而判据用的
+                    # 那一份还是 3 —— 再失败一次就 `4 >= 阈值` 立刻判断线并
+                    # 再次降级，实际只失败了一次。两处必须一起清。
+                    self._comm_failures[device_id] = 0
                     health['consecutive_failures'] = 0
+                    # 恢复健康后允许下一次掉线重新降级
+                    self._degraded_devices.discard(device_id)
                 health['name'] = config.get('name', device_id)
                 health['protocol'] = config.get('protocol', 'unknown')
         except Exception as e:
@@ -1466,6 +1483,8 @@ class DeviceControlSafety:
                 (1 - alpha) * health.get('avg_response_ms', 0)
             )
             self._comm_failures[device_id] = 0
+            # 恢复后清掉「已降级」标记，下一次掉线才能再触发降级
+            self._degraded_devices.discard(device_id)
         else:
             failures = self._comm_failures.get(device_id, 0) + 1
             self._comm_failures[device_id] = failures
@@ -1473,7 +1492,18 @@ class DeviceControlSafety:
 
             if failures >= self._comm_threshold:
                 health['status'] = 'disconnected'
-                self._trigger_fault_degradation(device_id, failures)
+                # round 303：**只在跨过阈值那一刻降级一次**。
+                # 原来这里没有任何「已降级」标记，`failures >= 阈值` 之后
+                # 每一个失败采样点都会重跑一遍：安全状态 handler（关阀/切手动）
+                # 被重复下发、声光被重复触发、审计被重复写。
+                # 一台设备掉线 5 分钟（5s 一采）= 60 次重复动作；
+                # 审计日志是 `deque(maxlen=50000)`，一台设备几小时就能刷满，
+                # **真实的操作审计被挤出去**。
+                # 判据与联锁的 `triggered and not was_triggered` 同源：
+                # 状态迁移必须只在**边沿**发生。
+                if device_id not in self._degraded_devices:
+                    self._degraded_devices.add(device_id)
+                    self._trigger_fault_degradation(device_id, failures)
 
     def _trigger_fault_degradation(self, device_id: str, failures: int):
         """触发故障降级"""
@@ -1565,6 +1595,29 @@ class DeviceControlSafety:
             }
 
         try:
+            # round 303：**拿锁之后再复核一次**。
+            #
+            # `validate_write` 是在拿锁**之前**调的（1549 行），而这中间还要：
+            # 等设备锁（最长 5 秒）→ connect → 最多 3 次重试（每次之间 sleep 0.1s）。
+            # 这段时间里别的线程完全可以把 `_estop_active` 置起来（急停按钮、
+            # 联锁动作、看门狗都走这条路），或者某条 block_start 联锁刚触发。
+            # 「校验通过」是一个会过期的前提，而急停的语义是
+            # **立刻生效、不许有在途写入** —— 所以执行前必须重新确认一次。
+            #
+            # 复核只读内存（急停标志 / 设备健康 / 联锁状态 / 量程），
+            # 没有任何 I/O，代价可以忽略。
+            recheck = self.validate_write(device_id, address, value, operator)
+            if not recheck['allowed']:
+                self._audit('write_blocked', operator,
+                            f'写入被复核阻止（拿锁后状态已变）: '
+                            f'{device_id}/{address}={value}, 原因: {recheck["reason"]}')
+                return {
+                    'success': False,
+                    'message': f'写入前复核未通过：{recheck["reason"]}',
+                    'validation': recheck,
+                    'rechecked': True,
+                }
+
             # 写入
             success = False
             client = self.device_manager.get_client(device_id) if self.device_manager else None

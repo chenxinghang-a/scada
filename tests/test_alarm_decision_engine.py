@@ -119,12 +119,25 @@ def test_delay_restarts_when_condition_recovers():
     assert d2.action == PENDING
 
 
-def test_update_increments_count_while_active():
+def test_update_does_not_inflate_trigger_count():
+    """持续报警**不许**把 trigger_count 刷成采样点数（round 303）。
+
+    旧契约（本测试原来的名字就叫 `test_update_increments_count_while_active`）：
+    每个采样点 +1。于是同一条报警，看板读内存显示「触发 7200 次」（10 小时 /
+    5s 采样），历史报表读库显示 1 次 —— 同一个字段名两套语义，
+    报警合理性评审（tools/alarm_kpi_report.py）根本判断不了到底刷了多少次。
+
+    新契约：`trigger_count` 只在**重新触发**时 +1（与库一致）；
+    活跃期采样点数另存 `sample_count`，它有自己的消费方。
+    """
     rule = _rule()
     state = new_state('r1', 'd1', 'temp', decide(rule, None, 120.0, T0), T0)
+
     d = decide(rule, state, 130.0, T0 + timedelta(seconds=5))
+
     assert d.action == UPDATE
-    assert d.updates['trigger_count'] == 2
+    assert 'trigger_count' not in d.updates, '持续报警又在给 trigger_count 加数'
+    assert d.updates['sample_count'] == 1, '活跃采样点没有单独计数'
 
 
 def test_clear_when_recovered():

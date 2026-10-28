@@ -1932,6 +1932,10 @@ class AlarmManager:
                 'first_trigger_time': state.get('first_trigger_time'),
                 'last_trigger_time': state.get('last_trigger_time'),
                 'trigger_count': state.get('trigger_count', 0),
+                # round 303：活跃期采样点数（与 trigger_count 分开）。
+                # trigger_count 现在只在「重新触发」时 +1（与库一致），
+                # 「这条报警持续了多久 / 采了多少个点」由 sample_count 回答。
+                'sample_count': state.get('sample_count', 0),
                 'acknowledged': state.get('acknowledged', False),
                 # round 299：旁路状态必须能被看板看见。
                 # `shelve_alarm` 会置 `state['shelved']`，但此前**全仓没有一处读它**

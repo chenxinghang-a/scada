@@ -219,7 +219,14 @@ def decide(rule_config: dict, state: dict | None, value: Any,
 
     return Decision(UPDATE, {
         'last_trigger_time': timestamp,
-        'trigger_count': int(state.get('trigger_count') or 0) + 1,
+        # round 303：**trigger_count 只在「重新触发」时 +1，与库里一致**。
+        # 原来这里每个采样点都 +1：一条持续 10 小时的报警（5s 采样）在看板上
+        # 显示「触发 7200 次」，而历史报表里是 1 次 —— 同一个字段名两套语义。
+        # 做报警合理性评审（tools/alarm_kpi_report.py）时判断不了到底刷了多少次，
+        # 抖动抑制的效果也就无法验证。
+        # 活跃期的采样点数另存 `sample_count`：它有自己的一类消费方
+        # （波形密度、稳定性评估），不该和「触发了几次」共用一个字段。
+        'sample_count': int(state.get('sample_count') or 0) + 1,
         'last_value': numeric,
     }, reason='持续报警')
 
@@ -234,6 +241,8 @@ def new_state(rule_id: str, device_id: str, register_name: str,
         'first_trigger_time': timestamp,
         'last_trigger_time': timestamp,
         'trigger_count': 1,
+        # round 303：活跃期采样点数（与 trigger_count 分开，见 decide 的 UPDATE 分支）
+        'sample_count': 0,
         'confirmed': False,
         'acknowledged': False,
         'pending': decision.action == PENDING,
