@@ -4,6 +4,8 @@
 """
 
 import logging
+
+from core.device_lifecycle import notify_device_removed
 import threading
 import yaml
 from typing import Any
@@ -363,6 +365,9 @@ class SimulatedDeviceManager(IDeviceManager):
                 return False
 
             logger.info(f"[模拟] 移除设备: {device_id}")
+            # round 312：落盘成功之后才通知 —— 通知里各模块会清掉该设备的
+            # 健康/失败计数/报表状态，回滚的设备不能清。
+            notify_device_removed(device_id)
             return True
         except Exception as e:
             logger.error(f"移除设备异常: {e}")

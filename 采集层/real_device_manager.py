@@ -17,6 +17,7 @@ from .mqtt_client import MQTTClient
 from .rest_client import RESTDeviceClient
 import paths
 from core.safe_numeric import try_int
+from core.device_lifecycle import notify_device_removed
 
 logger = logging.getLogger(__name__)
 
@@ -672,6 +673,7 @@ class RealDeviceManager(IDeviceManager):
                 return False
 
             logger.info(f"[真实] 移除设备: {device_id}")
+            notify_device_removed(device_id)      # round 312
             return True
         except Exception as e:
             logger.error(f"移除设备异常: {e}")

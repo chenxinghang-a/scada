@@ -14,6 +14,7 @@ from typing import Any
 from pathlib import Path
 
 from core.connection_pool import ConnectionPool
+from core.device_lifecycle import notify_device_removed
 from core.config_manager import load_connection_pool_settings
 import paths
 
@@ -301,6 +302,11 @@ class DeviceManager:
         if removed:
             for did in removed:
                 self.disconnect_device(did)
+                # round 312：**热重载删设备不走 `remove_device()`** ——
+                # 它只替换配置表，所以这里必须逐个通知，
+                # 否则「yaml 里删掉一台设备」之后 OEE/能耗报表里它还在，
+                # 重新加回同名设备时还会继承旧的连续失败计数。
+                notify_device_removed(did)
             logger.info(f"移除设备: {removed}")
 
         return {
@@ -734,6 +740,10 @@ class DeviceManager:
             self._status_cache.pop(device_id, None)
             self._status_cache_time.pop(device_id, None)
             logger.info(f"移除设备: {device_id}")
+            # round 312：通知各模块清掉按设备索引的运行时状态。
+            # 这条路径是「界面上删设备」，但**热重载不走它** ——
+            # 所以 `reload_config()` 里的差集也要单独通知（见下）。
+            notify_device_removed(device_id)
             return True
         except Exception as e:
             logger.error(f"移除设备异常: {e}")

@@ -407,6 +407,30 @@ def main():
             vibration_analyzer=vibration_analyzer,
         )
 
+        # round 312：设备**被删除**时，通知各模块清掉按 device_id 索引的运行时状态。
+        #
+        # 为什么要在这里注册（而不是在 `api_devices` 里）：
+        # 设备消失有**两条**路径 —— ①界面上删（`remove_device`）；
+        # ②`devices.yaml` 热重载把设备删了（`reload_config` 的差集）。
+        # 第 ② 条完全不经过 API 层，所以清理逻辑必须挂在
+        # `core.device_lifecycle` 的事件上，而不是某个 handler 里。
+        #
+        # 监听器**显式捕获模块实例**、不碰 `current_app`：
+        # 热重载发生在后台维护线程里，那里没有 app context。
+        def _forget_device_state(device_id: str) -> None:
+            for _mod in (data_collector, device_control, oee_calculator,
+                         energy_manager, vibration_analyzer,
+                         predictive_maintenance, spc_analyzer, tsdb_adapter):
+                if _mod is None:
+                    continue
+                _fn = getattr(_mod, 'forget_device', None)
+                if callable(_fn):
+                    _fn(device_id)
+
+        from core.device_lifecycle import add_device_remove_listener
+        add_device_remove_listener(_forget_device_state)
+        logger.info("已注册设备删除监听器（清理 OEE/能耗/振动/预测维护/SPC/安全联锁/时序）")
+
         # 创建Flask应用
         logger.info("创建Web应用...")
         app = create_app(database, device_manager, alarm_manager, data_collector,
