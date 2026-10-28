@@ -1077,6 +1077,64 @@ class AlarmManager:
             self._release_notify_slot('sms')
             self._record_output_failure('sms', f"短信任务提交失败: {e}")
 
+    def _retire_inactive_rules(self, inactive_rule_ids: set[str]) -> int:
+        """规则被**删除或禁用**后，收尾它留下的活跃报警（round 317）。
+
+        Returns:
+            int: 收尾的报警条数。
+
+        ## 为什么必须做
+
+        `_rebuild_rules_index()` 只索引 `enabled` 的规则。一条规则从
+        `alarms.yaml` 里删掉（或改成 `enabled: false`）之后：
+
+        * 索引里没有它 → **后续采样永远不会再检查它**；
+        * 于是 `_process_alarm_state()` 永远不会给它走 CLEAR 分支
+          → `alarm_states` 里那条**永久残留**；
+        * 库里对应记录永远停在 `cleared = 0`。
+
+        现场表现：看板永久显示一条**规则已经不存在的报警**；点"确认"能确认，
+        但它永远不会"恢复"（因为没人再检查那个点位）；`get_active_alarms()`
+        和"未恢复报警数"永久偏大。与 round 274 修的"已删设备的幽灵报警"
+        是同一个病，只是维度从 device 换成了 rule。
+
+        ## 收尾动作
+
+        1. 从 `alarm_states` 移除（看板立刻不再显示）；
+        2. 库里标记 `cleared = 1`（它是"规则没了"而不是"条件恢复了"，
+           但对外语义一致：这条报警结束了）；
+        3. 从升级跟踪移除（否则 300/900/1800 秒后还会为一个不存在的规则
+           给三级主管打电话）。
+        """
+        if not inactive_rule_ids:
+            return 0
+
+        retired: list[tuple] = []
+        with self._state_lock:
+            for key in list(self.alarm_states):
+                if key[0] in inactive_rule_ids:
+                    state = self.alarm_states.pop(key, None)
+                    if state is not None:
+                        retired.append((key, state))
+
+        for (rule_id, device_id, register_name), _state in retired:
+            try:
+                self.database.clear_alarm(rule_id, device_id, register_name)
+            except Exception as e:      # noqa: BLE001 —— 收尾失败不许影响重载
+                logger.error("规则 %s 已失效，但数据库记录收尾失败 %s/%s: %s",
+                             rule_id, device_id, register_name, e)
+            if self._escalation_manager:
+                try:
+                    self._escalation_manager.remove_alarm(rule_id, device_id, register_name)
+                except Exception as e:  # noqa: BLE001
+                    logger.error("规则 %s 已失效，但升级跟踪移除失败: %s", rule_id, e)
+            logger.warning(
+                "规则 %s 已从配置删除/禁用 → 收尾其活跃报警 %s/%s"
+                "（否则它会永久挂在看板上，且永远不会「恢复」）",
+                rule_id, device_id, register_name)
+
+        return len(retired)
+
     def _rebuild_rules_index(self):
         """构建规则索引：(device_id, register_name) -> [(rule_id, rule_config)]
 
@@ -1294,6 +1352,16 @@ class AlarmManager:
 
             # 构建规则索引
             self._rebuild_rules_index()
+
+            # round 317：**被删除 / 被禁用的规则留下的活跃报警必须收尾**。
+            # 它们不在索引里 → 后续采样永远不再检查 → `alarm_states` 里那条
+            # 永久残留（看板永远显示一条"规则已不存在"的报警，且永远不会恢复）。
+            inactive = set(removed) | {
+                rid for rid, cfg in self.rules.items()
+                if not (cfg or {}).get('enabled', True)
+            }
+            if inactive:
+                self._retire_inactive_rules(inactive)
 
             # 加载去重配置
             dedup_cfg = config.get('dedup', {})
