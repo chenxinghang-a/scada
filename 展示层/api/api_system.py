@@ -35,10 +35,13 @@ def get_system_status():
     uptime_seconds = (datetime.now() - start_time).total_seconds() if start_time else 0
 
     brief = request.args.get('brief', '0') == '1'
+    # round 305：数据库统计走 30s TTL 缓存（6 条 COUNT(*) 全表扫描，
+    # 而这个接口被前端 3~5s 轮询）。想立刻看实时数就带 `fresh=1`。
+    fresh_db = request.args.get('fresh', '0') == '1'
 
     return jsonify({
         'version': get_version(),
-        'database': current_app.database.get_database_stats(),
+        'database': current_app.database.get_database_stats(force=fresh_db),
         'devices': current_app.device_manager.get_all_status(brief=brief),
         'collector': current_app.data_collector.get_stats(),
         'alarms': current_app.alarm_manager.get_alarm_statistics(),
@@ -51,8 +54,10 @@ def get_system_status():
 @system_bp.route('/system/database', methods=['GET'])
 @jwt_required
 def get_database_stats():
-    """获取数据库统计"""
-    return jsonify(current_app.database.get_database_stats())
+    """获取数据库统计（用户主动查询，默认强制实时）"""
+    # round 305：`/status` 走 TTL 缓存，但这个端点是人点出来的，默认要实时数。
+    force = request.args.get('force', '1') != '0'
+    return jsonify(current_app.database.get_database_stats(force=force))
 
 
 @system_bp.route('/system/simulation-mode', methods=['GET'])

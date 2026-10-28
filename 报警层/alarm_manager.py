@@ -2558,20 +2558,49 @@ class AlarmManager:
                     state['shelved'] = False
                 logger.info(f"报警旁路已过期自动解除: {':'.join(key)}")
 
-    def set_deadband(self, rule_id: str, deadband_value: float):
+    def set_deadband(self, rule_id: str, deadband_value: float) -> bool:
         """
         设置报警死区（ISA-18.2 Deadband）
 
         防止阈值附近信号抖动导致报警反复触发/清除。
         例如：阈值100，死区2，则 value>102 才触发，value<98 才清除。
 
+        round 305：**必须落盘**。
+        原来只改内存 `_deadbands`，而 `load_config()` 会按文件内容**整体重建**
+        死区表（round 304 的改动让这件事更彻底）—— API 设的值在下一次热重载时
+        静默消失，而接口回的是「已设置」。热重载由 alarms.yaml 的 mtime 触发，
+        生产上只要有人改一次配置文件就会发生。
+
         Args:
             rule_id: 报警规则ID
             deadband_value: 死区值
+
+        Returns:
+            bool: 是否真的写进了配置。False = 内存已回滚、调用方必须告知用户。
         """
+        if rule_id not in self.rules:
+            logger.warning("设置死区失败：规则 %s 不存在", rule_id)
+            return False
+
         with self._state_lock:
+            previous = self._deadbands.get(rule_id)
             self._deadbands[rule_id] = deadband_value
+            # 死区必须同时写进规则本体 —— `load_config` 是从
+            # `rule_config['deadband']` 读的，只改 `_deadbands` 存不下来。
+            self.rules[rule_id]['deadband'] = deadband_value
+
+        if not self._save_config():
+            with self._state_lock:
+                if previous is None:
+                    self._deadbands.pop(rule_id, None)
+                else:
+                    self._deadbands[rule_id] = previous
+                self.rules[rule_id].pop('deadband', None)
+            logger.error("设置死区失败（配置落盘失败，已回滚）: %s", rule_id)
+            return False
+
         logger.info(f"报警死区已设置: {rule_id} = {deadband_value}")
+        return True
 
     def get_deadbands(self) -> dict[str, float]:
         """获取所有死区配置"""

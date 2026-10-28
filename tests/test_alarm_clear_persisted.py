@@ -138,12 +138,17 @@ def test_retrigger_while_still_active_increments(db):
 # ---------------------------------------------------------------------------
 
 def test_unacknowledged_count_excludes_cleared(db):
-    """未确认数只算仍活跃的 —— 否则只增不减。"""
+    """未确认数只算仍活跃的 —— 否则只增不减。
+
+    round 305：`get_database_stats()` 加了 30s TTL 缓存，而这里的断言要的是
+    **写完立刻读**的精确值，所以全部显式 `force=True` ——
+    本条测的是 SQL 语义，不是缓存行为（缓存本身由 test_silent_failures_round305 覆盖）。
+    """
     _trigger(db, datetime(2026, 10, 24, 8, 0, 0))
-    assert db.get_database_stats()['unacknowledged_alarms'] == 1
+    assert db.get_database_stats(force=True)['unacknowledged_alarms'] == 1
 
     db.clear_alarm(*ALARM_KEY, cleared_at=datetime(2026, 10, 24, 8, 30, 0))
-    stats = db.get_database_stats()
+    stats = db.get_database_stats(force=True)
     assert stats['unacknowledged_alarms'] == 0, (
         '已恢复的报警仍被算作"未确认" —— 这个数会只增不减')
     assert stats['active_alarms'] == 0
@@ -151,10 +156,10 @@ def test_unacknowledged_count_excludes_cleared(db):
 
 def test_active_count_ignores_cleared_but_keeps_unacked(db):
     _trigger(db, datetime(2026, 10, 24, 8, 0, 0))
-    assert db.get_database_stats()['active_alarms'] == 1
+    assert db.get_database_stats(force=True)['active_alarms'] == 1
 
     db.acknowledge_alarm('r1', 'operator', 'dev1', 'temp')
-    stats = db.get_database_stats()
+    stats = db.get_database_stats(force=True)
     assert stats['active_alarms'] == 1, '确认过的报警仍在持续，算活跃'
     assert stats['unacknowledged_alarms'] == 0
 

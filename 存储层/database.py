@@ -93,6 +93,18 @@ _DBSTAT_DATA_BYTES_SQL = 'SELECT SUM(pgsize) FROM dbstat'
 #: 迟迟没被发现的场景之一。
 BLOAT_WARN_INTERVAL_SECONDS = 3600
 
+#: `get_database_stats()` 的结果缓存时长（秒）。round 305。
+#:
+#: 为什么需要：这个函数被 `/api/system/status` 每次请求调用一次，
+#: 而那是纯前端轮询（dashboard 5s、大屏 3s），外加健康检查 10s。
+#: 每次 6 条 ``COUNT(*)`` 全表扫描，`history_data` 在真实库上约 200 万行 ——
+#: 统计查询与实时写入抢同一条读连接，表现为「越开越卡 / 偶发 database is locked」。
+#:
+#: 30 秒的依据：行数统计的用途是"看趋势 / 判断要不要清理"，
+#: 秒级精度没有意义；而 30 秒能把全表扫描频次压低一个数量级。
+#: 需要立刻看结果（刚清完数据）时用 ``force=True``。
+DB_STATS_CACHE_SECONDS = 30.0
+
 
 def adapt_datetime(dt: datetime) -> str:
     """把 datetime 适配为 SQLite 文本（写入路径）。
@@ -134,6 +146,19 @@ class Database:
         # 光记日志不够 —— 长期跑下来没人会去翻日志，必须在 stats 里可查。
         self._skip_stats_lock = threading.Lock()
         self._skipped_invalid_rows = 0
+
+        # round 305：`get_database_stats()` 的 TTL 缓存。
+        #
+        # 这个函数由 `/api/system/status` 每次请求调用一次，而那是**纯前端轮询**
+        # （dashboard 5s、大屏 3s），外加健康检查 10s。每次执行 6 条 `COUNT(*)`
+        # 全表扫描，其中 `history_data` 在真实库上约 200 万行 ——
+        # 统计查询和实时写入抢同一条读连接，表现为「系统越开越卡、
+        # 采集偶发 database is locked」。
+        # 行数不需要秒级精度：30 秒滞后对运维没有意义，
+        # 但能把全表扫描从"每 3 秒"降到"每 30 秒"。
+        self._dbstats_lock = threading.Lock()
+        self._dbstats_cache: dict[str, Any] | None = None
+        self._dbstats_cache_at: float = 0.0
 
         # 上次膨胀告警时间（单调时钟），用于告警节流。
         #
@@ -1243,17 +1268,47 @@ class Database:
 
             return history_deleted
 
-    def get_database_stats(self) -> dict[str, Any]:
-        """
-        获取数据库统计信息
+    def get_database_stats(self, *, force: bool = False) -> dict[str, Any]:
+        """获取数据库统计信息（带 TTL 缓存）。
 
         除各表行数外，还带上磁盘膨胀指标（``free_page_ratio`` 等，见
         ``get_fragmentation_stats``）。空闲页占比过高时会打 warning 日志 ——
         这是"文件 3.3GB、实际数据 67MB"那类膨胀的**自动发现**入口
         （原先只能靠人发现写入变慢后手工跑 ``tools/vacuum_db.py``）。
 
+        round 305：**结果缓存 `DB_STATS_CACHE_SECONDS` 秒**。
+        本函数被 `/api/system/status` 每次请求调用，而那是前端轮询
+        （dashboard 5s / 大屏 3s）+ 健康检查 10s —— 每次 6 条 ``COUNT(*)``
+        全表扫描，`history_data` 在真实库上约 200 万行。
+        统计查询与实时写入抢同一条读连接，表现为「越开越卡、偶发 database is locked」。
+
+        Args:
+            force: 跳过缓存强制重算 —— 刚清理完数据、想立刻看到结果时用。
+
         Returns:
             dict[str, Any]: 统计信息
+        """
+        if not force:
+            with self._dbstats_lock:
+                cached = self._dbstats_cache
+                cached_at = self._dbstats_cache_at
+            if cached is not None and (time.monotonic() - cached_at) < DB_STATS_CACHE_SECONDS:
+                return dict(cached)
+
+        stats = self._collect_database_stats()
+
+        # 只有拿到**完整**结果才写缓存 —— 统计过程中抛异常时不该把半份数据
+        # 留给下一轮读者（那会让"行数归零"这种假象活 30 秒）。
+        with self._dbstats_lock:
+            self._dbstats_cache = dict(stats)
+            self._dbstats_cache_at = time.monotonic()
+        return stats
+
+    def _collect_database_stats(self) -> dict[str, Any]:
+        """真正执行统计（6 条 COUNT + 膨胀指标）。
+
+        ⚠️ 不要直接调用 —— 走 ``get_database_stats()``，它带 TTL 缓存。
+        这里每次都会扫全表，直接调用等于把 round 305 修的负载问题重新引入。
         """
         with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
