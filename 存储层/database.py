@@ -4,6 +4,7 @@
 """
 
 import sqlite3
+import json
 import logging
 import threading
 import time
@@ -377,6 +378,22 @@ class Database:
                     message TEXT,
                     timestamp DATETIME NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # round 315：进程级 KV 状态（急停 / 联锁旁路）。
+            #
+            # 为什么需要：`DeviceControlSafety._estop_active` 与 `_interlock_bypass`
+            # 都是**纯内存**的，重启后清空 →
+            #   · 急停激活时重启 → 软件不再禁止写操作（而现场可能仍锁着急停）；
+            #   · 维护窗口内重启 → 联锁旁路突然失效，正在检修的设备被联锁动作
+            #     （写停机值/急停），人员可能被夹。
+            # 单独一条 execute：`cursor.execute()` 一次只能跑一条语句。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS system_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at DATETIME NOT NULL
                 )
             ''')
 
@@ -1116,6 +1133,51 @@ class Database:
 
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_system_state(self, key: str) -> Any | None:
+        """读进程级 KV 状态（JSON 反序列化）。不存在或解析失败返回 None。
+
+        round 315：目前用于 `estop` 与 `interlock_bypass` 两处 ——
+        它们都是"必须跨重启保持"的安全状态。
+        """
+        try:
+            with self.get_connection(readonly=True) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT value FROM system_state WHERE key = ?', (key,))
+                row = cursor.fetchone()
+        except Exception as e:      # noqa: BLE001 —— 老库没有这张表时不许炸
+            logger.debug("读取 system_state[%s] 失败: %s", key, e)
+            return None
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except (TypeError, ValueError) as e:
+            logger.warning("system_state[%s] 内容不是合法 JSON: %s", key, e)
+            return None
+
+    def set_system_state(self, key: str, value: Any) -> bool:
+        """写进程级 KV 状态（value 为 None 表示删除该键）。
+
+        Returns:
+            bool: 是否真的写成功。**调用方必须看返回值** ——
+            急停/旁路是安全状态，落库失败意味着"重启后会丢"。
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if value is None:
+                    cursor.execute('DELETE FROM system_state WHERE key = ?', (key,))
+                else:
+                    cursor.execute(
+                        'INSERT OR REPLACE INTO system_state (key, value, updated_at) '
+                        'VALUES (?, ?, ?)',
+                        (key, json.dumps(value, ensure_ascii=False, default=str),
+                         datetime.now()))
+            return True
+        except Exception as e:      # noqa: BLE001
+            logger.error("写入 system_state[%s] 失败（重启后会丢失该状态）: %s", key, e)
+            return False
 
     def get_uncleared_alarms(self, limit: int = 500) -> list[dict[str, Any]]:
         """取**条件尚未恢复**（`cleared = 0`）的报警记录（round 314）。

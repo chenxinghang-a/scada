@@ -209,6 +209,9 @@ class DeviceControlSafety:
 
         # 加载预置联锁规则
         self._load_preset_interlocks()
+
+        # round 315：恢复跨重启保持的安全状态（急停 / 旁路）
+        self._restore_persisted_state()
         # 加载写操作限制
         self._load_write_limits()
         # 初始化设备健康数据
@@ -672,6 +675,126 @@ class DeviceControlSafety:
             'total': total
         }
 
+    #: 跨重启保持的安全状态键（`system_state` 表）。
+    STATE_KEY_ESTOP = 'estop'
+    STATE_KEY_BYPASS = 'interlock_bypass'
+
+    def _persist_estop(self) -> None:
+        """把急停状态落库（round 315）。
+
+        为什么必须：`_estop_active` 是**纯内存**的。急停激活时进程重启 →
+        内存清空 → `validate_write()` 不再拦写操作，而**现场急停按钮可能仍锁着**。
+        落库失败只记 ERROR，不改急停本身的状态（内存里仍是急停，
+        宁可"重启后丢"也不能"现在就放行"）。
+        """
+        db = getattr(self, 'database', None)
+        if db is None or not hasattr(db, 'set_system_state'):
+            return
+        payload = None
+        if self._estop_active:
+            payload = {
+                'active': True,
+                'time': self._estop_time.isoformat() if self._estop_time else None,
+                'reason': self._estop_reason,
+                'affected_devices': list(getattr(self, '_estop_devices', []) or []),
+            }
+        if not db.set_system_state(self.STATE_KEY_ESTOP, payload):
+            logger.error("急停状态落库失败 —— 进程重启后急停标记会丢失，"
+                         "请人工确认现场急停按钮状态")
+
+    def _persist_bypasses(self) -> None:
+        """把当前**仍生效**的联锁旁路落库（round 315）。
+
+        存的是墙钟 `expires_at`（单调时钟不能跨进程），恢复时用它判断是否已过期。
+        """
+        db = getattr(self, 'database', None)
+        if db is None or not hasattr(db, 'set_system_state'):
+            return
+        with self._bypass_lock:
+            payload = {}
+            for interlock_id in self._active_bypasses:
+                req = next((r for r in self._bypass_requests.values()
+                            if r.interlock_id == interlock_id
+                            and r.status in ('pending', 'approved')), None)
+                if req is None:
+                    continue
+                payload[interlock_id] = {
+                    'request_id': req.request_id,
+                    'expires_at': req.expires_at,
+                    'requested_by': req.requested_by,
+                }
+        if not db.set_system_state(self.STATE_KEY_BYPASS, payload or None):
+            logger.error("联锁旁路状态落库失败 —— 进程重启后旁路会失效，"
+                         "正在检修的设备可能被联锁动作")
+
+    def _restore_persisted_state(self) -> dict[str, int]:
+        """启动时恢复急停与旁路（round 315）。
+
+        Returns:
+            dict: `{'estop': 0/1, 'bypass': 恢复条数, 'expired': 过期丢弃条数}`
+
+        旁路恢复时**必须校验过期**：库里可能留着一条早就该自动恢复的旁路
+        （上次进程在 Timer 触发前被杀），不校验就等于"永久旁路"。
+        """
+        result = {'estop': 0, 'bypass': 0, 'expired': 0}
+        db = getattr(self, 'database', None)
+        if db is None or not hasattr(db, 'get_system_state'):
+            return result
+
+        # --- 急停 ---
+        estop = db.get_system_state(self.STATE_KEY_ESTOP)
+        if isinstance(estop, dict) and estop.get('active'):
+            self._estop_active = True
+            raw_time = estop.get('time')
+            try:
+                self._estop_time = (datetime.fromisoformat(raw_time)
+                                    if isinstance(raw_time, str) else datetime.now())
+            except ValueError:
+                self._estop_time = datetime.now()
+            self._estop_reason = estop.get('reason') or '（重启前触发，原因未记录）'
+            self._estop_devices = list(estop.get('affected_devices') or [])
+            result['estop'] = 1
+            logger.critical(
+                "**紧急停机状态从数据库恢复**：进程重启前处于急停（%s，触发于 %s）。"
+                "写操作继续被禁止，直到工程师执行 reset_emergency_stop()",
+                self._estop_reason, self._estop_time)
+
+        # --- 旁路 ---
+        bypasses = db.get_system_state(self.STATE_KEY_BYPASS)
+        if isinstance(bypasses, dict):
+            now_wall = time.time()
+            for interlock_id, info in bypasses.items():
+                if not isinstance(info, dict):
+                    continue
+                expires_at = info.get('expires_at')
+                if not isinstance(expires_at, (int, float)) or expires_at <= now_wall:
+                    result['expired'] += 1
+                    continue        # 已过期，不恢复（由下面的重写清掉）
+                with self._lock:
+                    self._interlock_bypass.add(interlock_id)
+                with self._bypass_lock:
+                    self._active_bypasses.add(interlock_id)
+                # 重建定时器：用"还剩多久"换算成单调时钟
+                remaining = expires_at - now_wall
+                try:
+                    timer = threading.Timer(
+                        remaining, self._auto_restore_bypass,
+                        args=[interlock_id, info.get('request_id', '')])
+                    timer.daemon = True
+                    timer.start()
+                except Exception as e:      # noqa: BLE001
+                    logger.error("恢复旁路定时器失败 %s: %s", interlock_id, e)
+                result['bypass'] += 1
+                logger.warning(
+                    "**联锁旁路从数据库恢复**：%s（还剩 %.0f 分钟，原申请人 %s）",
+                    interlock_id, remaining / 60, info.get('requested_by', '?'))
+
+            if result['bypass'] or result['expired']:
+                # 把过期的从库里清掉，避免下次启动又数一遍
+                self._persist_bypasses()
+
+        return result
+
     def get_interlock_load_summary(self) -> dict[str, Any]:
         """最近一次联锁加载的摘要（round 308）。
 
@@ -832,6 +955,9 @@ class DeviceControlSafety:
         with self._bypass_lock:
             self._active_bypasses.add(request.interlock_id)
 
+        # round 315：落库 —— 维护窗口内重启不能让旁路失效
+        self._persist_bypasses()
+
         # 设置超时自动恢复
         # round 311：`threading.Timer` 要的是**相对时长**，必须用单调时钟算。
         # 用墙钟算的话，审批通过到启动 Timer 之间只要发生一次校时，
@@ -856,6 +982,8 @@ class DeviceControlSafety:
 
         self._audit('bypass_auto_restored', 'system', f'旁路超时自动恢复: {interlock_id}')
         logger.warning(f"旁路超时自动恢复: {interlock_id}")
+        # round 315：同步清库
+        self._persist_bypasses()
 
     def reject_bypass(self, request_id: str, rejector: str, reason: str = '') -> tuple[bool, str]:
         """拒绝旁路请求"""
@@ -1396,6 +1524,9 @@ class DeviceControlSafety:
 
         self._estop_devices = stopped_devices
 
+        # round 315：落库 —— 重启后必须仍然处于急停（否则写操作会被放行）
+        self._persist_estop()
+
         # 触发声光报警
         if self.alarm_manager:
             if self.alarm_manager.alarm_output:
@@ -1441,6 +1572,9 @@ class DeviceControlSafety:
         self._estop_active = False
         self._estop_time = None
         self._estop_reason = ''
+
+        # round 315：解除急停要同步清库，否则下次重启又"恢复"成急停
+        self._persist_estop()
 
         # 通知设备管理器恢复
         if self.device_manager:
