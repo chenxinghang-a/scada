@@ -657,8 +657,15 @@ class AuthManager:
         now = datetime.now()
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
+            # round 299：**必须同时清 `must_change_password`**。
+            # 默认 admin 建号时该位为 1；首次登录按提示走这条"常规改密"路径，
+            # 改完返回「密码修改成功」，但状态位仍是 1 →
+            # 重新登录又要求改密 → `jwt_required` 把除白名单外的一切请求打成 403
+            # → 改密死循环（而 `force_change_password` 的错误文案恰恰把人指向这里）。
+            # 两条改密路径对同一个状态位的写入必须等价。
             cursor.execute('''
-                UPDATE users SET password_hash = ?, updated_at = ?, password_changed_at = ?
+                UPDATE users SET password_hash = ?, updated_at = ?,
+                                 password_changed_at = ?, must_change_password = 0
                 WHERE username = ?
             ''', (new_hash.decode('utf-8'), now, now.isoformat(sep=' '), username))
 
@@ -710,10 +717,21 @@ class AuthManager:
 
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
+            # round 299：**必须写 `password_changed_at`**。
+            # `refresh_token()` 用它判定"令牌是否早于最后一次改密"，
+            # 这里不写 → 该字段恒为 NULL → 旧 refresh token 仍可通过校验，
+            # 攻击者能持续续期 `JWT_REFRESH_DAYS` 天。
+            _now = datetime.now()
             cursor.execute('''
-                UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ?
+                UPDATE users SET password_hash = ?, must_change_password = 0,
+                                 updated_at = ?, password_changed_at = ?
                 WHERE username = ?
-            ''', (new_hash.decode('utf-8'), datetime.now(), username))
+            ''', (new_hash.decode('utf-8'), _now, _now.isoformat(sep=' '), username))
+
+        # 强制改密的目的就是"把可能失陷的会话踢掉"，不撤旧令牌等于没改。
+        _revoked = self._blacklist_user_tokens(username, 'force_password_changed')
+        if not _revoked:
+            logger.error("强制改密后旧令牌撤销失败，旧令牌仍可继续使用 user=%s", username)
 
         self._log_operation(username, 'force_change_password', None, '首次登录改密成功')
         logger.info(f"用户 {username} 首次登录改密成功")

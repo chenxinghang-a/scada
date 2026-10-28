@@ -38,6 +38,26 @@ def get_alarms():
     data = current_app.database.get_alarm_records(
         device_id=device_id, alarm_level=alarm_level,
         acknowledged=acknowledged, limit=limit)
+
+    # round 299：把**运行时**的旁路状态合并进**库里的**历史记录。
+    # `alarm_records` 只有落库时的事实（触发 / 恢复 / 确认），而旁路只存在于
+    # `alarm_states`。不合并的话前端「已旁路」这个选项永远筛不出东西 ——
+    # 界面上看着有这功能，实际一条都不生效。
+    manager = getattr(current_app, 'alarm_manager', None)
+    if manager is not None and data:
+        try:
+            shelved = {
+                (a.get('alarm_id'), a.get('device_id'), a.get('register_name')):
+                    bool(a.get('shelved'))
+                for a in manager.get_active_alarms()
+            }
+        except Exception as e:      # noqa: BLE001 —— 合并失败不影响查历史
+            logger.debug("合并旁路状态失败: %s", e)
+            shelved = {}
+        for rec in data:
+            key = (rec.get('alarm_id'), rec.get('device_id'), rec.get('register_name'))
+            rec['shelved'] = shelved.get(key, False)
+
     return jsonify({'alarms': data})
 
 

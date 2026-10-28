@@ -249,7 +249,14 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
     for name, interval, description, func in build_maintenance_tasks(
             database, auth_manager, archive_days=archive_days,
             delete_days=delete_days, alarm_manager=alarm_manager,
-            device_manager=device_manager):
+            device_manager=device_manager,
+            # round 299：**这里原来漏了 data_collector**。
+            # `start_maintenance()` 明明透传了它，但注册时没往下传，
+            # 于是 `build_maintenance_tasks` 里那个闭包拿到的恒是 None，
+            # `watch_once(device_manager, None, ...)` 只重载配置表、
+            # **永不同步采集任务** —— round 285 的自动热重载等于只做了一半：
+            # 新增设备永远不采、删掉的设备继续超时重试并刷报警。
+            data_collector=data_collector):
         task_manager.add(name, func, overrides.get(name, interval), description)
         names.append(name)
 

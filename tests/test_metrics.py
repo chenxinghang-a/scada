@@ -92,29 +92,41 @@ class TestDeviceMetrics:
 class TestAlarmMetrics:
 
     def test_update_alarm_metrics(self, collector):
-        """update_alarm_metrics sets active alarm count"""
+        """update_alarm_metrics sets active alarm count **by level**
+
+        round 299：契约从「无 label 的单值 Gauge」改成「带 level 维度」——
+        `docs/MONITORING.md` 写的规则是 `scada_alarms_active{level="critical"} > 10`，
+        单值 Gauge 上根本不存在这条序列，PromQL 返回空向量，规则永不触发。
+        旧断言 `ALARMS_ACTIVE._value.get()` 正是把这个缺陷钉死的那条。
+        """
         am = MagicMock()
         am.get_active_alarms.return_value = [
-            {'id': 'a1'}, {'id': 'a2'}, {'id': 'a3'}
+            {'id': 'a1', 'alarm_level': 'critical'},
+            {'id': 'a2', 'alarm_level': 'critical'},
+            {'id': 'a3', 'alarm_level': 'warning'},
         ]
         collector.update_alarm_metrics(am)
-        assert ALARMS_ACTIVE._value.get() == 3
+        assert ALARMS_ACTIVE.labels(level='critical')._value.get() == 2
+        assert ALARMS_ACTIVE.labels(level='warning')._value.get() == 1
+        # 本轮没出现的级别显式归零，不能挂着上一轮的旧值
+        assert ALARMS_ACTIVE.labels(level='info')._value.get() == 0
 
     def test_update_alarm_metrics_empty(self, collector):
         """update_alarm_metrics handles empty alarms"""
         am = MagicMock()
         am.get_active_alarms.return_value = []
         collector.update_alarm_metrics(am)
-        assert ALARMS_ACTIVE._value.get() == 0
+        for lvl in ('critical', 'warning', 'info', 'unknown'):
+            assert ALARMS_ACTIVE.labels(level=lvl)._value.get() == 0
 
     def test_update_alarm_metrics_exception_safe(self, collector):
         """update_alarm_metrics doesn't raise on error"""
         am = MagicMock()
         am.get_active_alarms.side_effect = RuntimeError('fail')
-        ALARMS_ACTIVE.set(5)
+        ALARMS_ACTIVE.labels(level='critical').set(5)
         collector.update_alarm_metrics(am)  # should not raise
         # 原测试只调用不校验。异常时必须保留既有值，不能把活跃告警数写坏。
-        assert ALARMS_ACTIVE._value.get() == 5, \
+        assert ALARMS_ACTIVE.labels(level='critical')._value.get() == 5, \
             "get_active_alarms 抛异常时活跃告警数被改写"
 
 

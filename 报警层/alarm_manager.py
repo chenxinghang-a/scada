@@ -1894,6 +1894,11 @@ class AlarmManager:
                 'last_trigger_time': state.get('last_trigger_time'),
                 'trigger_count': state.get('trigger_count', 0),
                 'acknowledged': state.get('acknowledged', False),
+                # round 299：旁路状态必须能被看板看见。
+                # `shelve_alarm` 会置 `state['shelved']`，但此前**全仓没有一处读它**
+                # —— 只是往状态里塞了个没人消费的键，前端分不清
+                # 「真的在响」和「响过但已被旁路屏蔽」。
+                'shelved': state.get('shelved', False),
                 'pending': state.get('pending', False)
             })
 
@@ -1918,15 +1923,26 @@ class AlarmManager:
         """
         state_key = (alarm_id, device_id, register_name)
 
+        # round 299：**先写库、成功再置内存**。
+        # 原来是先置 `acknowledged=True` 再写库，于是：
+        # · `database.acknowledge_alarm` 抛异常 → 内存已是"已确认"，异常冒出；
+        # · 返回 False（rowcount=0，例如该行已被 clear_alarm 标为已恢复）→
+        #   内存仍是"已确认"，而 1932 行的 `if success and ...` 不成立 →
+        #   升级管理器收不到确认，电话照样打；同时 `get_active_alarms()`
+        #   已经把 `acknowledged: True` 报给前端 ——
+        #   **界面显示"已确认"、值班员以为处理完了、三级主管的电话照来**。
+        # 判据：内存与库必须是同一套真值，失败就不许改内存。
         with self._state_lock:
             state = self.alarm_states.get(state_key)
-            if state is not None:
-                state['acknowledged'] = True
-                state['acknowledged_by'] = acknowledged_by
-                state['acknowledged_at'] = datetime.now()
 
         # 更新数据库
         success = self.database.acknowledge_alarm(alarm_id, acknowledged_by, device_id, register_name)
+
+        if success and state is not None:
+            with self._state_lock:
+                state['acknowledged'] = True
+                state['acknowledged_by'] = acknowledged_by
+                state['acknowledged_at'] = datetime.now()
 
         # 通知升级管理器
         if success and self._escalation_manager:
@@ -2359,7 +2375,15 @@ class AlarmManager:
         """
         alarm_key = (alarm_id, device_id, register_name)
         shelved_until = None
-        if duration_minutes:
+        # round 299：`if duration_minutes:` 把 0 当 falsy → `shelved_until=None`
+        # → `is_expired()` 恒 False → **永久旁路**。前端表单默认 0 /
+        # "旁路 0 分钟"这类输入会让一条报警永久静默，而日志写的是
+        # 「时长: 手动解除」，看起来像正常操作。
+        if duration_minutes is not None:
+            if duration_minutes <= 0:
+                logger.warning("拒绝旁路 %s：时长必须为正数（收到 %s）",
+                               alarm_id, duration_minutes)
+                return False
             shelved_until = datetime.now() + timedelta(minutes=duration_minutes)
 
         with self._state_lock:
@@ -2369,6 +2393,19 @@ class AlarmManager:
                 shelved_by=shelved_by,
                 shelved_until=shelved_until,
             )
+            # round 299：**旁路必须同时撤掉升级跟踪**。
+            # 原来只写 `_shelved_alarms`，而旁路生效的唯一位置是
+            # `_process_alarm_state` 入口的 `continue`（只影响后续采样）。
+            # 于是一条正在响的报警被旁路后：`alarm_states` 里那条仍在
+            # （看板仍算活跃），升级管理器里的 `EscalationState` 也仍在 →
+            # 300/900/1800 秒后**照样给三级主管打电话**。
+            # 维护窗口屏蔽报警的唯一目的就是别打扰人。
+            state = self.alarm_states.get(alarm_key)
+            if state is not None:
+                state['shelved'] = True
+
+        if self._escalation_manager:
+            self._escalation_manager.remove_alarm(alarm_id, device_id, register_name)
 
         logger.warning(f"报警已旁路: {alarm_id} ({device_id}/{register_name}) "
                        f"by {shelved_by}, 原因: {reason}, "
@@ -2391,6 +2428,11 @@ class AlarmManager:
         with self._state_lock:
             if alarm_key in self._shelved_alarms:
                 del self._shelved_alarms[alarm_key]
+                # round 299：解除旁路必须**对称地**清掉状态位，
+                # 否则看板会永远显示「已旁路」，直到该报警被清掉重建。
+                state = self.alarm_states.get(alarm_key)
+                if state is not None:
+                    state['shelved'] = False
                 logger.info(f"报警旁路已解除: {alarm_id} ({device_id}/{register_name})")
                 return True
         return False
@@ -2406,6 +2448,10 @@ class AlarmManager:
             expired = [k for k, v in self._shelved_alarms.items() if v.is_expired()]
             for key in expired:
                 del self._shelved_alarms[key]
+                # round 299：到期自动解除同样要清状态位（理由同 unshelve_alarm）
+                state = self.alarm_states.get(key)
+                if state is not None:
+                    state['shelved'] = False
                 logger.info(f"报警旁路已过期自动解除: {':'.join(key)}")
 
     def set_deadband(self, rule_id: str, deadband_value: float):

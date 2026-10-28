@@ -44,7 +44,11 @@ QUEUE_SIZE = Gauge('scada_data_queue_size', '数据队列大小')
 
 # 告警指标
 ALARMS_TOTAL = Counter('scada_alarms_total', '告警总数', ['level', 'device_id'])
-ALARMS_ACTIVE = Gauge('scada_alarms_active', '活跃告警数')
+# round 299：**必须带 level 维度**。原来是无 label 的单值，
+# 而 `docs/MONITORING.md` 的正式告警规则写的是
+# `scada_alarms_active{level="critical"} > 10` —— 这条序列根本不存在，
+# PromQL 返回空向量，规则**永不触发**：200 条 critical 堆积也一声不响。
+ALARMS_ACTIVE = Gauge('scada_alarms_active', '活跃告警数', ['level'])
 ALARMS_ACKNOWLEDGED = Counter('scada_alarms_acknowledged_total', '已确认告警数')
 ALARM_DURATION = Histogram('scada_alarm_duration_seconds', '告警持续时间', ['level'])
 # 被**抑制**掉的告警数（round 290）。
@@ -93,40 +97,58 @@ class MetricsCollector:
         """从设备管理器收集指标"""
         try:
             status = device_manager.get_all_status()
-            # get_all_status may return a list or dict
+            # get_all_status() 的真实契约是 list（device_manager.py:599），
+            # 但历史上也接受 dict。这里统一归一化成 [(protocol, connected), ...]，
+            # 两条路径共用同一套聚合 —— 否则改了一条忘另一条，
+            # 修复就只活在 mock 里。
             if isinstance(status, list):
-                connected = sum(1 for s in status if s.get('connected'))
+                rows = [(s.get('protocol', 'unknown'), bool(s.get('connected')))
+                        for s in status]
                 fault = sum(1 for s in status if s.get('status') == 'fault')
-                protocols = {}
-                for s in status:
-                    proto = s.get('protocol', 'unknown')
-                    protocols[proto] = protocols.get(proto, 0) + 1
             elif isinstance(status, dict):
-                connected = 0
-                fault = 0
-                protocols = {}
-                for dev_id, info in status.items():
-                    proto = info.get('protocol', 'unknown')
-                    protocols[proto] = protocols.get(proto, 0) + 1
-                    if info.get('connected'):
-                        connected += 1
-                    if info.get('status') == 'fault':
-                        fault += 1
+                rows = [(info.get('protocol', 'unknown'), bool(info.get('connected')))
+                        for info in status.values()]
+                fault = sum(1 for info in status.values()
+                            if info.get('status') == 'fault')
             else:
                 return
 
-            DEVICES_CONNECTED.set(connected)
+            DEVICES_CONNECTED.set(sum(1 for _proto, ok in rows if ok))
             DEVICES_FAULT.set(fault)
-            for proto, count in protocols.items():
-                DEVICES_TOTAL.labels(protocol=proto, status='total').set(count)
+            # round 299：`status` 维度原来**恒为字面量 'total'**，
+            # 而 `docs/MONITORING.md` 的规则是
+            # `scada_devices_total{status="offline"} > 0` —— 这条序列根本不存在，
+            # 规则永不触发：全厂掉线也一声不响。
+            # round 299 续：第一版只改了 dict 分支，而 get_all_status() 真实返回
+            # **list** —— 生产路径反而退化成 protocol="unknown" 且三个值全 0，
+            # 比修复前更糟（原 total 至少是对的），而测试因为用 dict 做 mock 仍全绿。
+            per_proto: dict[str, list[int]] = {}
+            for proto, is_connected in rows:
+                slot = per_proto.setdefault(proto, [0, 0])  # [online, total]
+                slot[1] += 1
+                if is_connected:
+                    slot[0] += 1
+            for proto, (online, total) in per_proto.items():
+                DEVICES_TOTAL.labels(protocol=proto, status='total').set(total)
+                DEVICES_TOTAL.labels(protocol=proto, status='online').set(online)
+                DEVICES_TOTAL.labels(protocol=proto, status='offline').set(total - online)
         except Exception as e:
             logger.debug(f"设备指标更新失败: {e}")
 
     def update_alarm_metrics(self, alarm_manager):
         """从告警管理器收集指标"""
         try:
-            active = alarm_manager.get_active_alarms()
-            ALARMS_ACTIVE.set(len(active))
+            active = alarm_manager.get_active_alarms() or []
+            # 按级别分组；本轮没出现的级别显式置 0，
+            # 否则某级别清零后旧值会一直挂着（比"没有样本"更误导）。
+            by_level: dict[str, int] = {}
+            for alarm in active:
+                level = 'unknown'
+                if isinstance(alarm, dict):
+                    level = alarm.get('alarm_level') or alarm.get('level') or 'unknown'
+                by_level[level] = by_level.get(level, 0) + 1
+            for level in ('critical', 'warning', 'info', 'unknown'):
+                ALARMS_ACTIVE.labels(level=level).set(by_level.get(level, 0))
         except Exception as e:
             logger.debug(f"告警指标更新失败: {e}")
 

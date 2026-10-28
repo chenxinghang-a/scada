@@ -161,6 +161,7 @@
                     <option value="">全部状态</option>
                     <option value="unacknowledged">未确认</option>
                     <option value="acknowledged">已确认</option>
+                    <option value="shelved">已旁路</option>
                 </select>
             </div>
             <div class="col-md-3 d-flex gap-2">
@@ -259,6 +260,11 @@ async function loadAlarms() {
             alarms = alarms.filter(a => !a.acknowledged);
         } else if (statusFilter === 'acknowledged') {
             alarms = alarms.filter(a => a.acknowledged);
+        } else if (statusFilter === 'shelved') {
+            // round 299：旁路（ISA-18.2 Shelving）后的报警仍在活动列表里，
+            // 只是不打扰人。此前 API 不返回 shelved，前端也无从筛选 ——
+            // 维护窗口里「现场安静」和「报警还在响只是被屏蔽」长得一模一样。
+            alarms = alarms.filter(a => a.shelved);
         }
 
         // 更新统计（指标卡）
@@ -310,8 +316,10 @@ function renderAlarmList(alarms) {
         const triggerCount = a.trigger_count || 1;
 
         // 未确认只让左侧色条呼吸（design-tokens 的 .level-bar--pulse-*），不做整行闪烁
+        // round 299：已旁路的不许再呼吸 —— 旁路的目的就是「别打扰人」，
+        // 否则界面上照样闪，等于没屏蔽。
         const canPulse = (meta.bar === 'critical' || meta.bar === 'warning');
-        const pulse = (!a.acknowledged && canPulse) ? ` level-bar--pulse-${meta.bar}` : '';
+        const pulse = (!a.acknowledged && !a.shelved && canPulse) ? ` level-bar--pulse-${meta.bar}` : '';
 
         const ackBtn = a.acknowledged
             ? '<span class="tag tag--success"><i class="bi bi-check-lg"></i> 已确认</span>'
@@ -320,9 +328,9 @@ function renderAlarmList(alarms) {
                     <i class="bi bi-check2-circle me-1"></i>确认
                </button>`;
 
-        const statusTag = a.acknowledged
-            ? ''
-            : '<span class="tag tag--offline">未确认</span>';
+        const statusTag = a.shelved
+            ? '<span class="tag tag--warning"><i class="bi bi-bell-slash"></i> 已旁路</span>'
+            : (a.acknowledged ? '' : '<span class="tag tag--offline">未确认</span>');
 
         return `
         <div class="alarm-row">
