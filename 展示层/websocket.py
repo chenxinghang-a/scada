@@ -522,7 +522,11 @@ def start_data_push_thread(database, data_collector):
     stop_event = threading.Event()
     _push_stop_event = stop_event
 
-    _last_status_time = 0
+    # round 311：初值必须 `-inf` 而不是 `0`。
+    # 改用单调时钟后，`0` 意味着"在开机第 0 秒推送过" —— 在任何开机不足
+    # 10 秒的机器上 `monotonic() - 0 < 10` 成立，**首帧状态推送被吞掉**
+    # （CI runner 每次都是全新开机，所以这条路径在 CI 上必然被走到）。
+    _last_status_time = float('-inf')
     _cached_status = None
 
     def push_data():
@@ -564,7 +568,10 @@ def start_data_push_thread(database, data_collector):
                     except Exception as e:
                         logger.debug(f"设备状态推送失败: {e}")
 
-                now = time.time()
+                # round 311：节流表达的是**时长**（"每 10 秒最多推一次"），
+                # 用墙钟的话，NTP 往后校时会让推送**停很久**（`now - last` 变负），
+                # 运维看到的状态面板卡在旧数据上却没有任何报错。
+                now = time.monotonic()
                 if now - _last_status_time >= 10:
                     _cached_status = {
                         'timestamp': datetime.now().isoformat(),

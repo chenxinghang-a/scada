@@ -20,7 +20,16 @@ from flask import request, jsonify, g
 
 logger = logging.getLogger(__name__)
 
-# 用户限流配置: {username: {path: [timestamps]}}
+# 用户限流配置: {username: {path: [单调时钟时间戳]}}
+#
+# ⚠️ round 311：时间戳必须用 **`time.monotonic()`**，不能用 `time.time()`。
+# 限流窗口表达的是**时长**（"最近 60 秒内几次"），而墙钟会被 NTP 校时/手工改时间
+# 拨动：时钟**往后拨**一小时 → `cutoff = now - 60` 变小 → 窗口内所有历史时间戳
+# 都不再"过期" → `len(timestamps) >= limit_calls` 成立 →
+# **正常用户被误限流（429）直到真实时间追上**；
+# 往前拨则相反：所有时间戳立即过期 → **限流被整体绕过**。
+# 唯一的例外是响应头里的 `X-RateLimit-Reset` / `Retry-After`（那是给人看的
+# 绝对时刻/相对秒数），下面单独用墙钟换算。
 _user_limits: dict[str, dict[str, list[float]]] = {}
 _user_limits_lock = threading.Lock()
 
@@ -67,7 +76,8 @@ def user_rate_limit(calls: int = 0, period: int = 60, role_overrides: Optional[d
 
             # 检查限流
             path = request.path
-            now = time.time()
+            # round 311：窗口判定用单调时钟（见 `_user_limits` 的注释）
+            now = time.monotonic()
 
             with _user_limits_lock:
                 if username not in _user_limits:
@@ -84,6 +94,7 @@ def user_rate_limit(calls: int = 0, period: int = 60, role_overrides: Optional[d
 
                 # 检查是否超限
                 if len(timestamps) >= limit_calls:
+                    # 剩余等待秒数：两个单调时钟相减仍是**时长**，可直接用
                     retry_after = int(timestamps[0] + limit_period - now) + 1
                     logger.warning(
                         "用户限流触发: user=%s role=%s path=%s (%d/%d in %ds)",
@@ -98,7 +109,10 @@ def user_rate_limit(calls: int = 0, period: int = 60, role_overrides: Optional[d
                     resp.headers['Retry-After'] = str(retry_after)
                     resp.headers['X-RateLimit-Limit'] = str(limit_calls)
                     resp.headers['X-RateLimit-Remaining'] = '0'
-                    resp.headers['X-RateLimit-Reset'] = str(int(timestamps[0] + limit_period))
+                    # 只有这个头需要**绝对时刻**（客户端拿它做倒计时），
+                    # 由"还要等多久"换算成墙钟，不能用单调时钟直接加
+                    resp.headers['X-RateLimit-Reset'] = str(
+                        int(time.time() + (timestamps[0] + limit_period - now)))
                     return resp
 
                 # 记录本次请求
@@ -142,8 +156,12 @@ def get_user_rate_stats(username: str = None) -> dict:
 
 
 def cleanup_expired_entries():
-    """清理过期的限流条目"""
-    now = time.time()
+    """清理过期的限流条目
+
+    round 311：与判定处同一基准 —— 单调时钟。两者混用会让清理把
+    **还没过期**的条目删掉（或反之），限流窗口随之失真。
+    """
+    now = time.monotonic()
     with _user_limits_lock:
         for username in list(_user_limits.keys()):
             for path in list(_user_limits[username].keys()):

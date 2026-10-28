@@ -294,7 +294,12 @@ class AlarmEscalationManager:
                     'register_name': state.register_name,
                     'level': target_level,
                     'rule': rule,
-                    'elapsed_seconds': time.time() - state.first_trigger_time,
+                    # round 311：**与 318 行同一口径**（单调时钟）。
+                    # 这里原来用墙钟减 `first_trigger_time`，而判定升级用的是
+                    # `first_trigger_mono` —— 同一条报警的"已超时多久"在
+                    # 判定里和通知里**可能是两个数**：校时后通知里会出现
+                    # 负数（"已超时 -3598 秒"），直接打到三级主管的电话话术里。
+                    'elapsed_seconds': time.monotonic() - state.first_trigger_mono,
                 })
             except Exception as e:
                 logger.error(f"升级回调异常: {e}")

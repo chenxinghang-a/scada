@@ -86,11 +86,19 @@ class BypassRequest:
     interlock_id: str
     requested_by: str
     requested_at: float
-    expires_at: float  # 超时自动过期
+    expires_at: float  # 超时自动过期（**墙钟**，仅用于展示"旁路到 14:30 结束"）
     reason: str
     approvals: list = field(default_factory=list)
     required_approvals: int = 2  # 至少2人审批
     status: str = 'pending'  # pending/approved/rejected/expired
+    #: 与 `expires_at` 等价的**单调时钟**副本，**只用于过期判定**（round 311）。
+    #:
+    #: 为什么需要两份：`expires_at` 要给人看（绝对时刻），而判定表达的是
+    #: **时长**。用墙钟判定时，NTP 校时/手工改时间会让旁路
+    #: ①往后拨 → 旁路**延长**（本该 30 分钟恢复的联锁，实际旁路了两小时）；
+    #: ②往前拨 → 旁路**立即过期**，维护窗口中途联锁突然恢复，正在检修的人被夹。
+    #: `0.0` 表示"没有单调时钟副本"（旧数据 / 反序列化），此时回退墙钟。
+    expires_at_mono: float = 0.0
 
     @property
     def is_approved(self) -> bool:
@@ -98,6 +106,9 @@ class BypassRequest:
 
     @property
     def is_expired(self) -> bool:
+        # round 311：优先单调时钟；没有副本（旧数据）时回退墙钟
+        if self.expires_at_mono:
+            return time.monotonic() > self.expires_at_mono
         return time.time() > self.expires_at
 
 
@@ -134,6 +145,12 @@ class DeviceControlSafety:
         self._lock = threading.Lock()
 
         # ===== 联锁旁路审批（IEC 61511） =====
+        #: 旁路请求表（按 request_id）。**必须有上限**（round 311）：
+        #: request_id 是 uuid，每申请一次就多一条，而审批完成后
+        #: `approve_bypass` / `reject_bypass` 都只改 `status`、**从不删除** ——
+        #: 一个每年几百次维护旁路的现场，进程跑一年就攒几千条（每条含原因文本），
+        #: 且 `get_pending_bypasses()` 每次都要遍历全表。
+        #: 上限见 `_trim_bypass_requests()`：只淘汰**已结束**的，pending 永不丢。
         self._bypass_requests: dict[str, BypassRequest] = {}
         self._active_bypasses: Set[str] = set()  # 已批准且激活的旁路
         self._bypass_lock = threading.Lock()
@@ -710,12 +727,14 @@ class DeviceControlSafety:
             requested_by=requested_by,
             requested_at=time.time(),
             expires_at=time.time() + timeout_minutes * 60,
+            expires_at_mono=time.monotonic() + timeout_minutes * 60,
             reason=reason,
             required_approvals=2
         )
 
         with self._bypass_lock:
             self._bypass_requests[request_id] = request
+            self._trim_bypass_requests()
 
         self._audit('bypass_requested', requested_by, f'联锁旁路请求: {interlock_id}, 原因: {reason}')
         logger.warning(f"联锁旁路请求: {interlock_id} by {requested_by}, 等待审批")
@@ -777,7 +796,11 @@ class DeviceControlSafety:
             self._active_bypasses.add(request.interlock_id)
 
         # 设置超时自动恢复
-        delay = request.expires_at - time.time()
+        # round 311：`threading.Timer` 要的是**相对时长**，必须用单调时钟算。
+        # 用墙钟算的话，审批通过到启动 Timer 之间只要发生一次校时，
+        # 旁路的自动恢复就会提前或推迟（极端情况下 delay 变负数 → 永不恢复）。
+        delay = (request.expires_at_mono - time.monotonic()
+                 if request.expires_at_mono else request.expires_at - time.time())
         if delay > 0:
             timer = threading.Timer(delay, self._auto_restore_bypass, args=[request.interlock_id, request.request_id])
             timer.daemon = True
@@ -810,10 +833,51 @@ class DeviceControlSafety:
         self._audit('bypass_rejected', rejector, f'拒绝旁路请求 {request_id}, 联锁 {request.interlock_id}, 原因: {reason}')
         return True, "已拒绝"
 
+    #: 旁路请求表的内存上限。超出时**只淘汰已结束（非 pending）的**，
+    #: 按申请时间从旧到新 —— 待审批的请求一条都不能丢（那是安全流程的一环）。
+    MAX_BYPASS_REQUESTS_IN_MEMORY = 200
+
+    def _trim_bypass_requests(self) -> int:
+        """把旁路请求表裁到上限内（round 311）。调用方必须持有 `_bypass_lock`。
+
+        Returns:
+            int: 本次淘汰的条数。
+
+        为什么需要：`request_id` 是 uuid，每次申请都新增一条，而
+        `approve_bypass` / `reject_bypass` 只改 `status` 不删除 —— 内存**无界增长**。
+        审计记录已经通过 `_audit()` 落库，内存里这份只是为了"近期可查"。
+        """
+        overflow = len(self._bypass_requests) - self.MAX_BYPASS_REQUESTS_IN_MEMORY
+        if overflow <= 0:
+            return 0
+
+        # 只淘汰已结束的，最旧的先走
+        finished = sorted(
+            ((rid, r) for rid, r in self._bypass_requests.items()
+             if r.status != 'pending'),
+            key=lambda kv: kv[1].requested_at,
+        )
+        dropped = 0
+        for rid, _req in finished[:overflow]:
+            self._bypass_requests.pop(rid, None)
+            dropped += 1
+
+        if dropped < overflow:
+            # 剩下全是 pending —— 说明待审批请求堆积到 200 条以上，
+            # 这本身就是需要人介入的事（审批流程卡住了），不能静默。
+            logger.error(
+                "旁路请求表已达上限 %d 条，仍有 %d 条**待审批**无法淘汰"
+                "（审批流程可能已停滞，请检查待办）",
+                self.MAX_BYPASS_REQUESTS_IN_MEMORY,
+                len(self._bypass_requests))
+        else:
+            logger.info("旁路请求表超出上限，淘汰 %d 条已结束请求", dropped)
+        return dropped
+
     def get_pending_bypasses(self) -> list[dict[str, Any]]:
         """获取待审批的旁路请求"""
         with self._bypass_lock:
-            now = time.time()
+            now_mono = time.monotonic()
             pending = []
             for req in self._bypass_requests.values():
                 if req.status == 'pending' and not req.is_expired:
@@ -824,7 +888,9 @@ class DeviceControlSafety:
                         'reason': req.reason,
                         'approvals': len(req.approvals),
                         'required': req.required_approvals,
-                        'expires_in': int(req.expires_at - now)
+                        'expires_in': int(
+                            (req.expires_at_mono - now_mono) if req.expires_at_mono
+                            else (req.expires_at - time.time()))
                     })
             return pending
 
