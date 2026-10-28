@@ -328,6 +328,20 @@ function renderAlarmList(alarms) {
                     <i class="bi bi-check2-circle me-1"></i>确认
                </button>`;
 
+        // round 307：ISA-18.2 旁路（Shelving）的入口。
+        // 后端三件套（shelve/unshelve/get_shelved）一直都在，
+        // 但此前**没有任何 API 端点、也没有按钮** —— 维护窗口里想屏蔽一条刷屏报警
+        // 只能去改 yaml。现在补齐：旁路只静默播报，记录与统计照旧。
+        const shelveBtn = a.shelved
+            ? `<button class="btn btn-sm btn-outline-secondary"
+                       onclick="unshelveAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}', this)">
+                    <i class="bi bi-bell me-1"></i>解除旁路
+               </button>`
+            : `<button class="btn btn-sm btn-outline-warning"
+                       onclick="shelveAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}', this)">
+                    <i class="bi bi-bell-slash me-1"></i>旁路
+               </button>`;
+
         const statusTag = a.shelved
             ? '<span class="tag tag--warning"><i class="bi bi-bell-slash"></i> 已旁路</span>'
             : (a.acknowledged ? '' : '<span class="tag tag--offline">未确认</span>');
@@ -353,6 +367,7 @@ function renderAlarmList(alarms) {
             <div class="alarm-row__side">
                 ${statusTag}
                 ${ackBtn}
+                ${shelveBtn}
             </div>
         </div>`;
     }).join('');
@@ -392,6 +407,87 @@ async function acknowledgeAlarm(alarmId, deviceId, registerName, btn) {
         if (btn) {
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>确认';
+        }
+    }
+}
+
+// round 307：ISA-18.2 旁路 —— 只静默**播报**，记录与统计照旧
+async function shelveAlarm(alarmId, deviceId, registerName, btn) {
+    const reason = prompt('旁路将静默该报警的声光/广播/推送（记录与统计照旧）。\n请输入旁路原因:');
+    if (reason === null) return;
+
+    const minutesRaw = prompt('旁路时长（分钟，1~480）:', '30');
+    if (minutesRaw === null) return;
+    const minutes = parseInt(minutesRaw, 10);
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+        showToast('旁路时长必须是正整数（0 会造成永久静默）', 'danger');
+        return;
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>处理中';
+    }
+    try {
+        const response = await fetch(`/api/alarms/${alarmId}/shelve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({
+                device_id: deviceId,
+                register_name: registerName,
+                reason: reason || '维护',
+                duration_minutes: minutes
+            })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast(data.message || '已旁路', 'warning');
+            loadAlarms();
+        } else {
+            showToast(data.message || '旁路失败', 'danger');
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-bell-slash me-1"></i>旁路';
+            }
+        }
+    } catch (error) {
+        console.error('旁路失败:', error);
+        showToast('旁路失败：网络错误', 'danger');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-bell-slash me-1"></i>旁路';
+        }
+    }
+}
+
+async function unshelveAlarm(alarmId, deviceId, registerName, btn) {
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>处理中';
+    }
+    try {
+        const response = await fetch(`/api/alarms/${alarmId}/unshelve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({ device_id: deviceId, register_name: registerName })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('旁路已解除，播报恢复', 'success');
+            loadAlarms();
+        } else {
+            showToast(data.message || '解除失败', 'danger');
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-bell me-1"></i>解除旁路';
+            }
+        }
+    } catch (error) {
+        console.error('解除旁路失败:', error);
+        showToast('解除旁路失败：网络错误', 'danger');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-bell me-1"></i>解除旁路';
         }
     }
 }

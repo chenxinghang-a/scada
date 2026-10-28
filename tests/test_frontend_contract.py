@@ -1063,6 +1063,19 @@ UNUSED_BACKEND_PREFIX_RULES: dict[str, str] = {
         "**并同步采集任务**，不用重启进程。目前**刻意不接 UI** —— 它会让现场采集"
         "任务批量启停，属于运维操作，应走带审计的脚本/接口，而不是设备页上的一个按钮"
     ),
+    "/api/alarms/shelved": (
+        "ISA-18.2 旁路列表（round 307）。**由 Flask 模板 `模板/alarms.html` 使用** ——"
+        "本契约测试只扫 scada-app 的 .ts，看不到 Jinja 侧的调用，"
+        "所以「前端不调用」在这里是假象，不是漏接"
+    ),
+    "/api/alarms/<alarm_id>/shelve": (
+        "旁路报警（round 307）：Flask 模板 `alarms.html` 每行的「旁路」按钮会调它。"
+        "同理不在本测试的扫描范围（只扫 .ts）"
+    ),
+    "/api/alarms/<alarm_id>/unshelve": (
+        "解除旁路（round 307）：Flask 模板 `alarms.html` 的「解除旁路」按钮调用。"
+        "同理不在本测试的扫描范围"
+    ),
 }
 
 

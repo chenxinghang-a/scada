@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
 from ._common import get_auth_manager, load_yaml_config, save_yaml_config, api_error_handler, api_error, clamp_limit
+from core.safe_numeric import try_finite_float
 from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,88 @@ def acknowledge_alarm(alarm_id):
                        '请检查 DO 通道与通信链路，必要时到现场确认。',
         }), 200
     return jsonify({'success': True, 'output_ok': True, 'message': '报警已确认'})
+
+
+# ==================== ISA-18.2 报警旁路（Shelving） ====================
+#
+# round 307：`AlarmManager` 的 `shelve_alarm / unshelve_alarm / get_shelved_alarms`
+# 三件套**一直是只被测试调用的**（tools/_scan_dead_api.py 扫出来的 90 个
+# 「生产零调用」之一）。前端的 `alarms.html` 有「已旁路」筛选、
+# `get_active_alarms()` 也返回 `shelved` 字段，但**没有任何端点能触发旁路** ——
+# 功能存在、入口不存在，维护窗口里想屏蔽一条刷屏报警只能改 yaml。
+# 这里补上出口，与 ISA-18.2 的语义对齐：**只静默播报，记录与统计照旧**。
+
+@alarms_bp.route('/alarms/shelved', methods=['GET'])
+@_require_auth
+@api_error_handler
+def list_shelved_alarms():
+    """列出当前被旁路的报警（含原因、操作人、到期时间）"""
+    return jsonify({'shelved': current_app.alarm_manager.get_shelved_alarms()})
+
+
+@alarms_bp.route('/alarms/<alarm_id>/shelve', methods=['POST'])
+@_require_auth
+@_require_operator
+@api_error_handler
+def shelve_alarm(alarm_id):
+    """旁路一条报警（维护窗口静默播报）。
+
+    ⚠️ 只静默**播报**（声光/广播/WS/邮件），落库与统计照旧 —— 这是 ISA-18.2
+    的明确要求，也是 round 282 那轮修掉的缺陷（抑制不得丢失记录）。
+    """
+    data = request.get_json() or {}
+    device_id = data.get('device_id')
+    register_name = data.get('register_name')
+    if not device_id or not register_name:
+        return api_error('缺少 device_id / register_name', 400)
+
+    # 时长必须是正数：`duration_minutes=0` 在 `shelve_alarm` 里会变成
+    # `shelved_until=None` → `is_expired()` 恒 False → **永久静默**
+    # （历史缺陷，round 299 已在 manager 里挡住，这里再挡一次给出明确文案）。
+    duration = try_finite_float(data.get('duration_minutes', 30))
+    if duration is None:
+        return api_error('duration_minutes 必须是有限数值', 400)
+    if duration <= 0:
+        return api_error('duration_minutes 必须为正数（0 会造成永久静默）', 400)
+
+    manager = current_app.alarm_manager
+    reason = data.get('reason') or '维护'
+    ok = manager.shelve_alarm(alarm_id, device_id, register_name, reason,
+                              request.current_user['username'],
+                              duration_minutes=int(duration))
+    get_auth_manager().log_operation(
+        request.current_user['username'], 'alarm_shelve',
+        f'旁路报警 {alarm_id} ({device_id}/{register_name}) {int(duration)}分钟: {reason}')
+
+    if not ok:
+        return api_error('旁路失败', 400)
+    return jsonify({
+        'success': True,
+        'message': f'报警 {alarm_id} 已旁路 {int(duration)} 分钟'
+                   '（播报静默，记录与统计照常）',
+    })
+
+
+@alarms_bp.route('/alarms/<alarm_id>/unshelve', methods=['POST'])
+@_require_auth
+@_require_operator
+@api_error_handler
+def unshelve_alarm(alarm_id):
+    """解除报警旁路（立即恢复播报）"""
+    data = request.get_json() or {}
+    device_id = data.get('device_id')
+    register_name = data.get('register_name')
+    if not device_id or not register_name:
+        return api_error('缺少 device_id / register_name', 400)
+
+    ok = current_app.alarm_manager.unshelve_alarm(alarm_id, device_id, register_name)
+    get_auth_manager().log_operation(
+        request.current_user['username'], 'alarm_unshelve',
+        f'解除报警旁路 {alarm_id} ({device_id}/{register_name})')
+
+    if not ok:
+        return api_error(f'报警 {alarm_id} 当前不在旁路中', 404)
+    return jsonify({'success': True, 'message': f'报警 {alarm_id} 旁路已解除'})
 
 
 @alarms_bp.route('/alarms/statistics', methods=['GET'])
