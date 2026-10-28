@@ -2063,7 +2063,21 @@ class DataCollector:
         try:
             fn(*args, **kwargs)
         except Exception as e:
-            logger.error("智能模块 %s 处理数据失败（其余模块继续）: %s", module_name, e)
+            # round 301：**必须计数**，不能只打日志。
+            # 某个模块持续崩溃时（例如 spc 喂进全 NaN），`/stats` 上一切正常，
+            # 而它本该产出的判异 / 健康分 / OEE 一直是空的 —— 运维唯一的线索
+            # 是一行被正常采样日志淹没的 error。
+            # 用 getattr 兜底：部分测试会绕过 __init__ 构造采集器。
+            failures = getattr(self, '_intel_failures', None)
+            if failures is None:
+                failures = self._intel_failures = {}
+            failures[module_name] = failures.get(module_name, 0) + 1
+            last_error = getattr(self, '_intel_last_error', None)
+            if last_error is None:
+                last_error = self._intel_last_error = {}
+            last_error[module_name] = f'{type(e).__name__}: {e}'
+            logger.error("智能模块 %s 处理数据失败（其余模块继续，累计 %d 次）: %s",
+                         module_name, failures[module_name], e)
 
     def _dispatch_intelligence(self, data: dict):
         """智能层数据分发（在独立线程中运行）。
@@ -2310,4 +2324,13 @@ class DataCollector:
                 stats['circuit_breaker_devices'] = cb['devices']
         except Exception as e:      # noqa: BLE001 —— 统计不该因探测失败而 500
             logger.debug(f"读取熔断器状态失败: {e}")
+        # round 301：智能模块的失败次数与最近一次错误。
+        # `_safe_intel` 原来只打一行 error 日志 —— 某个模块持续崩溃时
+        # `/stats` 上一切正常，而它本该产出的判异 / 健康分 / OEE 一直是空的，
+        # 运维只能靠翻日志发现（而这些日志还被正常采样刷得看不见）。
+        intel_failures = dict(getattr(self, '_intel_failures', None) or {})
+        if intel_failures:
+            stats['intel_failures'] = intel_failures
+            stats['intel_last_error'] = dict(
+                getattr(self, '_intel_last_error', None) or {})
         return stats

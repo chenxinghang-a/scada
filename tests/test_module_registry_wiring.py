@@ -209,10 +209,17 @@ def test_health_alert_reaches_alarm_manager():
 
 
 def test_health_alert_without_registry_is_silent_not_crashing():
-    """没注册报警管理器时应静默跳过（best-effort），不得抛异常。"""
+    """没注册报警管理器时应静默跳过（best-effort），不得抛异常。
+
+    round 301：这是**有意为之的 smoke** —— 判据就是「不抛」。
+    要断言「什么都没发」需要一个能观测的出口，而这里的正确行为恰恰是
+    没有出口可用；把这个内部实现钉死反而会挡住以后换成日志/指标。
+    标记 empty-test-ok 让测试卫生守卫放行。
+    """
     from core.health_checker import HealthChecker
 
     HealthChecker._emit_health_alert({'unhealthy_checks': ['x'], 'degraded_checks': []})
+    # empty-test-ok：不抛即通过，见 docstring
 
 
 # ------------------------------------------------------------ 生产入口必须接线

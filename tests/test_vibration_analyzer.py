@@ -491,8 +491,14 @@ class TestAnalysisThread:
         assert va._running is False
 
     def test_stop_without_start_is_safe(self):
-        """未启动就 stop 不得抛异常"""
-        VibrationAnalyzer().stop()
+        """未启动就 stop 不得抛异常，且状态必须停在「未运行」。
+
+        round 301：原来只有一行 `VibrationAnalyzer().stop()`（不抛即通过）——
+        `stop()` 写成空函数也照样绿。
+        """
+        va = VibrationAnalyzer()
+        va.stop()
+        assert va._running is False, 'stop() 把从未启动的实例标成了运行中'
 
     def test_double_start_no_duplicate_thread(self):
         """重复 start 不得产生第二个线程"""

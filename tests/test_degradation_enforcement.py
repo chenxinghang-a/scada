@@ -196,7 +196,12 @@ class TestStatusHonesty:
 
     def test_require_feature_passes_when_enabled(self, level_guard):
         _set_level(level_guard, DegradationLevel.NORMAL)
-        level_guard.require_feature('oee_calculator')  # 不抛即通过
+        # round 301：原来只有一行调用（「不抛即通过」）。补上前提断言 ——
+        # 否则功能名写错、或 is_feature_enabled 对任何名字都返回 True，
+        # 这条测试照样是绿的。
+        assert level_guard.is_feature_enabled('oee_calculator') is True, (
+            '前提不成立：NORMAL 等级下该功能应处于启用状态')
+        level_guard.require_feature('oee_calculator')   # 启用时不得抛
 
 
 # ============================================================

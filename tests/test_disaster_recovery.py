@@ -22,15 +22,22 @@ class TestDatabaseRecovery:
         db_path.write_bytes(b'corrupt data')
 
         # 验证损坏检测
+        #
+        # round 301：原来整段包在 try/except: pass 里，`assert result != 'ok'`
+        # 一旦上面抛异常就跳过 —— 连「文件根本打不开」也算测试通过。
+        # 真实契约是二选一**必须发生**：integrity_check 返回非 ok，或直接抛
+        # DatabaseError。把异常当成通过要写在 except 里显式 return，
+        # 而不是顺手把断言一起吞掉。
         try:
             conn = sqlite3.connect(str(db_path), timeout=5)
-            cursor = conn.execute("PRAGMA integrity_check")
-            result = cursor.fetchone()[0]
-            conn.close()
-            assert result != 'ok'
-        except Exception:
-            # 预期会失败
-            pass
+            try:
+                result = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError:
+            return          # 抛异常本身就是「检出了损坏」，这是合法结果
+
+        assert result != 'ok', f'损坏的库通过了完整性检查：{result!r}'
 
     def test_database_backup_restore(self, tmp_path):
         """测试数据库备份恢复"""

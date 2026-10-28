@@ -187,8 +187,17 @@ class TestSending:
         assert fake.calls == []
 
     def test_no_notifier_is_noop(self, make_manager):
+        """没配通知器时，邮件通道必须什么都不做 —— 连线程池都不该被建出来。
+
+        round 301：原来只有一行调用（「不抛即通过」），空实现也能过。
+        """
         am = make_manager()
-        am._notify_by_email(_payload())   # 不抛即通过
+        assert getattr(am, 'notification', None) is None, '前提不成立：这个用例要求未配置通知器'
+
+        am._notify_by_email(_payload())
+
+        assert am._notify_executor is None, (
+            '没有通知器却把异步执行器建出来了 —— 白白占一个线程，且掩盖了配置缺失')
 
     def test_enabled_email_sends_once(self, make_manager):
         am = make_manager()
@@ -273,12 +282,21 @@ class TestFailureVisibility:
         assert am._output_errors.get('email', 0) == 1
 
     def test_exception_does_not_propagate(self, make_manager):
-        """邮件炸了不能把报警主链路带崩。"""
+        """邮件炸了不能把报警主链路带崩。
+
+        round 301：原来只有一行调用 + 「不抛即通过」—— 而异常本来就被丢进线程池，
+        主线程根本收不到，所以这条测试恒绿，什么都没测。
+        改成连发 3 次：执行器不能被打死，且每次都要记账。
+        """
         am = make_manager()
         am.set_notification(_FakeNotifier(raises=RuntimeError('boom')))
 
-        am._notify_by_email(_payload())      # 不抛即通过
+        for _ in range(3):
+            am._notify_by_email(_payload())
         am._notify_executor.shutdown(wait=True)
+
+        assert am._output_errors.get('email', 0) == 3, (
+            f'邮件异常没有逐次记账：{am._output_errors.get("email", 0)} 次（应为 3）')
 
 
 # ============================================================

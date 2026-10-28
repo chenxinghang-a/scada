@@ -390,8 +390,14 @@ class TestDeviceBehaviorSimulator:
         sim.state = DeviceState.RUNNING
         data = sim.update(1.0)
         assert isinstance(data, dict)
-        # update should return sensor data dict
-        assert len(data) >= 0
+        # round 301：原来写的是 `assert len(data) >= 0` —— 恒真，连返回 {} 都能过。
+        # update() 的真实契约：运行中的设备至少带「设备状态」与「健康度」两项元数据；
+        # 工艺点位只输出「模拟器认识、且设备配置里声明过」的那些
+        # （生成器按 _device_param_names 过滤，元数据以 _ 前缀恒保留），
+        # 所以配置里写 temp 而模拟器内部叫 temperature 时，这里不会有 temp。
+        assert data, '运行中的设备 update() 返回了空字典'
+        assert data.get('_device_state') == 'RUNNING', f'状态元数据不对：{data.get("_device_state")}'
+        assert '_health_score' in data, '缺少健康度元数据'
 
     def test_simulator_stats(self):
         """统计信息测试"""

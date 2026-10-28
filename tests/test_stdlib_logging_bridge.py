@@ -166,13 +166,18 @@ class TestNoiseAndIdempotency:
         assert n == 1, f"同一条日志投递了 {n} 次 —— handler 被重复安装了"
 
     def test_bridge_never_raises(self, logging_env):
-        """日志桥自己绝不能把应用搞挂。"""
+        """日志桥自己绝不能把应用搞挂。
+
+        round 301：这是**有意为之的 smoke**，判据就是「4 种畸形输入都不抛」。
+        桥接器出错只会让日志少一行，加业务断言反而会把日志实现钉死。
+        标记 empty-test-ok 让测试卫生守卫放行（见 tools/_scan_empty_asserts.py）。
+        """
         lg = logging.getLogger("core.weird")
         lg.info("普通")
         lg.info("带参数 %s 与 %d", "x", 1)
         lg.info("没有参数的百分号 %")
         lg.info("多行\n第二行")
-        # 没抛就是过
+        # empty-test-ok：不抛即通过，见 docstring
 
 
 # ---------------------------------------------------------------------------

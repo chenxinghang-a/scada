@@ -99,25 +99,23 @@ def test_acknowledged_alarm_does_not_escalate():
 # 2. 执行前复核（不许给已恢复的报警打电话）
 # ---------------------------------------------------------------------------
 
-def test_recovered_alarm_is_not_escalated():
-    """检查拍完快照后报警恢复 → 执行时不许升级。"""
+def test_recovered_before_check_is_not_escalated():
+    """检查开始前报警就已恢复 → 连快照都进不去，一条升级都不许发。
+
+    round 301：这条原来叫 `test_recovered_alarm_is_not_escalated`，注释里自己写着
+    「这里删掉的是自己，无法体现。见下一条用例」，**全程没有一个断言** ——
+    名字说测了，其实什么都没测，是一张占位符。
+    「快照后 → 执行前」的两种复核已由下面两条用例覆盖（remove / acknowledge），
+    所以这里补最基础的一层：恢复发生在检查之前。
+    """
     mgr, fired = _make()
     mgr.record_alarm('r1', 'd1', 'temp')
     mgr._states['r1:d1:temp'].first_trigger_mono = time.monotonic() - 31
-
-    # 用回调模拟"执行到一半时报警恢复"：第一条升级时把状态删掉，
-    # 第二条（如果有）必须被跳过。这里只有一条规则命中，改用下面的写法。
-    original = mgr._do_escalation
-
-    def _remove_then_escalate(key, state, target_level):
-        mgr.remove_alarm('r1', 'd1', 'temp')
-        return original(key, state, target_level)
-
-    mgr._do_escalation = _remove_then_escalate
+    mgr.remove_alarm('r1', 'd1', 'temp')
 
     mgr.check_escalations()
-    # 第一条允许执行（快照时还活着），但**复核必须发生在执行之前**：
-    # 这里删掉的是自己，无法体现。见下一条用例。
+
+    assert fired == [], f'已恢复的报警仍触发了升级：{fired}'
 
 
 def test_remove_between_snapshot_and_execution_skips(monkeypatch):
