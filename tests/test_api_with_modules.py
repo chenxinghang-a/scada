@@ -79,6 +79,10 @@ class TestControlAPIWithModules:
         """POST /api/control/interlocks/<id>/bypass 带模块"""
         mock_dc = MagicMock()
         mock_dc.bypass_interlock.return_value = True
+        # round 306：端点现在先查联锁是否存在（request_bypass 自己不查，
+        # 给不存在的 ID 建单会留下孤儿旁路），所以桩要给出这条联锁。
+        mock_dc.get_interlock_status.return_value = {'rule1': {}}
+        mock_dc.request_bypass.return_value = 'req0001'
         app.device_control = mock_dc
         resp = client.post('/api/control/interlocks/rule1/bypass',
                            json={'reason': 'test'}, headers=auth_headers)

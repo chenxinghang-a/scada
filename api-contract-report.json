@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-28T13:50:14+00:00",
+  "generated_at": "2026-10-28T14:09:47+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -423,7 +423,7 @@
       "source_path": "/control/audit",
       "backend_path": "/api/control/audit",
       "status": "match",
-      "detail": "精确匹配 api_control.py:549",
+      "detail": "精确匹配 api_control.py:592",
       "source_file": "control.ts",
       "source_line": 86
     },
@@ -433,7 +433,7 @@
       "source_path": "/control/batch",
       "backend_path": "/api/control/batch",
       "status": "match",
-      "detail": "精确匹配 api_control.py:456",
+      "detail": "精确匹配 api_control.py:499",
       "source_file": "control.ts",
       "source_line": 72
     },
@@ -473,7 +473,7 @@
       "source_path": "/control/health",
       "backend_path": "/api/control/health",
       "status": "match",
-      "detail": "精确匹配 api_control.py:446",
+      "detail": "精确匹配 api_control.py:489",
       "source_file": "control.ts",
       "source_line": 77
     },
@@ -503,7 +503,7 @@
       "source_path": "/control/interlocks/:ruleId/restore",
       "backend_path": "/api/control/interlocks/<rule_id>/restore",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_control.py:358",
+      "detail": "结构匹配（参数名归一）api_control.py:401",
       "source_file": "control.ts",
       "source_line": 32
     },
@@ -513,7 +513,7 @@
       "source_path": "/control/interlocks/bypass-approve",
       "backend_path": "/api/control/interlocks/bypass-approve",
       "status": "match",
-      "detail": "精确匹配 api_control.py:395",
+      "detail": "精确匹配 api_control.py:438",
       "source_file": "control.ts",
       "source_line": 41
     },
@@ -523,7 +523,7 @@
       "source_path": "/control/interlocks/bypass-pending",
       "backend_path": "/api/control/interlocks/bypass-pending",
       "status": "match",
-      "detail": "精确匹配 api_control.py:434",
+      "detail": "精确匹配 api_control.py:477",
       "source_file": "control.ts",
       "source_line": 49
     },
@@ -533,7 +533,7 @@
       "source_path": "/control/interlocks/bypass-reject",
       "backend_path": "/api/control/interlocks/bypass-reject",
       "status": "match",
-      "detail": "精确匹配 api_control.py:414",
+      "detail": "精确匹配 api_control.py:457",
       "source_file": "control.ts",
       "source_line": 45
     },
@@ -543,7 +543,7 @@
       "source_path": "/control/interlocks/bypass-request",
       "backend_path": "/api/control/interlocks/bypass-request",
       "status": "match",
-      "detail": "精确匹配 api_control.py:370",
+      "detail": "精确匹配 api_control.py:413",
       "source_file": "control.ts",
       "source_line": 37
     },
@@ -563,7 +563,7 @@
       "source_path": "/control/recipe/list",
       "backend_path": "/api/control/recipe/list",
       "status": "match",
-      "detail": "精确匹配 api_control.py:654",
+      "detail": "精确匹配 api_control.py:697",
       "source_file": "control.ts",
       "source_line": 91
     },
@@ -573,7 +573,7 @@
       "source_path": "/control/recipe/start",
       "backend_path": "/api/control/recipe/start",
       "status": "match",
-      "detail": "精确匹配 api_control.py:573",
+      "detail": "精确匹配 api_control.py:616",
       "source_file": "control.ts",
       "source_line": 95
     },
@@ -583,7 +583,7 @@
       "source_path": "/control/recipe/status",
       "backend_path": "/api/control/recipe/status",
       "status": "match",
-      "detail": "精确匹配 api_control.py:638",
+      "detail": "精确匹配 api_control.py:681",
       "source_file": "control.ts",
       "source_line": 105
     },
@@ -593,7 +593,7 @@
       "source_path": "/control/recipe/stop",
       "backend_path": "/api/control/recipe/stop",
       "status": "match",
-      "detail": "精确匹配 api_control.py:611",
+      "detail": "精确匹配 api_control.py:654",
       "source_file": "control.ts",
       "source_line": 101
     },
@@ -603,7 +603,7 @@
       "source_path": "/control/status",
       "backend_path": "/api/control/status",
       "status": "match",
-      "detail": "精确匹配 api_control.py:561",
+      "detail": "精确匹配 api_control.py:604",
       "source_file": "control.ts",
       "source_line": 6
     },
@@ -613,7 +613,7 @@
       "source_path": "/api/csrf-token",
       "backend_path": "/api/csrf-token",
       "status": "match",
-      "detail": "精确匹配 routes.py:420",
+      "detail": "精确匹配 routes.py:440",
       "source_file": "request.ts",
       "source_line": 54
     },

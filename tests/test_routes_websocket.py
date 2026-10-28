@@ -98,16 +98,17 @@ class TestCreateApp:
             )
             client = app.test_client()
 
-            # 未带令牌：/metrics 不在 /api/ 前缀下，会命中 create_app 里的
-            # check_page_auth（展示层/routes.py:168），必须重定向到 /login。
-            # 原断言 `in (200, 302, 500)` 把 500 也当通过 —— "端点挂了也算测过"。
+            # round 306：**匿名抓取必须直接返回指标**。
+            # 原来这里断言 302 到 /login（注释还解释了原因：「不在 /api/ 前缀下」）——
+            # 等于把「Prometheus 一条都采不到」钉成了正确行为：抓取端是外部系统，
+            # 不带 cookie、也不走登录，永远命中这条分支。
+            # 现在 /metrics 在 check_page_auth 的白名单里；
+            # 只有显式配置了 PROMETHEUS_SCRAPE_TOKEN 时才要求抓取端带 header。
             anon = client.get('/metrics')
-            assert anon.status_code == 302, \
-                f"未认证访问 /metrics 应重定向，实际 {anon.status_code}"
-            assert '/login' in anon.headers.get('Location', ''), \
-                f"重定向目标异常: {anon.headers.get('Location')}"
+            assert anon.status_code == 200, \
+                f"未认证访问 /metrics 应直接返回指标，实际 {anon.status_code}"
 
-            # 带令牌：应真正拿到 Prometheus 指标，返回 200
+            # 带令牌（Prometheus 的常规路径）：同样 200
             auth = client.get('/metrics', headers={'Authorization': 'Bearer dummy'})
             assert auth.status_code == 200, \
                 f"认证后 /metrics 应返回 200，实际 {auth.status_code}"

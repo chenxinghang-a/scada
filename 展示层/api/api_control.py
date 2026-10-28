@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
 from ._common import get_auth_manager, api_error_handler, api_error, safe_int, safe_float, clamp_limit
+from core.safe_numeric import try_finite_float
 from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
@@ -344,15 +345,61 @@ def get_interlocks():
 @control_bp.route('/control/interlocks/<rule_id>/bypass', methods=['POST'])
 @_require_engineer
 def bypass_interlock(rule_id):
-    """旁路联锁（维护用，需工程师权限+原因）"""
+    """旁路联锁（维护用）—— round 306 起改走**双人审批**流程。
+
+    原来直接调 `device_control.bypass_interlock()`，而那个方法自己的 docstring
+    就写着「[已废弃] 单人旁路违反 IEC 61511 职责分离要求」，且这条路径
+    **没有超时自动恢复**（双人审批的 `request_bypass` 会起 Timer）——
+    任意 engineer 账号即可永久旁路超温/超压联锁，事后审计里只有一行
+    `interlock_bypass_deprecated`，很难被认定成未授权操作。
+
+    现在转调 `request_bypass()`：创建审批单 → 第二人批准 → 超时自动恢复。
+    接口形状保持不变（仍回 `success`），但 `applied` 为 False 并带回
+    `request_id` —— 前端据此显示「已提交审批」而不是「已旁路」。
+    """
     data = request.get_json() or {}
     reason = data.get('reason', '维护')
     operator = request.current_user['username']
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
         return api_error('设备控制安全模块未启用', 503)
-    success = device_control.bypass_interlock(rule_id, operator, reason)
-    return jsonify({'success': success, 'message': f'联锁 {rule_id} 已旁路' if success else '旁路失败'})
+
+    # 参数校验：`request_bypass` 内部直接 `time.time() + timeout_minutes * 60`，
+    # 传字符串会 TypeError、传负数会让审批单**一创建就过期**却回「已创建」。
+    # round 306：用 `try_finite_float` 而不是裸 `float()` ——
+    # 裸 float 的 `int(float("inf"))` 抛 OverflowError（漏成 500），
+    # 而 `float("nan")` 根本不抛、让后面的范围比较对 NaN 失效
+    # （`1 <= nan <= 480` 恒 False 看起来能挡，但它挡的是"范围"，不是"无效值"）。
+    timeout_minutes = try_finite_float(data.get('timeout_minutes', 30))
+    if timeout_minutes is None:
+        return api_error('timeout_minutes 必须是有限数值', 400)
+    if not (1 <= timeout_minutes <= 480):
+        return api_error('timeout_minutes 必须在 1~480 分钟之间', 400)
+
+    # `request_bypass` 不校验联锁是否存在 —— 给不存在的 ID 建审批单，
+    # 批准后 `_activate_bypass` 会往旁路集合里塞一个孤儿 ID。
+    if rule_id not in device_control.get_interlock_status():
+        return api_error(f'联锁 {rule_id} 不存在', 404)
+
+    try:
+        request_id = device_control.request_bypass(
+            rule_id, operator, reason, int(timeout_minutes))
+    except Exception as e:      # noqa: BLE001 —— 审批单创建失败要如实回给操作员
+        logger.error("创建旁路审批单失败: %s", e, exc_info=True)
+        return api_error(f'旁路申请创建失败: {e}', 500)
+
+    if not request_id:
+        return api_error('旁路申请创建失败', 500)
+
+    logger.warning("联锁旁路申请已创建（待第二人批准）: %s by %s, %s分钟",
+                   rule_id, operator, timeout_minutes)
+    return jsonify({
+        'success': True,
+        'applied': False,
+        'request_id': request_id,
+        'message': f'联锁 {rule_id} 旁路申请已提交（单号 {request_id}），'
+                   f'需第二人批准后生效，最长 {timeout_minutes:.0f} 分钟自动恢复',
+    })
 
 
 @control_bp.route('/control/interlocks/<rule_id>/restore', methods=['POST'])

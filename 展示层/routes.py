@@ -4,6 +4,7 @@ Flask路由模块
 """
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path as _Path
@@ -321,6 +322,25 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         # 跳过API路由（已有自己的认证）、静态资源、登录页
         if path.startswith('/api/') or path.startswith('/static/') or path == '/login':
             return None
+
+        # round 306：**/metrics 必须能被 Prometheus 抓到**。
+        # 它不在上面任何一个白名单里 → 抓取请求不带 cookie，被 302 到 /login，
+        # 整套 HTTP 指标在实际部署中**一条都采不到**，而且没有任何报错
+        # （Grafana 面板只是"没有数据"，看起来像面板没配）。
+        # 当前状态是「既没采到、也没暴露」—— 纯粹的功能性失效。
+        #
+        # 策略：工业内网默认放行；若设置了 `PROMETHEUS_SCRAPE_TOKEN` 环境变量，
+        # 则要求抓取端带 `X-Prometheus-Scrape-Token` 头（零配置可用、需要时能加固，
+        # 不用改一行 Prometheus 配置就能先跑起来）。
+        if path == '/metrics':
+            expected = os.environ.get('PROMETHEUS_SCRAPE_TOKEN', '').strip()
+            if not expected:
+                return None
+            if request.headers.get('X-Prometheus-Scrape-Token', '') == expected:
+                return None
+            logger.warning("拒绝 /metrics 抓取：scrape token 不匹配，来源=%s",
+                           request.remote_addr)
+            return jsonify({'error': 'forbidden'}), 403
 
         # 跳过favicon等非页面请求
         last_segment = path.split('/')[-1]
