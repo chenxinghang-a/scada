@@ -361,14 +361,30 @@ def start_device(device_id):
     return jsonify({'success': result, 'message': f'设备 {device_id} 已启动'})
 
 
-def _start_device_collection(device_id: str):
-    """为已添加的设备启动采集任务"""
+def _start_device_collection(device_id: str) -> bool:
+    """为已添加的设备启动采集任务
+
+    Returns:
+        bool: 采集任务是否**真的挂上了**。
+
+    round 308：这是 `DataCollector.start_device_task()` 的**平行调用点**
+    （另一个在 `DataCollector.sync_device_tasks()`）。原来返回值被丢弃 ——
+    添加设备后采集没起来，接口照样回"设备已添加"，界面上一台设备
+    **永远没有数据**，看起来像设备坏了，实际是没人拉它。
+    """
     data_collector = getattr(current_app, 'data_collector', None)
     if not data_collector:
-        return
+        # 采集器未装配（单测 / 纯配置管理场景）—— 不是失败
+        return True
     device_config = current_app.device_manager.get_all_devices().get(device_id)
-    if device_config:
-        data_collector.start_device_task(device_id, device_config)
+    if not device_config:
+        logger.error("设备 %s 已添加但不在配置表中，无法启动采集", device_id)
+        return False
+    if not data_collector.start_device_task(device_id, device_config):
+        logger.error("设备 %s 已添加，但**采集任务启动失败**（该设备不会产生数据）",
+                     device_id)
+        return False
+    return True
 
 
 @devices_bp.route('/devices/<device_id>/test', methods=['POST'])

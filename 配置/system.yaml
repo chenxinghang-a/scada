@@ -41,10 +41,16 @@ collection:
   #     —— 实际超时在**设备/客户端**配置里（如 `采集层/fins_client.py` 读
   #        `config.get('timeout', 10)`），不是系统级旋钮。
 database:
-  compression:
-    enabled: true
-    interval_hours: 24
-    method: average
+  # ⚠️ round 308：原有 `compression:` 段（enabled / interval_hours / method）
+  #    **已删除** —— 全仓库没有任何压缩实现，`grep -rn "compression" 存储层/`
+  #    只有日志 gzip（`core/structured_logging.py`，与数据库无关）。
+  #    它写着 `enabled: true, interval_hours: 24, method: average`，
+  #    运维据此以为"库每天压缩一次"，实际**从不压缩**：
+  #    增长只能靠 `retention` 的按表删除兜底，而删除是**按时间窗口**、
+  #    不是按体积 —— 采集频率调高一倍，磁盘就多吃一倍。
+  #    要真做压缩，得先有"把原始点按小时聚合成 min/max/avg 再删原始点"
+  #    的实现（含可回放性校验），那是独立一轮的活；在那之前留着这个段
+  #    只会制造"我配了"的错觉。
   path: data/scada.db
   retention:
     # 数据保留策略的**唯一真源**（core/retention_scheduler.py 每 6 小时按它执行一次）。

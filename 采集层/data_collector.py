@@ -808,7 +808,11 @@ class DataCollector:
                 if protocol in ('opcua', 'mqtt'):
                     self._setup_push_device(device_id, device_config)
                 else:
-                    self._start_device_collection(device_id, device_config)
+                    # round 308：采集任务启动失败不能静默 —— 设备"在配置里"但
+                    # 永远不会产生数据，而 `protocols_active` 照样把它计入。
+                    if not self._start_device_collection(device_id, device_config):
+                        logger.error("设备 %s 的采集任务启动失败"
+                                     "（该设备不会产生数据，请检查协议与线程状态）", device_id)
 
         with self._stats_lock:
             self.stats['protocols_active'] = proto_count
@@ -909,11 +913,19 @@ class DataCollector:
             })
         return fallback_data
 
-    def start_device_task(self, device_id: str, device_config: dict[str, Any]):
-        """为指定设备启动采集任务（运行时添加设备时调用）"""
+    def start_device_task(self, device_id: str, device_config: dict[str, Any]) -> bool:
+        """为指定设备启动采集任务（运行时添加设备时调用）
+
+        Returns:
+            bool: 采集任务是否**已经挂上**（已存在也算成功，幂等）。
+
+        round 308：返回值是给 `api_devices._start_device_collection()` 用的 ——
+        添加设备后如果采集没起来，接口必须说"设备已添加，但采集未启动"，
+        而不是让界面显示一台永远没有数据的设备。
+        """
         if not self.running:
             logger.warning(f"数据采集器未运行，跳过设备 {device_id} 的采集启动")
-            return
+            return False
 
         if not device_config.get('enabled', True):
             logger.info(f"设备 {device_id} 已禁用，跳过采集启动")
@@ -922,7 +934,7 @@ class DataCollector:
         with self._tasks_lock:
             if device_id in self.tasks:
                 logger.debug(f"设备 {device_id} 已有采集任务，跳过")
-                return
+                return True
             # 重新添加同一台设备（此前被删除）时，必须解除「已取消」标记，
             # 否则 _schedule_next 会一直拒绝调度 → 采集中断且无任何报错。
             self._cancelled_devices.discard(device_id)
@@ -939,8 +951,13 @@ class DataCollector:
         if protocol in ('opcua', 'mqtt'):
             self._setup_push_device(device_id, device_config)
         else:
-            self._start_device_collection(device_id, device_config)
+            # round 308：同 start_all 的处理 —— 启动失败必须留痕
+            if not self._start_device_collection(device_id, device_config):
+                logger.error("设备 %s 的采集任务启动失败"
+                             "（该设备不会产生数据，请检查协议与线程状态）", device_id)
+                return False
         logger.info(f"已启动设备 {device_id} [{protocol}] 的采集任务")
+        return True
 
     def _cancelled_registry(self) -> dict[str, float]:
         """返回 `device_id → 登记时刻(monotonic)`，必要时补建。
@@ -1065,22 +1082,37 @@ class DataCollector:
             self.remove_device_task(device_id)
             logger.info("设备配置已移除/禁用，停止采集任务: %s", device_id)
 
+        # round 308：**启动失败不许算进 `started`**。
+        # 原实现把 `to_start` 整个当成结果返回，`start_device_task` 的成败
+        # 根本没看 —— 配置热重载后接口回「已启动 3 台」，其中一台的定时器
+        # 压根没挂上，那台设备从此没有数据，而运维刚看到"同步成功"。
+        started: list[str] = []
+        failed: list[str] = []
         for device_id in to_start:
-            self.start_device_task(device_id, devices.get(device_id) or {})
-            logger.info("设备配置新增，启动采集任务: %s", device_id)
+            if self.start_device_task(device_id, devices.get(device_id) or {}):
+                started.append(device_id)
+                logger.info("设备配置新增，启动采集任务: %s", device_id)
+            else:
+                failed.append(device_id)
+                logger.error("设备配置新增，但采集任务**启动失败**（该设备不会产生数据）: %s",
+                             device_id)
 
-        if to_start or to_stop:
+        if started or to_stop:
             logger.warning("设备采集任务已按配置同步: 启动 %s，停止 %s",
-                           to_start, to_stop)
+                           started, to_stop)
+        if failed:
+            logger.error("设备采集任务同步**部分失败**: 未能启动 %s", failed)
 
         return {
-            'started': to_start,
+            'started': started,
+            'failed': failed,
             'stopped': to_stop,
             'unchanged': unchanged,
             'skipped': False,
         }
 
-    #: 所有「按设备索引」的运行期状态容器 —— 删除设备时必须逐个清理。    #: round 274：`_device_intervals` 之前**漏了**，于是 `get_stats()` 里
+    #: 所有「按设备索引」的运行期状态容器 —— 删除设备时必须逐个清理。
+    #: round 274：`_device_intervals` 之前**漏了**，于是 `get_stats()` 里
     #: `device_intervals` 会一直列出已删除的设备（运维在界面上看到一台
     #: 不存在的设备"间隔 5s"），重新添加同名设备时也会短暂继承旧值。
     #: `tests/test_device_state_cleanup.py` 会扫源码里的
@@ -1171,8 +1203,18 @@ class DataCollector:
         else:
             logger.error(f"[{protocol.upper()}] 设备 {device_id} 连接失败")
 
-    def _start_device_collection(self, device_id: str, device_config: dict[str, Any]):
+    def _start_device_collection(self, device_id: str,
+                                 device_config: dict[str, Any]) -> bool:
         """启动单个设备的轮询采集任务（Modbus / REST），含失败退避。
+
+        Returns:
+            bool: **是否真的挂上了采集定时器**。
+
+        round 308：此前这个方法**没有任何 return**（恒 None）。调用方
+        `start_all` / `start_device_task` 想判断成败时只能 `if not ...`，
+        而 `not None` 恒为真 —— 要么全都不判断（原状：失败静默），
+        要么全都判断（改了一半：**每台设备每次启动都误报失败**）。
+        两种都错，必须先把契约补齐。
 
         采集工作提交到线程池执行（上限见 `self._max_concurrent`，来自
         `配置/system.yaml` 的 `collection.max_concurrent`），避免100设备创建
@@ -1180,6 +1222,13 @@ class DataCollector:
         """
         # 设备自己没写间隔时，用 `配置/system.yaml` 的 `collection.default_interval`
         # （此前是硬编码 5，而配置里恰好也是 5，所以这个旋钮是死的也没人发现）。
+        # 采集器没在跑时挂定时器是**假启动**：`collect_task` 第一行就
+        # `if not self.running: return`，定时器不会重排 → 这台设备永远不采，
+        # 而调用方以为起来了。直接如实返回 False。
+        if not self.running:
+            logger.warning("设备 %s 的采集任务未启动：采集器未运行", device_id)
+            return False
+
         base_interval = device_config.get('collection_interval', self._default_interval)
         protocol = device_config.get('protocol', 'modbus_tcp')
 
@@ -1352,10 +1401,17 @@ class DataCollector:
         # 25 台设备就是 25 倍的脉冲负载、其余时间全空。
         initial_delay = startup_jitter(base_interval)
         logger.debug("设备 %s 首次采集在 %.2fs 后（抖动打散相位）", device_id, initial_delay)
-        with self._tasks_lock:
-            self.tasks[device_id] = threading.Timer(initial_delay, collect_task)
-            self.tasks[device_id].daemon = True
-            self.tasks[device_id].start()
+        try:
+            with self._tasks_lock:
+                self.tasks[device_id] = threading.Timer(initial_delay, collect_task)
+                self.tasks[device_id].daemon = True
+                self.tasks[device_id].start()
+        except Exception as e:      # noqa: BLE001 —— 起不来必须如实上报
+            # 线程/定时器资源耗尽（现场几十台设备 + 频繁增删会走到这里）。
+            # 不接住的话异常冒到 `start_all()`，一台设备把整轮启动打断。
+            logger.error("设备 %s 的采集定时器创建失败: %s", device_id, e)
+            return False
+        return True
 
     def _get_dynamic_interval(self, device_id: str, base_interval: float) -> float:
         """

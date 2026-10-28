@@ -326,7 +326,18 @@ class SimulatedDeviceManager(IDeviceManager):
 
             with self._lock:
                 self.devices[device_id] = device_config
-            self._save_config()
+
+            # round 308：**落盘失败必须回滚**。
+            # `simulated_device_manager` 与 `device_manager` / `real_device_manager`
+            # 是**平行实现**：round 302 修了后两者的 add_device/remove_device，
+            # 漏了这一个 —— 因为三个类的同名方法各写了一份。
+            # 后果相同：接口回「添加成功」、界面出现设备，重启后消失。
+            if not self._save_config():
+                with self._lock:
+                    self.devices.pop(device_id, None)
+                    self.clients.pop(device_id, None)
+                logger.error("[模拟] 添加设备失败：配置落盘失败，已回滚 %s", device_id)
+                return False
 
             logger.info(f"[模拟] 添加设备: {device_id} [{protocol}]")
             return True
@@ -340,9 +351,17 @@ class SimulatedDeviceManager(IDeviceManager):
         try:
             self.disconnect_device(device_id)
             with self._lock:
-                self.devices.pop(device_id, None)
+                removed = self.devices.pop(device_id, None)
                 self.clients.pop(device_id, None)
-            self._save_config()
+
+            # round 308：落盘失败要把设备放回去（与 add_device 同理）
+            if not self._save_config():
+                if removed is not None:
+                    with self._lock:
+                        self.devices[device_id] = removed
+                logger.error("[模拟] 移除设备失败：配置落盘失败，已回滚 %s", device_id)
+                return False
+
             logger.info(f"[模拟] 移除设备: {device_id}")
             return True
         except Exception as e:

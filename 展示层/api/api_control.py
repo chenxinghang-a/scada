@@ -342,6 +342,37 @@ def get_interlocks():
     return jsonify(device_control.get_interlock_status())
 
 
+@control_bp.route('/control/interlocks/load-summary', methods=['GET'])
+@_require_auth
+def get_interlock_load_summary():
+    """联锁**加载摘要**（round 308）：声明几条 / 生效几条 / 丢弃几条。
+
+    为什么需要单独一个端点：`GET /control/interlocks` 的返回是
+    `{rule_id: 状态}`，只看它**无法区分**
+    「配了 12 条、5 条写错被丢弃」和「本来就只有 7 条」。
+    被丢弃的规则不会保护任何设备，而界面上一切正常。
+
+    **刻意不接前端 UI**：这是运维排障与交接核查用的只读视图
+    （同 `/api/devices/reload` 的处理方式），挂在联锁页上对操作员无意义。
+    """
+    device_control = getattr(current_app, 'device_control', None)
+    if not device_control:
+        return module_unavailable_response('device_control')
+    summary = device_control.get_interlock_load_summary()
+    degraded = bool(summary.get('rejected'))
+    return jsonify({
+        'success': True,
+        'degraded': degraded,
+        'summary': summary,
+        'message': (
+            f"联锁部分丢弃：声明 {summary.get('declared')} 条，"
+            f"生效 {summary.get('loaded')} 条，丢弃 {summary.get('rejected')} 条"
+            if degraded else
+            f"联锁加载正常：生效 {summary.get('loaded')} 条"
+        ),
+    })
+
+
 @control_bp.route('/control/interlocks/<rule_id>/bypass', methods=['POST'])
 @_require_engineer
 def bypass_interlock(rule_id):

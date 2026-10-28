@@ -289,6 +289,8 @@ class EnergyManager:
     def update_anomaly_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """更新异常检测配置"""
         with self._lock:
+            # round 308：备份，落盘失败时回滚（与同文件 `update_tariff_config` 同口径）
+            original = dict(self.anomaly_config)
             if 'threshold_multiplier' in config:
                 val = config['threshold_multiplier']
                 if not isinstance(val, (int, float)) or val <= 0:
@@ -301,7 +303,18 @@ class EnergyManager:
                     return {'success': False, 'message': f'警告倍数必须为正数: {val}'}
                 self.anomaly_config['warning_multiplier'] = val
 
-            self._save_config()
+            # round 308：**返回值不能丢**。同文件的 `update_tariff_config` 早就
+            # `saved = self._save_config()` 并在 message 里说明「已/未持久化」，
+            # 这一处漏了 —— 落盘失败时接口照样回「异常检测配置已更新」。
+            if not self._save_config():
+                self.anomaly_config.clear()
+                self.anomaly_config.update(original)
+                logger.error("异常检测配置更新失败：配置落盘失败，已回滚")
+                return {
+                    'success': False,
+                    'message': '配置未保存（落盘失败），修改已回滚',
+                    'config': dict(self.anomaly_config),
+                }
             return {
                 'success': True,
                 'message': '异常检测配置已更新',

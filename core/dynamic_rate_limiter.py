@@ -370,7 +370,13 @@ class DynamicRateLimiter:
                 )
 
                 # 尝试动态更新Flask-Limiter
-                self._apply_to_flask_limiter()
+                if not self._apply_to_flask_limiter():
+                    # round 308：阈值已经改了，但**没下发到 Flask-Limiter**。
+                    # 日志里写着"动态限流调整: A → B"，实际限流纹丝不动 ——
+                    # 生产上压测触发限流时，运维会看到"我明明调过阈值"。
+                    logger.error("动态限流：%s → %s 已写入配置，但**未下发到 Flask-Limiter**"
+                                 "（实例未注入），实际限流阈值不变",
+                                 old_level, new_level)
 
     def _apply_to_flask_limiter(self) -> bool:
         """将当前限流配置真正应用到 Flask-Limiter
@@ -438,8 +444,14 @@ class DynamicRateLimiter:
         """获取所有限流配置文件"""
         return {level: dict(profile) for level, profile in self._profiles.items()}
 
-    def override_profile(self, level: str, rpm: int, rps: int):
-        """运行时覆盖某等级的限流参数"""
+    def override_profile(self, level: str, rpm: int, rps: int) -> bool:
+        """运行时覆盖某等级的限流参数
+
+        Returns:
+            bool: 覆盖的若是**当前**等级，返回是否**真的下发**到了 Flask-Limiter
+            （False = 配置已存但未生效，调用方必须如实告知用户）；
+            覆盖其它等级时配置已存，返回 True（切到该等级时再下发）。
+        """
         with self._lock:
             self._profiles[level] = {"rpm": rpm, "rps": rps}
             is_current = self._current_level == level
@@ -449,7 +461,11 @@ class DynamicRateLimiter:
             if is_current:
                 # 覆盖的正是当前等级时，必须立刻下发，否则接口提示「已更新」
                 # 而实际限流阈值纹丝不动。
-                self._apply_to_flask_limiter()
+                applied = self._apply_to_flask_limiter()
+                if not applied:
+                    logger.error("限流配置覆盖：%s 已写入，但**未下发到 Flask-Limiter**", level)
+                return applied
+            return True
 
 
 # 全局动态限流器实例

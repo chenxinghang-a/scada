@@ -175,7 +175,15 @@ def update_rate_limiter_profile():
         if not isinstance(rps, int) or rps < 1:
             return error_response("rps 必须为正整数", 400)
 
-        dynamic_rate_limiter.override_profile(level, rpm, rps)
+        applied = dynamic_rate_limiter.override_profile(level, rpm, rps)
+        if not applied:
+            # round 308：**接口不能再说"已更新"**。
+            # `override_profile` 现在返回下发结果：False 表示配置已存，
+            # 但当前等级的阈值**没有真正下发到 Flask-Limiter**（实例未注入）。
+            return error_response(
+                f'限流配置已保存，但**未生效**：当前等级 {level} 的阈值'
+                '未能下发到 Flask-Limiter（实例未注入）。请检查限流器装配。',
+                500)
         return success_response({
             'message': f'限流配置已更新: {level} → rpm={rpm}, rps={rps}',
             'profile': dynamic_rate_limiter.get_current_profile(),

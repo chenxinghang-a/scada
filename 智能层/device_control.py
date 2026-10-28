@@ -122,6 +122,9 @@ class DeviceControlSafety:
 
         # ===== 安全联锁规则 =====
         self._interlock_rules: dict[str, dict[str, Any]] = {}
+        #: 最近一次加载的摘要（round 308）：声明/生效/丢弃。
+        #: `None` 表示还没加载过 —— 与「加载了但一条都没有」必须可区分。
+        self._interlock_load_summary: dict[str, Any] | None = None
         self._interlock_states: dict[str, bool] = {}  # rule_id -> is_triggered
         # round 302：条件成立但**动作没发出去**的次数（写停机值失败 / 急停抛异常）。
         # 状态位此时保持 False（等下一个采样点重试），所以光看 `triggered`
@@ -248,19 +251,30 @@ class DeviceControlSafety:
                 "不存在，条件永不匹配，属于「看似在保护、实际不保护」的死规则。",
                 INTERLOCK_CONFIG_PATH,
             )
+            # round 308：**空载也要留摘要**。否则 `get_interlock_status()`
+            # 返回空字典，界面/接口看到的是"没有联锁"而不是"联锁加载失败"，
+            # 与"配了但全被丢弃"无法区分。
+            self._interlock_load_summary = {
+                'source': None, 'declared': 0, 'loaded': 0,
+                'rejected': 0, 'empty': True,
+            }
             return
 
         loaded = 0
+        rejected = 0
         for rule in rules:
             if not isinstance(rule, dict):
                 logger.error("忽略非法联锁规则（非字典）: %r", rule)
+                rejected += 1
                 continue
             rule_id = rule.get('id')
             if not rule_id:
                 logger.error("忽略缺 id 的联锁规则: %r", rule)
+                rejected += 1
                 continue
             if 'condition' not in rule or 'action' not in rule:
                 logger.error("忽略缺 condition/action 的联锁规则: %s", rule_id)
+                rejected += 1
                 continue
             rule.setdefault('name', rule_id)
             rule.setdefault('priority', 1)
@@ -269,7 +283,28 @@ class DeviceControlSafety:
             self._interlock_states.setdefault(rule_id, False)
             loaded += 1
 
-        logger.info("已从 %s 加载 %d 条安全联锁规则", source, loaded)
+        # round 308：**部分丢弃必须汇总上报**。
+        # 原来只有逐条 `logger.error` + 一句 INFO「加载 N 条」——
+        # `interlocks.yaml` 里 12 条规则、5 条写错（缺 condition / 缩进吃掉
+        # action），现场看到的是「已加载 7 条」，**没有任何地方提示还有 5 条
+        # 被丢了**。那 5 台设备的保护等于不存在，而系统显示"联锁正常"。
+        # 判据：加载结果必须是 (声明数, 生效数, 丢弃数) 三元组，
+        # 丢弃 > 0 时用 WARNING（进得了日志告警），并把摘要暴露给状态接口。
+        self._interlock_load_summary = {
+            'source': source,
+            'declared': len(rules),
+            'loaded': loaded,
+            'rejected': rejected,
+            'empty': False,
+        }
+        if rejected:
+            logger.warning(
+                "安全联锁**部分丢弃**：%s 声明 %d 条，生效 %d 条，丢弃 %d 条"
+                "（被丢弃的规则不会保护任何设备，请检查上面的 error 日志）",
+                source, len(rules), loaded, rejected,
+            )
+        else:
+            logger.info("已从 %s 加载 %d 条安全联锁规则", source, loaded)
 
     def _load_interlocks_from_file(self) -> list[dict[str, Any]]:
         """从 配置/interlocks.yaml 读取联锁规则；文件不存在或不可用时返回 []"""
@@ -582,6 +617,24 @@ class DeviceControlSafety:
             'success_count': success_count,
             'total': total
         }
+
+    def get_interlock_load_summary(self) -> dict[str, Any]:
+        """最近一次联锁加载的摘要（round 308）。
+
+        单独一个方法，**不塞进 `get_interlock_status()` 的返回值** ——
+        那个方法的契约是 `{rule_id: 规则状态}`，多一个魔法 key 会让
+        `== {}` 的调用方和遍历 key 的前端把摘要当成一条规则。
+
+        Returns:
+            dict: `{source, declared, loaded, rejected, empty}`
+            `empty=True` 且 `declared=0` = 没配任何规则；
+            `declared>loaded` = 有规则被丢弃（保护缺失，必须告警）。
+        """
+        summary = self._interlock_load_summary
+        if summary is None:
+            return {'source': None, 'declared': 0, 'loaded': 0,
+                    'rejected': 0, 'empty': True, 'loaded_once': False}
+        return {**summary, 'loaded_once': True}
 
     def add_interlock(self, rule: dict[str, Any]) -> bool:
         """添加自定义联锁规则"""

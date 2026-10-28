@@ -1058,6 +1058,13 @@ UNUSED_BACKEND_PREFIX_RULES: dict[str, str] = {
         "「健康评分为什么一直不变」。**不面向浏览器 UI**（现有前端把它当扁平字典读，"
         "元信息走响应头 `X-Data-Freshness`），供运维脚本与排障使用"
     ),
+    "/api/control/interlocks/load-summary": (
+        "联锁**加载摘要**（round 308）：声明几条 / 生效几条 / 丢弃几条。"
+        "`GET /api/control/interlocks` 的返回是 `{rule_id: 状态}`，只看它无法区分"
+        "「配了 12 条、5 条写错被丢弃」和「本来就只有 7 条」—— 被丢弃的规则"
+        "不保护任何设备，而界面一切正常。**刻意不接 UI**：这是运维排障与交接"
+        "核查用的只读视图（同 `/api/devices/reload`），挂在联锁页上对操作员无意义"
+    ),
     "/api/devices/reload": (
         "设备配置热重载（round 283）：改完 `配置/devices.yaml` 后重新加载配置表"
         "**并同步采集任务**，不用重启进程。目前**刻意不接 UI** —— 它会让现场采集"

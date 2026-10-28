@@ -86,6 +86,10 @@ def _record_calls(c):
     def _start(device_id, config):
         calls['started'].append(device_id)
         c.tasks[device_id] = MagicMock()      # 模拟"已挂上定时器"
+        # round 308：`start_device_task` 的契约改成返回 bool（是否真的挂上），
+        # `sync_device_tasks` 据此区分 started / failed。这个 fake 既然真的
+        # 挂上了定时器，就必须 `return True` —— 否则它自己会被记进 failed。
+        return True
 
     def _stop(device_id):
         calls['stopped'].append(device_id)
@@ -187,6 +191,7 @@ def test_sync_does_not_hold_task_lock_while_calling_start_stop():
         finally:
             if acquired:
                 c._tasks_lock.release()
+        return True       # round 308：契约是 bool（是否真的挂上）
 
     c.start_device_task = _start
     c.remove_device_task = lambda device_id: None
