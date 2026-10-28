@@ -471,12 +471,116 @@ class AlarmManager:
         # round 314：从库里恢复"条件尚未恢复"的报警（必须在 load_config 之后，
         # 因为升级管理器是在 load_config 里创建的）
         self._restore_active_alarms()
+        # round 316：屏蔽也要跨重启保持（维护窗口内重启不该让报警重新刷屏）
+        self._restore_shelves()
 
         # 启动报警升级自动检查定时器
         self._start_escalation_timer()
 
         # 启动告警洪水检查定时器
         self._start_flood_timer()
+
+    #: 报警屏蔽（ISA-18.2 Shelving）的持久化键（round 316）。
+    STATE_KEY_SHELVES = 'alarm_shelves'
+
+    def _persist_shelves(self) -> None:
+        """把当前生效的报警屏蔽落库（round 316）。
+
+        `_shelved_alarms` 是**纯内存**的：维护窗口内重启（改配置 / 升级 / 崩溃）
+        → 屏蔽全部丢失 → 那条正在被屏蔽的刷屏报警**立刻重新刷屏**
+        （声光 + 前端弹窗），而操作员正在检修。
+        ISA-18.2 里 shelving 是"有原因、有操作人、有超时"的动作，
+        重启不该撤销它 —— 它只该由**超时**或**人工解除**结束。
+        """
+        db = getattr(self, 'database', None)
+        if db is None or not hasattr(db, 'set_system_state'):
+            return
+        payload = []
+        with self._state_lock:
+            for (alarm_id, device_id, register_name), st in self._shelved_alarms.items():
+                payload.append({
+                    'alarm_id': alarm_id,
+                    'device_id': device_id,
+                    'register_name': register_name,
+                    'reason': st.reason,
+                    'shelved_by': st.shelved_by,
+                    'shelved_at': (st.shelved_at.isoformat()
+                                   if isinstance(st.shelved_at, datetime) else None),
+                    'shelved_until': (st.shelved_until.isoformat()
+                                      if isinstance(st.shelved_until, datetime) else None),
+                })
+        if not db.set_system_state(self.STATE_KEY_SHELVES, payload or None):
+            logger.error("报警屏蔽状态落库失败 —— 进程重启后屏蔽会失效，"
+                         "正在被屏蔽的报警会重新刷屏")
+
+    def _restore_shelves(self) -> dict[str, int]:
+        """启动时恢复报警屏蔽（round 316）。
+
+        Returns:
+            dict: `{'restored': n, 'expired': n, 'dropped': n}`
+
+        过期的不恢复（由超时清理逻辑正常收尾）；手动屏蔽（`shelved_until=None`）
+        **必须恢复** —— 它本来就没有超时，重启后"自己解除"没有任何依据。
+        """
+        result = {'restored': 0, 'expired': 0, 'dropped': 0}
+        db = getattr(self, 'database', None)
+        if db is None or not hasattr(db, 'get_system_state'):
+            return result
+
+        rows = db.get_system_state(self.STATE_KEY_SHELVES)
+        if not isinstance(rows, list):
+            return result
+
+        now = datetime.now()
+
+        def _parse(v):
+            if not isinstance(v, str):
+                return None
+            try:
+                return datetime.fromisoformat(v)
+            except ValueError:
+                return None
+
+        for row in rows:
+            if not isinstance(row, dict):
+                result['dropped'] += 1
+                continue
+            alarm_id = row.get('alarm_id')
+            device_id = row.get('device_id')
+            register_name = row.get('register_name')
+            if not (alarm_id and device_id and register_name):
+                result['dropped'] += 1
+                continue
+            until = _parse(row.get('shelved_until'))
+            if until is not None and until <= now:
+                result['expired'] += 1
+                continue        # 已过期，不恢复
+
+            key = (alarm_id, device_id, register_name)
+            st = AlarmShelveState(
+                alarm_key=key,
+                reason=row.get('reason') or '（重启前屏蔽，原因未记录）',
+                shelved_by=row.get('shelved_by') or '?',
+                shelved_until=until,
+            )
+            shelved_at = _parse(row.get('shelved_at'))
+            if shelved_at is not None:
+                st.shelved_at = shelved_at
+            with self._state_lock:
+                self._shelved_alarms[key] = st
+                state = self.alarm_states.get(key)
+                if state is not None:
+                    state['shelved'] = True
+            result['restored'] += 1
+
+        if result['restored'] or result['expired']:
+            logger.warning(
+                "已从数据库恢复 %d 条**报警屏蔽**（过期丢弃 %d 条）—— "
+                "维护窗口内重启不该让被屏蔽的报警重新刷屏",
+                result['restored'], result['expired'])
+            if result['expired']:
+                self._persist_shelves()      # 清掉过期的，避免下次又数一遍
+        return result
 
     def _restore_active_alarms(self) -> int:
         """进程启动时从库里恢复「条件尚未恢复」的报警状态（round 314）。
@@ -2609,6 +2713,8 @@ class AlarmManager:
         logger.warning(f"报警已旁路: {alarm_id} ({device_id}/{register_name}) "
                        f"by {shelved_by}, 原因: {reason}, "
                        f"时长: {'手动解除' if not duration_minutes else f'{duration_minutes}分钟'}")
+        # round 316：落库（维护窗口内重启不能让屏蔽失效）
+        self._persist_shelves()
         return True
 
     def unshelve_alarm(self, alarm_id: str, device_id: str, register_name: str) -> bool:
@@ -2624,6 +2730,7 @@ class AlarmManager:
             bool: 是否成功
         """
         alarm_key = (alarm_id, device_id, register_name)
+        removed = False
         with self._state_lock:
             if alarm_key in self._shelved_alarms:
                 del self._shelved_alarms[alarm_key]
@@ -2632,9 +2739,21 @@ class AlarmManager:
                 state = self.alarm_states.get(alarm_key)
                 if state is not None:
                     state['shelved'] = False
-                logger.info(f"报警旁路已解除: {alarm_id} ({device_id}/{register_name})")
-                return True
-        return False
+                removed = True
+
+        if not removed:
+            return False
+
+        logger.info(f"报警旁路已解除: {alarm_id} ({device_id}/{register_name})")
+        # round 316：解除要同步清库，否则重启后屏蔽又"复活"。
+        #
+        # ⚠️ 必须在 `with self._state_lock:` **外面**调用 ——
+        # `_state_lock` 是 `threading.Lock()`（**非可重入**），
+        # 而 `_persist_shelves()` 自己也要拿这把锁 → 持锁调用会**自锁死**
+        # （整个报警模块静默停摆，且没有任何报错）。
+        # 第一版就是写在 with 块里，探针直接 SIGTERM 挂住。
+        self._persist_shelves()
+        return True
 
     def get_shelved_alarms(self) -> list[dict]:
         """获取所有被旁路的报警"""

@@ -152,11 +152,17 @@ def _scan_reentrant_violations():
                 if not (isinstance(tgt, ast.Attribute) and tgt.attr in LOCK_NAMES):
                     continue
                 val = node.value
-                if (isinstance(val, ast.Call) and isinstance(val.func, ast.Attribute)
-                        and val.func.attr == 'Lock'
-                        and isinstance(val.func.value, ast.Name)
-                        and val.func.value.id == 'threading'):
-                    non_reentrant.add(tgt.attr)
+                # ⚠️ 必须同时认两种写法：
+                #   `threading.Lock()`          —— func 是 Attribute
+                #   `from threading import Lock` 之后的 `Lock()` —— func 是 Name
+                # 第一版只认前者，于是 `AlarmManager._state_lock = Lock()`
+                # **完全没被识别**，整个类的闸门被跳过（恒绿）。
+                # 这个盲区让 round 316 的一个真实自锁死漏到了探针阶段。
+                if isinstance(val, ast.Call):
+                    fn = val.func
+                    if ((isinstance(fn, ast.Attribute) and fn.attr == 'Lock')
+                            or (isinstance(fn, ast.Name) and fn.id == 'Lock')):
+                        non_reentrant.add(tgt.attr)
             if not non_reentrant:
                 continue
 
@@ -243,6 +249,43 @@ def test_guard_detects_a_synthetic_violation():
         and n.value.func.attr == 'Lock'
     }
     assert non_reentrant == {'_lock'}, '锁类型识别失效（扫描器会恒绿）'
+
+
+def test_guard_detects_bare_lock_import():
+    """反向对照：`from threading import Lock` 后的裸 `Lock()` 也必须被识别。
+
+    第一版只认 `threading.Lock()`，`AlarmManager._state_lock = Lock()`
+    因此完全没被检查 —— 闸门对该类恒绿。
+    """
+    src = (
+        'from threading import Lock' + chr(10) +
+        'class Bad:' + chr(10) +
+        '    def __init__(self):' + chr(10) +
+        '        self._state_lock = Lock()' + chr(10) +
+        '    def outer(self):' + chr(10) +
+        '        with self._state_lock:' + chr(10) +
+        '            self.inner()' + chr(10) +
+        '    def inner(self):' + chr(10) +
+        '        with self._state_lock:' + chr(10) +
+        '            return 1' + chr(10)
+    )
+    tree = ast.parse(src)
+    cls = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)][0]
+    found = set()
+    for node in ast.walk(cls):
+        if not isinstance(node, ast.Assign):
+            continue
+        tgt = node.targets[0] if node.targets else None
+        if not isinstance(tgt, ast.Attribute):
+            continue
+        val = node.value
+        if isinstance(val, ast.Call):
+            fn = val.func
+            if ((isinstance(fn, ast.Attribute) and fn.attr == 'Lock')
+                    or (isinstance(fn, ast.Name) and fn.id == 'Lock')):
+                found.add(tgt.attr)
+    assert found == {'_state_lock'}, (
+        '裸 `Lock()`（from threading import Lock）没被识别成非可重入锁')
 
 
 def test_rlock_is_allowed():
