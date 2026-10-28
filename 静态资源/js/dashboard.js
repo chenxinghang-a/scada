@@ -874,9 +874,12 @@ function updateAlarmPanel(alarms) {
     const list = document.getElementById('alarm-list');
 
     // 重建"每设备活动报警"索引：设备卡据此置顶 + 打告警标记
+    // round 300：已旁路的不计入 —— 否则维护窗口里整排设备都红着置顶，
+    // 旁路只屏蔽了声音、没屏蔽视线，等于没生效。
     Object.keys(alarmsByDevice).forEach(k => delete alarmsByDevice[k]);
     (alarms || []).forEach(a => {
-        const did = a && a.device_id;
+        if (!a || a.shelved) return;
+        const did = a.device_id;
         if (!did) return;
         const cur = alarmsByDevice[did] || (alarmsByDevice[did] = { count: 0, level: 'warning' });
         cur.count++;
@@ -892,7 +895,9 @@ function updateAlarmPanel(alarms) {
     }
 
     // 统计未确认
-    const unacked = alarms.filter(a => !a.acknowledged).length;
+    // round 300：已旁路（ISA-18.2 Shelving）的不算「待处理」——
+    // 维护窗口里把它们算进 KPI，值班员会被一堆「点了也没用」的报警催着。
+    const unacked = alarms.filter(a => !a.acknowledged && !a.shelved).length;
     setText('kpi-unacked', unacked);
 
     const rows = alarms.slice(0, 20).map(a => createAlarmRow({

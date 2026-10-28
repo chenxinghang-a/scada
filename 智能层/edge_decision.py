@@ -56,6 +56,16 @@ class EdgeDecisionEngine:
         # 执行回调（用于实际控制设备）
         self._action_callbacks: dict[str, Callable[..., Any]] = {}
 
+        # round 300：动作执行失败计数（未注册回调 / 回调抛异常）。
+        # 此前这类失败只体现在 log_entry['result'] 的一段文字里，
+        # 没有任何可聚合的数 —— 运维看不到「这个部署根本没接广播回调」。
+        self._action_failures = 0
+
+        # round 300：PID 单拍 dt 上限。单调时钟解决不了「进程被挂起 / 系统休眠」——
+        # 那时 dt 是几十分钟，积分项一步就打满限幅。超过这个值视为这一拍不可信，
+        # 重新起算而不是硬算（正常采样周期是秒级；采样周期确实更长的部署可调）。
+        self._max_pid_dt = float(self.config.get('max_pid_dt_seconds', 60.0))
+
         # 当前数据快照
         self._data_snapshot: dict[str, float] = {}
 
@@ -348,7 +358,12 @@ class EdgeDecisionEngine:
             'enabled': enabled,
             'integral': 0,
             'prev_error': 0,
-            'prev_time': time.time(),
+            # round 300：PID 的 dt 必须用**单调时钟**。
+            # 原来存 time.time()（墙钟），NTP 校时往前跳 1 小时 → dt=3600
+            # → 积分项一秒钟打满限幅、输出直接顶到 output_max；
+            # 往后跳则 dt<=0 被 return 吞掉，控制静默丢拍。
+            # 这个值只活在本进程内存里，不落盘、不做跨机比较，换单调时钟无副作用。
+            'prev_time': time.monotonic(),
             'output': 0,
         }
         logger.info(f"添加PID控制器: {ctrl_id} - {name} (SP={setpoint})")
@@ -414,34 +429,71 @@ class EdgeDecisionEngine:
             'action_type': action_type,
             'timestamp': datetime.now().isoformat(),
             'snapshot_keys': list(snapshot.keys())[:5],
+            'ok': True,
         }
 
-        if action_type == 'write_register':
+        # round 300：**回调没注册也算失败**。
+        # 原来三个分支各自 `if callback:` —— write_register 在回调缺失时
+        # 连 `result` 都不写（日志里一条没有结果的记录），而 set_alarm /
+        # callback 更糟：`result` 是**无条件**写的，日志照样记
+        # 「报警: xxx」「回调: xxx」，实际一个函数都没调用；trigger_count 也照涨。
+        # 判据：日志里写的结果，必须等于真的发生了什么。
+        #
+        # 注意：`callback` 类型实际查的是 `callback_name`，不是 action_type 本身 ——
+        # 统一按「真正要调用的键」判定，否则这个分支会被误判成已注册。
+        callback_key = (action.get('callback_name', '')
+                        if action_type == 'callback' else action_type)
+
+        if not self._action_callbacks.get(callback_key):
+            log_entry['ok'] = False
+            log_entry['result'] = f'失败: 未注册 {callback_key} 回调'
+            with self._lock:
+                self._action_failures += 1
+            logger.error("动作未执行：未注册 %s 回调（规则 %s）", callback_key, rule_id)
+
+        elif action_type == 'write_register':
             target = action.get('target', '')
             value = action.get('value', 0)
-            callback = self._action_callbacks.get('write_register')
-            if callback:
-                try:
-                    device_id, register_name = target.split(':', 1)
-                    callback(device_id, register_name, value)
-                    log_entry['result'] = f'写入 {target} = {value}'
-                except Exception as e:
-                    log_entry['result'] = f'写入失败: {e}'
-                    logger.error(f"动作执行失败: {e}")
+            # 入口已保证回调存在；这里仍然整段 try —— 回调本身可能抛，
+            # 而且 `target` 格式非法（没有冒号）也算这次动作失败。
+            try:
+                device_id, register_name = target.split(':', 1)
+                self._action_callbacks['write_register'](device_id, register_name, value)
+                log_entry['result'] = f'写入 {target} = {value}'
+            except Exception as e:      # noqa: BLE001
+                log_entry['result'] = f'写入失败: {e}'
+                log_entry['ok'] = False
+                with self._lock:
+                    self._action_failures += 1
+                logger.error(f"动作执行失败: {e}")
 
         elif action_type == 'set_alarm':
             alarm_msg = action.get('message', f'规则 {rule_id} 触发')
-            callback = self._action_callbacks.get('set_alarm')
-            if callback:
+            callback = self._action_callbacks['set_alarm']
+            # round 300：回调抛异常时不许再写「报警: xxx」——
+            # 现场音柱没响、日志说报了警，正是 287 那一族的老毛病。
+            try:
                 callback(alarm_msg, action.get('level', 'warning'))
-            log_entry['result'] = f'报警: {alarm_msg}'
+                log_entry['result'] = f'报警: {alarm_msg}'
+            except Exception as e:      # noqa: BLE001 —— 动作失败不许拖垮决策循环
+                log_entry['ok'] = False
+                log_entry['result'] = f'报警失败: {e}'
+                with self._lock:
+                    self._action_failures += 1
+                logger.error("set_alarm 回调异常: %s", e)
 
         elif action_type == 'callback':
             callback_name = action.get('callback_name', '')
-            callback = self._action_callbacks.get(callback_name)
-            if callback:
+            callback = self._action_callbacks[callback_name]
+            try:
                 callback(snapshot)
-            log_entry['result'] = f'回调: {callback_name}'
+                log_entry['result'] = f'回调: {callback_name}'
+            except Exception as e:      # noqa: BLE001
+                log_entry['ok'] = False
+                log_entry['result'] = f'回调失败: {callback_name}: {e}'
+                with self._lock:
+                    self._action_failures += 1
+                logger.error("回调 %s 异常: %s", callback_name, e)
 
         # 更新规则统计
         with self._lock:
@@ -454,7 +506,12 @@ class EdgeDecisionEngine:
 
         self.decision_log.append(log_entry)
 
-        logger.info(f"[{rule_type.upper()}] {rule_id}: {log_entry.get('result', '')}")
+        # round 300：动作没生效时不能再用 info 写一行「成功」样子的日志
+        if log_entry.get('ok', True):
+            logger.info(f"[{rule_type.upper()}] {rule_id}: {log_entry.get('result', '')}")
+        else:
+            logger.warning(f"[{rule_type.upper()}] {rule_id}: 动作未生效 — "
+                           f"{log_entry.get('result', '')}")
 
     def _execute_pid(self, ctrl_id: str, ctrl: dict[str, Any], snapshot: dict[str, Any]):
         """执行PID控制计算"""
@@ -465,15 +522,21 @@ class EdgeDecisionEngine:
             return
 
         setpoint = ctrl['setpoint']
-        now = time.time()
+        error = setpoint - process_value
+
+        # round 300：与 prev_time 同源，必须都用单调时钟（理由见 add_pid_controller）
+        now = time.monotonic()
         dt = now - ctrl['prev_time']
 
-        if dt <= 0:
+        # 时钟跳变 / 进程被挂起时 dt 可能是几十分钟：直接算会把积分项一步打满
+        # 限幅、输出顶到 output_max，相当于一次没有依据的满量程动作。
+        # 这一拍不可信 —— 重新起算（不积分、不微分），等下一拍正常算。
+        if dt <= 0 or dt > self._max_pid_dt:
+            ctrl['prev_time'] = now
+            ctrl['prev_error'] = error
             return
 
         # PID计算
-        error = setpoint - process_value
-
         # 比例项
         p_term = ctrl['kp'] * error
 
@@ -498,12 +561,26 @@ class EdgeDecisionEngine:
         # 写入输出
         output_key = ctrl['output_key']
         callback = self._action_callbacks.get('write_register')
-        if callback and ':' in output_key:
-            device_id, register_name = output_key.split(':', 1)
-            try:
-                callback(device_id, register_name, output)
-            except Exception as e:
-                logger.error(f"PID输出写入失败: {e}")
+        # round 300：PID 算出了输出却没人写 —— 旧代码是 `if callback and ':' in
+        # output_key:` 直接静默跳过，而 `get_rules()` 里 output 照样有值、
+        # 看板上像是"正在控制"。控制量根本没下发，比不控制更危险。
+        if not callback:
+            with self._lock:
+                self._action_failures += 1
+            logger.error("PID 输出未写入：未注册 write_register 回调（%s）", ctrl_id)
+            return
+        if ':' not in output_key:
+            with self._lock:
+                self._action_failures += 1
+            logger.error("PID 输出未写入：output_key 格式非法 %r（%s）", output_key, ctrl_id)
+            return
+        device_id, register_name = output_key.split(':', 1)
+        try:
+            callback(device_id, register_name, output)
+        except Exception as e:
+            with self._lock:
+                self._action_failures += 1
+            logger.error(f"PID输出写入失败: {e}")
 
     # ==================== 查询接口 ====================
 
@@ -538,4 +615,7 @@ class EdgeDecisionEngine:
             'data_points': len(self._data_snapshot),
             'decision_log_size': len(self.decision_log),
             'registered_actions': list(self._action_callbacks.keys()),
+            # round 300：动作失败次数（未注册回调 / 回调抛异常）。
+            # 与 registered_actions 对照即可发现「规则配了但没人执行」。
+            'action_failures': self._action_failures,
         }

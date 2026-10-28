@@ -268,8 +268,9 @@ class TestPIDController:
         write_cb = MagicMock()
         engine_with_rules.register_action('write_register', write_cb)
         engine_with_rules.update_data('dev1:temp', 60.0)  # below setpoint 75
-        # Need to set prev_time to allow dt > 0
-        engine_with_rules.pid_controllers['temp_pid']['prev_time'] = time.time() - 1.0
+        # round 300：PID 的时间基准已改成单调时钟（墙钟会被 NTP 校时打断积分）。
+        # 这里必须跟着改，否则 dt 变成「monotonic - wall」的巨大负数，直接 return。
+        engine_with_rules.pid_controllers['temp_pid']['prev_time'] = time.monotonic() - 1.0
         engine_with_rules._execute_cycle()
         write_cb.assert_called()
 
@@ -279,13 +280,15 @@ class TestPIDController:
         engine_with_rules.register_action('write_register', write_cb)
         # Very large error to force clamping
         engine_with_rules.update_data('dev1:temp', -1000.0)
-        engine_with_rules.pid_controllers['temp_pid']['prev_time'] = time.time() - 1.0
+        # round 300：同 test_pid_output_with_data，时间基准必须是单调时钟
+        engine_with_rules.pid_controllers['temp_pid']['prev_time'] = time.monotonic() - 1.0
         engine_with_rules._execute_cycle()
-        if write_cb.called:
-            args = write_cb.call_args[0]
-            output = args[2]  # third arg is value
-            assert output >= 0
-            assert output <= 1500
+        # 这一拍必须真的执行了（否则下面的区间断言是空测）
+        assert write_cb.called, 'PID 输出没写出去，区间断言等于没测'
+        args = write_cb.call_args[0]
+        output = args[2]  # third arg is value
+        assert output >= 0
+        assert output <= 1500
 
     def test_disabled_pid_not_evaluated(self, engine):
         """Disabled PID controller is skipped"""

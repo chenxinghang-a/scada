@@ -603,14 +603,18 @@ function updateAlarmList(alarms) {
         const level = alarmLevel(a);
         const time = new Date(a.timestamp).toLocaleTimeString('zh-CN');
         // 未确认的紧急/警告报警：只在左侧色条上做呼吸强调，整行不闪烁
+        // round 300：已旁路的不呼吸、并标出来 —— 大屏是现场最显眼的一块屏，
+        // 旁路的目的就是「别打扰人」，屏上照旧闪等于没屏蔽；
+        // 但也不能藏（值班员要能看见「这条其实在响」）。
         const acked = a.acknowledged === true || a.acknowledged === 1;
-        const pulse = (!acked && (level === 'critical' || level === 'warning'))
+        const shelved = a.shelved === true || a.shelved === 1;
+        const pulse = (!acked && !shelved && (level === 'critical' || level === 'warning'))
             ? ` level-bar--pulse-${level}` : '';
         return `<div class="alarm-item alarm-${level}">
             <span class="level-bar level-bar--${level}${pulse}"></span>
             <div class="alarm-main">
                 <div class="alarm-time">${escapeHtml(time)}</div>
-                <div class="alarm-msg">${escapeHtml(a.alarm_message || a.alarm_id)} — ${escapeHtml(a.device_id)}</div>
+                <div class="alarm-msg">${shelved ? '[已旁路] ' : ''}${escapeHtml(a.alarm_message || a.alarm_id)} — ${escapeHtml(a.device_id)}</div>
             </div>
         </div>`;
     }).join('');

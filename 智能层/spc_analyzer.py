@@ -152,19 +152,45 @@ class SPCAnalyzer:
         span = violation.get('span', 1)
         return (violation.get('rule'), abs_start, abs_start + span - 1)
 
+    def _align_window(self, raw_data: list[float], fed: int,
+                      subgroup_size: int) -> tuple[list[float], int]:
+        """把缓冲区起点对齐到「按绝对位置切分」的子组边界。
+
+        round 300：缓冲区是定长 deque，每喂 1 个点就从头部挤掉 1 个；而
+        `_form_subgroups` 恒从 `data[0]` 按 n 切 —— 于是窗口每滑 1 格，
+        所有子组的**内容边界**整体错位，同一个物理子组在两轮里根本不是同一个东西。
+
+        指纹只能靠「绝对采样序号」稳：把开头不足一个子组的残片丢掉，
+        让 `aligned[0]` 的绝对位置是 n 的倍数，子组序号才有稳定身份。
+
+        返回 (对齐后的数据, 第一个子组的绝对子组序号)。
+
+        原来的写法是 `base_index = 已喂入点数 - 子组数`：**点数**与**子组数**
+        两个单位直接相减，且没做对齐。默认 n=5 时每来 1 个新点 base_index +1、
+        而子组边界要 5 个点才移一格 —— 同一条物理违规每次采样都换指纹，
+        重复计入，100 条上限被它自己刷满，真正的违规反而被挤出去。
+        """
+        dropped = max(0, fed - len(raw_data))       # 已被挤出的点数
+        pad = (-dropped) % subgroup_size            # 让 aligned[0] 落在子组边界
+        aligned = raw_data[pad:] if pad else raw_data
+        base = (dropped + pad) // subgroup_size     # 首个子组的绝对序号
+        return aligned, base
+
     def _record_violations(self, key: str, violations: list[dict[str, Any]],
                             device_id: str, register_name: str,
-                            window_len: int) -> list[dict[str, Any]]:
+                            base_index: int) -> list[dict[str, Any]]:
         """
         记录本轮判异结果 —— **必须在 self._lock 内调用**。
 
         只写入指纹未出现过的判异（去重），并返回本轮新增的部分。
         这样 `get_violations()` 不会因为反复重扫窗口而线性膨胀。
+
+        `base_index` 必须是**第一个子组的绝对子组序号**（由 `_align_window`
+        给出），不是窗口长度、更不是已喂入点数 —— 单位错会让指纹每轮变一次。
         """
         if not violations:
             return []
 
-        base_index = max(0, self._total_fed[key] - window_len)
         seen = self._violation_seen[key]
         if len(seen) > self._violation_fingerprint_cap:
             seen.clear()
@@ -204,21 +230,26 @@ class SPCAnalyzer:
             }
         """
         key = f"{device_id}:{register_name}"
+        n = self.subgroup_size
 
         with self._lock:
             raw_data = list(self.data_buffers.get(key, []))
+            fed = self._total_fed.get(key, 0)
 
-        if len(raw_data) < self.subgroup_size * 2:
+        if len(raw_data) < n * 2:
             return None
 
-        # 分组
-        subgroups = self._form_subgroups(raw_data)
+        # 分组：必须先对齐到**绝对子组边界**，否则窗口每滑 1 点、
+        # 子组内容就整体错位，指纹随之每轮变一次（round 300，见 _align_window）
+        aligned, base_subgroup = self._align_window(raw_data, fed, n)
+        subgroups = self._form_subgroups(aligned)
+        if len(subgroups) < 2:
+            return None
 
         # 计算子组均值和极差
         xbar_values = [sum(g) / len(g) for g in subgroups]
         r_values = [max(g) - min(g) for g in subgroups]
 
-        n = self.subgroup_size
         k = len(subgroups)
 
         # X̄图控制限
@@ -274,7 +305,7 @@ class SPCAnalyzer:
         # 判异结果去重 + 控制限缓存：同一把锁内原子完成
         with self._lock:
             self._record_violations(key, violations, device_id, register_name,
-                                    len(xbar_values))
+                                    base_subgroup)
             self.control_limits[key] = result
 
         return result
@@ -286,19 +317,24 @@ class SPCAnalyzer:
         适用于子组大小 n>10
         """
         key = f"{device_id}:{register_name}"
+        n = self.subgroup_size
 
         with self._lock:
             raw_data = list(self.data_buffers.get(key, []))
+            fed = self._total_fed.get(key, 0)
 
-        if len(raw_data) < self.subgroup_size * 2:
+        if len(raw_data) < n * 2:
             return None
 
-        subgroups = self._form_subgroups(raw_data)
+        # 对齐到绝对子组边界（round 300，理由见 _align_window）
+        aligned, base_subgroup = self._align_window(raw_data, fed, n)
+        subgroups = self._form_subgroups(aligned)
+        if len(subgroups) < 2:
+            return None
 
         xbar_values = [sum(g) / len(g) for g in subgroups]
         s_values = [self._std_dev(g) for g in subgroups]
 
-        n = self.subgroup_size
         k = len(subgroups)
 
         xbar_bar = sum(xbar_values) / k
@@ -343,7 +379,7 @@ class SPCAnalyzer:
         # 判异结果去重 + 锁内写入（与 X̄-R 图保持一致）
         with self._lock:
             self._record_violations(key, violations, device_id, register_name,
-                                    len(xbar_values))
+                                    base_subgroup)
 
         return {
             'chart_type': 'X̄-S',

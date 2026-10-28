@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-10-28T11:04:41+00:00",
+  "generated_at": "2026-10-28T11:27:43+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -63,7 +63,7 @@
       "source_path": "/alarm-output/config",
       "backend_path": "/api/alarm-output/config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:372",
+      "detail": "精确匹配 api_alarms.py:396",
       "source_file": "alarms.ts",
       "source_line": 211
     },
@@ -73,7 +73,7 @@
       "source_path": "/alarm-output/config",
       "backend_path": "/api/alarm-output/config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:385",
+      "detail": "精确匹配 api_alarms.py:409",
       "source_file": "alarms.ts",
       "source_line": 215
     },
@@ -133,7 +133,7 @@
       "source_path": "/alarm-rules/:id",
       "backend_path": "/api/alarm-rules/<rule_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_alarms.py:322",
+      "detail": "结构匹配（参数名归一）api_alarms.py:334",
       "source_file": "alarms.ts",
       "source_line": 169
     },
@@ -143,7 +143,7 @@
       "source_path": "/alarm-rules/:id",
       "backend_path": "/api/alarm-rules/<rule_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_alarms.py:290",
+      "detail": "结构匹配（参数名归一）api_alarms.py:296",
       "source_file": "alarms.ts",
       "source_line": 165
     },
@@ -153,7 +153,7 @@
       "source_path": "/alarm-rules/notification",
       "backend_path": "/api/alarm-rules/notification",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:347",
+      "detail": "精确匹配 api_alarms.py:365",
       "source_file": "alarms.ts",
       "source_line": 207
     },
@@ -193,7 +193,7 @@
       "source_path": "/alarms/dedup-config",
       "backend_path": "/api/alarms/dedup-config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:585",
+      "detail": "精确匹配 api_alarms.py:621",
       "source_file": "alarms.ts",
       "source_line": 148
     },
@@ -203,7 +203,7 @@
       "source_path": "/alarms/dedup-config",
       "backend_path": "/api/alarms/dedup-config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:594",
+      "detail": "精确匹配 api_alarms.py:630",
       "source_file": "alarms.ts",
       "source_line": 152
     },
@@ -213,7 +213,7 @@
       "source_path": "/alarms/flood-status",
       "backend_path": "/api/alarms/flood-status",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:576",
+      "detail": "精确匹配 api_alarms.py:612",
       "source_file": "alarms.ts",
       "source_line": 144
     },
@@ -363,7 +363,7 @@
       "source_path": "/broadcast/config",
       "backend_path": "/api/broadcast/config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:480",
+      "detail": "精确匹配 api_alarms.py:510",
       "source_file": "alarms.ts",
       "source_line": 219
     },
@@ -373,7 +373,7 @@
       "source_path": "/broadcast/config",
       "backend_path": "/api/broadcast/config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:501",
+      "detail": "精确匹配 api_alarms.py:531",
       "source_file": "alarms.ts",
       "source_line": 223
     },
@@ -1393,19 +1393,19 @@
       "method": "GET",
       "backend_path": "/api/alarms/escalation/rules",
       "source_file": "api_alarms.py",
-      "source_line": 667
+      "source_line": 703
     },
     {
       "method": "PUT",
       "backend_path": "/api/alarms/escalation/rules",
       "source_file": "api_alarms.py",
-      "source_line": 676
+      "source_line": 712
     },
     {
       "method": "GET",
       "backend_path": "/api/alarms/escalation/status",
       "source_file": "api_alarms.py",
-      "source_line": 658
+      "source_line": 694
     },
     {
       "method": "POST",

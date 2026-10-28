@@ -278,7 +278,13 @@ def add_alarm_rule():
     rules.append(data)
     config['alarm_rules'] = rules
 
-    save_yaml_config('配置/alarms.yaml', config)
+    # round 300：写盘失败就**到此为止** —— 不改运行时、不回「已保存」。
+    # 这些接口原来是裸调用，返回值直接丢弃：磁盘满 / 权限不足 / 原子写失败时
+    # 接口照样回 `{'success': True, 'message': '已保存'}`，而配置文件根本没落地，
+    # 重启后全部回滚。而且运行时对象已被改过，界面显示的和文件里的是两套配置。
+    # 本文件 710 行（升级规则）早就是正确写法，这里对齐它。
+    if not save_yaml_config('配置/alarms.yaml', config):
+        return api_error('保存报警配置失败', 500)
 
     current_app.alarm_manager.rules[data['id']] = data
     current_app.alarm_manager._rebuild_rules_index()
@@ -310,7 +316,13 @@ def update_alarm_rule(rule_id):
         return api_error(f'规则 {rule_id} 不存在', 404)
 
     config['alarm_rules'] = rules
-    save_yaml_config('配置/alarms.yaml', config)
+    # round 300：写盘失败就**到此为止** —— 不改运行时、不回「已保存」。
+    # 这些接口原来是裸调用，返回值直接丢弃：磁盘满 / 权限不足 / 原子写失败时
+    # 接口照样回 `{'success': True, 'message': '已保存'}`，而配置文件根本没落地，
+    # 重启后全部回滚。而且运行时对象已被改过，界面显示的和文件里的是两套配置。
+    # 本文件 710 行（升级规则）早就是正确写法，这里对齐它。
+    if not save_yaml_config('配置/alarms.yaml', config):
+        return api_error('保存报警配置失败', 500)
 
     current_app.alarm_manager.rules[rule_id] = rules[[r['id'] for r in rules].index(rule_id)]
     current_app.alarm_manager._rebuild_rules_index()
@@ -333,7 +345,13 @@ def delete_alarm_rule(rule_id):
         return api_error(f'规则 {rule_id} 不存在', 404)
 
     config['alarm_rules'] = new_rules
-    save_yaml_config('配置/alarms.yaml', config)
+    # round 300：写盘失败就**到此为止** —— 不改运行时、不回「已保存」。
+    # 这些接口原来是裸调用，返回值直接丢弃：磁盘满 / 权限不足 / 原子写失败时
+    # 接口照样回 `{'success': True, 'message': '已保存'}`，而配置文件根本没落地，
+    # 重启后全部回滚。而且运行时对象已被改过，界面显示的和文件里的是两套配置。
+    # 本文件 710 行（升级规则）早就是正确写法，这里对齐它。
+    if not save_yaml_config('配置/alarms.yaml', config):
+        return api_error('保存报警配置失败', 500)
 
     if rule_id in current_app.alarm_manager.rules:
         del current_app.alarm_manager.rules[rule_id]
@@ -360,7 +378,13 @@ def update_notification():
     if 'sound' in data:
         config.setdefault('notification', {})['sound'] = data['sound']
 
-    save_yaml_config('配置/alarms.yaml', config)
+    # round 300：写盘失败就**到此为止** —— 不改运行时、不回「已保存」。
+    # 这些接口原来是裸调用，返回值直接丢弃：磁盘满 / 权限不足 / 原子写失败时
+    # 接口照样回 `{'success': True, 'message': '已保存'}`，而配置文件根本没落地，
+    # 重启后全部回滚。而且运行时对象已被改过，界面显示的和文件里的是两套配置。
+    # 本文件 710 行（升级规则）早就是正确写法，这里对齐它。
+    if not save_yaml_config('配置/alarms.yaml', config):
+        return api_error('保存报警配置失败', 500)
 
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_notification', '更新通知设置')
@@ -444,7 +468,13 @@ def update_alarm_output_config():
                 alarm_output['relay_output']['do_mapping'] = {}
             alarm_output['relay_output']['do_mapping'].update(relay['do_mapping'])
 
-    save_yaml_config('配置/alarms.yaml', config)
+    # round 300：写盘失败就**到此为止** —— 不改运行时、不回「已保存」。
+    # 这些接口原来是裸调用，返回值直接丢弃：磁盘满 / 权限不足 / 原子写失败时
+    # 接口照样回 `{'success': True, 'message': '已保存'}`，而配置文件根本没落地，
+    # 重启后全部回滚。而且运行时对象已被改过，界面显示的和文件里的是两套配置。
+    # 本文件 710 行（升级规则）早就是正确写法，这里对齐它。
+    if not save_yaml_config('配置/alarms.yaml', config):
+        return api_error('保存报警配置失败', 500)
 
     # 同步更新运行时的alarm_output实例
     alarm_manager = current_app.alarm_manager
@@ -538,7 +568,13 @@ def update_broadcast_config():
         if key in data:
             broadcast[key] = data[key]
 
-    save_yaml_config('配置/alarms.yaml', config)
+    # round 300：写盘失败就**到此为止** —— 不改运行时、不回「已保存」。
+    # 这些接口原来是裸调用，返回值直接丢弃：磁盘满 / 权限不足 / 原子写失败时
+    # 接口照样回 `{'success': True, 'message': '已保存'}`，而配置文件根本没落地，
+    # 重启后全部回滚。而且运行时对象已被改过，界面显示的和文件里的是两套配置。
+    # 本文件 710 行（升级规则）早就是正确写法，这里对齐它。
+    if not save_yaml_config('配置/alarms.yaml', config):
+        return api_error('保存报警配置失败', 500)
 
     # 同步更新运行时的broadcast实例
     alarm_manager = current_app.alarm_manager
