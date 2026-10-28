@@ -79,6 +79,23 @@ class SafetyLevel:
     EMERGENCY = 'emergency' # 紧急（立即停机）
 
 
+#: 联锁规则里**真正会被执行**的条件类型（round 313）。
+#:
+#: `check_interlocks()` 只判 `threshold` 与 `coil`，其它值会让 `matched` 保持
+#: False 然后 `continue` —— 这条规则**永不触发，且一个字都不报**。
+#: 现场表现：yaml 里 `type: thresold`（少一个 h），界面上规则存在、enabled: true，
+#: 实际超温时什么都不发生。
+SUPPORTED_CONDITION_TYPES = frozenset({'threshold', 'coil'})
+
+#: 联锁规则里**真正会被执行**的动作类型（round 313）。
+#:
+#: 比条件拼错更隐蔽：`_execute_interlock_action()` 对未知类型**什么都不做，
+#: 但 `action_ok` 保持 True**，审计里记的是 `interlock_triggered`（成功）。
+#: 现场表现：`action: {type: write_registor}`（少一个 e）→ 条件成立、
+#: 状态显示"已触发"、审计说"已执行"，而**停机值一次都没下发**。
+SUPPORTED_ACTION_TYPES = frozenset({'write_register', 'emergency_stop', 'block_start'})
+
+
 @dataclass
 class BypassRequest:
     """联锁旁路审批请求（IEC 61511 合规）"""
@@ -291,6 +308,26 @@ class DeviceControlSafety:
                 continue
             if 'condition' not in rule or 'action' not in rule:
                 logger.error("忽略缺 condition/action 的联锁规则: %s", rule_id)
+                rejected += 1
+                continue
+            # round 313：**类型拼错 = 静默失效的死规则**。
+            # 条件类型不认识 → `matched` 永远 False，规则永不触发；
+            # 动作类型不认识 → 条件会触发、审计记"已执行"，但什么都没做。
+            # 两种都不能靠"运行期没报错"发现，必须在加载时拒绝并汇总告警。
+            cond_type = (rule.get('condition') or {}).get('type')
+            if cond_type not in SUPPORTED_CONDITION_TYPES:
+                logger.error(
+                    "忽略联锁规则 %s：condition.type=%r 不被支持（只支持 %s）—— "
+                    "这条规则**永远不会触发**", rule_id, cond_type,
+                    sorted(SUPPORTED_CONDITION_TYPES))
+                rejected += 1
+                continue
+            act_type = (rule.get('action') or {}).get('type')
+            if act_type not in SUPPORTED_ACTION_TYPES:
+                logger.error(
+                    "忽略联锁规则 %s：action.type=%r 不被支持（只支持 %s）—— "
+                    "条件会触发但**动作不会执行**", rule_id, act_type,
+                    sorted(SUPPORTED_ACTION_TYPES))
                 rejected += 1
                 continue
             rule.setdefault('name', rule_id)
@@ -1096,6 +1133,18 @@ class DeviceControlSafety:
         elif action_type == 'block_start':
             # 标记设备启动被阻止
             logger.warning(f"联锁阻止设备启动: {rule_id}")
+
+        else:
+            # round 313：**未知动作类型绝不能算成功**。
+            # 原来这里没有 else —— `action_ok` 保持 True，审计记
+            # `interlock_triggered`（成功），而实际上什么动作都没发出。
+            # 加载时已经拦掉这类规则，但运行期 `add_interlock()` 注入的
+            # 规则绕过加载校验，所以这里必须再兜一次。
+            action_ok = False
+            logger.error(
+                "联锁 %s 的动作类型 %r 不被支持（只支持 %s）—— "
+                "条件已成立但**动作未执行**，设备可能并未进入安全状态",
+                rule_id, action_type, sorted(SUPPORTED_ACTION_TYPES))
 
         # 记录审计（写文件也可能失败，不能因为审计挂了就丢掉动作结果）
         try:

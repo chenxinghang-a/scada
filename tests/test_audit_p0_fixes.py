@@ -415,7 +415,13 @@ class TestControlInterlockFailClosed:
         所以这里把量程一并配好，否则会在量程那一步先被拦下，
         用例就测不到它本来想测的东西了。
         """
-        rules = [{'id': 'r1', 'condition': {'device_id': 'x', 'register': 't', 'operator': '>', 'value': 999},
+        # round 313：**必须写 `type`**。原来这条规则没有 `condition.type`，
+        # 而 `check_interlocks()` 只认 `threshold` / `coil` —— 也就是说这条
+        # 规则**永远不会触发**。用例想验的是"有联锁配置时不 fail-closed"，
+        # 结果用一条死规则证明了它（本项目"测试固化缺陷"第 6 例）。
+        rules = [{'id': 'r1',
+                  'condition': {'type': 'threshold', 'device_id': 'x',
+                                'register': 't', 'operator': '>', 'value': 999},
                   'action': {'type': 'block_start'}}]
         dc = _dc(interlocks=rules, simulation=False)
         assert dc._interlock_rules

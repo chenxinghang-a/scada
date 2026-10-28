@@ -528,17 +528,36 @@ class TestInterlockConfigDriven:
         assert 'il_temp_high' in dc._interlock_rules
 
     def test_invalid_rules_are_skipped(self):
-        """缺 id / 缺 condition 的规则必须被丢弃（不得半装）"""
+        """缺 id / 缺 condition / **类型不认识** 的规则必须被丢弃（不得半装）
+
+        round 313：原断言是 `'il_bad2' in dc._interlock_rules`，注释写
+        「结构合法的仍会装载（条件求值由引擎兜底）」—— 这句话是**错的**：
+        `condition={}` 没有 `type`，而 `check_interlocks()` 只认
+        `threshold` / `coil`，于是这条规则**永远不会触发**，引擎也不"兜底"，
+        它只是静默地什么都不做。用一条死规则当"合法"样本，
+        等于把"半装"钉成了需求（本项目"测试固化缺陷"第 7 例）。
+        """
         from 智能层.device_control import DeviceControlSafety
         bad_rules = [
             {'name': 'no id'},
             {'id': 'il_bad'},                                   # 缺 condition/action
-            {'id': 'il_bad2', 'condition': {}, 'action': {}},    # 结构合法但内容空
+            {'id': 'il_bad2', 'condition': {}, 'action': {}},    # 缺 type → 永不触发
+            {'id': 'il_bad3',                                   # 条件类型拼错
+             'condition': {'type': 'thresold', 'device_id': 'x', 'register': 't'},
+             'action': {'type': 'block_start'}},
+            {'id': 'il_bad4',                                   # 动作类型拼错
+             'condition': {'type': 'threshold', 'device_id': 'x', 'register': 't'},
+             'action': {'type': 'write_registor'}},
             'not-a-dict',
         ]
         dc = DeviceControlSafety(MagicMock(), config={'interlocks': bad_rules})
         assert 'il_bad' not in dc._interlock_rules
-        assert 'il_bad2' in dc._interlock_rules  # 结构合法的仍会装载（条件求值由引擎兜底）
+        assert 'il_bad2' not in dc._interlock_rules, (
+            '缺 condition.type 的规则被装载了 —— 它永远不会触发')
+        assert 'il_bad3' not in dc._interlock_rules, '条件类型拼错却装载了'
+        assert 'il_bad4' not in dc._interlock_rules, '动作类型拼错却装载了'
+        # 汇总里必须能看出被丢了几条
+        assert dc.get_interlock_load_summary()['rejected'] >= 4
 
     def test_configured_interlock_triggers_and_writes(self):
         """配置化联锁在条件满足时触发，并按寄存器名解析地址后写入"""
