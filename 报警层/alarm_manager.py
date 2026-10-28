@@ -468,11 +468,106 @@ class AlarmManager:
         self._config_watcher_running = True
         self._start_config_watcher()
 
+        # round 314：从库里恢复"条件尚未恢复"的报警（必须在 load_config 之后，
+        # 因为升级管理器是在 load_config 里创建的）
+        self._restore_active_alarms()
+
         # 启动报警升级自动检查定时器
         self._start_escalation_timer()
 
         # 启动告警洪水检查定时器
         self._start_flood_timer()
+
+    def _restore_active_alarms(self) -> int:
+        """进程启动时从库里恢复「条件尚未恢复」的报警状态（round 314）。
+
+        Returns:
+            int: 恢复的条数。
+
+        ## 为什么必须做
+
+        `alarm_states` 是**纯内存**的，而库里的 `alarm_records.cleared = 0`
+        记录才是"现场还在发生"的事实。重启后不恢复的后果（实测）：
+
+        * `get_active_alarms()` 返回空 → **看板显示"无报警"，而现场还在超温**；
+          如果那台设备随后通信中断（不再有采样），这条报警就**永久消失**；
+        * 下一次采样时 `_process_alarm_state` 把它当**全新报警** →
+          重新播报（声光 + 广播 + 前端弹窗）、`acknowledged` 变回 False、
+          **升级跟踪重新登记** → 300/900/1800 秒后又给三级主管打电话，
+          而人早就确认过了；
+        * 历史里同一条持续报警变成 2 行、3 行。
+
+        ## 已确认的不登记升级
+
+        恢复时 `acknowledged = True` 的报警**不进升级跟踪** —— 人已经处理过，
+        重启不该让它重新打电话。但**仍在** `alarm_states` 里，
+        所以看板仍然显示它（已确认、未恢复），`clear_alarm` 也仍能正常收尾。
+        """
+        try:
+            rows = self.database.get_uncleared_alarms()
+        except Exception as e:      # noqa: BLE001 —— 恢复失败不许拦住启动
+            logger.error("恢复未恢复报警失败（看板可能显示为空）: %s", e)
+            return 0
+
+        def _to_dt(v):
+            if isinstance(v, datetime):
+                return v
+            if isinstance(v, str):
+                try:
+                    return datetime.fromisoformat(v)
+                except ValueError:
+                    return None
+            return None
+
+        restored = 0
+        skipped_acked = 0
+        for row in rows:
+            alarm_id = row.get('alarm_id')
+            device_id = row.get('device_id')
+            register_name = row.get('register_name')
+            if not (alarm_id and device_id and register_name):
+                continue
+            key = (alarm_id, device_id, register_name)
+
+            ts = _to_dt(row.get('timestamp')) or datetime.now()
+            last_ts = _to_dt(row.get('last_trigger_time')) or ts
+            acked = bool(row.get('acknowledged'))
+
+            with self._state_lock:
+                if key in self.alarm_states:
+                    continue
+                self.alarm_states[key] = {
+                    'alarm_id': alarm_id,
+                    'device_id': device_id,
+                    'register_name': register_name,
+                    'first_trigger_time': ts,
+                    'last_trigger_time': last_ts,
+                    'trigger_count': row.get('trigger_count') or 1,
+                    'confirmed': True,      # 已经在库里，说明条件成立过
+                    'acknowledged': acked,
+                    'pending': False,
+                    'restored': True,       # 标记来源，便于排障
+                }
+
+            if acked:
+                skipped_acked += 1
+            elif self._escalation_manager is not None:
+                # 未确认 → 继续升级计时（起点用库里的最初触发时刻）
+                try:
+                    self._escalation_manager.record_alarm(
+                        alarm_id, device_id, register_name,
+                        first_trigger_time=ts.timestamp())
+                except Exception as e:      # noqa: BLE001
+                    logger.error("恢复升级跟踪失败 %s/%s/%s: %s",
+                                 alarm_id, device_id, register_name, e)
+            restored += 1
+
+        if restored:
+            logger.warning(
+                "已从数据库恢复 %d 条**条件尚未恢复**的报警（其中 %d 条已确认、"
+                "不重新升级）。看板与升级计时按重启前的状态继续",
+                restored, skipped_acked)
+        return restored
 
     def _start_config_watcher(self):
         """启动配置文件热重载后台线程（默认每10秒检查文件修改时间）"""

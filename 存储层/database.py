@@ -1024,11 +1024,21 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 查找同一报警**仍然活跃**的记录（未确认 且 未恢复）
+            # 查找同一报警**仍然活跃**的记录（条件尚未恢复）
+            #
+            # ⚠️ round 314：判据从「未确认 **且** 未恢复」改成「未恢复」。
+            # 按 ISA-18.2 的报警状态机，"已确认但条件仍在"**还是同一条报警**
+            # （Active/Ack 只是生命周期中的一站），不是新事件。
+            # 原判据的后果：
+            #   超温 → 操作员确认 → 温度一直没降 → **进程重启** → 下一次采样
+            #   → 库里查不到"未确认且未恢复"的行 → **新建一行**
+            #   → 同一条持续报警在历史里变成 2 条、3 条…，报警 KPI 翻倍；
+            #   而且新行的 `acknowledged = 0`，**已确认的报警重启后又变成未确认**，
+            #   升级定时器会重新走一遍 300/900/1800 秒，半夜再打给三级主管。
             cursor.execute('''
                 SELECT id, trigger_count FROM alarm_records
                 WHERE alarm_id = ? AND device_id = ? AND register_name = ?
-                  AND acknowledged = 0 AND cleared = 0
+                  AND cleared = 0
                 ORDER BY timestamp DESC LIMIT 1
             ''', (alarm_id, device_id, register_name))
 
@@ -1105,6 +1115,26 @@ class Database:
             params.append(offset)
 
             cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_uncleared_alarms(self, limit: int = 500) -> list[dict[str, Any]]:
+        """取**条件尚未恢复**（`cleared = 0`）的报警记录（round 314）。
+
+        用途：`AlarmManager` 启动时把"现场还在发生"的报警恢复到内存
+        `alarm_states` —— 否则进程重启后 `get_active_alarms()` 返回空，
+        **看板显示"无报警"，而现场还在超温**；如果该设备随后通信中断
+        （不再有采样），这条报警就永久消失了，直到条件再次变化才可能被重新发现。
+
+        按 `timestamp` 升序（最老的在前），与 `get_active_alarms()` 的顺序一致。
+        """
+        with self.get_connection(readonly=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM alarm_records
+                WHERE cleared = 0
+                ORDER BY timestamp ASC
+                LIMIT ?
+            ''', (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
     def acknowledge_alarm(self, alarm_id: str, acknowledged_by: str,

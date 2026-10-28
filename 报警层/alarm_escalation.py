@@ -182,18 +182,34 @@ class AlarmEscalationManager:
                 logger.error(f"升级检查异常: {e}")
             time.sleep(self._check_interval)
 
-    def record_alarm(self, alarm_id: str, device_id: str, register_name: str):
-        """记录新告警"""
+    def record_alarm(self, alarm_id: str, device_id: str, register_name: str,
+                     first_trigger_time: float | None = None):
+        """记录新告警
+
+        Args:
+            first_trigger_time: 报警**最初**触发的墙钟时刻（epoch 秒）。
+                进程重启后从库里恢复时传入，这样"已超时多久"接着算，
+                而不是从重启那一刻重新计时（否则一条已经拖了 2 小时的
+                未确认报警，重启后升级倒计时归零，**永远不会升级**）。
+                缺省取当前时刻。
+        """
         key = f"{alarm_id}:{device_id}:{register_name}"
         with self._lock:
             if key not in self._states:
+                now_wall = time.time()
+                anchor_wall = (first_trigger_time
+                               if isinstance(first_trigger_time, (int, float))
+                               and first_trigger_time > 0 else now_wall)
+                # 用"从 anchor 到现在经过的墙钟时长"反推单调时钟起点，
+                # 让两个基准保持同一个相对关系（判定用 mono，展示用 wall）。
+                anchor_mono = time.monotonic() - max(0.0, now_wall - anchor_wall)
                 self._states[key] = EscalationState(
                     alarm_id=alarm_id,
                     device_id=device_id,
                     register_name=register_name,
                     current_level=0,
-                    first_trigger_time=time.time(),
-                    first_trigger_mono=time.monotonic(),
+                    first_trigger_time=anchor_wall,
+                    first_trigger_mono=anchor_mono,
                 )
                 logger.debug(f"记录告警升级跟踪: {key}")
 
