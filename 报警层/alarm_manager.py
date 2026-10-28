@@ -369,6 +369,19 @@ class AlarmManager:
 
         # ISA-18.2: 死区配置 (rule_id -> deadband_value)
         self._deadbands: dict[str, float] = {}
+        # round 304：**外部事件（edge_decision / 上位机联动 / 脚本）不能寄生在
+        # `self.rules` 里**。原来 `raise_external_alarm` 往 `self.rules` 塞一条
+        # `condition: 'external'` 的伪规则，只为了 `get_active_alarms()` 能显示
+        # 名称/级别 —— 但 `self.rules` 是**会落盘的**（`_save_config` 写
+        # `list(self.rules.values())`）：
+        #   · 任何一次 add_rule / remove_rule 都会把这些运行时事件写进 alarms.yaml，
+        #     重启后变成 `condition: external`（`evaluate_condition` 对未知条件
+        #     恒 False）的僵尸规则；
+        #   · `total_rules` / `enabled_rules` 统计虚高，报警合理性自检失去意义；
+        #   · `_rebuild_rules_index()` 会把 ('external','event') 塞进判定索引，
+        #     真有点位同名上报时会走 CLEAR 分支把外部报警判成「已恢复」。
+        # 现在外部报警走独立容器，读取侧合并、落盘侧不碰。
+        self._external_alarms: dict[str, dict[str, Any]] = {}
 
         # ISA-18.2: 报警统计分析器（延迟初始化）
         self._alarm_statistics = None
@@ -866,15 +879,24 @@ class AlarmManager:
             self._record_output_failure('sms', f"短信任务提交失败: {e}")
 
     def _rebuild_rules_index(self):
-        """构建规则索引：(device_id, register_name) -> [(rule_id, rule_config)]"""
-        self._rules_index.clear()
-        for rule_id, rule_config in self.rules.items():
+        """构建规则索引：(device_id, register_name) -> [(rule_id, rule_config)]
+
+        round 304：**构造新 dict 再整体替换，不再 `clear()` 后逐条重建**。
+        原来 `self._rules_index.clear()` 之后是一个「索引为空」的窗口，
+        而 `check_alarm` 读索引时不持锁 —— 落在窗口里的采样会拿到空列表、
+        直接 `return`，**该点位的报警静默漏检一次**，日志里一个字都没有。
+        重建是纯内存操作，窗口只有几十微秒，但采集是多线程的，真撞上就是
+        一次无痕漏报；而这类"几十微秒的窗口"正是最难复现、最容易被当成
+        "设备偶发抖动"的一类。
+        dict 引用赋值在 CPython 下是原子的：读者要么看到旧索引、要么看到新索引。
+        """
+        new_index: dict[tuple, list] = {}
+        for rule_id, rule_config in list(self.rules.items()):
             if not rule_config.get('enabled', True):
                 continue
             key = (rule_config.get('device_id'), rule_config.get('register_name'))
-            if key not in self._rules_index:
-                self._rules_index[key] = []
-            self._rules_index[key].append((rule_id, rule_config))
+            new_index.setdefault(key, []).append((rule_id, rule_config))
+        self._rules_index = new_index
         logger.debug(f"规则索引已构建: {len(self._rules_index)} 个设备/寄存器组合")
 
     def add_escalation_callback(self, callback: Callable[..., Any]):
@@ -1039,17 +1061,36 @@ class AlarmManager:
                 config = yaml.safe_load(f)
 
             # 解析报警规则
+            #
+            # round 304：**文件即真源 —— 整体替换，不再「只增不删」**。
+            # 原来这里是 `self.rules[rule_id] = rule_config` 一条条并进去：
+            #   · 运维从 alarms.yaml 删掉一条误报规则 → 它仍在内存里继续报警；
+            #   · 再通过 API 加一条规则时，`_save_config` 写的是
+            #     `list(self.rules.values())` → 刚删的规则被**重新写回文件**，
+            #     重启也活。整个链路上没有一行日志解释它为什么回来。
+            # 删除动作必须传播：构造新字典，一次性替换引用（赋值是原子的，
+            # 读者要么看到旧表、要么看到新表，不会看到半张表）。
             rules_config = config.get('alarm_rules', [])
+            new_rules: dict[str, dict[str, Any]] = {}
+            new_deadbands: dict[str, float] = {}
             for rule_config in rules_config:
                 rule_id = rule_config.get('id')
-                if rule_id:
-                    self.rules[rule_id] = rule_config
-                    # 从规则配置中读取死区
-                    deadband = rule_config.get('deadband', 0)
-                    if deadband:
-                        self._deadbands[rule_id] = float(deadband)
-                    logger.info(f"加载报警规则: {rule_id} - {rule_config.get('name')}")
+                if not rule_id:
+                    logger.warning("报警规则缺少 id，已跳过: %r", rule_config)
+                    continue
+                new_rules[rule_id] = rule_config
+                # 从规则配置中读取死区
+                deadband = rule_config.get('deadband', 0)
+                if deadband:
+                    new_deadbands[rule_id] = float(deadband)
 
+            removed = sorted(set(self.rules) - set(new_rules))
+            with self._state_lock:
+                self.rules = new_rules
+                self._deadbands = new_deadbands
+            if removed:
+                logger.info("报警规则重载：配置里已删除 %d 条（内存同步移除）: %s",
+                            len(removed), removed)
             logger.info(f"共加载 {len(self.rules)} 条报警规则")
 
             # 构建规则索引
@@ -1854,9 +1895,14 @@ class AlarmManager:
         state_key = (alarm_id, device_id, register_name)
 
         # 注册成"规则"，否则 get_active_alarms 拿不到名称/级别
+        #
+        # round 304：注册到**独立容器** `_external_alarms`，不再污染 `self.rules`。
+        # `self.rules` 是「配置里的报警规则」，会被 `_save_config` 整份写回
+        # alarms.yaml —— 把运行时事件混进去，等于让它们有机会变成持久化的
+        # 僵尸规则（见 __init__ 里的详细说明）。
         with self._state_lock:
-            if alarm_id not in self.rules:
-                self.rules[alarm_id] = {
+            if alarm_id not in self._external_alarms:
+                self._external_alarms[alarm_id] = {
                     'id': alarm_id,
                     'name': message,
                     'level': level,
@@ -1884,8 +1930,14 @@ class AlarmManager:
             else:
                 state['last_trigger_time'] = timestamp
                 state['trigger_count'] = state.get('trigger_count', 0) + 1
+            # round 304：取本条的规则描述（从独立容器里拿，不再读 self.rules）
+            rule_config = dict(self._external_alarms.get(alarm_id) or {
+                'id': alarm_id, 'name': message, 'level': level,
+                'device_id': device_id, 'register_name': register_name,
+                'condition': 'external', 'threshold': 0,
+            })
 
-        self._trigger_alarm(self.rules[alarm_id], device_id, register_name,
+        self._trigger_alarm(rule_config, device_id, register_name,
                             value, timestamp, notify=notify)
         return True
 
@@ -1896,6 +1948,12 @@ class AlarmManager:
         state_key = (alarm_id, device_id, register_name)
         with self._state_lock:
             existed = self.alarm_states.pop(state_key, None) is not None
+            # round 304：外部事件的**描述**也要跟着回收，否则 `_external_alarms`
+            # 只增不减（一个按消息哈希派生 ID 的部署会随事件种类无界增长）。
+            # 只有「再没有其它 state 引用这个 alarm_id」时才删，避免误删
+            # 同一事件挂在多个 device/register 上的描述。
+            if not any(k[0] == alarm_id for k in self.alarm_states):
+                self._external_alarms.pop(alarm_id, None)
         if not existed:
             return False
         if self._escalation_manager:
@@ -1917,7 +1975,10 @@ class AlarmManager:
         # 线程安全：快照遍历，避免RuntimeError: dictionary changed size
         with self._state_lock:
             snapshot = list(self.alarm_states.items())
-            rules_snapshot = dict(self.rules)
+            # round 304：配置规则 + 外部事件描述合并读取。
+            # 外部事件不进 `self.rules`（那会被落盘成僵尸规则），但活跃列表
+            # 仍要能显示它的名称/级别 —— 所以在这里合并一次。
+            rules_snapshot = {**self.rules, **self._external_alarms}
 
         for state_key, state in snapshot:
             rule_id, device_id, register_name = state_key

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import threading
 
 import pytest
 
@@ -38,6 +39,11 @@ def _load_alarm_manager(monkeypatch, config_path: pathlib.Path):
     am.database = MagicMock()
     am.config_path = str(config_path)
     am.rules = {}
+    # round 304：load_config 现在在 `_state_lock` 内**整体替换** rules / deadbands
+    # （修掉「只增不删」），裸对象要把这两样也备齐，否则 AttributeError。
+    am._deadbands = {}
+    am._external_alarms = {}
+    am._state_lock = threading.Lock()
     am.alarm_states = {}
     am.dedup_config = None
     am.logger = __import__("logging").getLogger("test_auto_alerts")
