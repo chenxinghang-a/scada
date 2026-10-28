@@ -221,6 +221,109 @@ class DeviceControlSafety:
 
     # ==================== 安全联锁 ====================
 
+    def reload_interlocks(self) -> dict[str, Any]:
+        """重新加载 `配置/interlocks.yaml`，返回差集（round 318）。
+
+        Returns:
+            dict: `{'added': [...], 'removed': [...], 'changed': [...],
+                   'kept': [...], 'source': str}`
+
+        ## 为什么需要
+
+        `_load_preset_interlocks()` **只在 `__init__` 里调用一次** ——
+        也就是说改 `interlocks.yaml`（调阈值、加一条、停用一条）必须
+        **重启进程**才生效，而这是 24/7 的现场系统。
+
+        更糟的是**没有任何提示**：运维改完文件、看到 `git status` 干净，
+        就以为生效了。方向虽然"安全"（旧规则继续保护），但两种误判都很危险：
+
+        * 改**高**阈值想减少误跳闸 → 实际没生效 → 继续误跳闸；
+        * 改**低**阈值想更严格 → 实际仍是旧阈值 → **保护不足而无人知**。
+
+        ## 差集怎么算
+
+        规则按 `id` 比对；`id` 相同但 `condition` / `action` 变了算 **changed**。
+        `changed` 的规则必须**重置运行时状态**：
+        `_interlock_states`（旧阈值下的"已触发"不能沿用）、
+        `_interlock_bypass`（旧规则的审批不该自动套到新规则上）、
+        `_interlock_action_failures`。
+
+        `removed` 的规则同理要清干净 —— 否则一条被删的联锁仍挂在
+        `_interlock_bypass` 里，将来同 id 规则重新加回来时会**自动处于旁路状态**。
+        """
+        old_rules = dict(self._interlock_rules)
+        old_ids = set(old_rules)
+        #: 旧状态要留着 —— **没变的规则**（kept）必须沿用它的"已触发"位。
+        #: 一刀切重置会让一条正在触发的联锁突然变"未触发"，
+        #: 下一轮采样再重新触发一次（重复播报 + 重复执行动作）。
+        old_states = dict(self._interlock_states)
+
+        # **构造全新的空表再让 `_load_preset_interlocks()` 往里填**。
+        # 不能"先清空旧表再逐条填"：判定线程（`check_interlocks`）正在遍历它，
+        # 中间态会抛 `dictionary changed size during iteration`。
+        # 直接赋新对象是原子的：读者要么看到旧表、要么看到新表。
+        #
+        # 加载失败（文件不存在/全是坏规则）时新表保持为空 →
+        # `_load_preset_interlocks` 会走"空规则"分支告警，
+        # 而 `validate_write` 在真实设备模式下 fail-closed 拒绝写操作。
+        self._interlock_rules = {}
+        self._interlock_states = {}
+        self._load_preset_interlocks()
+        new_rules = self._interlock_rules
+
+        new_ids = set(new_rules)
+        added = sorted(new_ids - old_ids)
+        removed = sorted(old_ids - new_ids)
+        changed = sorted(
+            rid for rid in (new_ids & old_ids)
+            if (old_rules[rid].get('condition') != new_rules[rid].get('condition')
+                or old_rules[rid].get('action') != new_rules[rid].get('action')
+                or old_rules[rid].get('enabled', True) != new_rules[rid].get('enabled', True))
+        )
+        # ⚠️ kept 只能取**旧表与新表的交集**再排除 changed ——
+        # 写成 `new_ids - set(changed)` 会把新增的规则也算进 kept。
+        kept = sorted((new_ids & old_ids) - set(changed))
+
+        # 失效规则（删除 / 改动）的运行时状态必须清干净
+        if removed or changed:
+            with self._lock:
+                # removed：规则没了，状态表里也不该留 key
+                for rid in removed:
+                    self._interlock_states.pop(rid, None)
+                    self._interlock_action_failures.pop(rid, None)
+                    self._interlock_bypass.discard(rid)
+                # changed：规则还在（新条件），状态**重置为未触发**而不是删 key ——
+                # 删掉会让 `_interlock_states` 缺少这条规则的条目，
+                # 与"加载完成"时的形状不一致（下游按 key 存在性判断会漏）。
+                for rid in changed:
+                    if rid in self._interlock_states:
+                        self._interlock_states[rid] = False
+                    self._interlock_action_failures.pop(rid, None)
+                    self._interlock_bypass.discard(rid)
+
+        # 恢复 **kept** 规则的旧状态（`_load_preset_interlocks` 会把新表
+        # 全部填成 False，这里只覆盖没变的那部分）
+        with self._lock:
+            for rid in kept:
+                if rid in old_states:
+                    self._interlock_states[rid] = old_states[rid]
+
+        if added or removed or changed:
+            logger.warning(
+                "安全联锁配置已热重载：新增 %s，移除 %s，变更 %s（变更/移除的规则"
+                "运行时状态已重置，旁路审批不继承）",
+                added, removed, changed)
+        else:
+            logger.info("安全联锁配置已重载（无变化）")
+
+        return {
+            'added': added,
+            'removed': removed,
+            'changed': changed,
+            'kept': kept,
+            'source': (self._interlock_load_summary or {}).get('source'),
+        }
+
     def _load_preset_interlocks(self):
         """
         加载安全联锁规则（配置驱动）

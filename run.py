@@ -556,7 +556,11 @@ def main():
                     device_manager=device_manager,
                     # round 285：devices.yaml 热重载后要同步采集任务
                     # （只换配置表不同步任务 = 删掉的设备一直重试、新增的永远不采）
-                    data_collector=getattr(app, 'data_collector', None))
+                    data_collector=getattr(app, 'data_collector', None),
+                    # round 318：interlocks.yaml 热重载
+                    # （`_load_preset_interlocks()` 只在构造时跑一次，
+                    #  改阈值必须重启才生效，且没有任何提示）
+                    device_control=getattr(app, 'device_control', None))
                 logger.info(f"后台维护任务已启动: {', '.join(maintenance_started) or '（无）'}")
             except Exception as _mt_err:
                 logger.error("后台维护任务启动失败: %s", _mt_err, exc_info=True)

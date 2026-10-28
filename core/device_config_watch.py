@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 
 #: `DeviceManager` 没给出 config_path 时的兜底路径
 DEFAULT_CONFIG_REL = '配置/devices.yaml'
+#: 安全联锁规则文件（round 318）。改它同样必须热重载 ——
+#: `DeviceControlSafety._load_preset_interlocks()` 只在构造时跑一次。
+DEFAULT_INTERLOCK_REL = '配置/interlocks.yaml'
 
 
 def _resolve_path(device_manager) -> Any:
@@ -153,3 +156,85 @@ def watch_once(device_manager, data_collector=None, *,
         'sync': sync,
         'reason': '已应用',
     }
+
+
+def watch_interlocks_once(device_control, *, state: dict | None = None) -> dict[str, Any]:
+    """检查 `配置/interlocks.yaml` 的 mtime，变了就热重载联锁规则（round 318）。
+
+    Args:
+        device_control: `智能层.device_control.DeviceControlSafety`
+        state: 跨调用保存的基线，形如 `{'mtime': 1234.5}`。
+
+    Returns:
+        dict: `{'changed', 'reloaded', 'diff', 'reason'}`
+
+    ## 为什么需要
+
+    `_load_preset_interlocks()` **只在 `__init__` 里调用一次** ——
+    改 `interlocks.yaml`（调阈值、加一条、停用一条）必须**重启进程**才生效，
+    而这是 24/7 的现场系统。且**没有任何提示**：运维改完文件就以为生效了。
+
+    方向虽然"安全"（旧规则继续保护），但两种误判都很危险：
+    · 改**高**阈值想减少误跳闸 → 实际没生效 → 继续误跳闸；
+    · 改**低**阈值想更严格 → 实际仍是旧阈值 → **保护不足而无人知**。
+
+    ## 与 `watch_once` 同样的三条纪律
+
+    · 首次调用只建基线（构造时已经加载过，不重复加载）；
+    · mtime 未变什么都不做；
+    · **处理完立刻推进基线** —— 同一个坏文件不每 10 秒刷一次错误日志，
+      修好后 mtime 再变 → 自然重试。
+    """
+    if state is None:
+        state = {}
+
+    try:
+        import paths
+        path = paths.resolve(DEFAULT_INTERLOCK_REL)
+    except Exception as e:      # noqa: BLE001
+        from pathlib import Path
+        logger.debug("解析联锁配置路径失败，按原样使用: %s", e)
+        path = Path(DEFAULT_INTERLOCK_REL)
+
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError:
+        return {'changed': False, 'reloaded': False, 'diff': None,
+                'reason': f'联锁配置文件不存在: {path}'}
+    except OSError as e:
+        return {'changed': False, 'reloaded': False, 'diff': None,
+                'reason': f'无法读取联锁配置文件 {path}: {e}'}
+
+    previous = state.get('mtime')
+    if previous is None:
+        state['mtime'] = mtime
+        return {'changed': False, 'reloaded': False, 'diff': None,
+                'reason': '首次建立 mtime 基线（不重载）'}
+
+    if mtime == previous:
+        return {'changed': False, 'reloaded': False, 'diff': None,
+                'reason': '联锁配置文件未变化'}
+
+    # 先推进基线：坏文件不该每轮都重试并刷日志
+    state['mtime'] = mtime
+
+    reload_fn = getattr(device_control, 'reload_interlocks', None)
+    if not callable(reload_fn):
+        return {'changed': True, 'reloaded': False, 'diff': None,
+                'reason': 'device_control 不提供 reload_interlocks()，无法热重载'}
+
+    try:
+        diff = reload_fn() or {}
+    except Exception as e:      # noqa: BLE001 —— 重载炸了不能让维护任务挂
+        logger.error("联锁配置自动重载异常: %s", e)
+        return {'changed': True, 'reloaded': False, 'diff': None,
+                'reason': f'重载异常: {e}'}
+
+    if diff.get('added') or diff.get('removed') or diff.get('changed'):
+        logger.warning(
+            "联锁配置已自动热重载：新增 %s / 移除 %s / 变更 %s",
+            diff.get('added'), diff.get('removed'), diff.get('changed'))
+    else:
+        logger.info("联锁配置已自动热重载（规则内容无变化）")
+
+    return {'changed': True, 'reloaded': True, 'diff': diff, 'reason': '已重载'}

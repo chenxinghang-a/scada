@@ -50,6 +50,7 @@ DEFAULT_INTERVALS: Dict[str, float] = {
     'data_archive': 86400,                # 24 小时
     'data_freshness_watch': 30,           # 30 秒（采集中断看门狗）
     'device_config_watch': 10,            # 10 秒（devices.yaml 热重载）
+    'interlock_config_watch': 10,         # 10 秒（interlocks.yaml 热重载）
     'backup_restore_drill': 86400,        # 24 小时（备份恢复演练）
 }
 
@@ -57,7 +58,7 @@ DEFAULT_INTERVALS: Dict[str, float] = {
 def build_maintenance_tasks(database=None, auth_manager=None, *,
                             archive_days: int = 7, delete_days: int = 30,
                             alarm_manager=None, device_manager=None,
-                            data_collector=None) -> List[tuple]:
+                            data_collector=None, device_control=None) -> List[tuple]:
     """组装 (名称, 间隔, 说明, 可调用对象) 列表。
 
     依赖为 None 的任务会被跳过（并记录 debug 日志），这样调用方可以只传
@@ -138,6 +139,31 @@ def build_maintenance_tasks(database=None, auth_manager=None, *,
             DEFAULT_INTERVALS['device_config_watch'],
             '监视 devices.yaml 的 mtime，变化即重载配置并同步采集任务',
             _device_config_watch,
+        ))
+
+    if device_control is not None:
+        # 跨轮次保存的 mtime 基线（与 devices.yaml 各自独立）
+        _interlock_cfg_state: Dict[str, Any] = {}
+
+        def _interlock_config_watch():
+            """安全联锁配置自动热重载（round 318）。
+
+            `DeviceControlSafety._load_preset_interlocks()` **只在构造时跑一次** ——
+            改 `interlocks.yaml`（调阈值、加一条、停用一条）必须重启进程才生效，
+            而这是 24/7 的现场系统；且**没有任何提示**，运维改完文件就以为生效了。
+
+            两种误判都很危险：改**高**阈值想减少误跳闸 → 实际没生效 →
+            继续误跳闸；改**低**阈值想更严格 → 实际仍是旧阈值 →
+            **保护不足而无人知**。
+            """
+            from core.device_config_watch import watch_interlocks_once
+            return watch_interlocks_once(device_control, state=_interlock_cfg_state)
+
+        tasks.append((
+            'interlock_config_watch',
+            DEFAULT_INTERVALS['interlock_config_watch'],
+            '监视 interlocks.yaml 的 mtime，变化即热重载安全联锁规则',
+            _interlock_config_watch,
         ))
 
     if database is not None and alarm_manager is not None:
@@ -231,7 +257,7 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
                                archive_days: int = 7, delete_days: int = 30,
                                intervals: Optional[Dict[str, float]] = None,
                                alarm_manager=None, device_manager=None,
-                               data_collector=None) -> List[str]:
+                               data_collector=None, device_control=None) -> List[str]:
     """把所有维护任务注册到 ``task_manager``（不启动）。
 
     Args:
@@ -256,7 +282,8 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
             # `watch_once(device_manager, None, ...)` 只重载配置表、
             # **永不同步采集任务** —— round 285 的自动热重载等于只做了一半：
             # 新增设备永远不采、删掉的设备继续超时重试并刷报警。
-            data_collector=data_collector):
+            data_collector=data_collector,
+            device_control=device_control):
         task_manager.add(name, func, overrides.get(name, interval), description)
         names.append(name)
 
@@ -271,7 +298,7 @@ def start_maintenance(database=None, auth_manager=None, *,
                       archive_days: int = 7, delete_days: int = 30,
                       intervals: Optional[Dict[str, float]] = None,
                       alarm_manager=None, device_manager=None,
-                      data_collector=None) -> List[str]:
+                      data_collector=None, device_control=None) -> List[str]:
     """注册并启动全部维护任务（幂等）。
 
     重复调用不会产生第二套线程 —— 已处于 running 状态的任务会被
@@ -281,7 +308,7 @@ def start_maintenance(database=None, auth_manager=None, *,
         database, auth_manager, archive_days=archive_days,
         delete_days=delete_days, intervals=intervals,
         alarm_manager=alarm_manager, device_manager=device_manager,
-        data_collector=data_collector)
+        data_collector=data_collector, device_control=device_control)
     started = [n for n in names if task_manager.start(n)]
     logger.info("维护任务已启动: %s", ', '.join(started) or '（无）')
     return started
