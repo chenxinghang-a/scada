@@ -1043,6 +1043,30 @@ class DeviceControlSafety:
 
         return action_ok
 
+    def forget_device(self, device_id: str) -> bool:
+        """设备被删除时清掉它的健康/失败计数/写锁/安全状态处理器（round 310）。
+
+        这些容器都以 `device_id` 为 key 且没有删除点，后果里最硬的是
+        **重新添加同名设备会继承旧的 `_comm_failures`**：
+
+            # 删设备前它已经连续失败 5 次
+            del device; add_device(same_id)
+            # → 新设备第一次采样前就 `_comm_failures[same_id] == 5`
+            # → 直接判离线 / 直接拒绝写操作（`check_write` 的健康检查）
+
+        现场表现：设备明明在线，界面显示离线、写操作被拒，重启才恢复。
+        `_device_health` 同理（`status: disconnected` 会被继承）。
+        """
+        removed = False
+        for container in (self._device_health, self._comm_failures,
+                          self._device_locks, self._safe_state_handlers):
+            if device_id in container:
+                container.pop(device_id, None)
+                removed = True
+        if removed:
+            logger.info("设备控制安全模块已清理已删除设备的状态: %s", device_id)
+        return removed
+
     def get_interlock_status(self) -> dict[str, Any]:
         """获取所有联锁状态"""
         with self._lock:

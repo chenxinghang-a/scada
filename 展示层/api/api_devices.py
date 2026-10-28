@@ -269,6 +269,8 @@ def delete_device(device_id):
         if result and result.get('success'):
             get_auth_manager().log_operation(
                 request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
+            # round 310：删掉之后必须清各模块的按设备状态
+            _forget_device_everywhere(device_id)
             return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
         # 回退到 device_manager
         success = current_app.device_manager.remove_device(device_id)
@@ -278,6 +280,7 @@ def delete_device(device_id):
     if success:
         get_auth_manager().log_operation(
             request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
+        _forget_device_everywhere(device_id)
         return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
     # round 302：删除同样会因落盘失败而回滚（设备被放回内存）。
     # 保持 400（与 add 一致：该返回值也可能是「设备本就不存在」），
@@ -385,6 +388,58 @@ def _start_device_collection(device_id: str) -> bool:
                      device_id)
         return False
     return True
+
+
+#: 设备被删除后必须清掉「按 device_id 索引的运行时状态」的模块。
+#: 这里用属性名而不是直接 import —— 模块可能未装配（单测 / 精简部署）。
+_FORGET_DEVICE_HOLDERS = (
+    'data_collector',       # 采集层：失败计数 / 间隔 / 断路器状态
+    'device_control',       # 安全联锁：健康状态 / 通信失败计数 / 写锁
+    'oee_calculator',       # OEE：产量 / 班次 / 理论产能
+    'energy_manager',       # 能耗：实时功率 / kWh 差分基准 / 能耗基线
+    'vibration_analyzer',   # 振动：波形缓冲 / 评分 / 采样率
+    'mqtt_subscriber',      # 网关订阅端：遥测/状态缓存
+    'predictive_maintenance',
+    'spc_analyzer',
+)
+
+
+def _forget_device_everywhere(device_id: str) -> dict:
+    """设备**真的删掉之后**，清掉各模块里按 device_id 索引的运行时状态。
+
+    Returns:
+        dict: `{模块属性名: True/False/异常文本}`，只含"确实有该设备状态"的模块。
+
+    为什么必须做（round 310）：`device_manager.remove_device()` 只删配置表与
+    客户端，而智能层/网关里十几个容器都以 `device_id` 为 key、**没有任何删除点**。
+    设备删掉后：
+
+    * 报表里继续出现这台不存在的设备（OEE / 能耗 / 振动 / 遥测缓存）；
+    * **重新添加同名设备会继承旧状态** —— 最硬的是
+      `DeviceControlSafety._comm_failures`：删之前连续失败 5 次，
+      新设备第一次采样前就被判离线、写操作被拒，重启才恢复。
+
+    与 round 274 修 `DataCollector._device_intervals` 是同一族问题，
+    区别是那次只在采集层内部清，这次跨模块统一入口。
+    """
+    from flask import current_app
+
+    result: dict[str, Any] = {}
+    for attr in _FORGET_DEVICE_HOLDERS:
+        module = getattr(current_app, attr, None)
+        forget = getattr(module, 'forget_device', None)
+        if not callable(forget):
+            continue
+        try:
+            if forget(device_id):
+                result[attr] = True
+        except Exception as e:      # noqa: BLE001 —— 清理失败不许影响删除结果
+            result[attr] = f'清理异常: {e}'
+            logger.error("清理设备 %s 的 %s 状态失败: %s", device_id, attr, e)
+    if result:
+        logger.info("设备 %s 已删除，清理了这些模块的运行时状态: %s",
+                    device_id, ', '.join(sorted(result)))
+    return result
 
 
 @devices_bp.route('/devices/<device_id>/test', methods=['POST'])

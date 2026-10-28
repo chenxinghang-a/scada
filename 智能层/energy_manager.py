@@ -347,6 +347,28 @@ class EnergyManager:
 
     # ==================== 数据输入接口 ====================
 
+    def forget_device(self, device_id: str) -> bool:
+        """设备被删除时清掉它的能耗状态（round 310）。
+
+        `realtime_power` / `_last_energy_reading` / `energy_baseline` 三个容器
+        都以 `device_id` 为 key 且**没有删除点**。设备删掉后：
+
+        * `get_realtime_power()` 仍返回它的最后一帧功率 —— 总功率里**永久多出**
+          一台不存在的设备（看板"总功率 320 kW"里含着已拆掉的设备）；
+        * `_last_energy_reading` 留着旧的 kWh 累计值，重新添加同名设备时
+          第一次差分得到**负增量**（新表从 0 开始，旧值还在），
+          被当成"这一小时用了 -450 kWh"，能耗曲线出现负值。
+        """
+        removed = False
+        for container in (self.realtime_power, self._last_energy_reading,
+                          self.energy_baseline):
+            if device_id in container:
+                container.pop(device_id, None)
+                removed = True
+        if removed:
+            logger.info("能耗管理器已清理已删除设备的状态: %s", device_id)
+        return removed
+
     def feed_power_data(self, device_id: str, power_kw: float,
                          energy_kwh: float | None = None, timestamp: datetime | None = None):
         """

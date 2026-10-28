@@ -81,6 +81,20 @@ class PredictiveMaintenance:
 
         logger.info("预测性维护模块初始化完成")
 
+    def forget_device(self, device_id: str) -> bool:
+        """设备被删除时清掉它的健康评分（round 310）。
+
+        `health_scores` 以 `device_id` 为 key 且没有删除点：设备删掉后
+        `get_health_scores()` 仍返回它，运维在维护看板上看到一台不存在的
+        设备的"健康度 62%，建议 30 天内保养"。
+        重新添加同名设备时也会继承旧评分（首轮分析前就显示一个历史分数）。
+        """
+        if device_id in self.health_scores:
+            self.health_scores.pop(device_id, None)
+            logger.info("预测性维护已清理已删除设备的评分: %s", device_id)
+            return True
+        return False
+
     def feed_data(self, device_id: str, register_name: str,
                   value: float, timestamp: datetime | None = None):
         """

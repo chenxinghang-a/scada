@@ -74,6 +74,27 @@ class SPCAnalyzer:
 
         logger.info("SPC分析器初始化完成")
 
+    def forget_device(self, device_id: str) -> bool:
+        """设备被删除时清掉它的 SPC 控制限/规格限/违规记录（round 310）。
+
+        ⚠️ 这三个容器的 key 是 **`device_id:register_name` 复合键**，不是裸
+        device_id —— 直接 `pop(device_id)` 一个都删不掉（而且不会报错，
+        是最容易写成"看起来修了其实没删"的形态）。这里按前缀匹配。
+
+        设备删掉后：`get_violations()` / 控制图接口仍会返回它的数据，
+        报表里出现不存在的设备；`_auto_set_spec_limits` 也不会再给它重算，
+        旧控制限**永久冻结**。
+        """
+        prefix = f'{device_id}:'
+        removed = False
+        for container in (self.control_limits, self.spec_limits, self.violations):
+            for key in [k for k in list(container) if k.startswith(prefix)]:
+                container.pop(key, None)
+                removed = True
+        if removed:
+            logger.info("SPC 已清理已删除设备的控制限与违规记录: %s", device_id)
+        return removed
+
     def feed_data(self, device_id: str, register_name: str, value: float):
         """
         喂入质量数据

@@ -211,6 +211,23 @@ class MQTTSubscriber:
             self.logger.error(f"处理消息异常: {e}")
             self.stats['errors'] += 1
 
+    def forget_device(self, device_id: str) -> bool:
+        """设备被删除时清掉它的遥测/状态缓存（round 310）。
+
+        `_telemetry_cache` / `_status_cache` 以 `device_id` 为 key 且没有删除点，
+        而 `get_all_telemetry()` 返回的是 `copy()` 全表 —— 设备删掉后
+        **网关仍然对外提供它的最后一帧数据**：下游/前端会看到一台
+        已经不存在的设备还在"上报"。
+        """
+        removed = False
+        for container in (self._telemetry_cache, self._status_cache):
+            if device_id in container:
+                container.pop(device_id, None)
+                removed = True
+        if removed:
+            self.logger.info("MQTT 订阅端已清理已删除设备的缓存: %s", device_id)
+        return removed
+
     def _note_quality(self, telemetry: DeviceTelemetry) -> None:
         """统计非 GOOD 的质量码（round 296）。
 

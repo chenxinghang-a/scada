@@ -725,6 +725,14 @@ class DeviceManager:
                 logger.error("移除设备失败：配置落盘失败，已回滚 %s", device_id)
                 return False
 
+            # round 310：**状态缓存必须一起清**。`_status_cache` / `_status_cache_time`
+            # 以 device_id 为 key、TTL 5 秒，但删除设备时从不清 ——
+            # 后果不是"多占几十字节"，而是**同名设备重新添加后 5 秒内返回旧状态**：
+            # 旧设备删之前是 connected=True，新设备其实还没连上，
+            # `get_device_status()` 却回"已连接"，界面/写操作前置检查全部被误导。
+            # 放在落盘成功之后：落盘失败会回滚设备，那时缓存仍然有效。
+            self._status_cache.pop(device_id, None)
+            self._status_cache_time.pop(device_id, None)
             logger.info(f"移除设备: {device_id}")
             return True
         except Exception as e:

@@ -101,6 +101,21 @@ class TSDBAdapter:
 
         logger.info("TDengine智能层适配器初始化完成")
 
+    def forget_device(self, device_id: str) -> bool:
+        """设备被删除时注销它的时序同步登记（round 310）。
+
+        `_registered_devices` 以 `device_id` 为 key 且没有删除点，而
+        `_sync_data()` 里 `for device_id in self._registered_devices:` 会
+        **继续给一台已删除的设备拉数据**（查库得到空 → 仍走一轮同步），
+        `_write_results()` 也会给它写结果行 —— 时序库里因此出现
+        "已删除设备仍在产生数据"的记录，报表对不上设备清单。
+        """
+        if device_id in self._registered_devices:
+            self._registered_devices.pop(device_id, None)
+            logger.info("时序适配器已注销已删除设备: %s", device_id)
+            return True
+        return False
+
     def register_device(self, device_id: str, registers: list[dict[str, Any]]):
         """
         注册设备及其寄存器

@@ -155,6 +155,32 @@ class OEECalculator:
                 'since': now,
             }
 
+    def forget_device(self, device_id: str) -> bool:
+        """设备被删除时清掉它的全部按设备状态（round 310）。
+
+        Returns:
+            bool: 是否真的清掉了东西。
+
+        为什么必须有：这四个容器都以 `device_id` 为 key，全类**没有任何删除点**
+        （`grep -c "device_states.pop"` = 0）。设备删掉后：
+          · 内存里留着它的产量/班次/理论产能；
+          · `get_oee()` / 班次报表**仍会把它列出来** —— 运维在报表里看到一台
+            已经不存在的设备，且它的 OEE 从此冻结在删除那一刻的数值，
+            看起来像"这台设备停了但还在统计"；
+          · 重新添加同名设备时**继承旧的 `_last_production`**，
+            第一笔产量会被算成"增量"，OEE 直接跳变。
+        与 round 274 修 `DataCollector._device_intervals` 同型。
+        """
+        removed = False
+        for container in (self.device_states, self._last_production,
+                          self.shift_data, self.theoretical_rates):
+            if device_id in container:
+                container.pop(device_id, None)
+                removed = True
+        if removed:
+            logger.info("OEE 已清理已删除设备的状态: %s", device_id)
+        return removed
+
     def record_production(self, device_id: str, count: int | None = None, good_count: int | None = None):
         """
         记录产量（支持绝对值和增量两种模式）

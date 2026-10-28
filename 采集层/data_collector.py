@@ -1032,6 +1032,17 @@ class DataCollector:
         # 导致**设备删除失败、追踪数据残留**（也就是这段代码本来要防的内存泄漏）。
         self._forget_device_state(device_id)
 
+    def forget_device(self, device_id: str) -> bool:
+        """统一入口别名（round 310）：清理该设备的采集侧运行时状态。
+
+        `_forget_device_state()` 早已存在（round 274），但方法名不是统一约定，
+        于是 `api_devices._forget_device_everywhere()` 按 `forget_device` 找不到它
+        —— 设备删除后采集侧的失败计数/间隔/断路器状态仍然残留。
+        这里只做状态清理；取消定时器由 `remove_device_task()` 负责（删除路径
+        会先调它，再调本方法），两者职责不重叠。
+        """
+        return self._forget_device_state(device_id)
+
     def sync_device_tasks(self) -> dict[str, Any]:
         """把正在跑的采集任务对齐到**当前设备配置**（配置热重载用）。
 

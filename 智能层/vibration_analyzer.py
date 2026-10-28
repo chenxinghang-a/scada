@@ -192,6 +192,24 @@ class VibrationAnalyzer:
             return None
         return value
 
+    def forget_device(self, device_id: str) -> bool:
+        """设备被删除时清掉它的振动缓冲与评分（round 310）。
+
+        `_buffers`（deque，单设备可存上千条波形）、`_scores`、
+        `_device_sample_rates` / `_feed_sample_rates` 都没有删除点。
+        设备删掉后缓冲**永久占内存**，`refresh_scores()` 还会继续给它算分 ——
+        报表里出现一台不存在的设备的振动评分。
+        """
+        removed = False
+        for container in (self._buffers, self._scores,
+                          self._device_sample_rates, self._feed_sample_rates):
+            if device_id in container:
+                container.pop(device_id, None)
+                removed = True
+        if removed:
+            logger.info("振动分析器已清理已删除设备的状态: %s", device_id)
+        return removed
+
     def resolve_sample_rate(self, device_id: str) -> float | None:
         """
         解析设备的真实采样率（Hz）
