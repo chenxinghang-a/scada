@@ -98,89 +98,98 @@ class EdgeDecisionEngine:
         if self._thread:
             self._thread.join(timeout=5)
 
-    def _load_default_rules(self):
-        """加载默认决策规则和安全联锁"""
-        # 安全联锁规则
-        self.add_interlock(
-            'high_temp_interlock',
-            condition={
-                'type': 'threshold',
-                'key': 'siemens_plc_01:temperature',
-                'operator': 'gt',
-                'value': 150.0
-            },
-            action={'type': 'set_alarm', 'message': '反应釜温度过高，紧急停机！', 'level': 'critical'},
-            name='高温安全联锁',
-            enabled=True
-        )
+    def _load_default_rules(self) -> bool:
+        """加载默认决策规则 / 安全联锁 / PID（round 309：不再硬编码设备名）
 
-        self.add_interlock(
-            'high_pressure_interlock',
-            condition={
-                'type': 'threshold',
-                'key': 'siemens_plc_01:pressure',
-                'operator': 'gt',
-                'value': 1.0
-            },
-            action={'type': 'set_alarm', 'message': '管道压力超限，紧急泄压！', 'level': 'critical'},
-            name='高压安全联锁',
-            enabled=True
-        )
+        ⚠️ 历史实现把 3 条规则 + 2 条联锁 + 1 个 PID **写死在代码里**，全部绑定
+        `siemens_plc_01` —— 而设备清单里**没有这个设备**（真实的是
+        `siemens_1500_01` / `siemens_web_01` 等）。`update_data()` 以
+        `device_id:register_name` 为 key，所以这 6 条**永远匹配不上**：
+        引擎启动日志写着「已加载默认规则: 3条规则, 2条联锁, 1个PID控制器」，
+        界面上有规则在跑，实际一条都不会触发 ——
+        与 round 246 在 `device_control` 里删掉的那批"预置联锁"是同一个病
+        （**看似在保护、实际不保护**）。
 
-        # 决策规则
-        self.add_rule(
-            'temp_control_rule',
-            condition={
-                'type': 'threshold',
-                'key': 'siemens_plc_01:temperature',
-                'operator': 'gt',
-                'value': 80.0
-            },
-            action={'type': 'set_alarm', 'message': '反应釜温度偏高，建议检查冷却系统', 'level': 'warning'},
-            name='温度预警规则',
-            priority=10,
-            enabled=True
-        )
+        返回值此前也没有：`start()` 里调用它，无法知道到底加载到了没有。
 
-        self.add_rule(
-            'pressure_control_rule',
-            condition={
-                'type': 'threshold',
-                'key': 'siemens_plc_01:pressure',
-                'operator': 'gt',
-                'value': 0.8
-            },
-            action={'type': 'set_alarm', 'message': '管道压力偏高，建议检查阀门', 'level': 'warning'},
-            name='压力预警规则',
-            priority=20,
-            enabled=True
-        )
+        Returns:
+            bool: 是否加载到了默认规则（False = 没有配置，引擎空转）。
 
-        self.add_rule(
-            'motor_current_rule',
-            condition={
-                'type': 'threshold',
-                'key': 'siemens_plc_01:motor_current',
-                'operator': 'gt',
-                'value': 10.0
-            },
-            action={'type': 'set_alarm', 'message': '电机电流过高，可能过载', 'level': 'warning'},
-            name='电机过载预警',
-            priority=15,
-            enabled=True
-        )
+        来源（按优先级）：
+          1. `config['default_rules']` —— 显式注入，形如
+             `{'interlocks': [...], 'rules': [...], 'pid_controllers': [...]}`，
+             每项字段与 `add_interlock()` / `add_rule()` / `add_pid_controller()`
+             的参数同名（`id` 对应各方法的第一个位置参数）；
+          2. 没有就**什么都不加载**并 WARNING —— 与 `device_control` 的口径一致：
+             「没有配置就没有规则」，绝不用不存在的设备名凑数。
+        """
+        spec = self.config.get('default_rules')
+        if not isinstance(spec, dict):
+            spec = {}
 
-        # PID控制器
-        self.add_pid_controller(
-            'temp_pid',
-            input_key='siemens_plc_01:temperature',
-            output_key='siemens_plc_01:motor_speed',
-            setpoint=75.0,
-            kp=2.0, ki=0.5, kd=0.1,
-            output_min=0, output_max=1500
-        )
+        interlocks = spec.get('interlocks') or []
+        rules = spec.get('rules') or []
+        pids = spec.get('pid_controllers') or []
 
-        logger.info(f"已加载默认规则: {len(self.rules)}条规则, {len(self.interlocks)}条联锁, {len(self.pid_controllers)}个PID控制器")
+        if not (interlocks or rules or pids):
+            logger.warning(
+                "边缘决策引擎**没有加载任何默认规则**：请在构造配置里提供 "
+                "default_rules（interlocks / rules / pid_controllers），"
+                "或运行期用 add_rule()/add_interlock()/add_pid_controller() 注入。"
+                "此前写死的 siemens_plc_01 那批规则已移除 —— 设备清单里没有该设备，"
+                "条件永不匹配，属于「看似在保护、实际不保护」的死规则。")
+            return False
+
+        loaded = {'interlocks': 0, 'rules': 0, 'pid_controllers': 0}
+        skipped = []
+
+        for item in interlocks:
+            rid = item.get('id')
+            if not rid or 'condition' not in item or 'action' not in item:
+                skipped.append(f'interlock:{rid or "<无 id>"}')
+                continue
+            self.add_interlock(
+                rid, condition=item['condition'], action=item['action'],
+                name=item.get('name', ''), enabled=item.get('enabled', True),
+                priority=item.get('priority', 0))
+            loaded['interlocks'] += 1
+
+        for item in rules:
+            rid = item.get('id')
+            if not rid or 'condition' not in item or 'action' not in item:
+                skipped.append(f'rule:{rid or "<无 id>"}')
+                continue
+            self.add_rule(
+                rid, condition=item['condition'], action=item['action'],
+                name=item.get('name', ''), priority=item.get('priority', 10),
+                enabled=item.get('enabled', True))
+            loaded['rules'] += 1
+
+        for item in pids:
+            rid = item.get('id')
+            if not rid or 'input_key' not in item or 'output_key' not in item:
+                skipped.append(f'pid:{rid or "<无 id>"}')
+                continue
+            self.add_pid_controller(
+                rid, input_key=item['input_key'], output_key=item['output_key'],
+                setpoint=item.get('setpoint', 0.0), kp=item.get('kp', 1.0),
+                ki=item.get('ki', 0.1), kd=item.get('kd', 0.05),
+                output_min=item.get('output_min', 0),
+                output_max=item.get('output_max', 100),
+                name=item.get('name', ''), enabled=item.get('enabled', True))
+            loaded['pid_controllers'] += 1
+
+        # round 309：**部分丢弃必须汇总**（与联锁加载同口径）——
+        # 少注册一条规则不会有任何报错，只表现为"某条保护没生效"。
+        if skipped:
+            logger.warning(
+                "边缘决策默认规则**部分丢弃**：%d 条缺 id/condition/action/input_key，"
+                "未注册（%s）—— 它们不会执行任何动作",
+                len(skipped), ', '.join(skipped))
+
+        logger.info("已加载默认规则: %d条规则, %d条联锁, %d个PID控制器",
+                    loaded['rules'], loaded['interlocks'], loaded['pid_controllers'])
+        return True
 
     def _decision_loop(self):
         """决策主循环"""

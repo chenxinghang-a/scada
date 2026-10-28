@@ -219,6 +219,33 @@ class AlarmOutput:
             logger.error(f"写DO{address}失败: {e}")
             return False
 
+    def _shutdown_do(self, address: int, what: str) -> bool:
+        """线程退出时的「最后一笔」DO 写入，失败要留痕（round 309）。
+
+        Returns:
+            bool: 是否真的写成功。
+
+        为什么单独一个方法：退出清理是**唯一一次机会** —— 写失败之后线程就结束，
+        再没有任何代码会重试这个 DO。历史实现在这里直接丢弃 `_write_do` 的返回值，
+        于是"蜂鸣器关不掉 / 灯灭不掉"在现场是**完全静默**的：
+        `get_status()` 读的是意图（`current_state`），显示一切正常。
+
+        失败时：ERROR 日志（写明现场可能的物理后果）+ 计数（`get_status()['do_channel']`
+        里的 `shutdown_failures`），让运维知道"这次报警结束后声光可能还亮着"。
+        """
+        with self._io_lock:
+            ok = self._write_do(address, False)
+        if not ok:
+            with self._lock:
+                self._do_shutdown_failures = getattr(
+                    self, '_do_shutdown_failures', 0) + 1
+            logger.error(
+                "DO 退出清理失败: %s → DO%d 未能关闭。"
+                "线程已退出，**不会再有重试** —— 现场该通道可能保持原状态"
+                "（蜂鸣器常响 / 指示灯常亮），需人工复位或检查通信链路",
+                what, address)
+        return ok
+
     def _write_all_do(self, red: bool, yellow: bool, green: bool, buzzer: bool) -> bool:
         """批量写DO线圈。
 
@@ -525,9 +552,14 @@ class AlarmOutput:
                 self._buzzer_running = False
                 break
             time.sleep(off_time)
+
         # 退出时关蜂鸣器
-        with self._io_lock:
-            self._write_do(self.do_buzzer, False)
+        # round 309：**退出清理同样要看结果**。round 286 修了循环内的失败检查，
+        # 但漏了这段"退出时"的清理 —— 而它恰恰是最危险的一处：
+        # 线程退出后再没有人会写这个 DO，蜂鸣器一旦没关掉就会**一直响**，
+        # 而 `get_status()['state']['buzzer']` 已经显示 False（意图），
+        # 现场只能靠人去拔电源。
+        self._shutdown_do(self.do_buzzer, '蜂鸣器（退出时关闭）')
 
     # ==================== 闪烁控制 ====================
 
@@ -572,8 +604,9 @@ class AlarmOutput:
             time.sleep(interval)
 
         # 退出时灭灯（加锁）
-        with self._io_lock:
-            self._write_do(do_addr, False)
+        # round 309：与蜂鸣器同理 —— 线程退出后没人再写这个 DO，
+        # 灭灯失败就是**灯一直亮着**，而界面已经显示"正常"。
+        self._shutdown_do(do_addr, f'{color} 灯（退出时熄灭）')
 
     # ==================== 接口兼容 ====================
 
@@ -621,6 +654,10 @@ class AlarmOutput:
                     'circuit_open': circuit_open,
                     'circuit_remaining_seconds': round(remaining, 1),
                     'fail_threshold': CIRCUIT_FAIL_THRESHOLD,
+                    # round 309：线程退出时"最后一笔"关闭 DO 失败的次数。
+                    # 非 0 意味着**上一次报警结束后声光可能还亮着**，
+                    # 而 `state` 里显示的是意图（已关），必须让运维看到这个差。
+                    'shutdown_failures': getattr(self, '_do_shutdown_failures', 0),
                 },
             }
 

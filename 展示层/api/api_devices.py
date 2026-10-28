@@ -1164,7 +1164,16 @@ def add_preset_device():
             request.current_user['username'], 'add_preset',
             f"添加预设设备: {preset_id} -> {result.get('device_id', '')}")
         # 启动采集
-        _start_device_collection(result.get('device_id', ''))
+        # round 309：**返回值不能丢**（这是上一轮 round 308 留下的半成品 ——
+        # `_start_device_collection()` 改成返回 bool 了，但三个调用点还在当语句调）。
+        # 采集没起来时接口仍回 `success: true`「已添加」，
+        # 界面上一台设备**永远没有数据**，看起来像设备坏了，实际是没人拉它。
+        started = _start_device_collection(result.get('device_id', ''))
+        result['collection_started'] = started
+        if not started:
+            result['message'] = (
+                f"{result.get('message', '设备已添加')}"
+                '（**采集任务未启动**：设备已写入配置，但不会产生数据，请检查采集器状态）')
     return jsonify(result)
 
 
@@ -1190,9 +1199,17 @@ def batch_add_presets():
             request.current_user['username'], 'batch_add_presets',
             f"批量添加预设: {preset_ids}")
         # 启动所有成功添加的设备的采集
+        # round 309：逐台收集启动结果 —— 批量添加最容易掩盖"添加成功但采集没起"
+        failed = []
         for r in result.get('results', []):
             if r.get('success') and r.get('device_id'):
-                _start_device_collection(r['device_id'])
+                if not _start_device_collection(r['device_id']):
+                    failed.append(r['device_id'])
+        result['collection_failed'] = failed
+        if failed:
+            result['message'] = (
+                f"{result.get('message', '')}；其中 {len(failed)} 台**采集任务未启动**"
+                f"（{', '.join(failed)}）：配置已写入，但不会产生数据")
     return jsonify(result)
 
 
@@ -1214,7 +1231,14 @@ def add_all_presets():
         get_auth_manager().log_operation(
             request.current_user['username'], 'add_all_presets',
             f"添加全部预设: {result['message']}")
+        failed = []
         for r in result.get('results', []):
             if r.get('success') and r.get('device_id'):
-                _start_device_collection(r['device_id'])
+                if not _start_device_collection(r['device_id']):
+                    failed.append(r['device_id'])
+        result['collection_failed'] = failed
+        if failed:
+            result['message'] = (
+                f"{result.get('message', '')}；其中 {len(failed)} 台**采集任务未启动**"
+                f"（{', '.join(failed)}）：配置已写入，但不会产生数据")
     return jsonify(result)

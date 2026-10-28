@@ -390,11 +390,35 @@ class TestQueryAPI:
 
 class TestStartStop:
 
-    def test_start_loads_defaults_when_empty(self, engine):
-        """start() loads default rules when rule DB is empty"""
+    def test_start_loads_defaults_when_empty(self):
+        """start() 在规则库为空时加载**配置里给的**默认规则
+
+        round 309：原来断言的是「start() 之后必然有规则」，而那批默认规则是
+        硬编码绑定 `siemens_plc_01` 的 —— 设备清单里没有这个设备，条件永不匹配。
+        这条用例把「必须有不依赖配置的内置规则」钉成了需求，等于要求代码继续
+        保留死规则。现在改成：注入了 `default_rules` 就加载，没注入就空转。
+        """
+        cfg = {'default_rules': {'rules': [{
+            'id': 'r1',
+            'condition': {'type': 'threshold', 'key': 'd1:temp',
+                          'operator': 'gt', 'value': 0},
+            'action': {'type': 'set_alarm', 'message': 'x'},
+        }]}}
+        engine = EdgeDecisionEngine(MagicMock(), cfg)
         engine.start()
-        assert len(engine.rules) > 0 or len(engine.interlocks) > 0
+        assert list(engine.rules) == ['r1']
         engine.stop()
+
+    def test_start_without_default_config_loads_nothing(self):
+        """反向对照：没配默认规则时不加载任何硬编码规则（否则就是死规则）"""
+        engine = EdgeDecisionEngine(MagicMock())
+        engine.start()
+        try:
+            assert engine.rules == {}, '又在无配置时加载了硬编码规则'
+            assert engine.interlocks == {}
+            assert engine.pid_controllers == {}
+        finally:
+            engine.stop()
 
     def test_start_creates_thread(self, engine):
         """start() creates decision loop thread"""
@@ -476,19 +500,41 @@ class TestPriorityOrdering:
         engine._execute_cycle()
         assert [e['rule_id'] for e in engine.get_decision_log()] == ['il_high', 'il_low', 'r1']
 
-    def test_default_rules_respect_declared_priorities(self, engine):
-        """内置默认规则的执行顺序必须按声明的优先级（10/15/20），而非注册顺序"""
-        engine.start()   # 加载默认规则与联锁
+    def test_default_rules_respect_declared_priorities(self):
+        """默认规则的执行顺序必须按声明的优先级（10/15/20），而非注册顺序
+
+        round 309：这条用例原来喂的是 `siemens_plc_01:*`，而**设备清单里没有
+        这个设备**（真实是 siemens_1500_01 等）。硬编码默认规则绑在它身上，
+        条件永远匹配不上 —— 用例之所以一直绿，是因为它自己
+        `update_data('siemens_plc_01:temperature', 200)` 把数据喂给了一个
+        虚构设备，等于**用测试数据给死规则续命**（本项目"测试固化缺陷"第四例）。
+        现在默认规则改为配置注入，用例注入三条同点位、不同优先级的规则，
+        测的仍是"排序"，但不再依赖不存在的设备。
+        """
+        def _rule(rid, priority):
+            return {
+                'id': rid,
+                'condition': {'type': 'threshold', 'key': 'd1:temp',
+                              'operator': 'gt', 'value': 0},
+                'action': {'type': 'set_alarm', 'message': rid},
+                'priority': priority,
+            }
+
+        # 故意乱序注册：验证排序依据是 priority 而不是注册顺序
+        cfg = {'default_rules': {'rules': [
+            _rule('r_p20', 20), _rule('r_p10', 10), _rule('r_p15', 15),
+        ]}}
+        engine = EdgeDecisionEngine(MagicMock(), cfg)
+
+        engine.start()   # 加载默认规则
         engine.stop()
         engine.register_action('set_alarm', MagicMock())
-        engine.update_data('siemens_plc_01:temperature', 200.0)
-        engine.update_data('siemens_plc_01:motor_current', 20.0)
-        engine.update_data('siemens_plc_01:pressure', 2.0)
+        engine.update_data('d1:temp', 200.0)
 
         engine._execute_cycle()
         executed = [e['rule_id'] for e in engine.get_decision_log()
                     if e['rule_type'] == 'rule']
-        assert executed == ['temp_control_rule', 'motor_current_rule', 'pressure_control_rule'], \
+        assert executed == ['r_p10', 'r_p15', 'r_p20'], \
             f'默认规则未按优先级执行: {executed}'
 
     def test_equal_priority_execute_all(self, engine):
