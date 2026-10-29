@@ -84,6 +84,13 @@ class MQTTToTSDBService:
             'telemetry_written': 0,
             'alarms_written': 0,
             'errors': 0,
+            # round 321：两类"数据没了但没人知道"的计数
+            #   requeued —— 写失败被放回缓冲区重试的条数（说明 TDengine 在抖）
+            #   dropped  —— 缓冲区满（deque maxlen）被挤掉的条数（**永久丢失**）
+            'telemetry_requeued': 0,
+            'alarms_requeued': 0,
+            'telemetry_dropped': 0,
+            'alarms_dropped': 0,
             'last_flush_time': None
         }
 
@@ -167,6 +174,11 @@ class MQTTToTSDBService:
                 )
 
                 with self._buffer_lock:
+                    # round 321：deque 满时会**静默挤掉最旧的一条**，
+                    # 以前没人知道丢了多少 —— 这里显式计数。
+                    if (self._telemetry_buffer.maxlen is not None
+                            and len(self._telemetry_buffer) >= self._telemetry_buffer.maxlen):
+                        self.stats['telemetry_dropped'] += 1
                     self._telemetry_buffer.append(record)
 
             # 检查是否需要刷新
@@ -195,6 +207,9 @@ class MQTTToTSDBService:
             )
 
             with self._buffer_lock:
+                if (self._alarm_buffer.maxlen is not None
+                        and len(self._alarm_buffer) >= self._alarm_buffer.maxlen):
+                    self.stats['alarms_dropped'] += 1
                 self._alarm_buffer.append(record)
 
             # 报警立即写入
@@ -238,7 +253,18 @@ class MQTTToTSDBService:
             if self.tdengine.write_telemetry_batch(records):
                 self.stats['telemetry_written'] += len(records)
             else:
+                # round 321：**写失败必须回填**。
+                # round 298 只补了"计数"（原来返回值被丢弃、except 永远不进），
+                # 但 False 分支**没有把 records 放回缓冲区** ——
+                # 注释写着"写失败必须回填并计数"，代码只做了后一半。
+                # 后果：TDengine 短暂不可用（重启/网络抖动）期间，
+                # 每 5 秒一批数据**静默消失**，而统计里只有 errors 涨。
                 self.stats['errors'] += len(records)
+                self.stats['telemetry_requeued'] += len(records)
+                self.logger.warning(
+                    "遥测批量写入失败（%d 条），已回填缓冲区重试", len(records))
+                with self._buffer_lock:
+                    self._telemetry_buffer.extend(records)
             self.logger.debug(f"写入 {len(records)} 条遥测数据")
         except Exception as e:
             self.logger.error(f"写入遥测数据失败: {e}")
@@ -258,11 +284,21 @@ class MQTTToTSDBService:
             self._alarm_buffer.clear()
 
         try:
+            failed = []
             for record in records:
                 if not self.tdengine.write_alarm(record):
                     self.stats['errors'] += 1
+                    failed.append(record)
                     continue
                 self.stats['alarms_written'] += 1
+            if failed:
+                # round 321：报警比遥测更不能丢 —— 写失败的必须回填。
+                # 原来 `continue` 直接把这条丢了（报警丢了等于"没发生过"）。
+                self.stats['alarms_requeued'] += len(failed)
+                self.logger.warning(
+                    "报警写入失败 %d 条，已回填缓冲区重试", len(failed))
+                with self._buffer_lock:
+                    self._alarm_buffer.extend(failed)
             self.logger.debug(f"写入 {len(records)} 条报警数据")
         except Exception as e:
             self.logger.error(f"写入报警数据失败: {e}")

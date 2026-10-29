@@ -380,7 +380,10 @@ def main():
             from datetime import datetime
 
             logger.warning(f"[边缘决策报警] [{str(level).upper()}] {message}")
-            digest = hashlib.sha1(str(message).encode('utf-8')).hexdigest()[:10]
+            # `usedforsecurity=False`：这里只是**派生稳定 ID**，不是安全用途。
+            # 显式声明后，FIPS 环境下也不会因为用 sha1 被拒。
+            digest = hashlib.sha1(str(message).encode('utf-8'),
+                                   usedforsecurity=False).hexdigest()[:10]
             try:
                 alarm_manager.raise_external_alarm(
                     alarm_id=f'edge_{digest}',

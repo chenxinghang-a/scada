@@ -70,7 +70,7 @@ def _iter_dict_entries(node: ast.Dict):
     对已知有缺陷的代码也报「✅ 干净」—— 是个**瞎的守卫**。
     （是拿修复前的代码回放才发现的，见 tools 说明与 MEMORY 21t。）
     """
-    for key, value in zip(node.keys, node.values):
+    for key, value in zip(node.keys, node.values, strict=True):
         yield key, value
 
 

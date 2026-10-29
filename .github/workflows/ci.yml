@@ -175,6 +175,24 @@ jobs:
         continue-on-error: true
         run: ruff check . --select E,W,F --ignore E501,W503
 
+      - name: Ruff（**阻断**：正确性与安全子集）
+        # round 321：从"全部非阻断"里挑出一组**当前零违规**的子集，开成阻断。
+        # 选它们的标准：每一条都对应"静默算错/静默失效"，而不是风格问题 ——
+        #   S113 请求没超时        → 卡死线程池（采集链路整条停摆）
+        #   S301 pickle 反序列化   → 任意代码执行
+        #   S506 yaml.load 不安全  → 同上
+        #   S501 关闭证书校验      → 中间人
+        #   S108 可预测临时文件    → 符号链接攻击
+        #   S324 不安全哈希        → 若用于签名/口令即失效
+        #   B006 可变默认参数      → 跨调用共享状态
+        #   B023 循环变量晚绑定    → 所有闭包拿到最后一个值
+        #   B904 except 里 raise   → 丢掉原因链，排障时看不到根因
+        #   B905 zip 不写 strict   → **静默截断**（FFT/回归里直接算错）
+        # 这些在本仓库当前均为 0 命中；以后新增违规会直接把 CI 打红。
+        run: >
+          ruff check . --select S113,S301,S506,S501,S108,S324,B006,B023,B904,B905
+          --exclude .venv,dist,build,legacy,tests
+
   build-backend:
     # 在 clean checkout 上证明后端可打包，产出 dist/scada-backend/（onedir）。
     #

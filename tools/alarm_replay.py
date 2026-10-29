@@ -176,7 +176,7 @@ def main(argv=None) -> int:
     print('## 现状（配置里的 delay / deadband）\n')
     print('| 规则 | 设备/寄存器 | 点数 | 报警次数 | 清除次数 |')
     print('|---|---|---|---|---|')
-    for x, r in zip(current, rules):
+    for x, r in zip(current, rules, strict=True):
         print(f'| {x["rule_id"]} | {x["device_id"]}/{x["register_name"]} '
               f'| {x["points"]} | **{x["fires"]}** | {x["clears"]} |')
     print(f'| **合计** | | | **{cur_total}** | |')
@@ -187,7 +187,7 @@ def main(argv=None) -> int:
         print('## 建议参数（delay + deadband）\n')
         print('| 规则 | delay | deadband | 报警次数 | 相对现状 |')
         print('|---|---|---|---|---|')
-        for x, r, c in zip(suggested, rules, current):
+        for x, r, c in zip(suggested, rules, current, strict=True):
             p = SUGGESTED.get(r['id'], {})
             delta = x['fires'] - c['fires']
             pct = (f'{delta / c["fires"] * 100:+.0f}%' if c['fires'] else '—')

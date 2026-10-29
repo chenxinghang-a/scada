@@ -108,7 +108,7 @@ class FFTResult:
         result = {}
         for name, (low, high) in bands.items():
             energy = 0
-            for f, a in zip(self.frequencies, self.amplitudes):
+            for f, a in zip(self.frequencies, self.amplitudes, strict=True):
                 if low <= f < high:
                     energy += a * a
             result[name] = round(math.sqrt(energy), 4)
@@ -585,7 +585,7 @@ class VibrationAnalyzer:
             max_amp = 0
             found_freq = 0
 
-            for f, a in zip(frequencies, amplitudes):
+            for f, a in zip(frequencies, amplitudes, strict=True):
                 if abs(f - expected_freq) <= freq_range and a > max_amp:
                     max_amp = a
                     found_freq = f

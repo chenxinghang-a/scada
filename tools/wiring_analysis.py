@@ -79,7 +79,7 @@ def is_entry_point(path: pathlib.Path) -> bool:
         left = node.test.left
         if not (isinstance(left, ast.Name) and left.id == "__name__"):
             continue
-        for op, comp in zip(node.test.ops, node.test.comparators):
+        for op, comp in zip(node.test.ops, node.test.comparators, strict=True):
             if isinstance(op, ast.Eq) and isinstance(comp, ast.Constant) and comp.value == "__main__":
                 return True
     return False

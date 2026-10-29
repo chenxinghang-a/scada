@@ -229,7 +229,7 @@ class PredictiveMaintenance:
         # 最小二乘法
         sum_x = sum(x)
         sum_y = sum(values)
-        sum_xy = sum(xi * yi for xi, yi in zip(x, values))
+        sum_xy = sum(xi * yi for xi, yi in zip(x, values, strict=True))
         sum_x2 = sum(xi * xi for xi in x)
 
         denominator = n * sum_x2 - sum_x * sum_x
@@ -242,7 +242,7 @@ class PredictiveMaintenance:
         # R²
         y_mean = sum_y / n
         ss_tot = sum((yi - y_mean) ** 2 for yi in values)
-        ss_res = sum((yi - (slope * xi + intercept)) ** 2 for xi, yi in zip(x, values))
+        ss_res = sum((yi - (slope * xi + intercept)) ** 2 for xi, yi in zip(x, values, strict=True))
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
         # 变化率（每小时）—— 注意是**绝对变化量**，不是百分比（docstring 已改正）

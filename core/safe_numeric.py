@@ -40,10 +40,10 @@ def to_finite_float(value: Any, name: str = 'value') -> float:
     try:
         num = float(value)
     except (TypeError, ValueError):
-        raise ValueError(f'Invalid {name}: must be number')
+        raise ValueError(f'Invalid {name}: must be number') from None
     except OverflowError:
         # 自定义 `__float__` 之类的极端实现才会走到这里，一并收口。
-        raise ValueError(f'Invalid {name}: must be a finite number')
+        raise ValueError(f'Invalid {name}: must be a finite number') from None
     if not math.isfinite(num):
         raise ValueError(f'Invalid {name}: must be a finite number (NaN/Infinity 不被接受)')
     return num
@@ -67,9 +67,9 @@ def to_int(value: Any, name: str = 'value') -> int:
     try:
         return int(value)
     except OverflowError:
-        raise ValueError(f'Invalid {name}: must be a finite integer')
+        raise ValueError(f'Invalid {name}: must be a finite integer') from None
     except (TypeError, ValueError):
-        raise ValueError(f'Invalid {name}: must be integer')
+        raise ValueError(f'Invalid {name}: must be integer') from None
 
 
 def try_finite_float(value: Any) -> float | None:
