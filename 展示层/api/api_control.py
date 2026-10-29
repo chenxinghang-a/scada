@@ -65,30 +65,32 @@ def write_register(device_id):
     except ValueError as e:
         return api_error(str(e))
 
-    # 工厂级安全校验
-    device_control = getattr(current_app, 'device_control', None)
-    if device_control:
-        result = device_control.write_with_verification(
-            device_id, address, value, operator)
-        if not result['success']:
-            return jsonify(result), 403
-        return jsonify(result)
+    # ---- 请求级校验（400/404 语义，与"被安全层拒绝"的 403 区分开）----
+    #
+    # round 322：这些检查原本只写在"无安全模块"的降级分支里，删降级分支时
+    # 一起被带走了。它们属于**请求合法性**，不是安全决策，必须在最前面：
+    #   · 400 —— 调用方传错了（地址/值不合法、设备未连接）
+    #   · 404 —— 设备不存在
+    #   · 403 —— 请求合法，但被安全层拒绝（急停/联锁/量程）
+    #   · 503 —— 安全层本身不可用（fail-closed，见下）
+    if address < REGISTER_ADDRESS_MIN or address > REGISTER_ADDRESS_MAX:
+        return api_error(f'寄存器地址超出范围 ({REGISTER_ADDRESS_MIN}-{REGISTER_ADDRESS_MAX})')
+    if not (REGISTER_VALUE_INT16_MIN <= value <= REGISTER_VALUE_INT16_MAX):
+        return api_error(f'写入值 {value} 超出安全范围 '
+                         f'({REGISTER_VALUE_INT16_MIN}~{REGISTER_VALUE_INT16_MAX})')
 
-    # 降级：无安全模块时执行基础安全校验
     client = current_app.device_manager.get_client(device_id)
     if not client:
         return api_error(f'设备 {device_id} 不存在', 404)
-    if not client.connected:
+    if not getattr(client, 'connected', False):
         return api_error(f'设备 {device_id} 未连接')
 
-    # 基础安全校验：地址范围 + 值范围（防止写入危险值）
-    if address < REGISTER_ADDRESS_MIN or address > REGISTER_ADDRESS_MAX:
-        return api_error(f'寄存器地址超出范围 ({REGISTER_ADDRESS_MIN}-{REGISTER_ADDRESS_MAX})')
-    # INT16 范围检查（最常见场景）
-    if not (REGISTER_VALUE_INT16_MIN <= value <= REGISTER_VALUE_INT16_MAX):
-        return api_error(f'写入值 {value} 超出安全范围 ({REGISTER_VALUE_INT16_MIN}~{REGISTER_VALUE_INT16_MAX})')
-
-    # 幂等性检查：2秒内相同地址+值的写入视为重复操作
+    # 幂等性检查（**在主路径上**，round 322 从已删除的降级分支搬上来）
+    #
+    # 为什么必须有：设定值写入是**非幂等**的物理动作，重复下发可能让设备
+    # 连续两次改变状态（例如"启动→停止"被点了两下）。原来这段保护只写在
+    # "无安全模块"的降级分支里 —— 也就是说**保护只存在于那条不可达的路径**，
+    # 真正在跑的这条完全没有防重复。
     import time
     write_key = f"{device_id}:{address}:{value}"
     with _write_lock:
@@ -96,7 +98,6 @@ def write_register(device_id):
         now = time.time()
         if last_write is _IN_FLIGHT:
             # 同一写入正在下发中。**不能**回"成功(幂等)" —— 上一次的结果还没出来。
-            # 明确告诉调用方"进行中"，由它决定等待或重试。
             return jsonify({
                 'success': False,
                 'message': f'相同的写入正在执行中，请勿重复提交: 地址={address}, 值={value}',
@@ -105,7 +106,6 @@ def write_register(device_id):
             return jsonify({'success': True, 'message': f'写入成功(幂等): 地址={address}, 值={value}'})
         # 先占位（挡住并发重复提交），写入结束后再落实为时间戳
         _recent_writes[write_key] = _IN_FLIGHT
-        # 清理过期记录（只清**已完成**的条目，不能误删进行中的占位）
         if len(_recent_writes) > RECENT_WRITES_MAX:
             for k in [k for k, v in _recent_writes.items()
                       if isinstance(v, float) and now - v >= IDEMPOTENCY_WINDOW_S]:
@@ -113,27 +113,44 @@ def write_register(device_id):
             if len(_recent_writes) > RECENT_WRITES_MAX:
                 _recent_writes.clear()
 
+    # 工厂级安全校验
+    device_control = getattr(current_app, 'device_control', None)
+    if device_control is None:
+        # 无安全模块 → **拒绝写入**（fail-closed）
+        #
+        # round 322：原来这里"降级"成基础校验（只查 INT16 范围 + 地址范围），
+        # 然后直接下发。也就是说：**安全模块不可用时，急停、联锁、旁路、
+        # 二次确认、回读验证全部消失，写入照样成功** ——
+        # 而调用方看到的是同一个 200，没有任何区别。
+        # 安全层的正确降级方向是"拒绝"，不是"用弱校验继续干"。
+        with _write_lock:
+            _recent_writes.pop(write_key, None)
+        logger.error(
+            "拒绝写入：安全模块(device_control)不可用 —— 无法做急停/联锁/量程/回读校验。"
+            " device=%s address=%s value=%s operator=%s",
+            device_id, address, value, operator)
+        return jsonify({
+            'success': False,
+            'message': '安全模块不可用，已拒绝写入（无法执行急停/联锁/量程/回读校验）',
+        }), 503
+
     success = False
     try:
-        success = client.write_single_register(address, value)
+        result = device_control.write_with_verification(
+            device_id, address, value, operator)
+        success = bool(result.get('success'))
+        if not success:
+            return jsonify(result), 403
+        return jsonify(result)
     finally:
-        # 幂等键在上面是**写入前**登记的（用于挡住并发重复提交），
-        # 写入结束后按真实结果落实：
-        #   - 成功 → 换成时间戳，2 秒内的重试确实可以判定为"已写入"
-        #   - 失败（含抛异常）→ 撤销登记，让重试能真正下发；否则调用方重试会命中
-        #     2 秒窗口，被判成"写入成功(幂等)"并回 HTTP 200，而寄存器**从未写入**。
+        # 按真实结果落实幂等键：成功 → 时间戳（2 秒内重试判为已写入）；
+        # 失败/异常 → 撤销占位，让重试能真正下发（否则重试会命中窗口被判成
+        # "写入成功(幂等)"，而寄存器**从未写入**）。
         with _write_lock:
             if success:
                 _recent_writes[write_key] = time.time()
             elif _recent_writes.get(write_key) is _IN_FLIGHT:
                 _recent_writes.pop(write_key, None)
-
-    if success:
-        get_auth_manager().log_operation(
-            operator, 'write_register',
-            f'设备 {device_id} 写入寄存器 address={address} value={value}')
-        return jsonify({'success': True, 'message': f'写入成功: 地址={address}, 值={value}'})
-    return jsonify({'success': False, 'message': '写入失败，请检查设备连接和寄存器地址'}), 400
 
 
 @control_bp.route('/devices/<device_id>/write-coil', methods=['POST'])

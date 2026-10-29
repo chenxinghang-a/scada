@@ -45,11 +45,23 @@ class TestValueRangeValidation:
     """Write operations must reject values outside safe physical bounds."""
 
     def test_in_range_value_accepted(self, client, app):
-        """A value within the register's valid range is accepted."""
+        """A value within the register's valid range is accepted.
+
+        round 322：**必须提供 `device_control`** —— 安全模块不可用时端点
+        现在直接 503（fail-closed）。原来的写法没有它，等于在验"绕过安全层
+        也能写成功"，那正是这轮修掉的 fail-open。
+        """
         mock_client = MagicMock()
         mock_client.connected = True
         mock_client.write_single_register.return_value = True
         app.device_manager.get_client.return_value = mock_client
+
+        mock_dc = MagicMock()
+        mock_dc.write_with_verification.return_value = {
+            'success': True, 'message': '写入成功', 'verified': True,
+            'effective': True, 'warnings': [],
+        }
+        app.device_control = mock_dc
 
         token = _make_token('engineer')
         app.auth_manager.verify_token.return_value = {

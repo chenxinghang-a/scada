@@ -59,11 +59,33 @@ def test_audit_log_records_error_on_failure(app, client, auth_headers, monkeypat
         f'operator 未落到真实用户: {seen}'
 
 
+class _SlowDeviceControl:
+    """慢速安全模块替身：让第一个请求在写入过程中停留，好让第二个请求撞上来。
+
+    round 322：幂等保护从"无安全模块的降级分支"搬到了**主路径**，
+    所以这里必须提供一个 `device_control`，否则请求在 503 就被拒了，
+    根本走不到幂等判断（原来的写法是 `app.device_control = None`，
+    它验的是那条已删除的降级路径）。
+    """
+
+    def __init__(self, client, delay: float):
+        self.client = client
+        self.delay = delay
+
+    def write_with_verification(self, device_id, address, value, operator, **kw):
+        time.sleep(self.delay)
+        ok = self.client.write_single_register(int(address), int(value))
+        return {
+            'success': bool(ok), 'message': '写入成功', 'kind': 'register',
+            'verified': True, 'effective': True, 'warnings': [],
+        }
+
+
 def test_write_register_concurrent_second_gets_409(app, client, auth_headers, monkeypatch):
     """并发重复写入：第二个请求必须拿到 409，而不是「成功(幂等)」。"""
-    app.device_control = None
     fake = _SlowClient(0.6)
     monkeypatch.setattr(app.device_manager, 'get_client', lambda d: fake)
+    app.device_control = _SlowDeviceControl(fake, 0.6)
     monkeypatch.setattr('展示层.api.api_control._recent_writes', {}, raising=False)
     import 展示层.api.api_control as ac
     ac._recent_writes.clear()
@@ -86,3 +108,19 @@ def test_write_register_concurrent_second_gets_409(app, client, auth_headers, mo
 
     assert 409 in codes, f'并发重复写入未挡住: {codes}'
     assert fake.calls == 1, f'寄存器被写入了 {fake.calls} 次，应为 1 次'
+
+
+def test_write_register_fails_closed_without_safety_module(app, client, auth_headers):
+    """**安全模块不可用时必须拒绝写入**（round 322）。
+
+    原来这里会"降级"成只查 INT16 范围然后直接下发 —— 急停、联锁、旁路、
+    二次确认、回读验证全部消失，而调用方看到的是同一个 200。
+    安全层的正确降级方向是"拒绝"，不是"用弱校验继续干"。
+    """
+    app.device_control = None
+    r = client.post('/api/devices/dev1/write-register',
+                    json={'address': 100, 'value': 5}, headers=auth_headers)
+    assert r.status_code == 503, f'期望 503（拒绝写入），实际 {r.status_code}'
+    body = r.get_json() or {}
+    assert body.get('success') is False
+    assert '安全模块不可用' in (body.get('message') or '')

@@ -27,6 +27,7 @@ import uuid
 import logging
 import threading
 import json
+import hashlib
 from typing import Any, Callable, Set
 from datetime import datetime, timedelta
 from collections import deque
@@ -197,6 +198,11 @@ class DeviceControlSafety:
         # ===== 操作审计 =====
         self._audit_log = deque(maxlen=AUDIT_LOG_CAPACITY)
         self._audit_file = paths.resolve('data/audit_log.jsonl')
+        # round 322：审计完整性 —— 串行写 + 哈希链。
+        # 哈希链的作用：每条记录带上前一条的哈希，**删/改中间任何一条都会断链**，
+        # 事后能证明"日志没被篡改过"。成本只是多一次 sha256。
+        self._audit_lock = threading.Lock()
+        self._audit_last_hash = ''
 
         # ===== 通信监控 =====
         self._comm_failures: dict[str, int] = {}  # device_id -> consecutive failures
@@ -2047,6 +2053,19 @@ class DeviceControlSafety:
                     'rechecked': True,
                 }
 
+            # round 322：**执行前先落一条 attempt 审计**。
+            #
+            # 为什么在"执行前"：写不进去就不许执行 —— "执行了但没记录"
+            # 等于出事时说不清。这是审计完整性的标准做法（先记意图，再动手）。
+            if not self._audit(
+                    'write_attempt', operator,
+                    f'即将写入({kind}): {device_id}/{address}={value}'):
+                return {
+                    'success': False,
+                    'message': '审计日志不可写，已拒绝执行写入（无法留痕，请先修复日志目录）',
+                    'audit_failed': True,
+                }
+
             # 写入
             success = False
             client = self.device_manager.get_client(device_id) if self.device_manager else None
@@ -2128,10 +2147,26 @@ class DeviceControlSafety:
                 'message': '写入成功',
                 'kind': kind,
                 'verified': verified,
+                #: 现场状态是否**确认**已改变。`verified is False` 时为 False。
+                #: 与 `success` 的区别：`success` 表示"指令下发成功"，
+                #: `effective` 表示"设备真的变成了这个值"。
+                'effective': verified is not False,
                 'warnings': list(validation.get('warnings', []))
             }
             if verified is False:
-                result['message'] = '写入成功，但回读验证失败（设备未接受该值）'
+                # round 322：**回读不一致必须算失败**。
+                #
+                # 原来这里只把 message 改成"写入成功，但回读验证失败"，
+                # 而 `success` 仍是 True —— 于是：
+                #   · 前端只看 `success` → 弹"写入成功"的绿条；
+                #   · 接口调用方按 2xx 判定成功 → 继续往下走。
+                # 但设备**并没有变成期望的值**。操作员以为设定值改了，
+                # 实际没有 —— 这在联锁/联锁旁路/温控这类场景是能出事的。
+                # 判据：**"没生效"就是失败**，把 `verified` 降级成 warning 是自欺。
+                result['success'] = False
+                result['message'] = (
+                    f'写入未生效：回读值为 {readback_value}，与写入值 {value} 不一致'
+                    f'（指令已下发，但设备未接受该值）')
                 result['warnings'].append(
                     f'回读值 {readback_value} 与写入值 {value} 不一致')
             elif verified is None:
@@ -2145,23 +2180,52 @@ class DeviceControlSafety:
 
     # ==================== 操作审计 ====================
 
-    def _audit(self, action: str, operator: str, detail: str):
-        """记录操作审计日志"""
-        entry = {
-            'timestamp': datetime.now().isoformat(),
-            'action': action,
-            'operator': operator,
-            'detail': detail
-        }
-        self._audit_log.append(entry)
+    def _audit(self, action: str, operator: str, detail: str) -> bool:
+        """记录操作审计日志。返回**是否成功落盘**（round 322）。
 
-        # 持久化到文件
-        try:
-            self._audit_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._audit_file, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-        except Exception as e:
-            logger.error(f"审计日志写入失败: {e}")
+        ## 为什么要有返回值
+
+        原来这里 `except` 只打一行 ERROR，**调用方完全不知道**。
+        于是磁盘满 / 目录只读 / 权限错的时候：操作照常执行，
+        但**没有任何记录**。事故调查时"系统里查不到"和"没发生过"没法区分，
+        这在需要自证的场景里是致命的。
+
+        现在调用方（`write_with_verification`）在**执行前**先写一条
+        `write_attempt`，写不进去就**拒绝执行**。
+
+        ## 哈希链
+
+        每条记录带 `prev`（上一条的 `hash`）与自己的 `hash`
+        （`sha256(prev + 记录内容)[:16]`）。删掉或改动中间任意一条，
+        后面的链就对不上 —— 能证明"日志没被动过"。
+        `prev` 为空串表示链的起点（或历史日志，老记录没有这两个字段）。
+        """
+        with self._audit_lock:
+            prev_hash = self._audit_last_hash
+            entry = {
+                'timestamp': datetime.now().isoformat(timespec='milliseconds'),
+                'action': action,
+                'operator': operator,
+                'detail': detail,
+                'prev': prev_hash,
+            }
+            entry['hash'] = hashlib.sha256(
+                (prev_hash + json.dumps(entry, ensure_ascii=False, sort_keys=True)
+                 ).encode('utf-8')).hexdigest()[:16]
+
+            try:
+                self._audit_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._audit_file, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+            except Exception as e:
+                # 落盘失败：**不进内存列表、不推进链尾** —— 内存与文件保持一致，
+                # 否则接口里能看到一条"文件里没有"的记录。
+                logger.error("审计日志写入失败（本次操作将不被记录）: %s", e)
+                return False
+
+            self._audit_log.append(entry)
+            self._audit_last_hash = entry['hash']
+            return True
 
     def get_audit_log(self, limit: int = 100, action_filter: str | None = None) -> list[dict[str, Any]]:
         """获取操作审计日志"""

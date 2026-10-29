@@ -151,6 +151,7 @@ def test_verified_true_on_match():
     dc = _dc(_FakeClient(reg_value=100))
     res = dc.write_with_verification('dev1', 1, 100, 'op')
     assert res['verified'] is True
+    assert res['success'] is True and res['effective'] is True
     # ⚠️ 不能断言 warnings == []：round 236 起，**未配置 write_limits** 的设备
     # 在模拟模式下会带一条「本次写入未做范围校验」的提示（这是有意留痕）。
     # 这里要钉的是「回读一致时不该有**验证失败**的警告」。
@@ -158,10 +159,18 @@ def test_verified_true_on_match():
 
 
 def test_verified_false_on_mismatch():
+    """回读不一致 = **写入失败**（round 322 起 `success` 也是 False）。
+
+    原来这里 `success` 仍是 True，只把 message 改成"写入成功，但回读验证失败"
+    —— 前端只看 `success` 就会弹"写入成功"的绿条，而设备**并没有变成期望的值**。
+    """
     dc = _dc(_FakeClient(reg_value=90))
     res = dc.write_with_verification('dev1', 1, 100, 'op')
     assert res['verified'] is False
-    assert '回读验证失败' in res['message']
+    assert res['success'] is False, (
+        '回读不一致却报成功 —— 操作员会以为设定值已经改了')
+    assert res['effective'] is False, 'effective 应表示"现场状态未确认改变"'
+    assert '未生效' in res['message'] and '90' in res['message']
     assert res['warnings'], '验证失败必须带 warning'
 
 

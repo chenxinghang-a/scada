@@ -276,9 +276,27 @@ class WriteSafetyValidator:
         # 1. 检查寄存器是否存在
         profile = self._profiles.get(address)
         if profile is None:
-            # 未知寄存器 — 允许但记录警告
-            logger.warning(f"[写入安全] {self.device_name}: 写入未知寄存器 addr={address}, value={value}, user={user}")
-            return True, '未知寄存器（无安全档案）'
+            # round 322：**未知寄存器必须拒绝**（fail-closed）。
+            #
+            # 原来这里是 `return True, '未知寄存器（无安全档案）'` ——
+            # 也就是说：只要设备配置里没有这个地址，**量程校验、联锁校验、
+            # 二次确认全部跳过**，一路放行到从站。
+            #
+            # 这是安全层最危险的形状。触发路径全都很现实：
+            #   · 界面上把地址写错一位（40001 写成 40002）→ 写到相邻寄存器；
+            #   · 配置里漏登记某个寄存器 → 它反而成了"无限制可写"；
+            #   · 调用方传了个超出配置的地址 → 从站按自己的映射解释，可能落到
+            #     完全不相干的寄存器上（不同厂商的地址映射表并不统一）。
+            # 现场后果：本该被量程/联锁挡住的值被真的下发出去。
+            #
+            # 判据：**安全层遇到"不认识的东西"必须拒绝，不能放行**。
+            # 确实需要写某个寄存器，就把它登记进设备配置（那才是正确的做法）。
+            self.blocked_count += 1
+            reason = (f'寄存器地址 {address} 不在设备 {self.device_id} 的配置中，'
+                      f'无法做量程/联锁校验，拒绝写入（如需写入请先在设备配置中登记该寄存器）')
+            logger.error(f"[写入安全] {self.device_name}: 写入被拒绝 — {reason}, "
+                         f"value={value}, user={user}")
+            return False, reason
 
         # 2. 检查是否可写
         if not profile.writable:
