@@ -51,6 +51,7 @@ DEFAULT_INTERVALS: Dict[str, float] = {
     'data_freshness_watch': 30,           # 30 秒（采集中断看门狗）
     'device_config_watch': 10,            # 10 秒（devices.yaml 热重载）
     'interlock_config_watch': 10,         # 10 秒（interlocks.yaml 热重载）
+    'energy_config_watch': 30,            # 30 秒（energy.yaml 热重载）
     'backup_restore_drill': 86400,        # 24 小时（备份恢复演练）
 }
 
@@ -58,7 +59,8 @@ DEFAULT_INTERVALS: Dict[str, float] = {
 def build_maintenance_tasks(database=None, auth_manager=None, *,
                             archive_days: int = 7, delete_days: int = 30,
                             alarm_manager=None, device_manager=None,
-                            data_collector=None, device_control=None) -> List[tuple]:
+                            data_collector=None, device_control=None,
+                            energy_manager=None) -> List[tuple]:
     """组装 (名称, 间隔, 说明, 可调用对象) 列表。
 
     依赖为 None 的任务会被跳过（并记录 debug 日志），这样调用方可以只传
@@ -139,6 +141,26 @@ def build_maintenance_tasks(database=None, auth_manager=None, *,
             DEFAULT_INTERVALS['device_config_watch'],
             '监视 devices.yaml 的 mtime，变化即重载配置并同步采集任务',
             _device_config_watch,
+        ))
+
+    if energy_manager is not None:
+        _energy_cfg_state: Dict[str, Any] = {}
+
+        def _energy_config_watch():
+            """能源配置自动热重载（round 319）。
+
+            `EnergyManager._load_config()` 只在构造时跑一次 —— 手改
+            `energy.yaml`（调峰谷时段/改碳排因子）不生效，而电价算错
+            不会报错，只会让「本月电费」「碳排放」两个报表静默失真。
+            """
+            from core.device_config_watch import watch_energy_once
+            return watch_energy_once(energy_manager, state=_energy_cfg_state)
+
+        tasks.append((
+            'energy_config_watch',
+            DEFAULT_INTERVALS['energy_config_watch'],
+            '监视 energy.yaml 的 mtime，变化即热重载电价与碳排因子',
+            _energy_config_watch,
         ))
 
     if device_control is not None:
@@ -257,7 +279,8 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
                                archive_days: int = 7, delete_days: int = 30,
                                intervals: Optional[Dict[str, float]] = None,
                                alarm_manager=None, device_manager=None,
-                               data_collector=None, device_control=None) -> List[str]:
+                               data_collector=None, device_control=None,
+                               energy_manager=None) -> List[str]:
     """把所有维护任务注册到 ``task_manager``（不启动）。
 
     Args:
@@ -283,7 +306,7 @@ def register_maintenance_tasks(database=None, auth_manager=None, *,
             # **永不同步采集任务** —— round 285 的自动热重载等于只做了一半：
             # 新增设备永远不采、删掉的设备继续超时重试并刷报警。
             data_collector=data_collector,
-            device_control=device_control):
+            device_control=device_control, energy_manager=energy_manager):
         task_manager.add(name, func, overrides.get(name, interval), description)
         names.append(name)
 
@@ -298,7 +321,8 @@ def start_maintenance(database=None, auth_manager=None, *,
                       archive_days: int = 7, delete_days: int = 30,
                       intervals: Optional[Dict[str, float]] = None,
                       alarm_manager=None, device_manager=None,
-                      data_collector=None, device_control=None) -> List[str]:
+                      data_collector=None, device_control=None,
+                      energy_manager=None) -> List[str]:
     """注册并启动全部维护任务（幂等）。
 
     重复调用不会产生第二套线程 —— 已处于 running 状态的任务会被
@@ -308,7 +332,8 @@ def start_maintenance(database=None, auth_manager=None, *,
         database, auth_manager, archive_days=archive_days,
         delete_days=delete_days, intervals=intervals,
         alarm_manager=alarm_manager, device_manager=device_manager,
-        data_collector=data_collector, device_control=device_control)
+        data_collector=data_collector, device_control=device_control,
+        energy_manager=energy_manager)
     started = [n for n in names if task_manager.start(n)]
     logger.info("维护任务已启动: %s", ', '.join(started) or '（无）')
     return started

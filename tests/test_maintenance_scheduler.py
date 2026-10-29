@@ -101,7 +101,8 @@ def test_build_maintenance_tasks_covers_all_known_structures(tmp_path, auth_mana
     round 285 同理：`device_config_watch`（devices.yaml 热重载）依赖设备管理器。
 
     round 318 同理：`interlock_config_watch`（interlocks.yaml 热重载）依赖
-    `device_control`。**每次新增维护任务都要回这里补依赖** —— 这条守卫就是
+    `device_control`；round 319：`energy_config_watch`（energy.yaml）依赖
+    `energy_manager`。**每次新增维护任务都要回这里补依赖** —— 这条守卫就是
     为了逼你做这件事（漏了它会直接红，而不是让新任务静默不注册）。
     """
     from core.maintenance import DEFAULT_INTERVALS, build_maintenance_tasks
@@ -109,7 +110,7 @@ def test_build_maintenance_tasks_covers_all_known_structures(tmp_path, auth_mana
     tasks = build_maintenance_tasks(
         database=_make_database(tmp_path), auth_manager=auth_manager,
         alarm_manager=object(), device_manager=object(),
-        device_control=object())
+        device_control=object(), energy_manager=object())
     names = {t[0] for t in tasks}
 
     assert names == set(DEFAULT_INTERVALS), (

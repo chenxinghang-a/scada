@@ -36,6 +36,8 @@ DEFAULT_CONFIG_REL = '配置/devices.yaml'
 #: 安全联锁规则文件（round 318）。改它同样必须热重载 ——
 #: `DeviceControlSafety._load_preset_interlocks()` 只在构造时跑一次。
 DEFAULT_INTERLOCK_REL = '配置/interlocks.yaml'
+#: 能源配置（电价/碳排因子，round 319）。
+DEFAULT_ENERGY_REL = '配置/energy.yaml'
 
 
 def _resolve_path(device_manager) -> Any:
@@ -238,3 +240,73 @@ def watch_interlocks_once(device_control, *, state: dict | None = None) -> dict[
         logger.info("联锁配置已自动热重载（规则内容无变化）")
 
     return {'changed': True, 'reloaded': True, 'diff': diff, 'reason': '已重载'}
+
+
+def watch_energy_once(energy_manager, *, state: dict | None = None) -> dict[str, Any]:
+    """检查 `配置/energy.yaml` 的 mtime，变了就热重载电价/碳排因子（round 319）。
+
+    Returns:
+        dict: `{'changed', 'reloaded', 'diff', 'reason'}`
+
+    ## 为什么需要
+
+    `EnergyManager._load_config()` **只在 `__init__` 里调用**。而 `energy.yaml`
+    头部写着「支持通过前端界面动态调整」—— 走 API 确实能改，但运维更常
+    直接改文件（调峰谷时段、改碳排因子）。手改文件**不会生效**，且无任何提示。
+
+    电价算错不会报错，只会让「本月电费」「碳排放」两个报表静默失真。
+
+    与 `watch_interlocks_once` 同样的三条纪律：首次只建基线、未变不动作、
+    处理完立刻推进基线（坏文件不刷日志）。
+    """
+    if state is None:
+        state = {}
+
+    try:
+        import paths
+        path = paths.resolve(DEFAULT_ENERGY_REL)
+    except Exception as e:      # noqa: BLE001
+        from pathlib import Path
+        logger.debug("解析能源配置路径失败，按原样使用: %s", e)
+        path = Path(DEFAULT_ENERGY_REL)
+
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError:
+        return {'changed': False, 'reloaded': False, 'diff': None,
+                'reason': f'能源配置文件不存在: {path}'}
+    except OSError as e:
+        return {'changed': False, 'reloaded': False, 'diff': None,
+                'reason': f'无法读取能源配置文件 {path}: {e}'}
+
+    previous = state.get('mtime')
+    if previous is None:
+        state['mtime'] = mtime
+        return {'changed': False, 'reloaded': False, 'diff': None,
+                'reason': '首次建立 mtime 基线（不重载）'}
+
+    if mtime == previous:
+        return {'changed': False, 'reloaded': False, 'diff': None,
+                'reason': '能源配置文件未变化'}
+
+    state['mtime'] = mtime
+
+    reload_fn = getattr(energy_manager, 'reload_config', None)
+    if not callable(reload_fn):
+        return {'changed': True, 'reloaded': False, 'diff': None,
+                'reason': 'energy_manager 不提供 reload_config()，无法热重载'}
+
+    try:
+        result = reload_fn() or {}
+    except Exception as e:      # noqa: BLE001
+        logger.error("能源配置自动重载异常: %s", e)
+        return {'changed': True, 'reloaded': False, 'diff': None,
+                'reason': f'重载异常: {e}'}
+
+    if not result.get('reloaded'):
+        # 解析失败：`reload_config()` 已经保留了原配置，这里只如实上报
+        return {'changed': True, 'reloaded': False, 'diff': result.get('changed'),
+                'reason': result.get('reason') or '重载被拒绝'}
+
+    return {'changed': True, 'reloaded': True,
+            'diff': result.get('changed'), 'reason': result.get('reason') or '已重载'}

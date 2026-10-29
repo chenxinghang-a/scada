@@ -107,12 +107,16 @@ class EnergyManager:
 
         logger.info("能源管理模块初始化完成")
 
-    def _load_config(self, override: dict[str, Any] | None = None):
+    def _load_config(self, override: dict[str, Any] | None = None) -> bool:
         """
         加载配置：YAML文件 -> 默认值 -> 外部覆盖
 
         Args:
             override: 外部配置字典（优先级最高）
+
+        Returns:
+            bool: 配置文件**是否成功解析**。False 表示文件坏了、
+            当前生效的配置被原样保留（fail-closed，见下面的注释）。
         """
         # 1. 从默认值开始
         merged = {
@@ -143,7 +147,20 @@ class EnergyManager:
                     merged['anomaly'].update(file_config['anomaly'])
                 logger.info(f"从 {self.config_path} 加载能源配置")
             except Exception as e:
-                logger.warning(f"加载能源配置文件失败: {e}，使用默认配置")
+                # round 319：**fail-closed —— 保留当前生效的配置**。
+                #
+                # 原来是 `logger.warning(...，使用默认配置)`：写坏 energy.yaml
+                # （缩进错一格、保存中间态）会让电价**静默回落默认值**，
+                # 电费与碳排放全算错，而日志只有一行 warning。
+                # 默认电价（1.2/0.7/0.35）与现场实际电价通常不同 ——
+                # 报表上的"本月电费"直接失真，且没有任何"配置没生效"的提示。
+                #
+                # 与 round 284 给 devices.yaml 修的 fail-closed 同口径：
+                # 「解析失败」≠「配置里没有值」，前者必须保留原状并报错。
+                logger.error(
+                    "加载能源配置文件失败: %s —— **保留当前生效的配置**"
+                    "（不会回落到默认电价，避免电费/碳排报表失真）", e)
+                return False
         else:
             logger.info(f"能源配置文件不存在: {self.config_path}，使用默认配置")
 
@@ -164,6 +181,8 @@ class EnergyManager:
         self.tariff_periods = merged['tariff_periods']
         self.carbon_factor = merged['carbon_factor']
         self.anomaly_config = merged['anomaly']
+
+        return True
 
     def _save_config(self) -> bool:
         """将当前配置持久化到YAML文件"""
@@ -346,6 +365,51 @@ class EnergyManager:
             time.sleep(60)  # 每分钟检查一次
 
     # ==================== 数据输入接口 ====================
+
+    def reload_config(self) -> dict[str, Any]:
+        """重新读取 `配置/energy.yaml`（round 319）。
+
+        Returns:
+            dict: `{'reloaded': bool, 'changed': {...}, 'reason': str}`
+
+        ## 为什么需要
+
+        `_load_config()` **只在 `__init__` 里调用**，而 `配置/energy.yaml`
+        头部写着「支持通过前端界面动态调整」—— 走 API 确实能改，但运维更常
+        直接改文件（调峰谷时段、改碳排因子）。手改文件**不会生效**，
+        而且没有任何提示。
+
+        ## 解析失败时保留原配置
+
+        `_load_config()` 现在返回 bool；False 表示文件坏了，此时**不改内存**
+        （否则电价会静默回落默认值 → 电费/碳排报表失真）。
+        """
+        old_tariff = dict(self.tariff)
+        old_periods = {k: [list(p) for p in v] for k, v in self.tariff_periods.items()}
+        old_carbon = self.carbon_factor
+        old_anomaly = dict(self.anomaly_config)
+
+        if not self._load_config():
+            return {'reloaded': False, 'changed': {},
+                    'reason': '配置文件解析失败，已保留原配置（电价不会回落默认值）'}
+
+        changed: dict[str, Any] = {}
+        if self.tariff != old_tariff:
+            changed['tariff'] = {'old': old_tariff, 'new': dict(self.tariff)}
+        if self.tariff_periods != old_periods:
+            changed['tariff_periods'] = {'old': old_periods,
+                                         'new': {k: [list(p) for p in v]
+                                                 for k, v in self.tariff_periods.items()}}
+        if self.carbon_factor != old_carbon:
+            changed['carbon_factor'] = {'old': old_carbon, 'new': self.carbon_factor}
+        if self.anomaly_config != old_anomaly:
+            changed['anomaly'] = {'old': old_anomaly, 'new': dict(self.anomaly_config)}
+
+        if changed:
+            logger.warning("能源配置已热重载，变更项: %s", sorted(changed))
+        else:
+            logger.info("能源配置已重载（内容无变化）")
+        return {'reloaded': True, 'changed': changed, 'reason': '已重载'}
 
     def forget_device(self, device_id: str) -> bool:
         """设备被删除时清掉它的能耗状态（round 310）。

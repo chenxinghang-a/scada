@@ -560,7 +560,9 @@ def main():
                     # round 318：interlocks.yaml 热重载
                     # （`_load_preset_interlocks()` 只在构造时跑一次，
                     #  改阈值必须重启才生效，且没有任何提示）
-                    device_control=getattr(app, 'device_control', None))
+                    device_control=getattr(app, 'device_control', None),
+                    # round 319：energy.yaml 热重载（电价/碳排因子改了要生效）
+                    energy_manager=getattr(app, 'energy_manager', None))
                 logger.info(f"后台维护任务已启动: {', '.join(maintenance_started) or '（无）'}")
             except Exception as _mt_err:
                 logger.error("后台维护任务启动失败: %s", _mt_err, exc_info=True)
