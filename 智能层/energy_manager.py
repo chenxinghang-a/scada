@@ -105,6 +105,12 @@ class EnergyManager:
         self._running = False
         self._thread = None
 
+        # round 320：累计量的"窗口"与跨重启恢复。
+        # 见 `_rollover_if_new_day()` / `_restore_accumulated()` 的注释。
+        self._window_date = self._today()
+        self._last_persist_mono = float('-inf')
+        self._restore_accumulated()
+
         logger.info("能源管理模块初始化完成")
 
     def _load_config(self, override: dict[str, Any] | None = None) -> bool:
@@ -354,6 +360,9 @@ class EnergyManager:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
+        # round 320：优雅停机时把累计量落库 —— 正常重启不该丢最后一段。
+        # （落库本身有 30s 节流，这里 force 一次，代价是一条 SQL）
+        self._persist_accumulated(force=True)
 
     def _monitor_loop(self):
         """监控主循环"""
@@ -362,6 +371,13 @@ class EnergyManager:
                 self._check_anomalies()
             except Exception as e:
                 logger.error(f"能源监控异常: {e}", exc_info=True)
+            try:
+                # round 320：每分钟把累计量落库一次 —— 崩溃重启最多丢 60 秒。
+                # 不靠"每次采样都写"是因为那会把 SQLite 打满
+                # （20 台设备 × 1 秒间隔 = 每秒 20 次事务）。
+                self._persist_accumulated(force=True)
+            except Exception as e:
+                logger.error(f"能耗累计落库异常: {e}", exc_info=True)
             time.sleep(60)  # 每分钟检查一次
 
     # ==================== 数据输入接口 ====================
@@ -424,14 +440,155 @@ class EnergyManager:
           被当成"这一小时用了 -450 kWh"，能耗曲线出现负值。
         """
         removed = False
+        # round 320：`energy_accumulated` 原来**不在**清理列表里 ——
+        # 设备删掉后它今天已经用的电仍留在"今日能耗/电费/碳排"里，
+        # 而且 round 320 起会被落库、重启后照样恢复回来。
+        # （round 310 清的是 realtime_power / _last_energy_reading / energy_baseline，
+        #   漏了这一个；当时的判据是"按 device_id 存储的容器"，这里正是。）
         for container in (self.realtime_power, self._last_energy_reading,
-                          self.energy_baseline):
+                          self.energy_baseline, self.energy_accumulated):
             if device_id in container:
                 container.pop(device_id, None)
                 removed = True
         if removed:
             logger.info("能耗管理器已清理已删除设备的状态: %s", device_id)
+            # round 320：同步落库，否则重启后已删设备的累计又被恢复回来
+            self._persist_accumulated(force=True)
         return removed
+
+    #: 能耗累计量的持久化键（round 320）。
+    STATE_KEY_ACCUM = 'energy_accumulated'
+
+    #: 累计量落库的最小间隔（秒）。每次采样都写库会把 SQLite 打满 ——
+    #: 采集间隔 1 秒、20 台设备时就是每秒 20 次事务。
+    PERSIST_INTERVAL_S = 30.0
+
+    #: 累计量的字段全集。恢复与清零都按这个集合做，避免漏字段
+    #: （漏一个就是"重启后某个分项归零"）。
+    ACCUM_FIELDS = ('energy_kwh', 'water_m3', 'gas_m3', 'steam_ton',
+                    'peak_kwh', 'flat_kwh', 'valley_kwh')
+
+    def _today(self):
+        """当前**本地日期**。抽成方法是为了让用例能替换掉"今天"。"""
+        return datetime.now().date()
+
+    def _rollover_if_new_day(self) -> bool:
+        """跨日则清空累计量（**保留电表基线**）。返回是否发生了跨日（round 320）。
+
+        ## 为什么需要
+
+        `energy_accumulated` 原来**没有任何窗口** —— `reset_accumulated()`
+        的 docstring 写着"新班次/新日"，但**全仓库零调用点**。于是这个数的真实
+        口径是"自进程启动以来"：
+
+        * 进程跑了三个月 → 看板上的"能耗汇总/电费/碳排放"是三个月的累计，
+          而页面上没有任何地方说这是三个月；
+        * 重启一次 → 归零，看起来像"能耗突然变成 0"。
+
+        两个方向都是错的，而且**都不报错**。这里把口径钉成**今天**（本地日），
+        与"日能耗/日电费"的业务含义一致。
+
+        ## 为什么保留 `_last_energy_reading`
+
+        电表读数是**绝对值**，跨日不清零。清掉的话，跨日后的第一次读数只能
+        建基线，午夜前后那一段用电量就永久丢了（每台表每天丢一段）。
+        """
+        today = self._today()
+        if today == self._window_date:
+            return False
+        with self._lock:
+            self.energy_accumulated.clear()
+            self.shift_records.clear()
+        logger.warning(
+            "能耗累计已跨日重置：%s → %s（电表读数基线保留，跨日增量计入新一天）",
+            self._window_date, today)
+        self._window_date = today
+        self._persist_accumulated(force=True)
+        return True
+
+    def _persist_accumulated(self, force: bool = False) -> bool:
+        """把累计量与电表基线落库（节流）。返回是否真的写了（round 320）。
+
+        没有 `system_state` 能力的 database（老库 / 测试里的 MagicMock）时直接跳过 ——
+        能耗统计是**附加能力**，不能因为它让采集链路报错。
+        """
+        db = getattr(self, 'database', None)
+        if db is None or not hasattr(db, 'set_system_state'):
+            return False
+
+        now_mono = time.monotonic()
+        # ⚠️ 初值必须是 `-inf` 而不是 `0`：`monotonic()` 在 Windows 上是
+        # "开机以来的秒数"，开机不足 30 秒的机器上 `now - 0 < 30` 成立，
+        # 首帧落库会被静默吞掉（CI runner 每次都是全新开机）。
+        if not force and (now_mono - self._last_persist_mono) < self.PERSIST_INTERVAL_S:
+            return False
+        self._last_persist_mono = now_mono
+
+        with self._lock:
+            payload = {
+                'date': self._window_date.isoformat(),
+                'devices': {did: {k: acc.get(k, 0) for k in self.ACCUM_FIELDS}
+                            for did, acc in self.energy_accumulated.items()},
+                'last_readings': dict(self._last_energy_reading),
+            }
+        ok = bool(db.set_system_state(self.STATE_KEY_ACCUM, payload))
+        if not ok:
+            logger.error(
+                "能耗累计落库失败 —— 进程重启后「今日能耗/电费/碳排放」会归零"
+                "（内存里的累计不受影响，30 秒后重试）")
+        return ok
+
+    def _restore_accumulated(self) -> int:
+        """启动时恢复累计量与电表基线（round 320）。返回恢复的设备数。
+
+        两条规则：
+
+        * **电表基线无条件恢复** —— 它是绝对值。不恢复的话，重启后的第一次读数
+          只能建基线，停机期间的用电量永久丢失（每次重启丢一段）。
+        * **累计量只在"同一天"时恢复** —— 库里存的是昨天的累计，今天不该接着算
+          （那会把昨天的电费算进今天）。跨天时从 0 开始。
+        """
+        db = getattr(self, 'database', None)
+        if db is None or not hasattr(db, 'get_system_state'):
+            return 0
+        data = db.get_system_state(self.STATE_KEY_ACCUM)
+        if not isinstance(data, dict):
+            return 0
+
+        readings = data.get('last_readings')
+        if isinstance(readings, dict):
+            for did, value in readings.items():
+                if isinstance(value, (int, float)):
+                    self._last_energy_reading[did] = float(value)
+
+        stored_date = data.get('date')
+        today_iso = self._today().isoformat()
+        if stored_date != today_iso:
+            if self._last_energy_reading:
+                logger.warning(
+                    "库里的能耗累计属于 %s（今天 %s）—— 累计量从 0 开始，"
+                    "但电表读数基线已恢复（跨日增量计入今天）",
+                    stored_date, today_iso)
+            return 0
+
+        devices = data.get('devices')
+        if not isinstance(devices, dict):
+            return 0
+        restored = 0
+        for did, acc in devices.items():
+            if not isinstance(acc, dict):
+                continue
+            target = self.energy_accumulated[did]      # defaultdict 自动建条目
+            for field in self.ACCUM_FIELDS:
+                value = acc.get(field, 0)
+                if isinstance(value, (int, float)):
+                    target[field] = float(value)
+            restored += 1
+        if restored:
+            logger.warning(
+                "已从数据库恢复 %d 台设备的**今日**能耗累计（重启不再归零）",
+                restored)
+        return restored
 
     def feed_power_data(self, device_id: str, power_kw: float,
                          energy_kwh: float | None = None, timestamp: datetime | None = None):
@@ -450,6 +607,7 @@ class EnergyManager:
             timestamp: 时间戳
         """
         now = timestamp or datetime.now()
+        self._rollover_if_new_day()
 
         with self._lock:
             if energy_kwh is not None:
@@ -486,9 +644,18 @@ class EnergyManager:
                     if dt_hours > 0:
                         avg_power = (old_power + power_kw) / 2
                         delta_kwh = avg_power * dt_hours
-                        tariff_type = self._get_tariff_type(now.hour)
-                        self.energy_accumulated[device_id]['energy_kwh'] += delta_kwh
-                        self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
+                        # round 320：**同一次调用里既有累积读数又有功率时，只按累积读数算**。
+                        # 两者是同一个物理量的两个通道，都加就是重复计 ——
+                        # 实测：读数 1000→1250（真实 250 kWh），同时给 50/52 kW，
+                        # 结果累计成 301 kWh（多算 51）。
+                        # 累积读数是**精确值**，功率积分是**近似值**，有精确值时不该再叠加近似值。
+                        # 功率仍要更新 `realtime_power`（"总功率"看板靠它）。
+                        if energy_kwh is None:
+                            tariff_type = self._get_tariff_type(now.hour)
+                            self.energy_accumulated[device_id]['energy_kwh'] += delta_kwh
+                            self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
+
+        self._persist_accumulated()
 
     def feed_water_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
         """
@@ -499,6 +666,7 @@ class EnergyManager:
         （把已统计的用水量抹掉），因此这里与电力路径一致地做 dt 保护。
         """
         now = timestamp or datetime.now()
+        self._rollover_if_new_day()
         with self._lock:
             old = self.realtime_power.get(f"{device_id}_water", {})
             if old and 'timestamp' in old:
@@ -514,10 +682,12 @@ class EnergyManager:
                 'flow_m3h': flow_m3h,
                 'timestamp': now,
             }
+        self._persist_accumulated()
 
     def feed_gas_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
         """喂入气表数据（Δt 保护同 feed_water_data，避免乱序数据导致负累加）"""
         now = timestamp or datetime.now()
+        self._rollover_if_new_day()
         with self._lock:
             old = self.realtime_power.get(f"{device_id}_gas", {})
             if old and 'timestamp' in old:
@@ -533,6 +703,7 @@ class EnergyManager:
                 'flow_m3h': flow_m3h,
                 'timestamp': now,
             }
+        self._persist_accumulated()
 
     def set_baseline(self, device_id: str, daily_kwh: float):
         """设置能耗基线（用于异常检测）"""
@@ -584,6 +755,7 @@ class EnergyManager:
                 'tariff_rates': dict,  # 当前电价
             }
         """
+        self._rollover_if_new_day()      # round 320：读之前先确保窗口是"今天"
         with self._lock:
             if device_id:
                 data = dict(self.energy_accumulated.get(device_id, {}))
@@ -613,6 +785,10 @@ class EnergyManager:
             'water_m3': round(data.get('water_m3', 0), 2),
             'gas_m3': round(data.get('gas_m3', 0), 2),
             'tariff_rates': dict(self.tariff),
+            # round 320：把口径写进返回值 —— 这个数是「今天」的，不是"自启动以来"。
+            # 不写清楚，前端标"总能耗"就会被理解成累计总量。
+            'window': 'today',
+            'window_date': self._window_date.isoformat(),
         }
 
     def get_energy_cost_breakdown(self) -> dict[str, Any]:
@@ -735,7 +911,12 @@ class EnergyManager:
         return anomalies
 
     def reset_accumulated(self, device_id: str | None = None):
-        """重置能耗累积（新班次/新日）"""
+        """重置能耗累积（新班次/新日）
+
+        round 320：重置必须**同步落库** —— 否则重启后会把刚清零的累计
+        从库里"恢复"回来，运维点了"清零"却看到数字又跳回去。
+        （这也是本方法此前**零调用点**的后果之一：没人调，所以没人发现。）
+        """
         with self._lock:
             if device_id:
                 self.energy_accumulated[device_id] = {
@@ -744,3 +925,4 @@ class EnergyManager:
                 }
             else:
                 self.energy_accumulated.clear()
+        self._persist_accumulated(force=True)
