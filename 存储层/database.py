@@ -633,17 +633,25 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            cursor.execute('''
-                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(device_id, register_name) DO UPDATE SET
-                    value = excluded.value, unit = excluded.unit, timestamp = excluded.timestamp
-            ''', (device_id, register_name, value, unit, timestamp))
+            # round 326：**显式写 created_at**，不再依赖 DDL 里的
+            # `DEFAULT CURRENT_TIMESTAMP` —— 那个默认值是 **UTC**，
+            # 而 `timestamp` 来自 `datetime.now()`（本地时间）。
+            # 两者混用会让同一行数据差 8 小时（实测 scada.db 5000 行恒差 8h），
+            # 任何 `WHERE timestamp > created_at` 或按 created_at 分天的报表都会错。
+            created_at = datetime.now()
 
             cursor.execute('''
-                INSERT INTO history_data (device_id, register_name, value, unit, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (device_id, register_name, value, unit, timestamp))
+                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(device_id, register_name) DO UPDATE SET
+                    value = excluded.value, unit = excluded.unit,
+                    timestamp = excluded.timestamp, created_at = excluded.created_at
+            ''', (device_id, register_name, value, unit, timestamp, created_at))
+
+            cursor.execute('''
+                INSERT INTO history_data (device_id, register_name, value, unit, timestamp, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (device_id, register_name, value, unit, timestamp, created_at))
 
     def _inc_skipped_invalid(self, n: int = 1) -> None:
         """累计「被落库层拒掉的非法记录数」"""
@@ -693,6 +701,10 @@ class Database:
         # Validate each record individually to avoid losing entire batch on one bad record
         valid_rows = []
         skipped_invalid = 0
+        # round 326：批量用同一个入库时刻，与 timestamp 同为**本地时间**尺度。
+        # 不再依赖 DDL 的 `DEFAULT CURRENT_TIMESTAMP`（那是 UTC）—— 否则同一行
+        # 的 timestamp 与 created_at 会差 8 小时。
+        created_at = datetime.now()
         for d in batch:
             try:
                 # quality 为 OPC UA 质量码（int）。采集层算出的值经此落库，
@@ -729,7 +741,7 @@ class Database:
 
                 valid_rows.append((
                     d['device_id'], d['register_name'], value,
-                    d.get('unit', ''), d['timestamp'], q,
+                    d.get('unit', ''), d['timestamp'], q, created_at,
                 ))
             except (KeyError, TypeError) as e:
                 skipped_invalid += 1
@@ -748,18 +760,19 @@ class Database:
 
             # realtime_data: 批量UPSERT（保留稳定id）
             cursor.executemany('''
-                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp, quality)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp, quality, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(device_id, register_name) DO UPDATE SET
                     value = excluded.value, unit = excluded.unit,
-                    timestamp = excluded.timestamp, quality = excluded.quality
+                    timestamp = excluded.timestamp, quality = excluded.quality,
+                    created_at = excluded.created_at
             ''', valid_rows)
 
-            # history_data: 批量INSERT
+            # history_data: 批量INSERT（created_at 在 row[6]，前 5 列之外单独取）
             cursor.executemany('''
-                INSERT INTO history_data (device_id, register_name, value, unit, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-            ''', [row[:5] for row in valid_rows])
+                INSERT INTO history_data (device_id, register_name, value, unit, timestamp, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', [row[:5] + (row[6],) for row in valid_rows])
 
     def delete_device_data(self, device_id: str):
         """
@@ -1075,13 +1088,18 @@ class Database:
                 ''', (new_count, timestamp, actual_value, actual_value, alarm_row_id))
             else:
                 # 无未确认记录 → 新建
+                # round 326：显式写 created_at（本地时间），不再吃 DDL 的
+                # `DEFAULT CURRENT_TIMESTAMP`（UTC）—— 否则同一行的
+                # timestamp（本地）与 created_at（UTC）差 8 小时。
                 cursor.execute('''
                     INSERT INTO alarm_records
                     (alarm_id, device_id, register_name, alarm_level, alarm_message,
-                     threshold, actual_value, timestamp, trigger_count, last_trigger_time, last_value)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                     threshold, actual_value, timestamp, trigger_count, last_trigger_time,
+                     last_value, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
                 ''', (alarm_id, device_id, register_name, alarm_level, alarm_message,
-                      threshold, actual_value, timestamp, timestamp, actual_value))
+                      threshold, actual_value, timestamp, timestamp, actual_value,
+                      datetime.now()))
 
     def get_alarm_records(self, device_id: str | None = None, alarm_level: str | None = None,
                           start_time: datetime | None = None, end_time: datetime | None = None,

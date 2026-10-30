@@ -28,6 +28,16 @@ RUN mkdir -p logs data exports
 ENV SCADA_HOST=0.0.0.0
 ENV SCADA_PORT=5000
 
+# ⚠️ 2026-10-30（round 326）：**必须钉死时区**。
+#    python:3.12-slim 默认 UTC，而本机（Windows）是 UTC+8。
+#    代码里时间戳统一用 `datetime.now()`（本地时间）+ SQLite 的
+#    `CURRENT_TIMESTAMP`（**永远是 UTC**）—— 容器不设 TZ 时，
+#    同一行数据的 `timestamp` 与 `created_at` 会差 8 小时，
+#    且同一份代码在本机/容器写出的时间戳属于**不同时区**，混存后无法区分。
+#    钉死 TZ 后两边都产出同一个本地时间，报表/保留策略的 cutoff 才和写入值同尺度。
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 EXPOSE 5000
 
 # 健康检查走容器内回环，端口跟随 SCADA_PORT（此前写死 5000，

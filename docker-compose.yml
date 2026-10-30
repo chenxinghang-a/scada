@@ -17,6 +17,9 @@ services:
       - SCADA_ENV=production
       - SCADA_HOST=0.0.0.0
       - SCADA_PORT=5000
+      # round 326：钉死时区。不设时容器是 UTC，而代码用 datetime.now()（本地）
+      # + SQLite CURRENT_TIMESTAMP（UTC），同一行时间字段会差 8 小时。
+      - TZ=Asia/Shanghai
       - MQTT_BROKER=emqx
       - MQTT_PORT=1883
       - TDENGINE_HOST=tdengine
