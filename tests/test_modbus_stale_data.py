@@ -426,3 +426,91 @@ class TestStaleQualityPropagation:
 
         assert batch[0]['quality'] == DataQualityAssessor.GOOD
         assert batch[0]['quality'] == 192
+
+
+# ============================================================
+# 写后回读验证（round 327）
+# ============================================================
+
+class _FakeWriteClient(_FakeInnerClient):
+    """在只读替身基础上补 write_register，并记录写入调用。"""
+
+    def __init__(self):
+        super().__init__()
+        self.write_calls: list[tuple[int, int]] = []
+
+    def write_register(self, address, value, slave=None):
+        self.write_calls.append((address, value))
+        return _FakeResult([], error=False)
+
+
+@pytest.fixture
+def writable_client():
+    """带一个可写寄存器的客户端。
+
+    ⚠️ 配置里**必须**写 ``access: 'rw'`` —— 否则 ``WriteSafetyValidator``
+    会把寄存器判成只读、直接拦掉写入，测试根本走不到验证分支
+    （这是本文件第一次写探针时踩到的坑）。
+    """
+    c = ModbusClient({
+        'id': 'dev_write',
+        'name': '写入验证设备',
+        'protocol': 'modbus_tcp',
+        'registers': [{
+            'address': 10, 'name': 'r10', 'scale': 1.0, 'offset': 0,
+            'access': 'rw',
+        }],
+    })
+    c.client = _FakeWriteClient()
+    c.connected = True
+    c.reconnect = lambda: False
+    return c
+
+
+class TestWriteVerifyRequiresFreshRead:
+    """``verify=True`` 的回读必须是**新鲜数据**，不能拿陈旧缓存充数。
+
+    缺陷（修复前）：``write_single_register`` 用 ``read_holding_registers``
+    做回读，而后者在失败时返回**陈旧缓存值**（见该方法的 Warning）。
+    于是「写入后回读超时 + 缓存里恰好存着同一个值」被判成验证通过 ——
+    设备根本没写进去，系统却报"写入成功且已校验"。
+    实测复现：回读抛 ConnectionException、缓存预置 [42]、写入 42 → 返回 True。
+    """
+
+    def test_stale_cache_matching_written_value_is_rejected(self, writable_client):
+        c = writable_client
+        c._last_good_values[(10, 1)] = [42]      # 缓存值恰好等于即将写入的值
+        c._last_good_at[(10, 1)] = time.time()
+        c.client.exc = ConnectionException('simulated timeout')
+
+        assert c.write_single_register(10, 42, verify=True) is False, (
+            '回读用了陈旧缓存却被判成验证通过 —— 设备没写进去也报成功')
+        assert c.last_read_source == 'cache'
+
+    def test_fresh_read_with_matching_value_passes(self, writable_client):
+        """反向对照：回读真的成功且值正确 → 必须通过（别修过头）。"""
+        c = writable_client
+        c.client.HOLDING_VALUES = [42]
+        assert c.write_single_register(10, 42, verify=True) is True
+        assert c.last_read_source == 'fresh'
+
+    def test_fresh_read_with_wrong_value_fails(self, writable_client):
+        c = writable_client
+        c.client.HOLDING_VALUES = [7]
+        assert c.write_single_register(10, 42, verify=True) is False
+
+    def test_no_cache_and_failed_read_fails(self, writable_client):
+        c = writable_client
+        c.client.exc = ConnectionException('down')
+        assert c.write_single_register(10, 42, verify=True) is False
+        assert c.last_read_source == 'none'
+
+    def test_failed_verification_is_counted(self, writable_client):
+        """验证失败要计入 failed_writes，不能只在日志里留痕。"""
+        c = writable_client
+        c._last_good_values[(10, 1)] = [42]
+        c._last_good_at[(10, 1)] = time.time()
+        c.client.exc = ConnectionException('timeout')
+        before = c.stats['failed_writes']
+        c.write_single_register(10, 42, verify=True)
+        assert c.stats['failed_writes'] == before + 1

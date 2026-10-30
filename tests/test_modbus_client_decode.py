@@ -85,6 +85,52 @@ class TestIntegerDecode:
     def test_uint32(self, regs, expected):
         assert _client().decode_uint32(regs) == expected
 
+    # ---- round 327：32 位整数必须按 byte_order 组合 ----
+    #
+    # 原来 decode_int32 / decode_uint32 固定写死 (r0 << 16) | r1、完全忽略
+    # byte_order —— 同一台设备配 CDAB 时 decode_float32 解对、32 位整数解错，
+    # 而且不会有任何提示。下面用同一个目标值 0x12345678 的四种寄存器排列钉住。
+    @pytest.mark.parametrize('bo,regs', [
+        ('ABCD', [0x1234, 0x5678]),   # A B C D
+        ('BADC', [0x3412, 0x7856]),   # B A D C（字内字节交换）
+        ('CDAB', [0x5678, 0x1234]),   # C D A B（两字交换）
+        ('DCBA', [0x7856, 0x3412]),   # D C B A（四字节反转）
+    ])
+    def test_uint32_respects_byte_order(self, bo, regs):
+        assert _client(byte_order=bo).decode_uint32(regs) == 0x12345678
+
+    @pytest.mark.parametrize('bo,regs', [
+        ('ABCD', [0x1234, 0x5678]),
+        ('BADC', [0x3412, 0x7856]),
+        ('CDAB', [0x5678, 0x1234]),
+        ('DCBA', [0x7856, 0x3412]),
+    ])
+    def test_int32_respects_byte_order(self, bo, regs):
+        assert _client(byte_order=bo).decode_int32(regs) == 0x12345678
+
+    def test_int32_negative_respects_byte_order(self):
+        """负数（符号位在最高位）在非 ABCD 字节序下也要正确。"""
+        # 0xFFFFFFFF = -1，四种排列下寄存器都是全 F，结果必须一致
+        for bo in ('ABCD', 'BADC', 'CDAB', 'DCBA'):
+            assert _client(byte_order=bo).decode_int32([0xFFFF, 0xFFFF]) == -1
+
+    def test_int32_short_list_raises(self):
+        """不足 2 个寄存器要明确报错，不能 IndexError。"""
+        with pytest.raises(ValueError):
+            _client().decode_int32([0x1234])
+
+    def test_float32_and_uint32_agree_on_register_layout(self):
+        """正向对照：同一组寄存器，float32 与 uint32 必须用**同一套**排列。
+
+        防的是「两条解码路径各写一套字节序逻辑、日后只改其中一条」。
+        """
+        import struct as _struct
+        regs = [0x1234, 0x5678]
+        for bo in ('ABCD', 'BADC', 'CDAB', 'DCBA'):
+            c = _client(byte_order=bo)
+            expected = _struct.unpack('!f', _struct.pack('!I', c.decode_uint32(regs)))[0]
+            assert c.decode_float32(regs) == pytest.approx(expected)
+
     def test_int16_uint16_agree_on_positive(self):
         """正向对照：正数区间两者必须一致（防其中一侧写反）"""
         c = _client()

@@ -746,6 +746,22 @@ class ModbusClient:
             if verify:
                 time.sleep(0.05)
                 read_back = self.read_holding_registers(address, 1, slave_id=slave)
+                # ⚠️ 回读**必须是新鲜数据**（round 327）。
+                # `read_holding_registers` 在读取失败时会返回**陈旧缓存值**
+                # （见其 docstring 的 Warning），且返回值本身无法区分。
+                # 于是「写入后回读超时 + 缓存里恰好存着同一个值」会被判成
+                # 验证通过 —— 设备根本没写进去，系统却报"写入成功且已校验"。
+                # 实测复现：回读抛异常、缓存预置 [42]、写入 42 → 返回 True。
+                if self.last_read_source != 'fresh':
+                    logger.warning(
+                        f"写入验证失败: addr={address}, 写入={value}, "
+                        f"回读不是新鲜数据（source={self.last_read_source}）— "
+                        f"无法确认设备是否真的写进去了")
+                    self._inc_stat('failed_writes')
+                    self._log_operation(
+                        'write_single_register', address, 1, False,
+                        f'回读非新鲜数据(source={self.last_read_source})')
+                    return False
                 if read_back and read_back[0] == value:
                     logger.debug(f"写入验证通过: addr={address}, value={value}")
                 else:
@@ -1035,6 +1051,36 @@ class ModbusClient:
             logger.error(f"读写寄存器异常: {e}")
             return None
 
+    def _combine_regs(self, registers: list[int]) -> int:
+        """按 ``byte_order`` 把 2 个 16 位寄存器拼成一个 32 位无符号整数。
+
+        round 327：抽出来是因为 ``decode_int32`` / ``decode_uint32`` 原来
+        **固定按 ``(r0 << 16) | r1`` 处理、完全忽略 byte_order** ——
+        同一台设备配 ``CDAB`` 时浮点解对、32 位整数解错，且没有任何提示。
+
+        四种排列（以 32 位值 ABCD 为例）：
+          * ABCD → ``A B C D``            → ``(w1 << 16) | w2``
+          * BADC → 字内字节交换            → 各字交换后拼接
+          * CDAB → 两个字交换              → ``(w2 << 16) | w1``
+          * DCBA → 四字节完全反转          → ``D C B A``
+        """
+        w1, w2 = registers[0], registers[1]
+
+        if self.byte_order == ByteOrder.BADC:
+            w1 = ((w1 & 0xFF) << 8) | ((w1 >> 8) & 0xFF)
+            w2 = ((w2 & 0xFF) << 8) | ((w2 >> 8) & 0xFF)
+            return (w1 << 16) | w2
+        if self.byte_order == ByteOrder.CDAB:
+            return (w2 << 16) | w1
+        if self.byte_order == ByteOrder.DCBA:
+            b0 = (w1 >> 8) & 0xFF
+            b1 = w1 & 0xFF
+            b2 = (w2 >> 8) & 0xFF
+            b3 = w2 & 0xFF
+            return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0
+        # ABCD 及未知值：字节序不变
+        return (w1 << 16) | w2
+
     def decode_float32(self, registers: list[int]) -> float | None:
         """
         解码32位浮点数，支持4种字节序
@@ -1048,26 +1094,7 @@ class ModbusClient:
         if len(registers) < 2:
             raise ValueError("需要至少2个寄存器")
 
-        w1, w2 = registers[0], registers[1]
-
-        if self.byte_order == ByteOrder.ABCD:
-            raw = (w1 << 16) | w2
-        elif self.byte_order == ByteOrder.BADC:
-            # Byte-swap within each word, then combine
-            w1_swapped = ((w1 & 0xFF) << 8) | ((w1 >> 8) & 0xFF)
-            w2_swapped = ((w2 & 0xFF) << 8) | ((w2 >> 8) & 0xFF)
-            raw = (w1_swapped << 16) | w2_swapped
-        elif self.byte_order == ByteOrder.CDAB:
-            # Word swap only
-            raw = (w2 << 16) | w1
-        elif self.byte_order == ByteOrder.DCBA:
-            b0 = (w1 >> 8) & 0xFF
-            b1 = w1 & 0xFF
-            b2 = (w2 >> 8) & 0xFF
-            b3 = w2 & 0xFF
-            raw = (b3 << 24) | (b2 << 16) | (b1 << 8) | b0
-        else:
-            raw = (w1 << 16) | w2
+        raw = self._combine_regs(registers)
 
         value = struct.unpack('!f', struct.pack('!I', raw))[0]
         # 传感器断线时 PLC 返回 0xFFFF → NaN，过滤掉
@@ -1131,7 +1158,11 @@ class ModbusClient:
 
     def decode_int32(self, registers: list[int]) -> int:
         """
-        解码32位有符号整数（两个寄存器，Big-Endian）
+        解码32位有符号整数（两个寄存器）
+
+        round 327 起**按 ``byte_order`` 组合寄存器**，与 ``decode_float32`` 一致。
+        原来固定按 ``(r0 << 16) | r1`` 处理：设备配 ``CDAB``/``BADC``/``DCBA`` 时
+        浮点解对、32 位整数解错，而且不会有任何提示。
 
         Args:
             registers: 寄存器值列表（2个）
@@ -1139,14 +1170,18 @@ class ModbusClient:
         Returns:
             int: 解码后的整数
         """
-        raw = (registers[0] << 16) | registers[1]
+        if len(registers) < 2:
+            raise ValueError("需要至少2个寄存器")
+        raw = self._combine_regs(registers)
         if raw & 0x80000000:
             raw -= 0x100000000
         return raw
 
     def decode_uint32(self, registers: list[int]) -> int:
         """
-        解码32位无符号整数（两个寄存器，Big-Endian）
+        解码32位无符号整数（两个寄存器）
+
+        round 327 起**按 ``byte_order`` 组合寄存器**（原因同 ``decode_int32``）。
 
         Args:
             registers: 寄存器值列表（2个）
@@ -1154,7 +1189,9 @@ class ModbusClient:
         Returns:
             int: 解码后的整数
         """
-        return (registers[0] << 16) | registers[1]
+        if len(registers) < 2:
+            raise ValueError("需要至少2个寄存器")
+        return self._combine_regs(registers)
 
     def get_stats(self) -> dict[str, Any]:
         """
