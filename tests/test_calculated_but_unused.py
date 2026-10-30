@@ -116,11 +116,13 @@ class TestOEELosses:
 
 class TestDNP3FrameCrc:
 
-    def test_parse_frame_exposes_crc(self):
-        """**核心回归**：帧头 CRC 必须透出来，且明确标注未校验。
+    def test_parse_frame_exposes_and_verifies_crc(self):
+        """**核心回归**：帧头 CRC 必须透出来，并且**真的校验过**。
 
-        修复前 `crc` 解析完就丢了 —— 等于帧头校验形同虚设：
-        线路噪声造成的位翻转不会被发现，损坏的帧带着 valid=True 一路往上走。
+        历史：`crc` 解析完就丢了 → 帧头校验形同虚设，线路噪声造成的位翻转
+        不会被发现，损坏帧带着 valid=True 一路往上走。
+        round 323 起改为真校验：合法帧 `crc_verified is True`，
+        坏帧直接 `valid is False`（见 `tests/test_dnp3_protocol.py` 的坏帧用例）。
         """
         from gateway.dnp3_gateway import DNP3Parser
 
@@ -130,8 +132,8 @@ class TestDNP3FrameCrc:
         assert result['valid'] is True, result
         assert 'crc' in result, f'返回值没有 crc 字段，实际键: {sorted(result)}'
         assert isinstance(result['crc'], int)
-        assert result['crc_verified'] is False, \
-            '必须明确标注 CRC 未校验 —— 不能让调用方以为已经验过了'
+        assert result['crc_verified'] is True, \
+            'CRC 字段透出来了却没校验 —— 坏帧会被当成现场数据'
 
     def test_crc_value_matches_frame_bytes(self):
         """透出的 crc 必须真的来自帧的第 8~10 字节。"""

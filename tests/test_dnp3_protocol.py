@@ -17,7 +17,10 @@ import struct
 
 import pytest
 
-from gateway.dnp3_gateway import DNP3Client, DNP3FunctionCode, DNP3ObjectGroup, DNP3Parser
+from gateway.dnp3_gateway import (
+    DNP3Client, DNP3FunctionCode, DNP3ObjectGroup, DNP3Parser,
+    crc16_dnp,
+)
 
 START = b'\x05\x64'
 
@@ -27,17 +30,21 @@ START = b'\x05\x64'
 # ---------------------------------------------------------------------------
 
 def _frame(user_data: bytes, *, ctrl: int = 0xC0, dest: int = 2, src: int = 1,
-           length: int | None = None, crc: bytes = b'\x00\x00') -> bytes:
-    """构造一个**符合标准帧长**的 DNP3 链路层帧。
+           length: int | None = None, crc: int | None = None) -> bytes:
+    """构造一个**符合 IEEE 1815** 的 DNP3 链路层帧（含真实 CRC）。
 
-    LENGTH 从控制字节数到用户数据末尾（不含 CRC）；用户数据每满 16 字节
-    追加一段 2 字节 CRC（测试里填 0，因为本实现不校验 CRC）。
+    round 323 起本实现会校验 CRC，所以测试帧必须带**正确**的 CRC：
+    帧头 CRC 覆盖前 8 字节，用户数据每 16 字节跟一个 CRC。
+    `crc=` 可显式指定帧头 CRC（用于构造"坏帧"用例）。
     """
     ln = len(user_data) + 5 if length is None else length
-    out = START + struct.pack('<BBHH', ln, ctrl, dest, src) + crc + user_data
-    for _ in range(0, len(user_data), 16):
-        out += b'\x00\x00'
-    return out
+    header = START + struct.pack('<BBHH', ln, ctrl, dest, src)
+    out = bytearray(header)
+    out += struct.pack('<H', crc16_dnp(header) if crc is None else crc)
+    for i in range(0, len(user_data), 16):
+        chunk = user_data[i:i + 16]
+        out += chunk + struct.pack('<H', crc16_dnp(chunk))
+    return bytes(out)
 
 
 def _response_frame(group: int, variation: int, values: bytes,
@@ -137,19 +144,71 @@ class TestParseFrame:
         assert p['function_code'] == DNP3FunctionCode.RESPONSE
         assert p['data'][:3] == bytes([DNP3ObjectGroup.AI, 1, 0x00])
 
-    def test_header_crc_is_exposed_but_not_verified(self):
-        """钉住**已知缺口**：帧头 CRC 解析出来但从不校验。
+    def test_header_crc_mismatch_rejects_frame(self):
+        """**已修（round 323）**：帧头 CRC 不匹配 → 整帧判无效。
 
-        补齐校验时这条会红 —— 那时请同步更新模块头注的缺口清单第 3 条。
+        原来 CRC 解析出来却从不比对，线路噪声造成的位翻转不会被发现，
+        损坏帧带着 `valid: True` 一路往上走。
         """
-        p = DNP3Parser.parse_frame(_frame(b'\xC0\x81', crc=b'\xAB\xCD'))
-        assert p['crc'] == 0xCDAB
-        assert p['crc_verified'] is False, '本实现不校验 CRC（已知缺口，见模块头注）'
+        good = _frame(b'\xC0\x81')
+        # 故意把帧头 CRC 改成错的（其余字节都是对的）
+        bad = good[:8] + b'\xAB\xCD' + good[10:]
+        p = DNP3Parser.parse_frame(bad)
+        assert p['crc_verified'] is False
+        assert p['valid'] is False, 'CRC 不符却判有效 —— 坏帧会被当成现场数据'
+        assert 'CRC' in p['error']
 
-    def test_length_field_is_not_validated(self):
-        """钉住现状：LENGTH 与实际长度不符也照样判 valid（校验在切帧侧做）"""
-        f = _frame(b'\xC0\x81', length=99)      # LENGTH 谎报
-        assert DNP3Parser.parse_frame(f)['valid'] is True
+    def test_header_bit_flip_is_detected(self):
+        """线路噪声场景：翻转帧头里的**一个 bit** → 必须被 CRC 抓到。"""
+        good = bytearray(_frame(b'\xC0\x81'))
+        good[3] ^= 0x01          # 控制字节翻转一位
+        p = DNP3Parser.parse_frame(bytes(good))
+        assert p['valid'] is False and p['crc_verified'] is False
+
+    def test_data_block_bit_flip_is_detected(self):
+        """用户数据块翻转一位 → 数据块 CRC 必须抓到（帧头 CRC 覆盖不到这里）。"""
+        good = bytearray(_frame(b'\xC0\x81\x01\x02\x03\x04'))
+        good[12] ^= 0x01         # 应用层字节（帧头 CRC 之后）
+        p = DNP3Parser.parse_frame(bytes(good))
+        assert p['valid'] is False and p['crc_verified'] is False
+        assert 'data block' in p['error']
+
+    def test_length_lie_is_rejected(self):
+        """LENGTH 谎报（比实际大）→ 数据块 CRC 对不上 → 判无效。
+
+        原来是"照样判 valid"（校验在切帧侧做），但切帧侧只按 LENGTH 切，
+        LENGTH 一错就会把后面的帧当数据吃掉。现在解析层也能兜住。
+        """
+        f = _frame(b'\xC0\x81', length=99)
+        assert DNP3Parser.parse_frame(f)['valid'] is False
+
+    def test_length_below_minimum_is_rejected(self):
+        """直接调 `parse_frame` 时 LENGTH < 5 必须拒绝（**第二道防线**）。
+
+        ⚠️ 真实数据流里走不到这里 —— `_process_buffer` 切帧时已用 `_frame_size()`
+        拦掉并重同步（见 `test_invalid_length_is_resynced`）。
+        本用例锁的是 `parse_frame` 作为 public API 的契约：LENGTH 最小值是 5，
+        小于 5 必须返回 valid=False，不能算出 user_data_len = 0 后"校验通过"。
+        """
+        for bad_len in (0, 1, 4):
+            p = DNP3Parser.parse_frame(_frame(b'', length=bad_len))
+            assert p['valid'] is False, f'LENGTH={bad_len} 的非法帧被放行'
+            assert 'LENGTH' in p['error']
+
+    def test_length_five_is_the_valid_minimum(self):
+        """反向对照：LENGTH=5（用户数据为空）是合法下界，不能误杀。"""
+        p = DNP3Parser.parse_frame(_frame(b'', length=5))
+        assert p['valid'] is True, '把合法的空载荷帧也拒了 —— 修过头'
+        assert p['crc_verified'] is True
+
+    def test_multiblock_payload_strips_all_crcs(self):
+        """用户数据 > 16 字节 → 多个数据块；解析后应用层字节里**不许混入 CRC**。"""
+        payload = bytes(range(40))          # 40 字节 → 3 块（16+16+8）
+        f = _frame(payload)
+        p = DNP3Parser.parse_frame(f)
+        assert p['valid'] is True and p['crc_verified'] is True
+        assert p['data'] == payload[2:], (
+            '应用层数据里混进了数据块 CRC —— 对象解析会整体错位')
 
 
 # ---------------------------------------------------------------------------
@@ -207,23 +266,31 @@ class TestBuildFrames:
         assert f[10] == 0xC0 and f[11] == DNP3FunctionCode.READ
 
     def test_read_request_length_field(self):
-        """LENGTH = 5 + 用户数据长度（**不含 CRC**）。
+        """LENGTH = 5 + 用户数据长度（**不含 CRC**），且整帧长度对得上。
 
         历史实现写的是 +8 —— 帧长字段偏大 3，真实从站会按错误长度取数据。
+        round 323：帧里现在**真的**带数据块 CRC，所以 `len(f) - 10` 不再等于
+        用户数据长度；改用 LENGTH 反推 + `_frame_size` 对账。
         """
         f = DNP3Parser.build_read_request(1, 2, DNP3ObjectGroup.AI)
-        app_len = len(f) - 10
-        assert f[2] == app_len + 5
+        user_data_len = f[2] - 5
+        assert user_data_len > 0
+        assert len(f) == DNP3Parser._frame_size(f[2]), (
+            '整帧长度与 LENGTH 推出来的不一致（数据块 CRC 漏了或多算了）')
 
     def test_direct_operate_header(self):
         f = DNP3Parser.build_direct_operate(1, 2, index=7, value=1)
         assert f[:2] == START
-        assert f[11] == DNP3FunctionCode.DIRECT_OPERATE
-        assert f[-1] == 0x01, '单点输出值'
+        # round 323：帧尾现在是数据块 CRC，不能再用 f[-1] 取应用层字节，
+        # 必须走 parse_frame（它会把数据块 CRC 剥掉）。
+        p = DNP3Parser.parse_frame(f)
+        assert p['valid'] is True and p['crc_verified'] is True
+        assert p['function_code'] == DNP3FunctionCode.DIRECT_OPERATE
+        assert p['data'][-1] == 0x01, '单点输出值'
 
     def test_direct_operate_masks_value_to_one_bit(self):
         f = DNP3Parser.build_direct_operate(1, 2, index=7, value=0xFF)
-        assert f[-1] == 0x01
+        assert DNP3Parser.parse_frame(f)['data'][-1] == 0x01
 
     def test_builders_do_not_raise(self):
         """回归：历史实现多传一个参数，struct.pack 必抛、异常被 except 吞掉
@@ -231,27 +298,36 @@ class TestBuildFrames:
         assert DNP3Parser.build_read_request(1, 2, DNP3ObjectGroup.AI)
         assert DNP3Parser.build_direct_operate(1, 2, 1, 1)
 
-    def test_crc_is_a_byte_sum_not_crc16(self):
-        """钉住**已知缺口 1**：发送侧 CRC 是字节和，不是 CRC-16/DNP。
+    def test_crc_is_crc16_dnp(self):
+        """**已修（round 323）**：发送侧 CRC 是标准 CRC-16/DNP。
 
-        补齐标准 CRC 时这条会红 —— 请同步更新模块头注缺口清单第 1 条。
+        原来是 `sum(header) & 0xFFFF`（字节和）—— 真实从站会丢弃每一个帧。
         """
         f = DNP3Parser.build_read_request(1, 2, DNP3ObjectGroup.AI)
-        header = f[:8]
-        assert struct.unpack('<H', f[8:10])[0] == sum(header) & 0xFFFF
+        assert struct.unpack('<H', f[8:10])[0] == crc16_dnp(f[:8])
+        assert struct.unpack('<H', f[8:10])[0] != sum(f[:8]) & 0xFFFF, (
+            '还是字节和 —— 没换成 CRC-16/DNP')
 
-    def test_built_frame_is_shorter_than_standard(self):
-        """钉住**已知缺口 2**：帧尾没有用户数据 CRC → 比标准短 2 字节。
+    def test_crc16_dnp_standard_vector(self):
+        """CRC-16/DNP 的标准校验值：`b'123456789'` → 0xEA82。
 
-        （补齐后这条会红，请同步更新缺口清单第 2 条。）
+        这条是**算法本身**的判据：参数（多项式/反射/初值/xorout）错一个就对不上。
+        """
+        assert crc16_dnp(b'123456789') == 0xEA82
+
+    def test_built_frame_has_data_block_crc(self):
+        """**已修（round 323）**：帧尾有用户数据块 CRC，长度与标准一致。
+
+        原来比标准短 2 字节（缺数据块 CRC）—— 真实从站会当成残帧丢弃。
         """
         f = DNP3Parser.build_read_request(1, 2, DNP3ObjectGroup.AI)
-        assert len(f) == DNP3Parser._frame_size(f[2]) - 2
+        assert len(f) == DNP3Parser._frame_size(f[2])
+        assert len(f) >= 12, '帧里必须有数据块 CRC'
 
     def test_read_request_qualifier_range_mismatch(self):
         """钉住**已知缺口 4**：限定符 0x06（all objects，不带范围）后面却跟了 4 字节范围"""
         f = DNP3Parser.build_read_request(1, 2, DNP3ObjectGroup.AI, start=0, stop=9)
-        obj_header = f[12:]
+        obj_header = DNP3Parser.parse_frame(f)['data']   # 已剥掉数据块 CRC
         assert obj_header[2] == 0x06, '当前用 0x06'
         assert len(obj_header) == 7, '0x06 本应无范围字段，却带了 4 字节 start/stop'
 
@@ -375,3 +451,49 @@ class TestHandleResponse:
         snap = c.read_data()
         snap[999] = {'value': 0}
         assert 999 not in c.read_data()
+
+
+# ---------------------------------------------------------------------------
+# 6. 坏帧不许污染现场数据（round 323）
+# ---------------------------------------------------------------------------
+
+class TestBadFramesAreDropped:
+    """CRC 不符的帧必须被**丢弃**，不能当数据用。
+
+    这是这一族里最要紧的一条：帧坏了 → 数据是错的 → 操作员看到假数据做决策。
+    """
+
+    def _client(self):
+        return DNP3Client('127.0.0.1')
+
+    def test_valid_frame_updates_snapshot(self):
+        """反向对照：合法帧必须能更新快照（否则下面的用例是假绿）。"""
+        c = self._client()
+        c._handle_response(_response_frame(DNP3ObjectGroup.AI, 1, _ai_values((42, 0))))
+        assert c._last_data, '合法帧没有更新快照'
+        assert next(iter(c._last_data.values()))['value'] == 42
+
+    def test_header_crc_corruption_does_not_update_snapshot(self):
+        c = self._client()
+        frame = bytearray(_response_frame(DNP3ObjectGroup.AI, 1, _ai_values((42, 0))))
+        frame[3] ^= 0x01                     # 控制字节翻转一位
+        c._handle_response(bytes(frame))
+        assert c._last_data == {}, '坏帧（帧头 CRC 不符）被当成现场数据写进了快照'
+        assert c._invalid_frames == 1
+
+    def test_data_crc_corruption_does_not_update_snapshot(self):
+        c = self._client()
+        frame = bytearray(_response_frame(DNP3ObjectGroup.AI, 1, _ai_values((42, 0))))
+        frame[12] ^= 0x01                    # 应用层数据翻转一位（帧头 CRC 覆盖不到）
+        c._handle_response(bytes(frame))
+        assert c._last_data == {}, '坏帧（数据块 CRC 不符）被当成现场数据'
+        assert c._invalid_frames == 1
+
+    def test_invalid_frames_are_counted(self):
+        """坏帧要可计数 —— 现场"数据不更新"时要能区分"设备没发"和"帧坏了"。"""
+        c = self._client()
+        for _ in range(3):
+            frame = bytearray(_response_frame(DNP3ObjectGroup.AI, 1, _ai_values((42, 0))))
+            frame[3] ^= 0x01
+            c._handle_response(bytes(frame))
+        assert c._invalid_frames == 3

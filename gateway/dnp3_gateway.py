@@ -11,29 +11,36 @@ DNP3广泛用于北美电力/水务/燃气公用事业的SCADA系统，是IEC 60
 - TCP通信（默认端口20000）
 - 自动重连、多设备支持
 
-⚠️ 现状与已知缺口（2026-10-13 核实，**这是「简化实现」，不能对真实从站工作**）
+⚠️ 现状与已知缺口（2026-10-13 核实，round 323 更新，**这是「简化实现」，不能对真实从站工作**）
 ------------------------------------------------------------------------------
 本模块是教学/演示级的**简化** DNP3，**未**通过一致性测试。逐条列清，避免被误读成
-「DNP3 已支持」：
+「DNP3 已支持」。**链路层 CRC（第 1–3 条）已在 round 323 补齐并通过标准测试向量**，
+但下面第 4–6 条（对象头限定符、取值位、限定符覆盖）仍不符合标准 ——
+也就是说：**帧能被从站接受了，但对象内容仍可能解析错**。
 
 0. ✅ **已修（2026-10-13）**：起始字节曾写成小端 `64 05`（标准是 `05 64`）→
    真实从站丢帧、本模块也认不出真实从站的帧；`LENGTH` 曾写成 `len(app)+8`
    （标准是 `len(app)+5`，不含 CRC）。两条都只影响链路层字段，已按标准改正。
 
-1. **发送侧 CRC 是假的**：`build_read_request` / `build_direct_operate` 用
-   ``crc = sum(header) & 0xFFFF``（代码里自称「简化CRC」）。
-   标准要求 CRC-16/DNP（多项式 0x3D65、refin/refout、xorout 0xFFFF）。
-   → **真实从站会丢弃本模块发出的每一个帧**。
+1. ✅ **已修（round 323）**：发送侧 CRC 换成标准 **CRC-16/DNP**
+   （多项式 0x3D65 反射形式 0xA6BC、初值 0、xorout 0xFFFF），
+   并加了标准测试向量（`crc16_dnp(b'123456789') == 0xEA82`）。
+   原来用的是 `sum(header) & 0xFFFF`（字节和）—— 真实从站会丢弃每一个帧。
 
-2. **发送侧缺用户数据 CRC**：帧尾只有 ``header + crc + app_data``，
-   而标准在每 16 字节用户数据后还要跟一个 CRC。
-   → 帧长比标准少 2 字节（可用 `DNP3Parser._frame_size` 对照验证）。
+2. ✅ **已修（round 323）**：补上**用户数据块 CRC**（每 16 字节跟一个 CRC），
+   帧长与 `_frame_size` 一致。原来比标准短 2 字节（缺数据块 CRC），
+   真实从站会当成残帧丢弃。
 
-3. **接收侧不校验任何 CRC**：`parse_frame` 把帧头 CRC 解析出来但**从不比对**，
-   返回值里明确标 ``'crc_verified': False``。
-   → 线路噪声造成的位翻转不会被发现，损坏帧会带着 ``valid: True`` 一路往上走。
-   （**未顺手加上校验**：算错就会拒掉合法帧，比不校验更危险 ——
-   需要按 8 字节块 + 多项式 0x3D65 重算，属独立改动。）
+3. ✅ **已修（round 323）**：接收侧**真的校验** CRC —— 帧头 CRC（覆盖前 8 字节）
+   与每个数据块 CRC 都算；任一不符 → `valid: False` + `crc_verified: False`，
+   网关 `_handle_response` 直接丢弃并计数（`_invalid_frames`，按 100 条节流告警）。
+   原来 CRC 解析出来却从不比对，线路噪声造成的位翻转会让坏帧带着
+   `valid: True` 一路往上走。
+   顺带修了应用层取数：原来 `data[12:]` 把数据块 CRC 也当成应用层字节，
+   多块数据时对象解析整体错位；现在先剥 CRC 再解析。
+   顺带补强 `parse_frame` 的契约：拒 `LENGTH < 5`（标准最小 5）。这是**第二道防线** ——
+   真实数据流里 `_process_buffer` 切帧时已用 `_frame_size()` 拦掉并重同步，
+   该分支只在直接调用 `parse_frame` 时生效，**不要误读成主防线**。
 
 4. **对象头限定符与范围不匹配**：`build_read_request` 用限定符 ``0x06``
    （= all objects，**不带范围字段**），却又紧跟了 4 字节 start/stop。
@@ -103,6 +110,62 @@ class DNP3ObjectGroup:
 # DNP3 帧解析 / 构建
 # ──────────────────────────────────────────────
 
+def crc16_dnp(data: bytes) -> int:
+    """CRC-16/DNP（IEEE 1815 规定的链路层校验）。
+
+    参数（别改，改了就与标准不符）：
+      · 多项式 0x3D65，**反射**（reflected 形式 0xA6BC）
+      · 初值 0x0000
+      · 结果再与 0xFFFF 异或（xorout）
+
+    校验值（标准测试向量）：``crc16_dnp(b'123456789') == 0xEA82``。
+    本函数**逐位**实现而不是查表：DNP3 帧很短（≤292 字节），
+    逐位实现慢不了多少，但少一张 512 字节的表、也少一处抄错的可能。
+    """
+    crc = 0x0000
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 1:
+                crc = (crc >> 1) ^ 0xA6BC
+            else:
+                crc >>= 1
+    return crc ^ 0xFFFF
+
+
+def _split_data_blocks(payload: bytes) -> list[bytes]:
+    """把用户数据按 16 字节切块（每块后面要跟一个 CRC）。"""
+    return [payload[i:i + 16] for i in range(0, len(payload), 16)]
+
+
+def build_dnp3_frame(control: int, destination: int, source: int,
+                     app_data: bytes) -> bytes:
+    """按 IEEE 1815 组一个完整的链路层帧（含**真实** CRC）。
+
+    结构::
+
+        起始(2) + LENGTH(1) + 控制(1) + 目的(2) + 源(2) + CRC(2)
+        + [用户数据 16 字节 + CRC(2)] * N
+
+    * 帧头 CRC 覆盖**前 8 字节**（起始~源地址）；
+    * 每 16 字节用户数据后跟一个 CRC，覆盖**该块数据**；
+    * ``LENGTH`` = 5 + 用户数据长度（**不含**任何 CRC）。
+
+    ⚠️ 原实现用 ``sum(header) & 0xFFFF`` 当 CRC，且完全不加数据块 CRC ——
+    真实从站会丢弃这样发出的每一个帧（见模块头注第 1、2 条）。
+    """
+    length = len(app_data) + 5
+    header = DNP3Parser.START_BYTES + struct.pack('<BBHH',
+                                                  length, control,
+                                                  destination, source)
+    out = bytearray(header)
+    out += struct.pack('<H', crc16_dnp(header))
+    for chunk in _split_data_blocks(app_data):
+        out += chunk
+        out += struct.pack('<H', crc16_dnp(chunk))
+    return bytes(out)
+
+
 class DNP3Parser:
     """DNP3协议解析器"""
 
@@ -154,17 +217,83 @@ class DNP3Parser:
         source = struct.unpack('<H', data[6:8])[0]
         crc = struct.unpack('<H', data[8:10])[0]
 
-        # 解析应用层（如果存在）
-        app_control = 0
-        function_code = 0
-        app_data = b''
+        # ---- LENGTH 下界校验（round 323，**第二道防线**）----
+        #
+        # LENGTH 是「从控制字节数到用户数据末尾、不含任何 CRC」的字节数，
+        # 标准最小值为 5（即用户数据为空）。
+        #
+        # ⚠️ 真实数据流里这道校验**走不到**：`_process_buffer` 切帧时已先用
+        # `_frame_size()` 拦掉 LENGTH < 5 并丢弃起始字节重同步
+        # （见 `test_invalid_length_is_resynced`）。
+        # 放在这里是因为 `parse_frame` 是 public staticmethod，可能被直接调用；
+        # 且将来切帧逻辑若改动，这层还能兜住。**不要误读成主防线。**
+        if length < 5:
+            return {
+                'valid': False,
+                'error': 'Invalid LENGTH (< 5)',
+                'length': length,
+                'control': control,
+                'destination': destination,
+                'source': source,
+                'crc': crc,
+                'crc_verified': False,
+            }
 
-        if len(data) > 10:
-            app_control = data[10]
-        if len(data) > 11:
-            function_code = data[11]
-        if len(data) > 12:
-            app_data = data[12:]
+        # ---- 帧头 CRC 校验（round 323）----
+        #
+        # 原实现把 CRC 解析出来却**从不比对**，于是线路噪声造成的位翻转
+        # 不会被发现，损坏帧带着 'valid': True 一路往上走。
+        # 现在按标准重算：CRC-16/DNP 覆盖前 8 字节。
+        header_crc_ok = (crc16_dnp(data[0:8]) == crc)
+
+        # ---- 用户数据块 CRC 校验（round 323）----
+        #
+        # 用户数据每 16 字节跟一个 CRC。必须**先剥掉这些 CRC** 再交给应用层，
+        # 否则应用层拿到的字节流里混着校验字节（原来 `data[12:]` 就是这么错的）。
+        user_data_len = max(0, length - 5)
+        payload = bytearray()
+        data_crc_ok = True
+        offset = 10
+        remaining = user_data_len
+        while remaining > 0:
+            take = min(16, remaining)
+            chunk = data[offset:offset + take]
+            if len(chunk) < take:
+                data_crc_ok = False          # 帧被截断
+                break
+            crc_bytes = data[offset + take:offset + take + 2]
+            if len(crc_bytes) < 2:
+                data_crc_ok = False
+                break
+            if crc16_dnp(chunk) != struct.unpack('<H', crc_bytes)[0]:
+                data_crc_ok = False
+            payload += chunk
+            offset += take + 2
+            remaining -= take
+
+        app_control = payload[0] if len(payload) > 0 else 0
+        function_code = payload[1] if len(payload) > 1 else 0
+        app_data = bytes(payload[2:])
+
+        crc_verified = header_crc_ok and data_crc_ok
+        if not crc_verified:
+            # **校验失败必须拒绝这一帧**。带着 valid=True 往上走，
+            # 等于把"线路噪声"当成"现场数据"。
+            reason = ('header CRC mismatch' if not header_crc_ok
+                      else 'data block CRC mismatch')
+            return {
+                'valid': False,
+                'error': reason,
+                'length': length,
+                'control': control,
+                'destination': destination,
+                'source': source,
+                'crc': crc,
+                'crc_verified': False,
+                'function_code': function_code,
+                'app_control': app_control,
+                'data': app_data,
+            }
 
         return {
             'valid': True,
@@ -172,15 +301,11 @@ class DNP3Parser:
             'control': control,
             'destination': destination,
             'source': source,
-            # 帧头 CRC（data[8:10]）。原实现解析出来却从未使用、也没放进返回值 ——
-            # 等于**帧头校验形同虚设**：线路噪声造成的位翻转不会被发现，
-            # 损坏的帧会带着 'valid': True 一路往上走。
-            # 这里先把值透出来（调用方与测试可用），**但本函数仍不做校验**：
-            # 真正的校验要按 DNP3 的 8 字节块 + 多项式 0x3D65 重算比对，
-            # 属于独立改动 —— 在解析函数里悄悄加上，一旦算错就会拒掉合法帧，
-            # 比不校验更危险。
+            # 帧头 CRC（data[8:10]）。round 323 起**真的校验**：
+            # CRC-16/DNP 覆盖前 8 字节，不符即拒帧（见上方 header_crc_ok）。
+            # 历史实现只解析不比对，等于帧头校验形同虚设。
             'crc': crc,
-            'crc_verified': False,
+            'crc_verified': True,
             'function_code': function_code,
             'app_control': app_control,
             'data': app_data,
@@ -203,23 +328,16 @@ class DNP3Parser:
 
         app_data = struct.pack('BB', app_control, function_code) + obj_header
 
-        # 数据链路层
+        # 数据链路层：LENGTH 与链路层头统一由 build_dnp3_frame 构造。
+        #   LENGTH 从**控制字节**数到用户数据末尾、**不含任何 CRC** → 5 + 用户数据长度；
+        #   历史实现写 +8（把起始字节与 CRC 也算进去）→ 帧长字段偏大 3。
+        #   历史实现还在 pack 时多传了一个 `0`（格式串只有 5 个格式符却给了 6 个值），
+        #   struct.pack 必抛 "pack expected 5 items for packing (got 6)"，
+        #   而 request_data() 的 except 把它吞掉 —— DNP3 从未真正发出过报文。
+        # round 323：改用标准 CRC-16/DNP + 数据块 CRC（见 `build_dnp3_frame`）。
+        #   原来 `sum(header) & 0xFFFF` 是假 CRC，真实从站会丢弃每一个帧。
         control = 0xC0  # DIR + PRM
-        # LENGTH 从**控制字节**数到用户数据末尾、**不含任何 CRC** → 5 + 用户数据长度。
-        # 历史实现写的是 +8（把起始字节与 CRC 也算进去了）→ 帧长字段偏大 3。
-        length = len(app_data) + 5
-
-        # DNP3 链路层头固定 8 字节：起始(2) + 长度(1) + 控制(1) + 目的地址(2) + 源地址(2)。
-        # 原实现在这里多传了一个 `0`（格式串只有 5 个格式符却给了 6 个值），
-        # struct.pack 必抛 "pack expected 5 items for packing (got 6)"，
-        # 而 request_data() 的 except 把它吞掉 —— DNP3 从未真正发出过报文。
-        header = DNP3Parser.START_BYTES + struct.pack('<BBHH',
-                             length, control, destination, source)
-
-        # 简化CRC（实际DNP3使用CRC-16/CCITT）
-        crc = sum(header) & 0xFFFF
-
-        return header + struct.pack('<H', crc) + app_data
+        return build_dnp3_frame(control, destination, source, app_data)
 
     @staticmethod
     def build_direct_operate(source: int, destination: int,
@@ -235,15 +353,10 @@ class DNP3Parser:
 
         app_data = struct.pack('BB', app_control, function_code) + obj_data
 
+        # 同 build_read_request：链路层头与 LENGTH 由 build_dnp3_frame 统一构造
+        #   （LENGTH = 5 + 用户数据长度，不含 CRC）。
         control = 0xC0
-        length = len(app_data) + 5     # 同 build_read_request：LENGTH = 5 + 用户数据长度
-
-        # 同 build_read_request：链路层头 8 字节，不能多传参数
-        header = DNP3Parser.START_BYTES + struct.pack('<BBHH',
-                             length, control, destination, source)
-
-        crc = sum(header) & 0xFFFF
-        return header + struct.pack('<H', crc) + app_data
+        return build_dnp3_frame(control, destination, source, app_data)
 
     @staticmethod
     def parse_response(data: bytes) -> list[dict]:
@@ -337,6 +450,11 @@ class DNP3Client:
         # 接收缓冲区：TCP 是字节流，DNP3 帧会**跨包/粘包**，
         # 必须自己重组（见 _process_buffer 的说明）。
         self._recv_buffer = b''
+        # 被丢弃的无效帧累计数（CRC 不符 / 长度非法）。现场「数据不更新」时，
+        # 这个计数是区分「设备没发」与「帧全坏了」的唯一依据 —— 所以必须在
+        # __init__ 里显式初始化，不能靠 getattr 兜底（那样读的人会拿到
+        # AttributeError，或者读到 0 而误判「从没坏过」）。
+        self._invalid_frames = 0
 
     # ── 连接管理 ──────────────────────────────
 
@@ -459,9 +577,18 @@ class DNP3Client:
             self._handle_response(frame)
 
     def _handle_response(self, data: bytes):
-        """处理DNP3响应"""
+        """处理DNP3响应（round 323：CRC 不符的帧在这里被丢弃，并计数）"""
         parsed = DNP3Parser.parse_frame(data)
         if not parsed.get('valid'):
+            # round 323：坏帧必须**丢弃**（不能当数据用），但也不能静默 ——
+            # 现场看到"数据不更新"时，要能区分"设备没发"和"帧坏了"。
+            # 噪声风暴下每帧打一条日志会淹掉别的信息，所以按 100 条节流。
+            self._invalid_frames += 1
+            n = self._invalid_frames
+            if n == 1 or n % 100 == 0:
+                self.logger.warning(
+                    "丢弃无效 DNP3 帧（累计 %d 个）：%s",
+                    n, parsed.get('error', 'unknown'))
             return
 
         fc = parsed.get('function_code', 0)
