@@ -228,25 +228,57 @@ class TestParseResponse:
         objs = DNP3Parser.parse_response(bytes([DNP3ObjectGroup.AI32, 1, 0x00]) + vals)
         assert objs[0]['value'] == -123456 and objs[0]['quality'] == 3
 
-    def test_binary_input_takes_low_bit(self):
-        """钉住现状：二进制输入取**最低位**（见模块头注缺口第 5 条 —— 与 variation 无关）"""
+    def test_binary_input_var2_uses_bit7(self):
+        """Var 2：状态位在 **bit7**，bit0..bit6 是质量。
+
+        原实现一律 `& 0x01` —— bit0 是保留位恒 0，导致**所有开关量恒显示"分"**，
+        断路器分合位反了也看不出来。
+        """
+        # 0x81 = 状态 1 + 质量 0x01；0x00 = 状态 0；0x80 = 状态 1 + 质量 0
         objs = DNP3Parser.parse_response(
-            bytes([DNP3ObjectGroup.BI, 1, 0x00, 0x01, 0x00, 0x81]))
+            bytes([DNP3ObjectGroup.BI, 2, 0x00, 0x81, 0x00, 0x80]))
         assert [o['value'] for o in objs] == [1, 0, 1]
-        assert all(o['quality'] == 0 for o in objs)
+        assert [o['quality'] for o in objs] == [1, 0, 0]
+
+    def test_binary_input_low_bits_are_not_the_state(self):
+        """反向对照：低 7 位全 1 也不能被当成状态（原实现会读成 1）。"""
+        objs = DNP3Parser.parse_response(
+            bytes([DNP3ObjectGroup.BI, 2, 0x00, 0x7F]))   # 状态位 0、质量位全 1
+        assert objs[0]['value'] == 0, '低 7 位被当成状态位了'
+        assert objs[0]['quality'] == 0x7F
+
+    def test_packed_bit_variation_is_rejected(self):
+        """Var 1 是打包位（1 字节 8 个点），本实现不支持 → 必须报错，不能假装解析。"""
+        objs, err = DNP3Parser.parse_response_ex(
+            bytes([DNP3ObjectGroup.BI, 1, 0x00, 0x01, 0x00]))
+        assert objs == []
+        assert err is not None and 'packed-bit' in err
 
     def test_truncated_value_does_not_invent_data(self):
         """值被截断时只返回已完整解析的对象，不得凭残缺字节编值"""
         data = bytes([DNP3ObjectGroup.AI, 1, 0x00]) + _ai_values((1, 0)) + b'\x05'
         assert len(DNP3Parser.parse_response(data)) == 1
 
-    def test_unknown_group_returns_empty(self):
-        assert DNP3Parser.parse_response(bytes([0x77, 1, 0x00, 1, 2, 3])) == []
+    def test_unsupported_group_reports_error(self):
+        """未知对象组 → `parse_response_ex` 必须给出错误，而不是静默空列表。"""
+        objs, err = DNP3Parser.parse_response_ex(bytes([0x77, 1, 0x00, 1, 2, 3]))
+        assert objs == []
+        assert err is not None and 'group' in err
 
-    def test_only_qualifier_zero_supported(self):
-        """钉住现状：只处理 qualifier 0x00（见模块头注缺口第 6 条）"""
+    def test_unsupported_qualifier_reports_error(self):
+        """qualifier != 0x00 → 明确报错。
+
+        原实现直接返回空列表，调用方无法区分「设备没发数据」和「本实现没实现」，
+        现场表现为「数据不刷新，而系统认为帧一切正常」。
+        """
         data = bytes([DNP3ObjectGroup.AI, 1, 0x01]) + _ai_values((1, 0))
-        assert DNP3Parser.parse_response(data) == []
+        objs, err = DNP3Parser.parse_response_ex(data)
+        assert objs == []
+        assert err is not None and 'qualifier' in err
+
+    def test_legacy_parse_response_still_returns_list(self):
+        """旧接口保持兼容：解析不了时返回空列表（但新代码应改用 _ex）。"""
+        assert DNP3Parser.parse_response(bytes([DNP3ObjectGroup.AI, 1, 0x01])) == []
 
     def test_too_short_returns_empty(self):
         assert DNP3Parser.parse_response(b'\x1e\x01') == []
@@ -497,3 +529,25 @@ class TestBadFramesAreDropped:
             frame[3] ^= 0x01
             c._handle_response(bytes(frame))
         assert c._invalid_frames == 3
+
+    def test_unparseable_response_is_counted_not_silently_dropped(self):
+        """帧本身合法但**对象解析不了**（不支持的 qualifier）→ 也必须计数。
+
+        原来 `parse_response` 返回空列表，`_last_data` 不更新、`_invalid_frames`
+        不涨 —— 现场看到"数据不刷新"，而系统认为一切正常。
+        """
+        c = self._client()
+        app = bytes([0xC0, DNP3FunctionCode.RESPONSE,
+                     DNP3ObjectGroup.AI, 1, 0x01]) + _ai_values((42, 0))
+        c._handle_response(_frame(app))
+        assert c._last_data == {}, '解析不了却把空结果当成"没有数据"'
+        assert c._invalid_frames == 1
+
+    def test_packed_bit_bi_does_not_write_wrong_state(self):
+        """Var 1 打包位不支持 → 不能把字节最低位当成一个点的状态写进快照。"""
+        c = self._client()
+        app = bytes([0xC0, DNP3FunctionCode.RESPONSE,
+                     DNP3ObjectGroup.BI, 1, 0x00, 0x01])
+        c._handle_response(_frame(app))
+        assert c._last_data == {}, '打包位被当成单点解析，写入了错误状态'
+        assert c._invalid_frames == 1

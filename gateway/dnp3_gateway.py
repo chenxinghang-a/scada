@@ -11,12 +11,13 @@ DNP3广泛用于北美电力/水务/燃气公用事业的SCADA系统，是IEC 60
 - TCP通信（默认端口20000）
 - 自动重连、多设备支持
 
-⚠️ 现状与已知缺口（2026-10-13 核实，round 323 更新，**这是「简化实现」，不能对真实从站工作**）
+⚠️ 现状与已知缺口（2026-10-13 核实，round 324 更新，**这是「简化实现」，不能对真实从站工作**）
 ------------------------------------------------------------------------------
 本模块是教学/演示级的**简化** DNP3，**未**通过一致性测试。逐条列清，避免被误读成
-「DNP3 已支持」。**链路层 CRC（第 1–3 条）已在 round 323 补齐并通过标准测试向量**，
-但下面第 4–6 条（对象头限定符、取值位、限定符覆盖）仍不符合标准 ——
-也就是说：**帧能被从站接受了，但对象内容仍可能解析错**。
+「DNP3 已支持」。**链路层 CRC（第 1–3 条）已在 round 323 补齐并通过标准测试向量；
+对象取值位（第 5 条）已在 round 324 修正。**
+但第 4 条（限定符与范围不匹配）、第 6 条（`0x00` 语义）、第 7 条（索引）仍未解决 ——
+也就是说：**帧能被从站接受了、开关量取值位对了，但对象头与索引仍可能解析错**。
 
 0. ✅ **已修（2026-10-13）**：起始字节曾写成小端 `64 05`（标准是 `05 64`）→
    真实从站丢帧、本模块也认不出真实从站的帧；`LENGTH` 曾写成 `len(app)+8`
@@ -42,15 +43,24 @@ DNP3广泛用于北美电力/水务/燃气公用事业的SCADA系统，是IEC 60
    真实数据流里 `_process_buffer` 切帧时已用 `_frame_size()` 拦掉并重同步，
    该分支只在直接调用 `parse_frame` 时生效，**不要误读成主防线**。
 
-4. **对象头限定符与范围不匹配**：`build_read_request` 用限定符 ``0x06``
+4. **对象头限定符与范围不匹配**（未修）：`build_read_request` 用限定符 ``0x06``
    （= all objects，**不带范围字段**），却又紧跟了 4 字节 start/stop。
    → 要么用 0x06 且去掉范围，要么用 0x01（16 位 start/stop）。
 
-5. **二进制输入的取值位与 variation 无关**：`parse_response` 用
-   ``data[offset] & 0x01``。DNP3 Group 1 的 Var 1 是**打包位**（1 字节装 8 个点）、
-   Var 2 的**状态位是 bit7**，而本函数不看 variation。
+5. ✅ **已修（round 324）**：二进制输入取值位按 variation 区分 ——
+   Var 2 用 **bit7**（低 7 位是质量），Var 1（打包位）**明确报错**、不再假装解析。
+   原来一律 ``data[offset] & 0x01``：Var 2 取的是保留位（恒 0）→ **所有开关量
+   恒显示"分"**，断路器分合位反了也看不出来；Var 1 每字节只取 1 个点 → 丢 7/8 的点。
 
-6. **`parse_response` 只处理 ``qualifier == 0x00``**，其余限定符直接返回空列表。
+6. ◐ **部分修（round 324）**：新增 `parse_response_ex()` 返回 `(objects, error)`，
+   对不支持的限定符/对象组**明确报错**（原来静默返回空列表，现场表现为
+   「数据不刷新，而系统认为帧一切正常」）；`_handle_response` 遇错计入
+   `_invalid_frames` 并节流告警。**但 `qualifier == 0x00` 的语义仍与标准不符** ——
+   标准里它是「1 字节起始 + 1 字节停止」的**范围**字段，本实现当成「无索引前缀」
+   直接把范围字段当对象数据解析，对真实从站会整体错位。这条**未修**。
+
+7. **`_last_data` 的 key 用数组位置**（`len(objects)`）而不是协议索引：
+   响应里点序一变就串位；带索引前缀的响应（qualifier 0x17/0x28）完全没实现。
 
 已修（2026-10-13）：**接收侧原本没有帧重组** —— `_recv_loop` 把每次 `recv()` 的
 一包直接丢给 `parse_frame`，于是「粘包」时丢掉同一包里的后续帧、
@@ -359,60 +369,100 @@ class DNP3Parser:
         return build_dnp3_frame(control, destination, source, app_data)
 
     @staticmethod
-    def parse_response(data: bytes) -> list[dict]:
-        """解析DNP3响应中的对象数据"""
-        objects = []
+    def parse_response_ex(data: bytes) -> tuple[list[dict], str | None]:
+        """解析 DNP3 响应里的对象数据，**并把"解析不了"明确报出来**。
+
+        round 324 新增。原 `parse_response()` 在遇到不支持的限定符时直接
+        返回空列表，调用方无法区分「设备没发数据」和「本实现没实现」——
+        现场表现为「数据不刷新，而系统认为帧一切正常」。
+
+        Returns:
+            (objects, error)。error 为 None 表示完整解析；非 None 表示这段
+            数据本实现解析不了，此时 objects 可能为空或只解析了前半截，
+            **调用方应整体丢弃、不要写快照**。
+        """
         if len(data) < 3:
-            return objects
+            return [], 'object header too short'
 
         group = data[0]
         variation = data[1]
         qualifier = data[2]
         offset = 3
 
-        if qualifier == 0x00:  # 无索引前缀，所有对象
-            while offset < len(data):
-                if group in (DNP3ObjectGroup.AI, DNP3ObjectGroup.AI16):
-                    if offset + 3 <= len(data):
-                        value = struct.unpack('<h', data[offset:offset + 2])[0]
-                        quality = data[offset + 2]
-                        objects.append({
-                            'group': group,
-                            'index': len(objects),
-                            'value': value,
-                            'quality': quality,
-                        })
-                        offset += 3
-                    else:
-                        break
-                elif group == DNP3ObjectGroup.AI32:
-                    if offset + 5 <= len(data):
-                        value = struct.unpack('<i', data[offset:offset + 4])[0]
-                        quality = data[offset + 4]
-                        objects.append({
-                            'group': group,
-                            'index': len(objects),
-                            'value': value,
-                            'quality': quality,
-                        })
-                        offset += 5
-                    else:
-                        break
-                elif group in (DNP3ObjectGroup.BI, DNP3ObjectGroup.BO):
-                    if offset + 1 <= len(data):
-                        value = data[offset] & 0x01
-                        objects.append({
-                            'group': group,
-                            'index': len(objects),
-                            'value': value,
-                            'quality': 0,
-                        })
-                        offset += 1
-                    else:
-                        break
-                else:
-                    break
+        # ⚠️ 已知缺口（未修，登记在模块头注第 6 条）：
+        # 标准里 qualifier 0x00 是「1 字节起始 + 1 字节停止」的**范围**字段，
+        # 本实现把它当成「无索引前缀」直接按对象长度循环 —— 对真实从站
+        # 会整体错位。这里**不假装支持**：除 0x00 外一律明确报错。
+        if qualifier != 0x00:
+            return [], f'unsupported qualifier 0x{qualifier:02X}'
 
+        objects: list[dict] = []
+        while offset < len(data):
+            if group in (DNP3ObjectGroup.AI, DNP3ObjectGroup.AI16):
+                if offset + 3 <= len(data):
+                    value = struct.unpack('<h', data[offset:offset + 2])[0]
+                    quality = data[offset + 2]
+                    objects.append({
+                        'group': group,
+                        'index': len(objects),
+                        'value': value,
+                        'quality': quality,
+                    })
+                    offset += 3
+                else:
+                    return objects, 'truncated AI object'
+            elif group == DNP3ObjectGroup.AI32:
+                if offset + 5 <= len(data):
+                    value = struct.unpack('<i', data[offset:offset + 4])[0]
+                    quality = data[offset + 4]
+                    objects.append({
+                        'group': group,
+                        'index': len(objects),
+                        'value': value,
+                        'quality': quality,
+                    })
+                    offset += 5
+                else:
+                    return objects, 'truncated AI32 object'
+            elif group in (DNP3ObjectGroup.BI, DNP3ObjectGroup.BO):
+                # ---- 取值位由 variation 决定（round 324）----
+                #
+                # Group 1/10 的两种常见 variation：
+                #   Var 1 = **打包位**：1 字节装 8 个点，bit0..bit7 依次对应连续 8 个点
+                #   Var 2 = 每点 1 字节，**状态在 bit7**，bit0..bit6 是质量/保留
+                #
+                # 原实现一律 `data[offset] & 0x01`：
+                #   - Var 2 取的是保留位（恒 0）→ **所有开关量恒显示"分"**，
+                #     断路器分合位反了也看不出来；
+                #   - Var 1 每字节只取 1 个点 → **丢 7/8 的点**。
+                # 打包位需要知道总点数才能正确展开（点数在 qualifier 的范围字段里，
+                # 而本实现的 0x00 语义本身就不对），所以**明确报错而不是假装解析**。
+                if variation == 1:
+                    return objects, 'packed-bit binary input (variation 1) not implemented'
+                if offset + 1 <= len(data):
+                    raw = data[offset]
+                    objects.append({
+                        'group': group,
+                        'index': len(objects),
+                        'value': (raw >> 7) & 0x01,
+                        'quality': raw & 0x7F,
+                    })
+                    offset += 1
+                else:
+                    return objects, 'truncated binary object'
+            else:
+                return objects, f'unsupported object group 0x{group:02X}'
+
+        return objects, None
+
+    @staticmethod
+    def parse_response(data: bytes) -> list[dict]:
+        """兼容旧签名：只返回 objects。
+
+        ⚠️ 本函数**无法区分「没数据」与「解析不了」**（两者都返回空列表）。
+        新代码请用 `parse_response_ex()`；保留本函数只为不破坏既有调用与测试。
+        """
+        objects, _error = DNP3Parser.parse_response_ex(data)
         return objects
 
 
@@ -594,7 +644,17 @@ class DNP3Client:
         fc = parsed.get('function_code', 0)
         # DNP3 outstation只发送RESPONSE(0x81)，不会发送READ(0x01)
         if fc == DNP3FunctionCode.RESPONSE:
-            objects = DNP3Parser.parse_response(parsed.get('data', b''))
+            objects, parse_error = DNP3Parser.parse_response_ex(parsed.get('data', b''))
+            if parse_error:
+                # round 324：解析不了**必须计数并告警**，不能静默返回空列表。
+                # 静默的后果：现场看到"数据不刷新"，而系统认为帧一切正常 ——
+                # 与 round 322 的「故障时没有拒绝」是同一个病。
+                self._invalid_frames += 1
+                n = self._invalid_frames
+                if n == 1 or n % 100 == 0:
+                    self.logger.warning(
+                        "丢弃无法解析的 DNP3 响应（累计 %d 个）：%s", n, parse_error)
+                return
             for obj in objects:
                 self._last_data[obj['index']] = {
                     'value': obj['value'],
