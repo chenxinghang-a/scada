@@ -11,13 +11,13 @@ DNP3广泛用于北美电力/水务/燃气公用事业的SCADA系统，是IEC 60
 - TCP通信（默认端口20000）
 - 自动重连、多设备支持
 
-⚠️ 现状与已知缺口（2026-10-13 核实，round 324 更新，**这是「简化实现」，不能对真实从站工作**）
+⚠️ 现状与已知缺口（2026-10-13 核实，round 325 更新，**这是「简化实现」，不能对真实从站工作**）
 ------------------------------------------------------------------------------
 本模块是教学/演示级的**简化** DNP3，**未**通过一致性测试。逐条列清，避免被误读成
-「DNP3 已支持」。**链路层 CRC（第 1–3 条）已在 round 323 补齐并通过标准测试向量；
-对象取值位（第 5 条）已在 round 324 修正。**
-但第 4 条（限定符与范围不匹配）、第 6 条（`0x00` 语义）、第 7 条（索引）仍未解决 ——
-也就是说：**帧能被从站接受了、开关量取值位对了，但对象头与索引仍可能解析错**。
+「DNP3 已支持」。**链路层（第 1–3 条，round 323）、对象取值位与限定符/索引
+（第 4–7 条，round 324–325）均已修正**，正常响应帧现在能按标准解析。
+剩下的缺口是**覆盖不全**而非**解析错**：打包位（Var 1）与带索引前缀的
+限定符（0x17/0x28）仍未实现，遇到时**明确报错**（不会静默给错值）。
 
 0. ✅ **已修（2026-10-13）**：起始字节曾写成小端 `64 05`（标准是 `05 64`）→
    真实从站丢帧、本模块也认不出真实从站的帧；`LENGTH` 曾写成 `len(app)+8`
@@ -43,32 +43,42 @@ DNP3广泛用于北美电力/水务/燃气公用事业的SCADA系统，是IEC 60
    真实数据流里 `_process_buffer` 切帧时已用 `_frame_size()` 拦掉并重同步，
    该分支只在直接调用 `parse_frame` 时生效，**不要误读成主防线**。
 
-4. **对象头限定符与范围不匹配**（未修）：`build_read_request` 用限定符 ``0x06``
-   （= all objects，**不带范围字段**），却又紧跟了 4 字节 start/stop。
-   → 要么用 0x06 且去掉范围，要么用 0x01（16 位 start/stop）。
+4. ✅ **已修（round 325）**：对象头限定符与范围字段对齐 ——
+   `build_read_request` 改用 ``0x01``（2 字节起始 + 2 字节停止），
+   `build_direct_operate` 改用 ``0x28``（2 字节数量 + 2 字节索引前缀）。
+   原来两者都写 ``0x06``（= all objects，**不带任何范围/数量字段**）后面却跟着
+   范围或索引字节 —— 从站会把这些字节当成对象数据开头，**读请求解析错位、
+   遥控命令发不出去**。
 
 5. ✅ **已修（round 324）**：二进制输入取值位按 variation 区分 ——
    Var 2 用 **bit7**（低 7 位是质量），Var 1（打包位）**明确报错**、不再假装解析。
    原来一律 ``data[offset] & 0x01``：Var 2 取的是保留位（恒 0）→ **所有开关量
    恒显示"分"**，断路器分合位反了也看不出来；Var 1 每字节只取 1 个点 → 丢 7/8 的点。
 
-6. ◐ **部分修（round 324）**：新增 `parse_response_ex()` 返回 `(objects, error)`，
-   对不支持的限定符/对象组**明确报错**（原来静默返回空列表，现场表现为
-   「数据不刷新，而系统认为帧一切正常」）；`_handle_response` 遇错计入
-   `_invalid_frames` 并节流告警。**但 `qualifier == 0x00` 的语义仍与标准不符** ——
-   标准里它是「1 字节起始 + 1 字节停止」的**范围**字段，本实现当成「无索引前缀」
-   直接把范围字段当对象数据解析，对真实从站会整体错位。这条**未修**。
+6. ✅ **已修（round 325）**：`parse_response_ex()` 按标准解析限定符 ——
+   ``0x00``（1 字节起始 + 1 字节停止）、``0x01``（2 字节起止）、``0x06``（all objects）。
+   原来把 ``0x00`` 当"无索引前缀"，把范围字段当对象数据解析，**真实从站整体错位**。
+   其余限定符（含 ``0x17``/``0x28`` 带索引前缀）**明确报错**，不再静默返回空列表；
+   `_handle_response` 遇错计入 `_invalid_frames` 并节流告警。
+   范围 ``stop < start`` 也判非法。
 
-7. **`_last_data` 的 key 用数组位置**（`len(objects)`）而不是协议索引：
-   响应里点序一变就串位；带索引前缀的响应（qualifier 0x17/0x28）完全没实现。
+7. ✅ **已修（round 325）**：``index`` 改用**协议索引**（范围起点递增），
+   不再是数组位置 ``len(objects)`` —— 原来响应点序一变就串位，
+   A 设备的开关量会写进 B 设备的槽位。
+
+8. **仍未实现（覆盖不全，不是解析错）**：
+   ① 打包位（Group 1/10 Var 1，1 字节装 8 个点）—— 遇到明确报错；
+   ② 带索引前缀的响应限定符 ``0x17``/``0x28`` —— 遇到明确报错。
+   这两条不修也不会给出**错的**值（宁可拒绝），但会**接不到**用这些编码的从站。
 
 已修（2026-10-13）：**接收侧原本没有帧重组** —— `_recv_loop` 把每次 `recv()` 的
 一包直接丢给 `parse_frame`，于是「粘包」时丢掉同一包里的后续帧、
 「半包」时被判 `Frame too short` 静默丢弃（TCP 是字节流，这两种都必然发生）。
 现在有 `_recv_buffer` + `_process_buffer()` 按标准帧长切帧。
 
-要真正接入现场 DNP3 从站，第 1–5 条都要按 IEEE 1815 补齐，并用一致性测试向量验证。
-在那之前，本模块只应在**模拟/演示**场景使用。
+要真正接入现场 DNP3 从站，还需补齐第 8 条（打包位、索引前缀限定符），
+并用 IEEE 1815 一致性测试向量验证。在那之前，本模块只应在**模拟/演示**场景使用；
+遇到未实现的编码会**明确报错并计数**，不会静默给出错误值。
 """
 
 import socket
@@ -331,9 +341,12 @@ class DNP3Parser:
         function_code = DNP3FunctionCode.READ
 
         # 对象头: Group(1) + Variation(1) + Qualifier(1) + Range(4)
+        #   Qualifier **0x01** = 「2 字节起始 + 2 字节停止」，后面才该跟 start/stop。
+        #   原来写 0x06（= all objects，**不带任何范围字段**）却又 pack 了 4 字节范围，
+        #   标准从站会把这 4 字节当成对象数据的开头 → 整个响应解析错位。
         obj_header = struct.pack('<BBBHH',
                                  object_group, variation,
-                                 0x06,  # 索引前缀 + 限定符
+                                 0x01,  # 16 位起始/停止范围
                                  start, stop)
 
         app_data = struct.pack('BB', app_control, function_code) + obj_header
@@ -356,10 +369,15 @@ class DNP3Parser:
         app_control = 0xC0
         function_code = DNP3FunctionCode.DIRECT_OPERATE
 
-        # 对象: BO(Group 0x0C), Variation 1, 索引前缀
+        # 对象头: Group(0x0C) + Var(1) + Qualifier + Count(2) + [Index(2) + Value(1)]
+        #   Qualifier **0x28** = 「2 字节数量 + 2 字节索引前缀」（每个对象前带 2 字节索引）。
+        #   原来写 0x06（= all objects，不带范围/数量）后面却跟了 index/index/value，
+        #   从站无法解析这条命令 —— **遥控实际发不出去**。
         obj_data = struct.pack('<BBBHHB',
-                               DNP3ObjectGroup.BO, 1, 0x06,
-                               index, index, value & 0x01)
+                               DNP3ObjectGroup.BO, 1, 0x28,
+                               1,                # 数量 = 1 个对象
+                               index,            # 2 字节索引前缀
+                               value & 0x01)
 
         app_data = struct.pack('BB', app_control, function_code) + obj_data
 
@@ -389,22 +407,53 @@ class DNP3Parser:
         qualifier = data[2]
         offset = 3
 
-        # ⚠️ 已知缺口（未修，登记在模块头注第 6 条）：
-        # 标准里 qualifier 0x00 是「1 字节起始 + 1 字节停止」的**范围**字段，
-        # 本实现把它当成「无索引前缀」直接按对象长度循环 —— 对真实从站
-        # 会整体错位。这里**不假装支持**：除 0x00 外一律明确报错。
-        if qualifier != 0x00:
+        # ---- 限定符 → 起始索引与点数（round 325）----
+        #
+        # DNP3 对象头 = Group(1) + Variation(1) + Qualifier(1) + 范围/数量字段。
+        # 原实现把 qualifier 当成「无索引前缀」，直接把它后面的字节当对象数据 ——
+        # 而标准里 0x00/0x01 **后面就是范围字段**，对真实从站会整体错位。
+        # 同时 `index` 原来用数组位置 `len(objects)`，响应点序一变就串位；
+        # 现在用**协议索引**（从范围起点递增）。
+        #
+        # 支持：
+        #   0x00 = 1 字节起始 + 1 字节停止
+        #   0x01 = 2 字节起始 + 2 字节停止
+        #   0x06 = all objects（无范围字段，数量由数据长度推）
+        if qualifier == 0x06:
+            start = 0
+            declared: int | None = None      # 数量未知，按数据长度推
+        elif qualifier == 0x00:
+            if len(data) < 5:
+                return [], 'truncated 8-bit range field'
+            start = data[3]
+            stop = data[4]
+            offset = 5
+            declared = stop - start + 1
+            if declared <= 0:
+                return [], 'invalid range (stop < start)'
+        elif qualifier == 0x01:
+            if len(data) < 7:
+                return [], 'truncated 16-bit range field'
+            start, stop = struct.unpack('<HH', data[3:7])
+            offset = 7
+            declared = stop - start + 1
+            if declared <= 0:
+                return [], 'invalid range (stop < start)'
+        else:
             return [], f'unsupported qualifier 0x{qualifier:02X}'
 
         objects: list[dict] = []
         while offset < len(data):
+            if declared is not None and len(objects) >= declared:
+                break                        # 已取够声明的点数，多余字节不再当对象
+            idx = start + len(objects)       # **协议索引**，不是数组位置
             if group in (DNP3ObjectGroup.AI, DNP3ObjectGroup.AI16):
                 if offset + 3 <= len(data):
                     value = struct.unpack('<h', data[offset:offset + 2])[0]
                     quality = data[offset + 2]
                     objects.append({
                         'group': group,
-                        'index': len(objects),
+                        'index': idx,
                         'value': value,
                         'quality': quality,
                     })
@@ -417,7 +466,7 @@ class DNP3Parser:
                     quality = data[offset + 4]
                     objects.append({
                         'group': group,
-                        'index': len(objects),
+                        'index': idx,
                         'value': value,
                         'quality': quality,
                     })
@@ -443,7 +492,7 @@ class DNP3Parser:
                     raw = data[offset]
                     objects.append({
                         'group': group,
-                        'index': len(objects),
+                        'index': idx,
                         'value': (raw >> 7) & 0x01,
                         'quality': raw & 0x7F,
                     })

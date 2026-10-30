@@ -48,8 +48,20 @@ def _frame(user_data: bytes, *, ctrl: int = 0xC0, dest: int = 2, src: int = 1,
 
 
 def _response_frame(group: int, variation: int, values: bytes,
-                    qualifier: int = 0x00) -> bytes:
-    obj = bytes([group, variation, qualifier]) + values
+                    qualifier: int = 0x06, start: int = 0,
+                    stop: int | None = None) -> bytes:
+    """构造 DNP3 响应帧的对象头 + 数据。
+
+    默认 ``qualifier=0x06``（= all objects，**不带范围字段**），此时点数由
+    数据长度决定。要测带范围的限定符（0x00 = 8 位起止、0x01 = 16 位起止），
+    显式传 ``stop``。
+    """
+    obj = bytes([group, variation, qualifier])
+    if qualifier == 0x00:
+        obj += bytes([start & 0xFF, (start if stop is None else stop) & 0xFF])
+    elif qualifier == 0x01:
+        obj += struct.pack('<HH', start, start if stop is None else stop)
+    obj += values
     app = bytes([0xC0, DNP3FunctionCode.RESPONSE]) + obj
     return _frame(app)
 
@@ -142,7 +154,7 @@ class TestParseFrame:
         p = DNP3Parser.parse_frame(f)
         assert p['app_control'] == 0xC0
         assert p['function_code'] == DNP3FunctionCode.RESPONSE
-        assert p['data'][:3] == bytes([DNP3ObjectGroup.AI, 1, 0x00])
+        assert p['data'][:3] == bytes([DNP3ObjectGroup.AI, 1, 0x06])
 
     def test_header_crc_mismatch_rejects_frame(self):
         """**已修（round 323）**：帧头 CRC 不匹配 → 整帧判无效。
@@ -217,7 +229,7 @@ class TestParseFrame:
 
 class TestParseResponse:
     def test_analog_input_16bit_signed(self):
-        data = bytes([DNP3ObjectGroup.AI, 1, 0x00]) + _ai_values((100, 0), (-50, 1), (7, 2))
+        data = bytes([DNP3ObjectGroup.AI, 1, 0x06]) + _ai_values((100, 0), (-50, 1), (7, 2))
         objs = DNP3Parser.parse_response(data)
         assert [o['value'] for o in objs] == [100, -50, 7]
         assert [o['quality'] for o in objs] == [0, 1, 2]
@@ -225,7 +237,7 @@ class TestParseResponse:
 
     def test_analog_input_32bit(self):
         vals = struct.pack('<iB', -123456, 3)
-        objs = DNP3Parser.parse_response(bytes([DNP3ObjectGroup.AI32, 1, 0x00]) + vals)
+        objs = DNP3Parser.parse_response(bytes([DNP3ObjectGroup.AI32, 1, 0x06]) + vals)
         assert objs[0]['value'] == -123456 and objs[0]['quality'] == 3
 
     def test_binary_input_var2_uses_bit7(self):
@@ -236,49 +248,86 @@ class TestParseResponse:
         """
         # 0x81 = 状态 1 + 质量 0x01；0x00 = 状态 0；0x80 = 状态 1 + 质量 0
         objs = DNP3Parser.parse_response(
-            bytes([DNP3ObjectGroup.BI, 2, 0x00, 0x81, 0x00, 0x80]))
+            bytes([DNP3ObjectGroup.BI, 2, 0x06, 0x81, 0x00, 0x80]))
         assert [o['value'] for o in objs] == [1, 0, 1]
         assert [o['quality'] for o in objs] == [1, 0, 0]
 
     def test_binary_input_low_bits_are_not_the_state(self):
         """反向对照：低 7 位全 1 也不能被当成状态（原实现会读成 1）。"""
         objs = DNP3Parser.parse_response(
-            bytes([DNP3ObjectGroup.BI, 2, 0x00, 0x7F]))   # 状态位 0、质量位全 1
+            bytes([DNP3ObjectGroup.BI, 2, 0x06, 0x7F]))   # 状态位 0、质量位全 1
         assert objs[0]['value'] == 0, '低 7 位被当成状态位了'
         assert objs[0]['quality'] == 0x7F
 
     def test_packed_bit_variation_is_rejected(self):
         """Var 1 是打包位（1 字节 8 个点），本实现不支持 → 必须报错，不能假装解析。"""
         objs, err = DNP3Parser.parse_response_ex(
-            bytes([DNP3ObjectGroup.BI, 1, 0x00, 0x01, 0x00]))
+            bytes([DNP3ObjectGroup.BI, 1, 0x06, 0x01, 0x00]))
         assert objs == []
         assert err is not None and 'packed-bit' in err
 
     def test_truncated_value_does_not_invent_data(self):
         """值被截断时只返回已完整解析的对象，不得凭残缺字节编值"""
-        data = bytes([DNP3ObjectGroup.AI, 1, 0x00]) + _ai_values((1, 0)) + b'\x05'
+        data = bytes([DNP3ObjectGroup.AI, 1, 0x06]) + _ai_values((1, 0)) + b'\x05'
         assert len(DNP3Parser.parse_response(data)) == 1
 
     def test_unsupported_group_reports_error(self):
         """未知对象组 → `parse_response_ex` 必须给出错误，而不是静默空列表。"""
-        objs, err = DNP3Parser.parse_response_ex(bytes([0x77, 1, 0x00, 1, 2, 3]))
+        objs, err = DNP3Parser.parse_response_ex(bytes([0x77, 1, 0x06, 1, 2, 3]))
         assert objs == []
         assert err is not None and 'group' in err
 
     def test_unsupported_qualifier_reports_error(self):
-        """qualifier != 0x00 → 明确报错。
+        """本实现不支持的限定符（如 0x17 = 1 字节数量 + 1 字节索引前缀）→ 明确报错。
 
         原实现直接返回空列表，调用方无法区分「设备没发数据」和「本实现没实现」，
         现场表现为「数据不刷新，而系统认为帧一切正常」。
         """
-        data = bytes([DNP3ObjectGroup.AI, 1, 0x01]) + _ai_values((1, 0))
+        data = bytes([DNP3ObjectGroup.AI, 1, 0x17, 1, 0]) + _ai_values((1, 0))
         objs, err = DNP3Parser.parse_response_ex(data)
         assert objs == []
         assert err is not None and 'qualifier' in err
 
     def test_legacy_parse_response_still_returns_list(self):
         """旧接口保持兼容：解析不了时返回空列表（但新代码应改用 _ex）。"""
-        assert DNP3Parser.parse_response(bytes([DNP3ObjectGroup.AI, 1, 0x01])) == []
+        assert DNP3Parser.parse_response(bytes([DNP3ObjectGroup.AI, 1, 0x17, 1, 0])) == []
+
+    def test_qualifier_00_range_sets_protocol_index(self):
+        """qualifier 0x00 = 8 位起始 + 8 位停止，`index` 必须是**协议索引**。
+
+        原实现把 0x00 当"无索引前缀"，把这 2 个范围字节当成对象数据解析，
+        且 index 用数组位置 `len(objects)` —— 真实从站的响应会整体错位。
+        """
+        # start=5, stop=7 → 3 个点，索引应为 5/6/7
+        data = (bytes([DNP3ObjectGroup.AI, 1, 0x00, 5, 7])
+                + _ai_values((10, 0), (20, 0), (30, 0)))
+        objs, err = DNP3Parser.parse_response_ex(data)
+        assert err is None
+        assert [o['index'] for o in objs] == [5, 6, 7], 'index 应是协议索引，不是数组位置'
+        assert [o['value'] for o in objs] == [10, 20, 30]
+
+    def test_qualifier_01_16bit_range(self):
+        """qualifier 0x01 = 2 字节起始 + 2 字节停止（支持 0..65535）。"""
+        data = (bytes([DNP3ObjectGroup.AI, 1, 0x01])
+                + struct.pack('<HH', 300, 301) + _ai_values((1, 0), (2, 0)))
+        objs, err = DNP3Parser.parse_response_ex(data)
+        assert err is None
+        assert [o['index'] for o in objs] == [300, 301]
+
+    def test_range_declares_fewer_points_than_data(self):
+        """范围只声明 2 个点、数据却有 3 个 → 只取声明的 2 个，不越界编造。"""
+        data = (bytes([DNP3ObjectGroup.AI, 1, 0x00, 0, 1])
+                + _ai_values((1, 0), (2, 0), (3, 0)))
+        objs, err = DNP3Parser.parse_response_ex(data)
+        assert err is None
+        assert len(objs) == 2
+
+    def test_range_stop_before_start_is_rejected(self):
+        """stop < start 的范围非法 → 必须报错，不能静默返回空。"""
+        objs, err = DNP3Parser.parse_response_ex(
+            bytes([DNP3ObjectGroup.AI, 1, 0x00, 9, 3]))
+        assert objs == []
+        assert err is not None and 'range' in err
 
     def test_too_short_returns_empty(self):
         assert DNP3Parser.parse_response(b'\x1e\x01') == []
@@ -356,12 +405,33 @@ class TestBuildFrames:
         assert len(f) == DNP3Parser._frame_size(f[2])
         assert len(f) >= 12, '帧里必须有数据块 CRC'
 
-    def test_read_request_qualifier_range_mismatch(self):
-        """钉住**已知缺口 4**：限定符 0x06（all objects，不带范围）后面却跟了 4 字节范围"""
+    def test_read_request_uses_16bit_range_qualifier(self):
+        """round 325：限定符改成 **0x01**（16 位起始/停止），后面才该跟 start/stop。
+
+        原来写 0x06（= all objects，**不带任何范围字段**）却又 pack 了 4 字节范围，
+        标准从站会把这 4 字节当成对象数据的开头 → 整个响应解析错位。
+        """
         f = DNP3Parser.build_read_request(1, 2, DNP3ObjectGroup.AI, start=0, stop=9)
         obj_header = DNP3Parser.parse_frame(f)['data']   # 已剥掉数据块 CRC
-        assert obj_header[2] == 0x06, '当前用 0x06'
-        assert len(obj_header) == 7, '0x06 本应无范围字段，却带了 4 字节 start/stop'
+        assert obj_header[2] == 0x01, '限定符应为 0x01（16 位起始/停止），不是 0x06'
+        assert len(obj_header) == 7, '0x01 后面应跟 4 字节 start/stop'
+        start, stop = struct.unpack('<HH', obj_header[3:7])
+        assert (start, stop) == (0, 9), '范围字段没写对'
+
+    def test_direct_operate_uses_count_and_index_qualifier(self):
+        """round 325：遥控对象头用 **0x28**（2 字节数量 + 2 字节索引前缀）。
+
+        原来写 0x06（不带范围/数量）后面却跟了 index/index/value，
+        从站无法解析这条命令 —— 遥控实际发不出去。
+        """
+        f = DNP3Parser.build_direct_operate(1, 2, index=7, value=1)
+        obj = DNP3Parser.parse_frame(f)['data']   # data 已去掉 app_control/function_code
+        # obj = [group, var, qual, count(2), index(2), value]
+        assert obj[2] == 0x28, '限定符应为 0x28（数量 + 索引前缀）'
+        count = struct.unpack('<H', obj[3:5])[0]
+        idx = struct.unpack('<H', obj[5:7])[0]
+        assert count == 1 and idx == 7, '数量或索引写错'
+        assert obj[7] == 1, '遥控值应在最后一个字节'
 
 
 # ---------------------------------------------------------------------------
