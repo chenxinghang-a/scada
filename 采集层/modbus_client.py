@@ -237,6 +237,71 @@ class ModbusClient:
         with self._log_lock:
             self._comm_log.append(entry)
 
+    def _resolve_slave(self, slave_id: int | None, *,
+                       allow_broadcast: bool = False) -> int | None:
+        """解析从站地址（round 334）。**非法返回 None**，由调用方明确失败。
+
+        原实现 9 处全是 ``slave = slave_id or self.slave_id`` ——
+        **``slave_id=0`` 是假值**，会被静默替换成 ``self.slave_id``（默认 1）。
+        而 Modbus 地址 0 是**广播地址**：
+
+          · 本意「广播给总线上所有从站」→ 实际只发给 1 号（单播，会真的执行）；
+          · 本意「发给 0 号」→ 也是发给 1 号。
+
+        两种情况都是**打错设备**，而且没有任何日志。
+
+        Args:
+            slave_id: 调用方传入的地址；``None`` 表示用设备默认值。
+            allow_broadcast: 写操作允许广播（0）；读操作必须 False ——
+                广播读没有从站会应答，只会白等到超时。
+
+        Returns:
+            int | None: 合法地址；非法返回 ``None``。
+
+        ⚠️ 为什么返回 None 而不是抛异常：这些方法里 ``slave`` 的赋值在
+        ``try`` **之外**，抛出去就是 500；而如果挪进 ``try`` 又会被捕获后
+        走「返回陈旧缓存」——那等于用别的从站的数据冒充，更糟。
+        返回 None 让调用方走「明确失败」分支（读返回 None、写返回 False）。
+        """
+        if slave_id is None:
+            return self.slave_id
+
+        # bool 是 int 子类：`slave_id=True` 会被当成 1 号从站
+        if isinstance(slave_id, bool):
+            logger.error("从站地址不能是布尔值: %r", slave_id)
+            return None
+
+        # int(1.5) 会**静默截断**成 1 —— 地址错位写到别的从站上。
+        # 浮点只接受整数值（1.0 可以，1.5 拒绝）。
+        if isinstance(slave_id, float) and not slave_id.is_integer():
+            logger.error("从站地址必须是整数（收到浮点 %r）", slave_id)
+            return None
+
+        # 用 `core.safe_numeric.to_int`：裸 `int()` 只捕 (TypeError, ValueError)
+        # 会漏 OverflowError（`int(float('inf'))`）—— 项目有静态守卫
+        # `tests/test_non_finite_input_guard.py` 专门扫这个模式。
+        from core.safe_numeric import to_int
+        try:
+            slave = to_int(slave_id, '从站地址')
+        except ValueError:
+            logger.error("从站地址必须是整数: %r", slave_id)
+            return None
+
+        if slave < 0 or slave > 247:
+            # GB/T 19582：1-247 单播、0 广播、248-255 保留
+            logger.error("从站地址超出 0-247: %d", slave)
+            return None
+
+        if slave == 0:
+            if not allow_broadcast:
+                logger.error(
+                    "从站地址 0 是广播地址，读操作没有从站会应答 —— 请传具体从站号")
+                return None
+            logger.warning(
+                "Modbus 广播写(从站地址 0)：该请求会影响总线上**所有**从站")
+
+        return slave
+
     def validate_address_range(self, address: int, count: int,
                                data_type: str = 'holding_register') -> bool:
         """
@@ -441,7 +506,9 @@ class ModbusClient:
                 cache_key, address, count, '设备未连接'
             )
 
-        slave = slave_id or self.slave_id
+        slave = self._resolve_slave(slave_id)
+        if slave is None:
+            return None
         self._inc_stat('total_reads')
 
         try:
@@ -544,7 +611,9 @@ class ModbusClient:
                 cache_key, address, count, '设备未连接'
             )
 
-        slave = slave_id or self.slave_id
+        slave = self._resolve_slave(slave_id)
+        if slave is None:
+            return None
         self._inc_stat('total_reads')
 
         try:
@@ -620,7 +689,9 @@ class ModbusClient:
         if not self.connected:
             return None
 
-        slave = slave_id or self.slave_id
+        slave = self._resolve_slave(slave_id)
+        if slave is None:
+            return None
 
         try:
             result = self.client.read_coils(
@@ -665,7 +736,9 @@ class ModbusClient:
         if not self.connected:
             return None
 
-        slave = slave_id or self.slave_id
+        slave = self._resolve_slave(slave_id)
+        if slave is None:
+            return None
 
         try:
             result = self.client.read_discrete_inputs(
@@ -720,7 +793,9 @@ class ModbusClient:
         if not self.connected:
             return False
 
-        slave = slave_id or self.slave_id
+        slave = self._resolve_slave(slave_id, allow_broadcast=True)
+        if slave is None:
+            return False
         self._inc_stat('total_writes')
 
         try:
@@ -808,7 +883,9 @@ class ModbusClient:
         if not self.connected:
             return False
 
-        slave = slave_id or self.slave_id
+        slave = self._resolve_slave(slave_id, allow_broadcast=True)
+        if slave is None:
+            return False
         self._inc_stat('total_writes')
 
         try:
@@ -895,7 +972,9 @@ class ModbusClient:
         if not self.connected:
             return False
 
-        slave = slave_id or self.slave_id
+        slave = self._resolve_slave(slave_id, allow_broadcast=True)
+        if slave is None:
+            return False
         self._inc_stat('total_writes')
 
         try:
@@ -954,7 +1033,9 @@ class ModbusClient:
         if not self.connected:
             return False
 
-        slave = slave_id or self.slave_id
+        slave = self._resolve_slave(slave_id, allow_broadcast=True)
+        if slave is None:
+            return False
         self._inc_stat('total_writes')
 
         try:
@@ -1026,7 +1107,9 @@ class ModbusClient:
         if not self.connected:
             return None
 
-        slave = slave_id or self.slave_id
+        slave = self._resolve_slave(slave_id)
+        if slave is None:
+            return None
 
         try:
             result = self.client.readwrite_registers(
