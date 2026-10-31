@@ -275,7 +275,31 @@ def write_endpoint(device_id):
             'message': '安全模块不可用，已拒绝写入（无法执行急停/联锁校验）',
         }), 503
 
-    if getattr(device_control, '_estop_active', False):
+    # ⚠️ round 333：**不碰私有属性**。
+    #
+    # 初版（round 331）写的是
+    #   getattr(dc, '_estop_active', False) / '_interlock_rules' / '_interlock_bypass'
+    # —— 三处默认值**全部指向「放行」**。属性改名或缺失时（DI 替换、测试桩、
+    # 将来重构），急停中仍然可以下发端点写入，**而且没有任何告警**。
+    # 这正是本项目 330 轮反复批判的 fail-open 形状，不能自己再犯一次。
+    #
+    # 改用公共方法 `get_estop_status()` / `get_interlock_status()`；
+    # **取不到、或返回结构不符，一律 503** —— 不默认 False / 不默认空集合。
+    try:
+        estop = device_control.get_estop_status()
+    except Exception as e:      # noqa: BLE001 —— 读不到状态就不许写
+        logger.error("读取急停状态失败，拒绝端点写入: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': '无法读取急停状态，已拒绝写入（安全状态未知不允许下发）',
+        }), 503
+    if not isinstance(estop, dict) or 'active' not in estop:
+        logger.error("急停状态接口返回格式不符: %r", estop)
+        return jsonify({
+            'success': False,
+            'message': '急停状态接口返回格式不符，已拒绝写入',
+        }), 503
+    if estop['active']:
         logger.warning("急停状态下拒绝端点写入: device=%s endpoint=%s operator=%s",
                        device_id, endpoint_name, operator)
         return jsonify({
@@ -283,13 +307,36 @@ def write_endpoint(device_id):
             'message': '紧急停机状态中，禁止下发端点写入（请先解除急停）',
         }), 403
 
-    for _rule_id, _rule in getattr(device_control, '_interlock_rules', {}).items():
-        if _rule_id in getattr(device_control, '_interlock_bypass', set()):
+    try:
+        interlocks = device_control.get_interlock_status()
+    except Exception as e:      # noqa: BLE001
+        logger.error("读取联锁状态失败，拒绝端点写入: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': '无法读取联锁状态，已拒绝写入（安全状态未知不允许下发）',
+        }), 503
+    if not isinstance(interlocks, dict):
+        logger.error("联锁状态接口返回格式不符: %r", type(interlocks))
+        return jsonify({
+            'success': False,
+            'message': '联锁状态接口返回格式不符，已拒绝写入',
+        }), 503
+
+    for _rule_id, _st in interlocks.items():
+        if not isinstance(_st, dict):
             continue
-        if not device_control._interlock_states.get(_rule_id, False):
+        if not _st.get('triggered'):
             continue
-        _act = (_rule.get('action') or {})
-        if _act.get('device_id') == device_id:
+        if _st.get('bypassed'):
+            continue
+        # round 333：**同时匹配 condition.device_id 与 action.device_id**。
+        # 原来只看 action.device_id —— 将来配一条
+        # `action: {type: emergency_stop}`（没有 device_id）的规则时，
+        # 它触发后该设备的端点写入仍能过。
+        _act = _st.get('action') or {}
+        _cond = _st.get('condition') or {}
+        _targets = {_act.get('device_id'), _cond.get('device_id')}
+        if device_id in _targets:
             logger.warning("联锁触发中拒绝端点写入: device=%s rule=%s operator=%s",
                            device_id, _rule_id, operator)
             return jsonify({
@@ -306,9 +353,23 @@ def write_endpoint(device_id):
             'message': '审计写入失败，拒绝下发（无法自证的操作不允许执行）',
         }), 503
 
+    # round 333：审计要**三态都记**（attempt / ok / failed）。
+    # 原来只记了 attempt —— 成功只写通用操作日志、失败（400/500/501）一条
+    # `_audit` 都没有，出事时无法自证「到底下发了没有、结果是什么」。
+    # 对照 `write_with_verification` 的口径：attempt + failed + ok 三态齐全。
+    def _audit_result(ok: bool, detail: str) -> None:
+        try:
+            device_control._audit(
+                f'write_endpoint_{method.lower()}_{"ok" if ok else "failed"}',
+                operator,
+                f'设备 {device_id} {method}端点 {endpoint_name}={value} {detail}')
+        except Exception as e:      # noqa: BLE001 —— 审计失败不该改写已发生的写入结果
+            logger.error("端点写入结果审计失败: %s", e)
+
     device_manager = current_app.device_manager
     client = device_manager.get_client(device_id)
     if not client:
+        _audit_result(False, '设备不存在')
         return api_error(f'设备 {device_id} 不存在', 404)
 
     # 查找端点配置
@@ -317,6 +378,7 @@ def write_endpoint(device_id):
     endpoint_config = next((ep for ep in endpoints if ep.get('name') == endpoint_name), None)
 
     if not endpoint_config:
+        _audit_result(False, '端点配置不存在')
         return api_error(f'端点 {endpoint_name} 不存在', 404)
 
     # 执行写入
@@ -353,6 +415,7 @@ def write_endpoint(device_id):
             else:
                 success = client.write_endpoint(endpoint_config, value)
         else:
+            _audit_result(False, '客户端不支持端点写入')
             return jsonify({
                 'success': False,
                 'message': f'设备客户端 {type(client).__name__} 不支持端点写入',
@@ -360,16 +423,19 @@ def write_endpoint(device_id):
     except Exception as e:      # noqa: BLE001 —— 必须给出可读错误，不能只留 500
         logger.error("端点写入异常 device=%s endpoint=%s method=%s: %s",
                      device_id, endpoint_name, method, e, exc_info=True)
+        _audit_result(False, f'异常: {type(e).__name__}: {e}')
         return jsonify({
             'success': False,
             'message': f'端点写入异常: {type(e).__name__}: {e}',
         }), 500
 
     if success:
+        _audit_result(True, '成功')
         get_auth_manager().log_operation(
             operator, f'write_endpoint_{method.lower()}',
             f'设备 {device_id} {method}端点 {endpoint_name}={value}')
         return jsonify({'success': True, 'message': f'{method}写入成功: {endpoint_name}={value}'})
+    _audit_result(False, '客户端返回失败')
     return jsonify({'success': False, 'message': f'{method}写入失败，请检查设备连接'}), 400
 
 
