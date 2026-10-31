@@ -607,3 +607,167 @@ class TestWriteLimitsConfigDriven:
         dc = DeviceControlSafety(MagicMock(), device_manager=dm)
         assert 'bad_range' not in dc._write_limits.get('plc_a', {})
         assert 'bad_type' not in dc._write_limits.get('plc_a', {})
+
+
+# ===========================================================================
+# 联锁动作必须 fail-closed（round 330）
+# ===========================================================================
+
+class TestInterlockActionFailClosed:
+    """`_execute_interlock_action` 只有**确认动作真的发出去了**才返回 True。
+
+    缺陷（修复前）：`action_ok = True` 起手，三条路径会假成功 ——
+    ① `write_single_register` 的返回值被丢弃（Modbus 写失败**返回 False
+    而不抛异常**）；② `device_manager` 为 None 时没有 else 分支；
+    ③ `trigger_emergency_stop` 的返回值（可能带 success=False）被丢弃。
+
+    后果最严重的是第一条：`check_interlocks` 见 ok=True 就把
+    `_interlock_states[rule_id]` 锁死，之后每周期 `triggered and not was_triggered`
+    恒为 False —— **停机指令永不重试**，而审计和看板都记着「已执行」。
+    """
+
+    RULE = {
+        'id': 'rule1', 'name': '超温停机',
+        'condition': {},
+        'action': {'type': 'write_register', 'device_id': 'plc_a',
+                   'register': 10, 'value': 0},
+    }
+
+    def _dc(self, write_ret=True):
+        devices = {'plc_a': {'protocol': 'modbus_tcp',
+                             'registers': [{'name': 'r10', 'address': 10}]}}
+        dc, client = _make_dc(devices)
+        client.write_single_register = MagicMock(return_value=write_ret)
+        return dc, client
+
+    def test_write_failure_returns_false(self):
+        """写 PLC 返回 False → 联锁动作必须判失败（原来判成功）。"""
+        dc, _ = self._dc(write_ret=False)
+        assert dc._execute_interlock_action(dict(self.RULE)) is False
+
+    def test_write_success_returns_true(self):
+        """反向对照：写成功必须返回 True（别修过头）。"""
+        dc, _ = self._dc(write_ret=True)
+        assert dc._execute_interlock_action(dict(self.RULE)) is True
+
+    def test_missing_device_manager_returns_false(self):
+        """device_manager 为 None 时不能算成功。"""
+        from 智能层.device_control import DeviceControlSafety
+        dc = DeviceControlSafety(MagicMock(), device_manager=None)
+        assert dc._execute_interlock_action(dict(self.RULE)) is False
+
+    def test_emergency_stop_partial_failure_returns_false(self):
+        """急停返回 {'success': False} 时必须判失败。"""
+        dc, _ = self._dc()
+        rule = dict(self.RULE, action={'type': 'emergency_stop'})
+        dc.trigger_emergency_stop = MagicMock(
+            return_value={'success': False, 'message': '2/3 台停机失败'})
+        assert dc._execute_interlock_action(rule) is False
+
+    def test_emergency_stop_success_returns_true(self):
+        dc, _ = self._dc()
+        rule = dict(self.RULE, action={'type': 'emergency_stop'})
+        dc.trigger_emergency_stop = MagicMock(return_value={'success': True})
+        assert dc._execute_interlock_action(rule) is True
+
+    def test_block_start_counts_as_success(self):
+        """反向对照：block_start 本来就算执行成功。
+
+        默认值改成 False 之后这里**必须显式置 True** —— 否则「阻止启动」
+        会被判失败，联锁状态永不置位、每个采样周期重复告警。
+        """
+        dc, _ = self._dc()
+        rule = dict(self.RULE, action={'type': 'block_start'})
+        assert dc._execute_interlock_action(rule) is True
+
+
+# ===========================================================================
+# 批量控制不能假成功、不能绕过急停与联锁（round 330）
+# ===========================================================================
+
+class TestBatchControlFailClosed:
+    """`batch_control` 的四处 fail-open（修复前）。
+
+    ① 急停期间 `action != 'reset'` 放行了 reset —— 而 `batch_control('reset')`
+       是往 PLC 的 control.reset 点位**下发硬件复位**（解除软件急停是
+       `reset_emergency_stop()`，只改标志位不碰 PLC）；
+    ② 顶层 `success = success_count > 0` —— 批量停机 10 台只停 1 台也报成功；
+    ③ 启动前只拦 `block_start` 联锁 —— 已触发的 write_register / emergency_stop
+       联锁被无视，照样启动；
+    ④ 审计在写 PLC **之后**才调、且不看返回值 —— 磁盘满时「指令发了、记录没有」。
+    """
+
+    DEVICES = {'plc_a': {
+        'protocol': 'modbus_tcp',
+        'control': {
+            'stop': {'type': 'coil', 'address': 9, 'value': False},
+            'start': {'type': 'coil', 'address': 7, 'value': True},
+        },
+    }}
+
+    def test_estop_blocks_reset_too(self):
+        """急停期间 reset 也必须被拦（reset 是往 PLC 发硬件复位）。"""
+        dc, client = _make_dc(self.DEVICES)
+        dc._estop_active = True
+        r = dc.batch_control('reset', 'op')
+        assert r['success'] is False
+        assert '紧急停机' in r['message']
+        client.write_single_register.assert_not_called()
+
+    def test_partial_stop_failure_is_not_success(self):
+        """3 台只停了 1 台 → 顶层 success 必须 False。"""
+        devices = {
+            f'plc_{i}': {'protocol': 'modbus_tcp',
+                         'control': {'stop': {'type': 'coil', 'address': 9,
+                                              'value': False}}}
+            for i in range(3)
+        }
+        dc, client = _make_dc(devices)
+        client.write_single_coil = MagicMock(side_effect=[True, False, False])
+        r = dc.batch_control('stop', 'op')
+        assert r['success'] is False, '部分失败却报成功 —— 操作员会以为全停了'
+        assert r['partial_success'] is True
+        assert r['success_count'] == 1 and r['total'] == 3
+
+    def test_all_stop_success_is_success(self):
+        """反向对照：全部成功才是 True。"""
+        dc, client = _make_dc(self.DEVICES)
+        client.write_single_coil = MagicMock(return_value=True)
+        r = dc.batch_control('stop', 'op')
+        assert r['success'] is True
+        assert r['partial_success'] is False
+
+    def test_start_blocked_by_triggered_write_register_interlock(self):
+        """已触发的 write_register 联锁（非 block_start）也要拦启动。"""
+        dc, client = _make_dc(self.DEVICES)
+        dc._interlock_rules = {'rule1': {
+            'id': 'rule1', 'name': '超温',
+            'action': {'type': 'write_register', 'device_id': 'plc_a',
+                       'register': 10, 'value': 0},
+        }}
+        dc._interlock_states = {'rule1': True}
+        r = dc.batch_control('start', 'op')
+        assert r['success'] is False, '联锁正在触发却允许启动'
+        assert 'rule1' in r.get('blocked_by', [])
+        client.write_single_coil.assert_not_called()
+
+    def test_start_allowed_when_interlock_not_triggered(self):
+        """反向对照：联锁存在但未触发 → 正常启动。"""
+        dc, client = _make_dc(self.DEVICES)
+        dc._interlock_rules = {'rule1': {
+            'id': 'rule1', 'name': '超温',
+            'action': {'type': 'write_register', 'device_id': 'plc_a',
+                       'register': 10, 'value': 0},
+        }}
+        dc._interlock_states = {'rule1': False}
+        r = dc.batch_control('start', 'op')
+        assert r['success'] is True
+
+    def test_audit_failure_blocks_write(self):
+        """审计写不进磁盘 → 拒绝下发（不调 write_single_coil）。"""
+        dc, client = _make_dc(self.DEVICES)
+        dc._audit = MagicMock(return_value=False)
+        r = dc.batch_control('stop', 'op')
+        assert r['success'] is False
+        client.write_single_coil.assert_not_called()
+        assert '审计' in r['results']['plc_a']['message']

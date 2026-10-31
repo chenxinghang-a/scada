@@ -655,25 +655,51 @@ class DeviceControlSafety:
         Returns:
             操作结果
         """
-        if self._estop_active and action != 'reset':
+        # round 330：**急停期间一律拦截，包括 reset**。
+        # 原来写的是 `and action != 'reset'` —— 但 `batch_control('reset')`
+        # 是往现场 PLC 的 control.reset 点位**下发硬件复位**，不是解除软件急停
+        # （解除走 `reset_emergency_stop()`，只改标志位、不碰 PLC）。
+        # 急停锁死时还允许向 PLC 发复位，等于给设备一个"重启"的机会。
+        # 正确顺序：先 `reset_emergency_stop()` 解除急停，再单独复位 PLC。
+        if self._estop_active:
             return {
                 'success': False,
-                'message': '紧急停机状态中，请先解除紧急停机',
+                'message': '紧急停机状态中，请先解除紧急停机再操作设备',
                 'results': {}
             }
 
         # 启动操作前检查联锁阻止条件
+        #
+        # round 330：**不只看 block_start**。原来只拦 action.type == 'block_start'
+        # 的联锁，于是某设备因超温触发了 write_register（写停机值）或
+        # emergency_stop 联锁、`_interlock_states[rule_id]` 已经是 True 时，
+        # batch_control('start') 会**无视正在触发的联锁强行启动**。
+        # 现在：已触发且未旁路的联锁，只要与本次要启动的设备相关就拦。
         if action == 'start':
+            blocked: list[tuple[str, Any, str]] = []
             for rule_id, rule in self._interlock_rules.items():
                 if rule_id in self._interlock_bypass:
                     continue
-                if rule.get('action', {}).get('type') == 'block_start':
-                    if self._interlock_states.get(rule_id, False):
-                        return {
-                            'success': False,
-                            'message': f'联锁 {rule_id} ({rule.get("name")}) 阻止设备启动',
-                            'results': {}
-                        }
+                if not self._interlock_states.get(rule_id, False):
+                    continue
+                act = rule.get('action', {}) or {}
+                act_type = act.get('type')
+                target = act.get('device_id')
+                # block_start 是「禁止启动」语义，无条件拦；
+                # 其它类型只在目标设备落在本次启动范围内时拦（避免无关联锁挡住整批）。
+                if act_type != 'block_start':
+                    if device_ids is not None and target is not None and target not in device_ids:
+                        continue
+                blocked.append((rule_id, rule.get('name'), act_type))
+            if blocked:
+                names = '、'.join(f'{rid}({name}/{t})' for rid, name, t in blocked)
+                logger.error("批量启动被已触发的联锁阻止: %s", names)
+                return {
+                    'success': False,
+                    'message': f'联锁正在触发，禁止启动：{names}',
+                    'results': {},
+                    'blocked_by': [rid for rid, _, _ in blocked],
+                }
 
         results = {}
         controllable = self._get_controllable_devices()
@@ -733,6 +759,20 @@ class DeviceControlSafety:
                                 f'批量{action}设备 {device_id}: 无可用控制点位，已拒绝写入')
                     continue
 
+                # round 330：**先写审计、再下发**（round 322 的 fail-closed 原则）。
+                # 原来审计是在写完之后调的（第 768 行附近），而且不看返回值 ——
+                # 磁盘满 / 目录只读时会出现「指令已经发给 PLC、记录却没有」，
+                # 事故调查时无法自证「谁在什么时候下发了什么」。
+                if not self._audit(
+                        f'batch_{action}_attempt', operator,
+                        f'批量{action}设备 {device_id}: 即将写 '
+                        f'{point["type"]}#{point["address"]}={point["value"]}'):
+                    results[device_id] = {
+                        'success': False,
+                        'message': '审计写入失败，拒绝下发（无法自证的操作不允许执行）',
+                    }
+                    continue
+
                 # 按点位类型走对应写法，**不允许跨类型退回**：
                 # 线圈和寄存器在现场是两个对象，退回写等于写错地方，
                 # 而调用方只会看到「成功」。不支持就明确失败。
@@ -776,12 +816,22 @@ class DeviceControlSafety:
         success_count = sum(1 for r in results.values() if r.get('success'))
         total = len(results)
 
+        # round 330：**部分成功不算成功**。
+        # 原来 `success_count > 0` —— 批量停机 10 台只停了 1 台也回 True，
+        # 操作员看到「成功」就走人，其余 9 台还在转。停机场景尤其致命。
+        all_ok = total > 0 and success_count == total
+        partial = 0 < success_count < total
+        msg = f'批量{action}完成: {success_count}/{total} 成功'
+        if partial:
+            failed = [d for d, r in results.items() if not r.get('success')]
+            msg += f'；**{len(failed)} 台失败**：{"、".join(failed[:5])}'
         return {
-            'success': success_count > 0,
-            'message': f'批量{action}完成: {success_count}/{total} 成功',
+            'success': all_ok,
+            'partial_success': partial,
+            'message': msg,
             'results': results,
             'success_count': success_count,
-            'total': total
+            'total': total,
         }
 
     #: 跨重启保持的安全状态键（`system_state` 表）。
@@ -1335,26 +1385,45 @@ class DeviceControlSafety:
                     logger.error("联锁广播失败（继续执行停机动作）: %s", e)
 
         # 执行动作
-        action_ok = True
+        #
+        # round 330：**默认 False（fail-closed）**。
+        # 原实现 `action_ok = True` 起手，于是三条路径都会「假成功」：
+        #   ① `write_single_register` 的返回值被丢弃 —— Modbus 写失败
+        #      **返回 False 而不抛异常**（见 采集层/modbus_client.py），
+        #      PLC 没写进去也算成功；
+        #   ② `if self.device_manager:` 没有 else 分支，未初始化同样算成功；
+        #   ③ `trigger_emergency_stop` 的返回值（可能带 success=False）被丢弃。
+        # 后果：调用方 `check_interlocks` 见 ok=True 就把 `_interlock_states[rule_id]`
+        # 锁死，之后每个采样周期的 `triggered and not was_triggered` 恒为 False ——
+        # **停机指令永不重试**，而审计和看板都记着「已执行」。
+        action_ok = False
         action_type = action.get('type')
         if action_type == 'write_register':
             device_id = action.get('device_id')
             register = action.get('register')
             value = action.get('value')
-            if self.device_manager:
+            if not self.device_manager:
+                logger.error("联锁动作失败: device_manager 未初始化 (rule=%s)", rule_id)
+            else:
                 try:
                     client = self.device_manager.get_client(device_id)
                     if client and hasattr(client, 'write_single_register'):
                         # register可能是寄存器名称，需要查找对应地址
                         address = self._resolve_register_address(device_id, register)
                         if address is not None:
-                            client.write_single_register(address, int(value))
-                            logger.info(f"联锁动作执行: 写入 {device_id}/addr={address} = {value}")
+                            # **必须接收返回值**：写失败返回 False、不抛异常。
+                            write_res = client.write_single_register(address, int(value))
+                            action_ok = bool(write_res)
+                            if action_ok:
+                                logger.info(f"联锁动作执行: 写入 {device_id}/addr={address} = {value}")
+                            else:
+                                logger.error(
+                                    "联锁动作写入返回失败: %s/addr=%s = %s —— "
+                                    "设备可能未进入安全状态，下个采样点会重试",
+                                    device_id, address, value)
                         else:
-                            action_ok = False
                             logger.error(f"联锁动作: 无法解析寄存器 {register} 的地址")
                     else:
-                        action_ok = False
                         logger.error(f"联锁动作: 设备 {device_id} 不支持写操作")
                 except Exception as e:      # noqa: BLE001 —— 写失败要能重试，不能吞
                     action_ok = False
@@ -1362,14 +1431,27 @@ class DeviceControlSafety:
 
         elif action_type == 'emergency_stop':
             try:
-                self.trigger_emergency_stop(f'联锁 {rule_id} 触发紧急停机')
+                estop_res = self.trigger_emergency_stop(f'联锁 {rule_id} 触发紧急停机')
+                # 急停返回值可能是 dict（含 success / 部分失败明细）。
+                # 显式读它 ——「部分设备停机失败」不能让联锁状态被锁死。
+                if isinstance(estop_res, dict):
+                    action_ok = bool(estop_res.get('success', True))
+                    if not action_ok:
+                        logger.error(
+                            "联锁急停未完全成功（rule=%s）：%s —— 下个采样点会重试",
+                            rule_id, estop_res.get('message'))
+                else:
+                    action_ok = True if estop_res is None else bool(estop_res)
             except Exception as e:          # noqa: BLE001
                 action_ok = False
                 logger.error("联锁急停执行失败: %s", e, exc_info=True)
 
         elif action_type == 'block_start':
-            # 标记设备启动被阻止
+            # 标记设备启动被阻止。
+            # ⚠️ 默认值改成 False 后**必须显式置 True** —— 否则「阻止启动」这个
+            # 本来就算执行成功的动作会被判失败，联锁状态永不置位、每周期重复告警。
             logger.warning(f"联锁阻止设备启动: {rule_id}")
+            action_ok = True
 
         else:
             # round 313：**未知动作类型绝不能算成功**。

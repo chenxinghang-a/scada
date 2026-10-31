@@ -213,11 +213,17 @@ def _dc():
 
 
 def test_interlock_action_failure_keeps_state_and_retries():
-    """动作抛异常后不许置「已触发」——否则停机动作、急停、审计永久跳过。"""
+    """动作抛异常后不许置「已触发」——否则停机动作、急停、审计永久跳过。
+
+    round 330：第二轮改成返回 **True**。原来写的是 `None`，依赖的是
+    「`_execute_interlock_action` 丢弃返回值」这个缺陷 —— 修掉之后
+    `bool(None) is False`，`None` 不再代表成功（fail-closed 语义）。
+    `write_single_register` 正常只返回 bool，不会返回 None。
+    """
     dc = _dc()
     dc.add_interlock(dict(IL_RULE))
     client = MagicMock()
-    client.write_single_register.side_effect = [RuntimeError('gateway down'), None]
+    client.write_single_register.side_effect = [RuntimeError('gateway down'), True]
     dc.device_manager.get_client.return_value = client
 
     dc.check_interlocks('d1', 'temp', 120.0)
