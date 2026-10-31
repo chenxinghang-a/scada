@@ -48,6 +48,9 @@ def _make_collector():
     dc._circuit_state = {}
     dc._failure_counts = {}
     dc._stats_lock = threading.Lock()
+    # round 329：熔断状态的读写走 `_tracking_lock`（与 _handle_normal_collection 一致），
+    # 重置入口也要用它。
+    dc._tracking_lock = threading.Lock()
     return dc
 
 
@@ -222,3 +225,88 @@ def test_resilience_api_does_not_use_generic_as_sole_source():
     # generic 只能作为附带字段
     assert "'generic': generic" in source, (
         '通用管理器的数据应作为 generic 附带字段返回，而不是主真源')
+
+
+# ===========================================================================
+# 4. 重置必须真的碰到采集链（round 329）
+# ===========================================================================
+
+class TestResetCoversCollector:
+    """``reset`` / ``reset-all`` 必须同时覆盖采集链的内联熔断器。
+
+    缺陷（修复前）：这两个端点只调 ``circuit_breaker_manager``，而设备熔断状态
+    存在 ``DataCollector._circuit_state`` 里 —— 接口回「已重置」，设备侧纹丝不动，
+    运维以为恢复了，设备还在冷却窗口里按 30 秒周期空转。
+
+    同一族的第二个症状：列表接口 ``breakers`` 的 key 是 device_id，
+    但按名字查走的是通用管理器（只有 database/device_comm/alarm_system）
+    → 前端拿列表里的设备名来查**必然 404**。
+    """
+
+    @staticmethod
+    def _open_device(dc, device_id='dev1'):
+        dc._circuit_state = {
+            device_id: {'opened_at': time.monotonic() - 5,
+                        'opened_at_wall': time.time() - 5},
+        }
+        dc._failure_counts = {device_id: 6}
+
+    def test_get_by_device_name_hits_collector(self, app, client, auth_headers):
+        """列表里有的设备，按名字查必须能查到（原来必然 404）。"""
+        dc = _make_collector()
+        self._open_device(dc)
+        app.data_collector = dc
+
+        r = client.get('/api/resilience/circuit-breaker/dev1', headers=auth_headers)
+        assert r.status_code == 200, r.get_json()
+        body = r.get_json()['data']
+        assert body['source'] == 'data_collector'
+        assert body['state'] == 'open'
+
+    def test_get_unknown_name_still_404(self, app, client, auth_headers):
+        """两边都没有才是 404（别为了修 bug 把 404 修没了）。"""
+        app.data_collector = _make_collector()
+        r = client.get('/api/resilience/circuit-breaker/no-such-breaker',
+                       headers=auth_headers)
+        assert r.status_code == 404
+
+    def test_reset_single_device_clears_collector_state(self, app, client,
+                                                        auth_headers):
+        dc = _make_collector()
+        self._open_device(dc)
+        app.data_collector = dc
+
+        r = client.post('/api/resilience/circuit-breaker/dev1/reset',
+                        headers=auth_headers)
+        assert r.status_code == 200, r.get_json()
+        assert dc._circuit_state == {}, '设备熔断状态没被清掉 —— 又是假重置'
+        assert dc._failure_counts.get('dev1', 0) == 0
+
+    def test_reset_all_clears_collector_state(self, app, client, auth_headers):
+        dc = _make_collector()
+        self._open_device(dc)
+        app.data_collector = dc
+
+        r = client.post('/api/resilience/circuit-breaker/reset-all',
+                        headers=auth_headers)
+        assert r.status_code == 200, r.get_json()
+        body = r.get_json()['data']
+        assert body['devices_reset'] >= 1, '没有回报重置了几台设备'
+        assert dc._circuit_state == {}, 'reset-all 没碰到采集链 —— 假成功'
+        assert dc._failure_counts == {}
+
+    def test_reset_all_reports_when_collector_fails(self, app, client,
+                                                    auth_headers):
+        """采集链重置失败时必须报错，不能回「已重置」。"""
+        dc = _make_collector()
+
+        def _boom():
+            raise RuntimeError('collector broken')
+
+        dc.reset_all_circuit_breakers = _boom
+        app.data_collector = dc
+
+        r = client.post('/api/resilience/circuit-breaker/reset-all',
+                        headers=auth_headers)
+        assert r.status_code == 500, '采集链重置失败却回了成功'
+        assert '未能重置' in (r.get_json().get('error') or '')

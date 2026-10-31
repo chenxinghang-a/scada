@@ -83,12 +83,31 @@ def get_all_circuit_breakers():
 @resilience_bp.route('/circuit-breaker/<name>', methods=['GET'])
 @jwt_required
 def get_circuit_breaker(name):
-    """获取指定熔断器状态"""
+    """获取指定熔断器状态
+
+    round 329：**两个源都要查**。列表接口的 ``breakers`` 来自采集链（按 device_id），
+    而这里原来只查 ``circuit_breaker_manager``（里面只有 database / device_comm /
+    alarm_system 三个实例）—— 前端拿列表里的设备名来查**必然 404**，
+    表现为「列表说有、点进去说不存在」。
+    """
+    # 先查采集链的设备熔断器（列表接口暴露的就是它们）
+    try:
+        dc = current_app.data_collector
+        real = dc.get_circuit_breaker_states()
+        devices = real.get('devices') if isinstance(real, dict) else None
+        if isinstance(devices, dict) and name in devices:
+            return success_response({'name': name, 'source': 'data_collector',
+                                     **devices[name]})
+    except Exception as e:      # noqa: BLE001 —— 探测失败不该 500
+        logger.warning("读取采集器熔断状态失败: %s", e)
+
+    # 再查通用管理器
     try:
         breaker = circuit_breaker_manager.get(name)
         if not breaker:
             return error_response(f"熔断器 {name} 不存在", 404)
-        return success_response(breaker.get_stats())
+        return success_response({'name': name, 'source': 'generic_manager',
+                                 **breaker.get_stats()})
     except Exception as e:
         logger.error(f"获取熔断器 {name} 失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -98,14 +117,30 @@ def get_circuit_breaker(name):
 @jwt_required
 @role_required('admin')
 def reset_circuit_breaker(name):
-    """重置指定熔断器"""
+    """重置指定熔断器
+
+    round 329：采集链的设备熔断器**也要能重置**。原来只调通用管理器，
+    设备侧的 ``_circuit_state`` 根本没人清 —— 接口回「已重置」，
+    看板上的设备还是「熔断中」。
+    """
+    # 先试采集链（设备熔断器）
+    try:
+        dc = current_app.data_collector
+        if dc.reset_circuit_breaker(name):
+            return success_response({'message': f'设备 {name} 的熔断器已重置',
+                                     'source': 'data_collector'})
+    except Exception as e:      # noqa: BLE001
+        logger.warning("重置采集器熔断状态失败: %s", e)
+
+    # 再试通用管理器
     try:
         breaker = circuit_breaker_manager.get(name)
         if not breaker:
             return error_response(f"熔断器 {name} 不存在", 404)
         breaker.reset()
         logger.info(f"熔断器 {name} 已手动重置")
-        return success_response({'message': f'熔断器 {name} 已重置'})
+        return success_response({'message': f'熔断器 {name} 已重置',
+                                 'source': 'generic_manager'})
     except Exception as e:
         logger.error(f"重置熔断器 {name} 失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -115,14 +150,40 @@ def reset_circuit_breaker(name):
 @jwt_required
 @role_required('admin')
 def reset_all_circuit_breakers():
-    """重置所有熔断器"""
+    """重置所有熔断器（采集链 + 通用管理器）
+
+    round 329：原来只调 ``circuit_breaker_manager.reset_all()``，
+    **采集链的设备熔断器一个都没重置**，却回「所有熔断器已重置」——
+    运维以为恢复了，设备还在冷却窗口里空转。现在两边都重置，并把
+    各自的影响数量返回，让调用方能核对。
+    """
+    generic_reset = 0
     try:
+        generic_reset = len(circuit_breaker_manager.get_all_stats())
         circuit_breaker_manager.reset_all()
-        logger.info("所有熔断器已手动重置")
-        return success_response({'message': '所有熔断器已重置'})
     except Exception as e:
-        logger.error(f"重置所有熔断器失败: {e}", exc_info=True)
-        return error_response("服务器内部错误", 500)
+        logger.error(f"重置通用熔断器失败: {e}", exc_info=True)
+
+    device_reset = 0
+    device_error = None
+    try:
+        device_reset = current_app.data_collector.reset_all_circuit_breakers()
+    except Exception as e:      # noqa: BLE001 —— 一边失败不该拖垮整个接口
+        device_error = str(e)
+        logger.error(f"重置采集链熔断器失败: {e}", exc_info=True)
+
+    payload = {
+        'message': '熔断器已重置',
+        'generic_reset': generic_reset,
+        'devices_reset': device_reset,
+    }
+    if device_error is not None:
+        # 采集链没重置成功必须说清楚 —— 否则又是一个"假成功"
+        return error_response(
+            f'通用熔断器已重置（{generic_reset} 个），但**采集链设备熔断器未能重置**：'
+            f'{device_error}', 500)
+    logger.info(f"所有熔断器已手动重置（通用 {generic_reset} 个、设备 {device_reset} 台）")
+    return success_response(payload)
 
 
 # ================================================================

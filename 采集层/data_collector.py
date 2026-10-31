@@ -2337,6 +2337,46 @@ class DataCollector:
             'devices': devices,
         }
 
+    def reset_circuit_breaker(self, device_id: str) -> bool:
+        """手动重置某设备的熔断器（round 329）。
+
+        采集链的熔断器是**内联实现**（``_circuit_state`` / ``_failure_counts``），
+        不在 ``core/circuit_breaker.py`` 的通用管理器里。而韧性 API 的
+        ``/circuit-breaker/<name>/reset`` 与 ``/reset-all`` 原来只重置了通用管理器
+        里那 3 个实例（database/device_comm/alarm_system），**设备侧状态纹丝不动**，
+        接口却回「已重置」—— 运维以为恢复了，实际还在熔断窗口里空转。
+
+        Args:
+            device_id: 设备 ID
+
+        Returns:
+            bool: 该设备原本是否处于熔断/连续失败状态。
+                  调用方用它区分「重置成功」与「本来就没在熔断」。
+        """
+        with self._tracking_lock:
+            tracked = (device_id in self._circuit_state
+                       or self._failure_counts.get(device_id, 0) > 0)
+            self._circuit_state.pop(device_id, None)
+            self._failure_counts.pop(device_id, None)
+        if tracked:
+            logger.info(f"设备 {device_id} 的熔断器已手动重置")
+        return tracked
+
+    def reset_all_circuit_breakers(self) -> int:
+        """重置**所有设备**的熔断器，返回受影响的设备数（round 329）。
+
+        与 ``reset_circuit_breaker`` 同一背景：通用管理器的 ``reset_all()``
+        碰不到采集链的内联熔断状态。
+        """
+        with self._tracking_lock:
+            affected = len(set(self._circuit_state)
+                           | {d for d, n in self._failure_counts.items() if n})
+            self._circuit_state.clear()
+            self._failure_counts.clear()
+        if affected:
+            logger.info(f"已手动重置 {affected} 台设备的熔断器")
+        return affected
+
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         with self._stats_lock:
