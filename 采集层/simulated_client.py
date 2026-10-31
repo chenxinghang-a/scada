@@ -1028,8 +1028,11 @@ class SimulatedRESTClient(PushClientInterface):
         else:
             return round(50 + 30 * math.sin(t / 20) + random.gauss(0, 2), 2)
 
-    def write_endpoint(self, endpoint_config: dict[str, Any], value: Any) -> bool:
-        logger.info(f"[模拟] REST写入: {endpoint_config.get('name')} = {value}")
+    def write_endpoint(self, endpoint_config: dict[str, Any], value: Any,
+                       method: str | None = None) -> bool:
+        """模拟写入。``method`` 仅为与 API 层调用签名对齐（round 331）。"""
+        logger.info(f"[模拟] REST写入({method or 'default'}): "
+                    f"{endpoint_config.get('name')} = {value}")
         return True
 
     def get_stats(self) -> dict[str, Any]:

@@ -581,6 +581,23 @@
 
 {% block extra_js %}
 <script>
+// XSS 安全转义（round 331）。
+//
+// 设备名 / 描述来自 `POST /api/devices` 与 `PUT /api/devices/<id>`，
+// 而下面 `renderDevices()` 是用模板字符串拼 innerHTML 的 —— 不转义时
+// 一个 `<img src=x onerror=...>` 就能在管理员浏览器里执行。
+// 令牌存在 localStorage（base.html），一次 XSS 即可拿走**长期令牌**。
+//
+// 服务端已经拒绝尖括号（`_sanitize_text_field`），这里是纵深防御：
+// 挡住历史脏数据、以及将来服务端校验被改松的情况。
+// 实现与 control.html / users.html 保持一致。
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+}
+
 // 设备列表缓存
 let devicesList = [];
 // 编辑态下采集周期的初始显示值。设备状态接口不返回 collection_interval，
@@ -762,10 +779,10 @@ function renderDevicesTable(devices) {
 
         return `
         <tr>
-            <td><code class="mono">${device.device_id}</code></td>
+            <td><code class="mono">${escapeHtml(device.device_id)}</code></td>
             <td>
-                <div class="cell-title">${device.name}</div>
-                <div class="cell-sub">${device.description || '—'}</div>
+                <div class="cell-title">${escapeHtml(device.name)}</div>
+                <div class="cell-sub">${escapeHtml(device.description) || '—'}</div>
             </td>
             <td><span class="tag tag--neutral tag--mono">${protocol.toUpperCase()}</span></td>
             <td><span class="addr">${getDeviceAddress(device)}</span></td>

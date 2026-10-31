@@ -117,6 +117,63 @@ class TestXSS:
         assert '<script>' not in resp.get_data(as_text=True), \
             "响应体中原样回显了 XSS payload"
 
+    # ---- round 331：补齐 POST/PUT × name/description 四条路 ----
+    #
+    # 原来只测了「POST + name + 响应体回显」这一条，于是：
+    #   · description 两处都直通（POST 只查 name，PUT 什么都不查）
+    #   · PUT 的 name 也不查
+    # 而这两个字段最终以 `${device.name}` / `${device.description}` 拼进
+    # 模板/devices.html 的 innerHTML，而令牌在 localStorage ——
+    # 一次存储型 XSS 即可拿走长期令牌，engineer 完成对 admin 的垂直越权。
+
+    def test_xss_in_device_description(self, client, auth_headers, app):
+        """description 必须和 name 一样被拦（原来完全直通）。"""
+        app.device_manager.add_device.return_value = True
+        resp = client.post('/api/devices', json={
+            'id': 'xss_desc', 'name': '正常设备',
+            'description': '<img src=x onerror=alert(1)>',
+            'protocol': 'modbus_tcp', 'host': '192.168.1.1', 'port': 502,
+        }, headers=auth_headers)
+        assert resp.status_code == 400, (
+            f'description 里的 XSS payload 被放行了: '
+            f'{resp.get_data(as_text=True)[:200]}')
+
+    def test_xss_in_put_device_name(self, client, auth_headers, app):
+        """PUT 的 name 必须校验（原来这条路径完全不查）。"""
+        app.device_manager.devices = {'dev1': {'protocol': 'modbus_tcp',
+                                               'name': 'old'}}
+        app.device_manager._save_config = MagicMock(return_value=True)
+        resp = client.put('/api/devices/dev1',
+                          json={'name': '<svg onload=alert(1)>'},
+                          headers=auth_headers)
+        assert resp.status_code == 400, (
+            f'PUT 的 name 里 XSS payload 被放行了: '
+            f'{resp.get_data(as_text=True)[:200]}')
+
+    def test_xss_in_put_device_description(self, client, auth_headers, app):
+        app.device_manager.devices = {'dev1': {'protocol': 'modbus_tcp',
+                                               'name': 'old'}}
+        app.device_manager._save_config = MagicMock(return_value=True)
+        resp = client.put('/api/devices/dev1',
+                          json={'description': '<iframe src=javascript:alert(1)>'},
+                          headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_normal_description_is_not_over_rejected(self, client, auth_headers,
+                                                     app):
+        """反向对照：`&` 和引号是普通文本，不能被误拒（别修过头）。"""
+        app.device_manager.add_device.return_value = True
+        # add_device 成功后会用 get_device_status() 的返回值构造响应 ——
+        # 不设的话是 MagicMock，jsonify 直接 TypeError（与本用例无关的噪声）
+        app.device_manager.get_device_status.return_value = {'connected': True}
+        resp = client.post('/api/devices', json={
+            'id': 'normal_desc', 'name': '一号泵',
+            'description': 'A&B 车间 "主泵"',
+            'protocol': 'modbus_tcp', 'host': '192.168.1.1', 'port': 502,
+        }, headers=auth_headers)
+        assert resp.status_code in (200, 201), (
+            f'正常描述被误拒了: {resp.get_data(as_text=True)[:200]}')
+
 
 class TestAuthenticationBypass:
     """认证绕过测试"""

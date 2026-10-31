@@ -254,6 +254,58 @@ def write_endpoint(device_id):
 
     operator = request.current_user['username']
 
+    # ==================== 安全闸门（round 331）====================
+    #
+    # 这是 REST 型设备**唯一的写通道**，但原来**完全绕过安全层**：
+    # 直接 `device_manager.get_client()` 拿客户端就写 —— 急停中可写、
+    # 联锁触发中可写、安全审计链里没有这条记录、无回读确认。
+    # 同文件的 write-register / write-coil 都走 device_control，唯独这条漏了。
+    #
+    # 为什么不直接复用 `write_with_verification`：那个接口的语义是
+    # 「寄存器地址 + 量程 + 回读比对」，而端点写入是「HTTP path + body」，
+    # 没有寄存器地址可比对。所以这里做**同等强度的三项前置闸门**：
+    # 安全模块存在性、急停状态、目标设备的已触发联锁，以及审计落盘。
+    device_control = getattr(current_app, 'device_control', None)
+    if device_control is None:
+        logger.error(
+            "拒绝端点写入：安全模块(device_control)不可用 —— 无法做急停/联锁校验。"
+            " device=%s endpoint=%s operator=%s", device_id, endpoint_name, operator)
+        return jsonify({
+            'success': False,
+            'message': '安全模块不可用，已拒绝写入（无法执行急停/联锁校验）',
+        }), 503
+
+    if getattr(device_control, '_estop_active', False):
+        logger.warning("急停状态下拒绝端点写入: device=%s endpoint=%s operator=%s",
+                       device_id, endpoint_name, operator)
+        return jsonify({
+            'success': False,
+            'message': '紧急停机状态中，禁止下发端点写入（请先解除急停）',
+        }), 403
+
+    for _rule_id, _rule in getattr(device_control, '_interlock_rules', {}).items():
+        if _rule_id in getattr(device_control, '_interlock_bypass', set()):
+            continue
+        if not device_control._interlock_states.get(_rule_id, False):
+            continue
+        _act = (_rule.get('action') or {})
+        if _act.get('device_id') == device_id:
+            logger.warning("联锁触发中拒绝端点写入: device=%s rule=%s operator=%s",
+                           device_id, _rule_id, operator)
+            return jsonify({
+                'success': False,
+                'message': f'联锁 {_rule_id} 正在触发，禁止对该设备下发端点写入',
+            }), 403
+
+    # 审计前置：写不进磁盘就不下发（round 322 的 fail-closed 原则）
+    if not device_control._audit(
+            f'write_endpoint_{method.lower()}_attempt', operator,
+            f'设备 {device_id} {method}端点 {endpoint_name}={value}'):
+        return jsonify({
+            'success': False,
+            'message': '审计写入失败，拒绝下发（无法自证的操作不允许执行）',
+        }), 503
+
     device_manager = current_app.device_manager
     client = device_manager.get_client(device_id)
     if not client:
@@ -268,15 +320,50 @@ def write_endpoint(device_id):
         return api_error(f'端点 {endpoint_name} 不存在', 404)
 
     # 执行写入
+    #
+    # round 331：包一层 —— 原来这里裸调，任何异常（典型是客户端方法签名
+    # 不匹配的 TypeError）都直穿到 app.errorhandler(500)，客户端只看到
+    # `{"error": "Internal server error"}`，运维无从判断是配置错、连不上、
+    # 还是代码 bug。
     success = False
-    if method == 'PUT' and hasattr(client, 'put_endpoint'):
-        result = client.put_endpoint(endpoint_config, {'value': value})
-        success = (result or {}).get('success', False)
-    elif method == 'POST' and hasattr(client, 'post_endpoint'):
-        result = client.post_endpoint(endpoint_config, {'value': value})
-        success = (result or {}).get('success', False)
-    elif hasattr(client, 'write_endpoint'):
-        success = client.write_endpoint(endpoint_config, value, method=method)
+    try:
+        if method == 'PUT' and hasattr(client, 'put_endpoint'):
+            result = client.put_endpoint(endpoint_config, {'value': value})
+            success = (result or {}).get('success', False)
+        elif method == 'POST' and hasattr(client, 'post_endpoint'):
+            result = client.post_endpoint(endpoint_config, {'value': value})
+            success = (result or {}).get('success', False)
+        elif hasattr(client, 'write_endpoint'):
+            # round 331：**按签名探测**，不硬编码调用形式。
+            # 内置的三个客户端现在都有 `method` 形参，但外部插件、旧实现、
+            # 或者将来新增的客户端可能只有 2 参 —— 用关键字硬传会让它们
+            # 直接 TypeError（这正是本轮修的那个「真实设备必然 500」）。
+            # 不用 try/except TypeError 猜：客户端内部的 TypeError 会被一起吞掉。
+            import inspect as _inspect
+            try:
+                _params = _inspect.signature(client.write_endpoint).parameters
+                _accepts_method = (
+                    'method' in _params
+                    or any(p.kind == _inspect.Parameter.VAR_KEYWORD
+                           for p in _params.values()))
+            except (TypeError, ValueError):
+                _accepts_method = False
+            if _accepts_method:
+                success = client.write_endpoint(endpoint_config, value, method=method)
+            else:
+                success = client.write_endpoint(endpoint_config, value)
+        else:
+            return jsonify({
+                'success': False,
+                'message': f'设备客户端 {type(client).__name__} 不支持端点写入',
+            }), 501
+    except Exception as e:      # noqa: BLE001 —— 必须给出可读错误，不能只留 500
+        logger.error("端点写入异常 device=%s endpoint=%s method=%s: %s",
+                     device_id, endpoint_name, method, e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f'端点写入异常: {type(e).__name__}: {e}',
+        }), 500
 
     if success:
         get_auth_manager().log_operation(

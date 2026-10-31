@@ -234,13 +234,23 @@ class RESTDeviceClient:
             logger.error(f"REST请求失败 [{endpoint_config.get('path')}]: {e}")
             return None
 
-    def write_endpoint(self, endpoint_config: dict[str, Any], value: Any) -> bool:
+    def write_endpoint(self, endpoint_config: dict[str, Any], value: Any,
+                       method: str | None = None) -> bool:
         """
         写入端点数据（控制命令）
 
         Args:
             endpoint_config: 端点配置
             value: 要写入的值
+            method: 显式指定 HTTP 方法（round 331）。
+                ``展示层/api/api_control.py`` 按用户选的 POST/PUT 用关键字传进来；
+                不传时退回 ``endpoint_config['write_method']``。
+
+        ⚠️ round 331：原来只有 2 个形参，而 API 层无条件用
+        ``client.write_endpoint(..., method=method)`` 调用 —— 真实设备
+        （``RESTDeviceClient``）**每一次写入都 TypeError → 500**，
+        客户端只看到 ``{"error": "Internal server error"}``。
+        这个功能在真实模式下从来没成功过，且没有一条正向测试覆盖。
 
         Returns:
             bool: 是否成功
@@ -252,7 +262,7 @@ class RESTDeviceClient:
                 body = body(value)
 
             resp = self._session.request(
-                method=endpoint_config.get('write_method', 'POST'),
+                method=(method or endpoint_config.get('write_method', 'POST')),
                 url=url,
                 json=body
             )

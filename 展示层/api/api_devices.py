@@ -46,6 +46,36 @@ def get_device(device_id):
     return jsonify({'device': status})
 
 
+def _sanitize_text_field(value, field_label: str, *, max_len: int = 200) -> str:
+    """文本字段的**统一**清洗出口（round 331）。
+
+    POST 与 PUT 必须走同一个出口。原来：POST 只查 `name` 的尖括号、
+    PUT 连 `name` 都不查，而 `description` 两处都直通。
+
+    为什么这是安全问题：这些字段最终以 ``${device.name}`` /
+    ``${device.description}`` 形式拼进前端 ``innerHTML``
+    （``模板/devices.html``），而 access token 存在 ``localStorage``
+    （``模板/base.html:208``）—— 一次存储型 XSS 就能拿走**长期令牌**，
+    工程师账号即可完成对管理员的垂直越权。
+
+    只拒绝尖括号（构成标签的必要字符），保留 ``&``、引号等普通文本 ——
+    过度拒绝会让「温度>80报警」这类正常描述写不进去。前端另有一层
+    ``escapeHtml`` 兜底（纵深防御）。
+
+    Raises:
+        ValueError: 类型错 / 过长 / 含尖括号。调用方转成 400。
+    """
+    if value is None:
+        return ''
+    if not isinstance(value, str):
+        raise ValueError(f'{field_label} 必须是文本')
+    if len(value) > max_len:
+        raise ValueError(f'{field_label} 过长（最多 {max_len} 字符）')
+    if '<' in value or '>' in value:
+        raise ValueError(f'{field_label} 不能包含HTML标签')
+    return value
+
+
 @devices_bp.route('/devices', methods=['POST'])
 @_require_engineer
 def add_device():
@@ -64,15 +94,19 @@ def add_device():
     if not device_id or not device_id.replace('_', '').replace('-', '').isalnum():
         return api_error('设备ID只能包含字母、数字、下划线和连字符')
 
-    # 设备名称只允许纯文本，拒绝 HTML 标签，避免名称进入前端后形成 XSS。
-    # 用字符判断而不是正则 r'<[^>]*>'：那个正则在 '<' 重复很多的串上是**多项式**
-    # 回溯（每个 '<' 都要一路扫到结尾），可被构造输入拖慢（CodeQL py/polynomial-redos #45）。
-    # 这里只关心「有没有尖括号」，判断一次 O(n) 即可，语义还更严。
-    device_name = data.get('name')
-    if not isinstance(device_name, str) or not device_name.strip():
+    # round 331：name / description 走**同一个**清洗出口。
+    # 原来只查 name 的尖括号、description 完全直通 —— 而两者都以
+    # `${device.name}` / `${device.description}` 形式拼进前端 innerHTML。
+    try:
+        device_name = _sanitize_text_field(data.get('name'), '设备名称')
+        description = _sanitize_text_field(data.get('description'), '设备描述')
+    except ValueError as e:
+        return api_error(str(e))
+    if not device_name.strip():
         return api_error('设备名称必须是非空文本')
-    if '<' in device_name or '>' in device_name:
-        return api_error('设备名称不能包含HTML标签')
+    # 清洗后的值写回，下游 `_build_device_config` 无需改动
+    data['name'] = device_name
+    data['description'] = description
 
     protocol = data.get('protocol', 'modbus_tcp')
 
@@ -147,6 +181,15 @@ def update_device(device_id):
                     if isinstance(v, str):
                         v = v.lower() not in ('false', '0', 'no', '')
                     device_config[key] = v
+                elif key in ('name', 'description'):
+                    # round 331：与 POST 走**同一个**清洗出口。
+                    # 原来这里完全不校验 —— PUT 可以往 name/description 塞
+                    # `<img src=x onerror=...>`，POST 那条路查得再严也没用
+                    # （两条写路径对同一个字段的校验必须等价）。
+                    device_config[key] = _sanitize_text_field(
+                        data[key], '设备名称' if key == 'name' else '设备描述')
+                    if key == 'name' and not device_config[key].strip():
+                        raise ValueError('设备名称必须是非空文本')
                 else:
                     device_config[key] = data[key]
     except ValueError as e:
