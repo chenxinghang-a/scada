@@ -2204,6 +2204,37 @@ class DeviceControlSafety:
                             f'写入失败: 客户端不支持寄存器写入 ({device_id}/{address})')
                 return {'success': False, 'message': '该设备的客户端不支持寄存器写入'}
 
+            # round 339：**寄存器写入不接受非整数**，不做静默截断。
+            #
+            # 原实现直接 `int(value)`：`1.9 → 1`，PLC 收到 1，而审计日志记的是
+            # 1.9（`_audit` 里 `f'{device_id}/{address}={value}'`）——
+            # **日志与现场不一致**，而且系统报「写入成功」。
+            # 实测链路：入口 `safe_float` 放行 1.9 → 量程校验通过（1.9 在 INT16 内）
+            # → 到这里被截成 1。
+            #
+            # 本路径**不具备 float32 写能力**（那要按 2 个寄存器编位 + 回读解码），
+            # 所以宁可拒绝也不猜 —— 猜错的代价是写了一个错误的设定值。
+            # 线圈分支保持 `bool(value)`：非零即真本来就是线圈语义。
+            if kind != 'coil':
+                from core.safe_numeric import try_finite_float
+                _fv = try_finite_float(value)
+                if _fv is None:
+                    self._audit('write_failed', operator,
+                                f'写入失败: 值不是有限数值 ({device_id}/{address}={value!r})')
+                    return {'success': False,
+                            'message': f'写入值不是有限数值: {value!r}'}
+                if not _fv.is_integer():
+                    self._audit('write_failed', operator,
+                                f'写入失败: 寄存器只接受整数，拒绝 {value!r} '
+                                f'({device_id}/{address})')
+                    return {
+                        'success': False,
+                        'message': (
+                            f'寄存器写入只接受整数值：{value!r} 会被截断成 '
+                            f'{int(_fv)} —— 已拒绝。若该点位是 float32，'
+                            f'需要按双寄存器编码写入，当前接口不支持。'),
+                    }
+
             for attempt in range(max_retries + 1):
                 try:
                     if kind == 'coil':

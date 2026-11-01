@@ -911,3 +911,75 @@ class TestBypassPersistenceRound336:
 
         dc._persist_bypasses()
         assert dc.database.set_system_state.call_args.args[1] is None
+
+
+# ===========================================================================
+# 寄存器写入不接受非整数（round 339）
+# ===========================================================================
+
+class TestRegisterWriteRejectsFractional:
+    """`1.9` 必须被拒绝，不能静默截断成 1（round 339）。
+
+    原实现 `int(value)`：1.9 → 1，PLC 收到 1，而审计日志记的是 1.9 ——
+    **日志与现场不一致**，而且系统报「写入成功」。
+    实测链路：入口 `safe_float` 放行 1.9 → 量程校验通过（1.9 在 INT16 内）
+    → 到写的时候被截成 1。
+
+    本路径不具备 float32 写能力（要按 2 个寄存器编位 + 回读解码），
+    所以宁可拒绝也不猜 —— 猜错的代价是写了一个错误的设定值。
+    """
+
+    DEVICES = {'plc_a': {
+        'protocol': 'modbus_tcp',
+        'registers': [{'name': 'r10', 'address': 10, 'access': 'rw'}],
+    }}
+
+    def _dc(self):
+        dc, client = _make_dc(self.DEVICES)
+        # 本用例只测「非整数拒绝」，安全校验直接放行（它有独立测试）。
+        # 注意返回结构是 dict（`{'allowed', 'reason'}`），不是 tuple。
+        dc.validate_write = MagicMock(return_value={'allowed': True, 'reason': 'ok'})
+        return dc, client
+
+    def test_fractional_value_is_rejected(self):
+        dc, client = self._dc()
+        result = dc.write_with_verification('plc_a', 10, 1.9, 'op')
+        assert result['success'] is False, '1.9 被静默截断成 1 写下去了'
+        assert '整数' in result['message']
+        client.write_single_register.assert_not_called()
+
+    def test_integer_float_is_accepted(self):
+        """反向对照：1.0 是整数值，必须放行（别修过头）。"""
+        dc, client = self._dc()
+        result = dc.write_with_verification('plc_a', 10, 1.0, 'op')
+        assert result['success'] is True, result
+        client.write_single_register.assert_called_once_with(10, 1)
+
+    def test_plain_int_is_accepted(self):
+        """反向对照：普通整数照常写（回读返回同一个值才判成功）。
+
+        注意 `write_with_verification` 用的是 `raw[0]`，所以回读要返回
+        **列表**（与 `ModbusClient.read_holding_registers` 的返回一致），
+        不能返回带 `.registers` 属性的对象 —— 否则 `raw[0]` 拿到的是
+        MagicMock，`int(MagicMock)` 恒为 1，会误判「回读值为 1」。
+        """
+        dc, client = self._dc()
+        client.read_holding_registers.return_value = [7]
+        result = dc.write_with_verification('plc_a', 10, 7, 'op')
+        assert result['success'] is True, result
+        client.write_single_register.assert_called_once_with(10, 7)
+
+    def test_coil_still_accepts_fractional_as_bool(self):
+        """反向对照：线圈的语义是「非零即真」，1.9 应被当成 True。"""
+        dc, client = self._dc()
+        result = dc.write_with_verification('plc_a', 10, 1.9, 'op', kind='coil')
+        assert result['success'] is True, result
+        client.write_single_coil.assert_called_once_with(10, True)
+
+    def test_fractional_rejection_is_audited(self):
+        """拒绝也要留审计 —— 否则「为什么没写进去」查不到。"""
+        dc, _ = self._dc()
+        dc._audit = MagicMock(return_value=True)
+        dc.write_with_verification('plc_a', 10, 1.9, 'op')
+        actions = [c.args[0] for c in dc._audit.call_args_list]
+        assert 'write_failed' in actions, f'拒绝没有写审计: {actions}'
