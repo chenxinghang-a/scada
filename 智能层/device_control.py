@@ -872,9 +872,23 @@ class DeviceControlSafety:
         with self._bypass_lock:
             payload = {}
             for interlock_id in self._active_bypasses:
-                req = next((r for r in self._bypass_requests.values()
-                            if r.interlock_id == interlock_id
-                            and r.status in ('pending', 'approved')), None)
+                # round 336：只认 **approved 且未过期**的请求，并取**最新**那条。
+                #
+                # 原来 `next((... for r in values() if status in ('pending','approved')))`
+                # 有两个问题：
+                #   · 允许 `pending` —— 那是「还没满 2 人审批」的请求，
+                #     它的 `expires_at` **不是**已生效旁路的过期时间。
+                #     落库后重启会按一个错误的时间点恢复/丢弃旁路。
+                #   · 正序遍历取到的是**最早**那条历史请求（dict 保插入序），
+                #     它的过期时间很可能早已过去 → 重启后旁路立即被判过期失效，
+                #     检修中的设备被联锁动作。
+                req = None
+                for r in reversed(list(self._bypass_requests.values())):
+                    if (r.interlock_id == interlock_id
+                            and r.status == 'approved'
+                            and not r.is_expired):
+                        req = r
+                        break
                 if req is None:
                     continue
                 payload[interlock_id] = {
@@ -1015,10 +1029,20 @@ class DeviceControlSafety:
         return True
 
     def restore_interlock(self, rule_id: str, operator: str) -> bool:
-        """恢复联锁"""
+        """恢复联锁（手动解除旁路）"""
         with self._lock:
             self._interlock_bypass.discard(rule_id)
             self._active_bypasses.discard(rule_id)
+        # round 336：**必须落库**。
+        #
+        # 原来只改内存 —— SQLite 的 `system_state` 里仍留着这条旁路，
+        # 进程重启时 `_restore_persisted_state()` 又把它加载生效：
+        # **「已手动恢复的联锁在重启后复活」**。检修现场以为保护已经回来了，
+        # 实际旁路还在，联锁触发时不会动作。
+        #
+        # 同族的 `_auto_restore_bypass`（超时自动恢复）是**有**这一行的，
+        # 两条恢复路径对同一份持久化状态的写入必须等价。
+        self._persist_bypasses()
         self._audit('interlock_restore', operator, f'恢复联锁 {rule_id}')
         logger.info(f"联锁已恢复: {rule_id} by {operator}")
         return True

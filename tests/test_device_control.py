@@ -817,3 +817,97 @@ class TestResolveRegisterAddressRejectsBool:
         """反向对照：名字叫 "on" 的寄存器，传**字符串** 'on' 能查到地址 77。"""
         dc, _ = _make_dc(self.DEVICES)
         assert dc._resolve_register_address('plc_a', 'on') == 77
+
+
+# ===========================================================================
+# 旁路持久化的两处状态错位（round 336）
+# ===========================================================================
+
+class TestBypassPersistenceRound336:
+    """手动恢复要落库、落库要取对请求。"""
+
+    @staticmethod
+    def _req(rid, interlock_id, *, status, seconds):
+        """造一条 BypassRequest；seconds 为负数表示已过期。"""
+        from 智能层.device_control import BypassRequest
+        now = time.time()
+        r = BypassRequest(
+            request_id=rid, interlock_id=interlock_id, requested_by='u',
+            requested_at=now - 600, expires_at=now + seconds,
+            reason='检修', expires_at_mono=time.monotonic() + seconds)
+        r.status = status
+        return r
+
+    def test_restore_interlock_persists_cleared_state(self):
+        """恢复联锁必须落库 —— 否则重启后旁路复活。
+
+        原来只改内存：SQLite 的 `system_state` 仍留着这条旁路，进程重启时
+        `_restore_persisted_state()` 又把它加载生效 —— **已手动恢复的联锁在
+        重启后复活**，检修现场以为保护回来了，实际旁路还在。
+        同族的 `_auto_restore_bypass`（超时自动恢复）是有这一行的。
+        """
+        dc, _ = _make_dc({})
+        dc.database = MagicMock()
+        dc.database.set_system_state = MagicMock(return_value=True)
+        dc._active_bypasses = {'rule1'}
+        dc._interlock_bypass = {'rule1'}
+        dc._bypass_requests = {}
+
+        dc.restore_interlock('rule1', 'op')
+
+        assert 'rule1' not in dc._active_bypasses
+        assert dc.database.set_system_state.called, (
+            '恢复联锁后没有落库 —— 重启后旁路会复活')
+        assert dc.database.set_system_state.call_args.args[1] is None, (
+            '恢复后应把空状态写库（payload=None）')
+
+    def test_persist_ignores_pending_request(self):
+        """pending（未满 2 人审批）的请求不能落库 —— 它还没生效。
+
+        它的 `expires_at` 不是「已生效旁路的过期时间」，落库后重启会按
+        一个错误的时间点恢复/丢弃旁路。
+        """
+        dc, _ = _make_dc({})
+        dc.database = MagicMock()
+        dc.database.set_system_state = MagicMock(return_value=True)
+        dc._bypass_requests = {
+            'p1': self._req('p1', 'rule1', status='pending', seconds=1800),
+        }
+        dc._active_bypasses = {'rule1'}
+
+        dc._persist_bypasses()
+        payload = dc.database.set_system_state.call_args.args[1]
+        assert payload is None, f'pending 请求被落库了: {payload!r}'
+
+    def test_persist_prefers_latest_valid_approved(self):
+        """多条 approved 时取**最新且未过期**那条，不是最早那条。
+
+        原来正序遍历 + `next()` → 取到最早的（其 expires_at 可能早已过去），
+        重启后旁路立即被判过期失效，检修中的设备被联锁动作。
+        """
+        dc, _ = _make_dc({})
+        dc.database = MagicMock()
+        dc.database.set_system_state = MagicMock(return_value=True)
+        dc._bypass_requests = {
+            'old': self._req('old', 'rule1', status='approved', seconds=-100),
+            'new': self._req('new', 'rule1', status='approved', seconds=1800),
+        }
+        dc._active_bypasses = {'rule1'}
+
+        dc._persist_bypasses()
+        payload = dc.database.set_system_state.call_args.args[1]
+        assert payload['rule1']['request_id'] == 'new', (
+            f'落库取错了请求: {payload["rule1"]["request_id"]}')
+
+    def test_persist_skips_when_all_expired(self):
+        """全部已过期 → 不落库（payload=None），重启后不会复活旁路。"""
+        dc, _ = _make_dc({})
+        dc.database = MagicMock()
+        dc.database.set_system_state = MagicMock(return_value=True)
+        dc._bypass_requests = {
+            'old': self._req('old', 'rule1', status='approved', seconds=-100),
+        }
+        dc._active_bypasses = {'rule1'}
+
+        dc._persist_bypasses()
+        assert dc.database.set_system_state.call_args.args[1] is None
