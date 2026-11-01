@@ -192,20 +192,22 @@ def write_coil(device_id):
             return jsonify(result), 403
         return jsonify(result)
 
-    # 降级：无安全模块时直接写入
-    client = current_app.device_manager.get_client(device_id)
-    if not client:
-        return api_error(f'设备 {device_id} 不存在', 404)
-    if not client.connected:
-        return api_error(f'设备 {device_id} 未连接')
-
-    success = client.write_single_coil(address, bool_val)
-    if success:
-        get_auth_manager().log_operation(
-            operator, 'write_coil',
-            f'设备 {device_id} 写入线圈 address={address} value={value}')
-        return jsonify({'success': True, 'message': f'写入成功: 地址={address}, 值={value}'})
-    return jsonify({'success': False, 'message': '写入失败，请检查设备连接和线圈地址'}), 400
+    # round 338：**无安全模块 → 拒绝写入**，与 write-register 的口径对齐。
+    #
+    # 原来这里「降级」成直接写 PLC：安全模块不可用时，急停、联锁、旁路、
+    # 回读验证**全部消失**，线圈照写 —— 而 write-register（117-135 行）
+    # 早在 round 322 就改成 503 拒绝了。
+    #
+    # 同一族的两条路径对「安全模块缺失」的处理**必须等价**，
+    # 否则等于「挑一条闸门少的路径去写」。这正是本轮「写路径收敛」要抓的形状。
+    logger.error(
+        "拒绝线圈写入：安全模块(device_control)不可用 —— 无法做急停/联锁/回读校验。"
+        " device=%s address=%s value=%s operator=%s",
+        device_id, address, value, operator)
+    return jsonify({
+        'success': False,
+        'message': '安全模块不可用，已拒绝写入（无法执行急停/联锁/回读校验）',
+    }), 503
 
 
 @control_bp.route('/devices/<device_id>/adjust', methods=['POST'])
@@ -722,76 +724,19 @@ def batch_control():
             operator, f'batch_{action}', f'批量{action}{target_desc}')
         return jsonify(result)
 
-    # 降级：无安全模块时直接操作设备
-    device_manager = current_app.device_manager
-    results = {}
-
-    # 确定要操作的设备列表
-    target_devices = device_manager.devices.items()
-    if device_ids:
-        target_devices = [(did, cfg) for did, cfg in target_devices if did in device_ids]
-
-    for device_id, config in target_devices:
-        if not config.get('enabled', True):
-            continue
-        try:
-            client = device_manager.get_client(device_id)
-            if not client:
-                results[device_id] = {'success': False, 'message': '设备客户端不存在'}
-                continue
-
-            # 确保设备已连接
-            if not getattr(client, 'connected', False):
-                try:
-                    client.connect()
-                except Exception as e:
-                    # 连接失败由下方 connected 检查统一处理并返回“设备连接失败”，
-                    # 此处异常仅作记录，无副作用
-                    logger.debug("批量控制前连接设备失败 device=%s action=%s: %s",
-                                 device_id, action, e)
-
-            if not getattr(client, 'connected', False):
-                results[device_id] = {'success': False, 'message': '设备连接失败'}
-                continue
-
-            success = False
-            if action == 'start':
-                if hasattr(client, 'write_single_coil'):
-                    success = client.write_single_coil(0, True)
-                elif hasattr(client, 'write_single_register'):
-                    success = client.write_single_register(100, 1)
-            elif action == 'stop':
-                if hasattr(client, 'write_single_coil'):
-                    success = client.write_single_coil(0, False)
-                elif hasattr(client, 'write_single_register'):
-                    success = client.write_single_register(100, 0)
-            elif action == 'reset':
-                if hasattr(client, 'write_single_register'):
-                    success = client.write_single_register(100, 0)
-                elif hasattr(client, 'write_single_coil'):
-                    success = client.write_single_coil(0, False)
-
-            results[device_id] = {
-                'success': success,
-                'message': f'{action}操作{"成功" if success else "失败"}'
-            }
-        except Exception as e:
-            logger.error(f"批量控制设备 {device_id} 失败: {e}", exc_info=True)
-            results[device_id] = {'success': False, 'message': f'设备 {device_id} 操作失败'}
-
-    success_count = sum(1 for r in results.values() if r.get('success'))
-    total = len(results)
-
-    target_desc = f'{len(device_ids)}台设备' if device_ids else '所有设备'
-    get_auth_manager().log_operation(
-        operator, f'batch_{action}', f'批量{action}{target_desc}: {success_count}/{total} 成功')
+    # round 338：**无安全模块 → 拒绝批量控制**，与 write-register / write-coil 对齐。
+    #
+    # 原来这里降级成「硬编码地址直写」：线圈 0 / 寄存器 100，
+    # 既没有急停/联锁/量程/审计，地址还是写死的 —— 而 device_control.batch_control
+    # 那套是按**配置点位**走的。同一个功能两套实现、挑闸门少的那条用，
+    # 等于绕过安全层。
+    logger.error(
+        "拒绝批量控制：安全模块(device_control)不可用。action=%s operator=%s",
+        action, operator)
     return jsonify({
-        'success': success_count > 0,
-        'message': f'批量{action}完成: {success_count}/{total} 成功',
-        'results': results,
-        'success_count': success_count,
-        'total': total
-    })
+        'success': False,
+        'message': '安全模块不可用，已拒绝批量控制（无法执行急停/联锁校验）',
+    }), 503
 
 
 @control_bp.route('/control/audit', methods=['GET'])

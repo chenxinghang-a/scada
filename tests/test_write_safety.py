@@ -224,11 +224,15 @@ class TestFunctionCodeWhitelist:
     """Only allowed write operations should succeed."""
 
     def test_write_coil_bool_value_accepted(self, client, app):
-        """Writing a boolean coil value is accepted."""
-        mock_client = MagicMock()
-        mock_client.connected = True
-        mock_client.write_single_coil.return_value = True
-        app.device_manager.get_client.return_value = mock_client
+        """写布尔线圈值被接受，且**转成 1/0 传给安全层**（round 338）。
+
+        原来这个测试依赖「无安全模块时降级直写 PLC」—— 那条路径在 round 338
+        已改成 503 拒绝（与 write-register 对齐）。现在验证真正的契约：
+        `True → 1` 且必须显式带 `kind='coil'`（否则会写到同地址的保持寄存器）。
+        """
+        dc = MagicMock()
+        dc.write_with_verification.return_value = {'success': True, 'message': 'ok'}
+        app.device_control = dc
 
         token = _make_token('engineer')
         app.auth_manager.verify_token.return_value = {
@@ -240,13 +244,16 @@ class TestFunctionCodeWhitelist:
                            json={'address': 0, 'value': True},
                            headers={'Authorization': f'Bearer {token}'})
         assert resp.status_code == 200
+        args, kwargs = dc.write_with_verification.call_args
+        assert args[2] == 1, f'True 应转成 1，实际 {args[2]!r}'
+        assert kwargs.get('kind') == 'coil', (
+            "必须显式传 kind='coil'，否则会写到同地址的保持寄存器")
 
     def test_write_coil_string_false_treated_as_false(self, client, app):
-        """String 'false' is treated as boolean False."""
-        mock_client = MagicMock()
-        mock_client.connected = True
-        mock_client.write_single_coil.return_value = True
-        app.device_manager.get_client.return_value = mock_client
+        """字符串 'false' 必须转成 0（round 338 改为验证安全层入参）。"""
+        dc = MagicMock()
+        dc.write_with_verification.return_value = {'success': True, 'message': 'ok'}
+        app.device_control = dc
 
         token = _make_token('engineer')
         app.auth_manager.verify_token.return_value = {
@@ -258,8 +265,9 @@ class TestFunctionCodeWhitelist:
                            json={'address': 0, 'value': 'false'},
                            headers={'Authorization': f'Bearer {token}'})
         assert resp.status_code == 200
-        # Verify the coil was written as False
-        mock_client.write_single_coil.assert_called_once_with(0, False)
+        args, kwargs = dc.write_with_verification.call_args
+        assert args[2] == 0, f"'false' 应转成 0，实际 {args[2]!r}"
+        assert kwargs.get('kind') == 'coil'
 
     def test_write_endpoint_rejects_unsupported_method(self, client, app):
         """Only POST/PUT methods are accepted for endpoint writes."""
