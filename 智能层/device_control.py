@@ -1922,6 +1922,20 @@ class DeviceControlSafety:
         Returns:
             寄存器地址，找不到返回None
         """
+        # ⚠️ round 335：**bool 必须先排除**（bool 是 int 子类）。
+        #
+        # YAML 1.1 里未加引号的 `on`/`off`/`yes`/`no` 会被解析成 True/False。
+        # 如果联锁动作写的是 `register: on`（本意是寄存器**名字**叫 "on"），
+        # 走到这里 `isinstance(True, int)` 为真 → 直接返回 True（等于地址 1），
+        # 而下游 `int(value)` 也把它当 1 —— **联锁写到了地址 1 的寄存器上**。
+        # 同样 `try_int(True)` 也会返回 1，所以必须在两个入口之前就挡住。
+        if isinstance(register_name, bool):
+            logger.error(
+                "联锁动作的 register 字段是布尔值 %r —— YAML 里 on/off/yes/no "
+                "未加引号会被解析成布尔。如果它是寄存器名，请加引号（'on'）",
+                register_name)
+            return None
+
         # 如果已经是整数，直接返回
         if isinstance(register_name, int):
             return register_name

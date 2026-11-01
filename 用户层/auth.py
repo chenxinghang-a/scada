@@ -381,13 +381,47 @@ class AuthManager:
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT username, role, display_name, is_active, must_change_password
+                    SELECT username, role, display_name, is_active,
+                           must_change_password, password_changed_at
                     FROM users WHERE username = ?
                 ''', (payload.get('username'),))
                 user = cursor.fetchone()
 
             if not user or not user['is_active']:
                 return None
+
+            # round 335：**改密后必须让旧 access 令牌失效**。
+            #
+            # `refresh_token` 早就校验了这个（见其 572-594 行），但 `verify_token`
+            # **完全没有** —— 而 access 令牌才是每个请求真正带的那一个。
+            # 于是「改密 + 全量撤销」之后：黑名单里只有**当前请求头那一个**令牌，
+            # 被盗的另一个 access 令牌仍然能通过 verify_token，
+            # 继续调 `/api/control/*` 下发控制指令，直到自然过期。
+            #
+            # 判据：令牌的 `iat` 早于 `password_changed_at` → 该令牌是改密前签发的。
+            token_iat = payload.get('iat', 0)
+            password_changed = user['password_changed_at']
+            if password_changed:
+                try:
+                    pwd_time = datetime.fromisoformat(password_changed).timestamp()
+                except (ValueError, TypeError) as e:
+                    # fail-closed：解析不出「密码变更时间」时不能假定密码没改过，
+                    # 那等于让已改密用户的旧令牌继续可用。
+                    # 不把原始值写进日志（字段名含 password，容易被误当凭据收集）。
+                    logger.error(
+                        "password_changed_at 非法，无法确认密码是否已变更，拒绝令牌 "
+                        "user=%s: %s", user['username'], e)
+                    return None
+
+                # ⚠️ 容差 1 秒是必须的：JWT 的 `iat` 是**整数秒**（RFC 7519），
+                # 而 `password_changed_at` 是 `datetime.now().isoformat()`，带**微秒**。
+                # 「改密后立刻登录」时两者在同一秒内，`pwd_time` 会比 `iat` 大
+                # 零点几秒 —— 不留容差的话，**刚签发的合法令牌会被自己的规则杀掉**
+                # （实测：smoke 测试里 admin 强制改密后立即登录 → 401）。
+                if pwd_time > token_iat + 1:
+                    logger.warning(
+                        "令牌签发于密码变更之前，已失效: user=%s", user['username'])
+                    return None
 
             return {
                 'username': user['username'],
@@ -589,7 +623,9 @@ class AuthManager:
                         "user=%s: %s", user.get('username'), e)
                     return None
 
-                if pwd_time > token_iat:
+                # 容差 1 秒：`iat` 是整数秒、`password_changed_at` 带微秒，
+                # 「改密后立刻刷新」时 pwd_time 会略大于 iat（同 round 335 的说明）。
+                if pwd_time > token_iat + 1:
                     logger.warning(f"密码已变更，刷新令牌失效: user={user['username']}")
                     return None
 

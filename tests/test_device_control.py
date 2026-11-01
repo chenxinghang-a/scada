@@ -771,3 +771,49 @@ class TestBatchControlFailClosed:
         assert r['success'] is False
         client.write_single_coil.assert_not_called()
         assert '审计' in r['results']['plc_a']['message']
+
+
+# ===========================================================================
+# register 字段是布尔值（round 335）
+# ===========================================================================
+
+class TestResolveRegisterAddressRejectsBool:
+    """`register: on/off` 不能被当成地址 1/0。
+
+    YAML 1.1 里**未加引号**的 `on`/`off`/`yes`/`no` 会被解析成 True/False。
+    如果联锁动作写的是 `register: on`（本意是寄存器**名字**叫 "on"），
+    走到 `_resolve_register_address` 时 `isinstance(True, int)` 为真
+    → 直接返回 True（等于地址 1），**联锁写到了地址 1 的寄存器上**。
+    `try_int(True)` 也会返回 1，所以必须在两个入口之前就挡住。
+    """
+
+    DEVICES = {'plc_a': {
+        'protocol': 'modbus_tcp',
+        'registers': [
+            {'name': 'on', 'address': 77},
+            {'name': 'temp', 'address': 10},
+        ],
+    }}
+
+    def test_bool_true_is_not_address_1(self):
+        dc, _ = _make_dc(self.DEVICES)
+        assert dc._resolve_register_address('plc_a', True) is None, (
+            'register=True 被当成地址 1 —— YAML 的 on/off 会踩到')
+
+    def test_bool_false_is_not_address_0(self):
+        dc, _ = _make_dc(self.DEVICES)
+        assert dc._resolve_register_address('plc_a', False) is None
+
+    def test_int_still_works(self):
+        """反向对照：真整数地址照常。"""
+        dc, _ = _make_dc(self.DEVICES)
+        assert dc._resolve_register_address('plc_a', 10) == 10
+
+    def test_numeric_string_still_works(self):
+        dc, _ = _make_dc(self.DEVICES)
+        assert dc._resolve_register_address('plc_a', '10') == 10
+
+    def test_name_lookup_still_works(self):
+        """反向对照：名字叫 "on" 的寄存器，传**字符串** 'on' 能查到地址 77。"""
+        dc, _ = _make_dc(self.DEVICES)
+        assert dc._resolve_register_address('plc_a', 'on') == 77

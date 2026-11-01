@@ -239,6 +239,99 @@ def test_refresh_token_rejected_when_password_changed_after_issue(auth_manager):
 
 
 # ===========================================================================
+# E. verify_token —— 改密后旧 access 令牌必须失效（round 335）
+# ===========================================================================
+
+def test_verify_token_rejects_access_issued_before_password_change(auth_manager):
+    """改密前签发的 **access** 令牌必须失效。
+
+    `refresh_token` 早就校验了 `password_changed_at`，但 `verify_token` 没有 ——
+    而 access 令牌才是每个请求真正带的那一个。改密 + 全量撤销之后，
+    黑名单里只有「当前请求头那一个」令牌，**被盗的另一个 access 令牌仍然可用**，
+    能继续调 `/api/control/*` 下发控制指令，直到自然过期。
+    """
+    auth_manager.register('accrot', 'Abcdef12', role='engineer')
+    login = auth_manager.login('accrot', 'Abcdef12')
+    access = login['token']
+
+    assert auth_manager.verify_token(access) is not None, '改密前应可用（前提检查）'
+
+    with auth_manager.database.get_connection() as conn:
+        conn.execute(
+            'UPDATE users SET password_changed_at = ? WHERE username = ?',
+            ('2999-01-01 00:00:00.000000', 'accrot'),
+        )
+        conn.commit()
+
+    assert auth_manager.verify_token(access) is None, (
+        '改密前签发的 access 令牌仍可用 —— 被盗令牌可以继续下发控制指令')
+
+
+def test_verify_token_accepts_token_issued_after_password_change(auth_manager):
+    """反向对照：改密**之后**签发的令牌必须正常通过（别修过头）。"""
+    auth_manager.register('accnew', 'Abcdef12', role='viewer')
+    with auth_manager.database.get_connection() as conn:
+        conn.execute(
+            'UPDATE users SET password_changed_at = ? WHERE username = ?',
+            ('2020-01-01 00:00:00.000000', 'accnew'),
+        )
+        conn.commit()
+
+    login = auth_manager.login('accnew', 'Abcdef12')
+    assert auth_manager.verify_token(login['token']) is not None
+
+
+def test_verify_token_works_when_password_never_changed(auth_manager):
+    """反向对照：从未改密（NULL）时正常通过。"""
+    auth_manager.register('accnull', 'Abcdef12', role='viewer')
+    login = auth_manager.login('accnull', 'Abcdef12')
+    assert auth_manager.verify_token(login['token']) is not None
+
+
+def test_verify_token_fails_closed_when_password_changed_at_unparseable(auth_manager):
+    """`password_changed_at` 不可解析时必须拒绝（fail-closed）。"""
+    auth_manager.register('accbad', 'Abcdef12', role='viewer')
+    login = auth_manager.login('accbad', 'Abcdef12')
+    token = login['token']
+
+    with auth_manager.database.get_connection() as conn:
+        conn.execute(
+            'UPDATE users SET password_changed_at = ? WHERE username = ?',
+            ('not-a-timestamp', 'accbad'),
+        )
+        conn.commit()
+
+    assert auth_manager.verify_token(token) is None, (
+        '无法确认密码是否已变更时必须拒绝（fail-closed），不能静默放行')
+
+
+def test_verify_token_accepts_token_issued_right_after_password_change(auth_manager):
+    """改密后**立刻**登录拿到的令牌必须可用 —— 秒级容差（round 335）。
+
+    `iat` 是 JWT 的**整数秒**（RFC 7519），`password_changed_at` 是
+    `datetime.now().isoformat()` 带**微秒**。同一秒内 pwd_time 会比 iat
+    大零点几秒 —— 不留 1 秒容差的话，**刚签发的合法令牌会被自己的规则杀掉**。
+
+    实测（本轮）：smoke 测试里 admin 被强制改密后立即登录，
+    `/api/devices` 直接 401，日志是「令牌签发于密码变更之前」。
+    """
+    from datetime import datetime
+
+    auth_manager.register('accnow', 'Abcdef12', role='viewer')
+    # 模拟「改密」：时间戳取当前时刻，与随后签发的 iat 落在同一秒
+    with auth_manager.database.get_connection() as conn:
+        conn.execute(
+            'UPDATE users SET password_changed_at = ? WHERE username = ?',
+            (datetime.now().isoformat(sep=' '), 'accnow'),
+        )
+        conn.commit()
+
+    login = auth_manager.login('accnow', 'Abcdef12')
+    assert auth_manager.verify_token(login['token']) is not None, (
+        '改密后立刻签发的令牌被自己的规则误杀了 —— 缺少秒级容差')
+
+
+# ===========================================================================
 # E. logout —— 不能谎报成功
 # ===========================================================================
 
