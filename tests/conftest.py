@@ -891,3 +891,54 @@ def _restore_global_logging_state():
     if root.level != saved_level:
         root.setLevel(saved_level)
     _logging.disable(saved_disable)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _drain_thread_pool_workers():
+    """会话结束时唤醒所有 ThreadPoolExecutor 的 worker，让进程能干净退出（round 337）。
+
+    ## 为什么需要它
+
+    全量跑完（`N passed` 统计行已出）之后，进程还要卡几分钟才退，
+    有时要等到被外部超时 kill。用 `faulthandler.dump_traceback_later`
+    抓到的栈很一致：**100 个线程**全部停在
+    `concurrent.futures.thread._worker` → `work_queue.get()`。
+
+    它们是各个 `DataCollector` 的 `ThreadPoolExecutor` 的 worker
+    （`采集层/data_collector.py:638`）。`ThreadPoolExecutor` 的 worker
+    **不会自己退出** —— 靠 `atexit` 里的 `_python_exit()` 给每个队列塞
+    `None` 再逐个 `join()`。而本项目测试里大量 `DataCollector` 没有调
+    `stop()`（只有 `stop()` 才 `shutdown(wait=True)`，见 `:839`），
+    于是 worker 越积越多，退出阶段要逐个唤醒 + join。
+
+    ## 做法
+
+    **提前**把 `None` 塞进每个已注册的队列 —— 等价于 `_python_exit()`
+    的第一阶段，但发生在测试收尾时而不是进程退出时。这样 worker 在
+    `atexit` 之前就退了，`_python_exit()` 的 `join()` 立刻返回。
+
+    ⚠️ 用的是 `concurrent.futures.thread` 的私有符号，Python 版本升级
+    可能改名 —— 所以整体包在 try/except 里，失败只告警不影响测试结果。
+    """
+    yield
+    try:
+        import concurrent.futures.thread as _cft
+        lock = getattr(_cft, '_global_shutdown_lock', None)
+        queues = getattr(_cft, '_threads_queues', None)
+        if queues is None:
+            return
+        if lock is not None:
+            with lock:
+                _cft._shutdown = True
+                items = list(queues.items())
+        else:
+            _cft._shutdown = True
+            items = list(queues.items())
+        for _t, q in items:
+            try:
+                q.put(None)
+            except Exception:      # noqa: BLE001 —— 单个队列失败不影响其它
+                pass
+    except Exception as e:         # noqa: BLE001 —— 收尾失败不该让测试报错
+        import warnings
+        warnings.warn(f'_drain_thread_pool_workers 收尾失败: {e}', RuntimeWarning)
