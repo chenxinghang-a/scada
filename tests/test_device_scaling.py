@@ -1,5 +1,5 @@
 """
-Stress tests for SCADA system with 30 simulated devices.
+Stress tests for SCADA system with the full simulated device set.
 Verifies scaling, data generation, batch processing, and API coverage.
 """
 
@@ -22,8 +22,24 @@ from 采集层.simulated_client import set_estop_state, set_device_stopped
 # ──────────────────────────────────────────────────────────────
 # Constants
 # ──────────────────────────────────────────────────────────────
-EXPECTED_DEVICE_COUNT = 30
 SIMULATED_CONFIG_PATH = os.path.join(PROJECT_ROOT, '配置', 'devices_simulated.yaml')
+
+
+def _count_simulated_devices() -> int:
+    """设备数从配置读，不写死。
+
+    round 340 之前这里是 `EXPECTED_DEVICE_COUNT = 30`。加了 12 台设备后，
+    5 个用例一起红 —— 但它们红的原因不是「功能坏了」，而是「测试假设过时」。
+    写死数量的测试在扩容时一定会红，且**红得没有信息量**（真正的回归会被
+    这 5 条噪音盖住）。改成读配置后，它守的是「API 返回的数量 == 配置里的数量」，
+    这才是真正想断言的。
+    """
+    import yaml
+    with open(SIMULATED_CONFIG_PATH, encoding='utf-8') as f:
+        return len((yaml.safe_load(f) or {}).get('devices') or [])
+
+
+EXPECTED_DEVICE_COUNT = _count_simulated_devices()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -31,14 +47,14 @@ SIMULATED_CONFIG_PATH = os.path.join(PROJECT_ROOT, '配置', 'devices_simulated.
 # ──────────────────────────────────────────────────────────────
 @pytest.fixture(scope='module')
 def device_manager():
-    """Load SimulatedDeviceManager with the 30-device config."""
+    """Load SimulatedDeviceManager with the simulated-device config."""
     mgr = SimulatedDeviceManager(config_path=SIMULATED_CONFIG_PATH)
     return mgr
 
 
 @pytest.fixture(scope='module')
 def connected_manager(device_manager):
-    """Connect all 30 devices and yield the manager."""
+    """Connect all simulated devices and yield the manager."""
     results = device_manager.connect_all()
     yield device_manager
     device_manager.disconnect_all()
@@ -78,10 +94,10 @@ def _count_all_registers(devices_config: dict) -> int:
 # 1. TestSimulatedDeviceManagerScaling
 # ================================================================
 class TestSimulatedDeviceManagerScaling:
-    """Verify SimulatedDeviceManager loads and manages 30 devices."""
+    """Verify SimulatedDeviceManager loads and manages all devices."""
 
     def test_manager_loads_30_devices(self, device_manager):
-        """All 30 devices should be loaded from devices_simulated.yaml."""
+        """All devices should be loaded from devices_simulated.yaml."""
         assert len(device_manager.devices) == EXPECTED_DEVICE_COUNT, (
             f"Expected {EXPECTED_DEVICE_COUNT} devices, got {len(device_manager.devices)}"
         )
@@ -94,7 +110,7 @@ class TestSimulatedDeviceManagerScaling:
             assert client.device_id == device_id
 
     def test_manager_connect_all(self, connected_manager):
-        """connect_all() should succeed for all 30 devices."""
+        """connect_all() should succeed for all devices."""
         results = connected_manager.connect_all()
         assert len(results) == EXPECTED_DEVICE_COUNT
         for device_id, success in results.items():
@@ -141,7 +157,7 @@ class TestDataCollectorScaling:
             data_collector.stop()
 
     def test_collector_batch_processing(self, data_collector, device_manager):
-        """Batch processing should handle data from 30 devices."""
+        """Batch processing should handle data from all devices."""
         data_collector.start()
         try:
             # Let a couple of collection cycles run
@@ -154,7 +170,7 @@ class TestDataCollectorScaling:
             data_collector.stop()
 
     def test_collector_memory_bounded(self, data_collector, device_manager):
-        """Data queue size should stay bounded with 30 devices."""
+        """Data queue size should stay bounded with all devices."""
         data_collector.start()
         try:
             # Run for several seconds
@@ -171,7 +187,7 @@ class TestDataCollectorScaling:
 # 3. TestSimulationScaling
 # ================================================================
 class TestSimulationScaling:
-    """Verify all 30 devices produce correct simulated data."""
+    """Verify all devices produce correct simulated data."""
 
     def test_all_devices_generate_data(self, connected_manager):
         """Every device should produce non-zero data from at least one source."""
@@ -221,7 +237,7 @@ class TestSimulationScaling:
                     )
 
     def test_all_registers_have_values(self, connected_manager):
-        """All 229 data points across 30 devices should produce values."""
+        """每个点位都要能取到值（数量由配置决定，不写死）。"""
         all_values = []
         for device_id in connected_manager.devices:
             client = connected_manager.get_client(device_id)
@@ -254,7 +270,10 @@ class TestSimulationScaling:
 
     def test_no_extreme_values(self, connected_manager):
         """No simulated value should exceed reasonable physical bounds."""
-        MAX_ABS_VALUE = 1_000_000  # Upper bound for any physical quantity
+        # 上限 10 亿：累计量（电表 kWh、流量计 m³、产量 件）跑几年就是千万级，
+        # 100 万这条线会把**真实量级**判成异常（round 340：1600kVA 变压器的
+        # 累计电量 158 万 kWh 就被它拦了）。
+        MAX_ABS_VALUE = 1_000_000_000
         for device_id in connected_manager.devices:
             client = connected_manager.get_client(device_id)
             if client is None:
@@ -339,7 +358,7 @@ class TestSimulationScaling:
 # 4. TestAPIScaling
 # ================================================================
 class TestAPIScaling:
-    """Verify API endpoints return data for all 30 devices."""
+    """Verify API endpoints return data for all devices."""
 
     @pytest.fixture(autouse=True)
     def setup_app(self, app, device_manager, data_collector):
@@ -349,7 +368,7 @@ class TestAPIScaling:
         self.app = app
 
     def test_get_all_devices_returns_30(self, client, auth_headers):
-        """/api/devices should return all 30 devices."""
+        """/api/devices should return all configured devices."""
         resp = client.get('/api/devices', headers=auth_headers)
         assert resp.status_code == 200
         data = resp.get_json()
@@ -359,8 +378,8 @@ class TestAPIScaling:
         )
 
     def test_get_realtime_data_covers_all(self, client, auth_headers, device_manager):
-        """/api/data/realtime should cover all 30 devices."""
-        # Override the mock DB to return a proper list covering all 30 devices
+        """/api/data/realtime should cover all devices."""
+        # Override the mock DB to return a proper list covering all devices
         self.app.database.get_realtime_data.return_value = [
             {'device_id': did, 'register_name': 'test', 'value': 1.0}
             for did in device_manager.devices
@@ -369,7 +388,7 @@ class TestAPIScaling:
         assert resp.status_code == 200
         data = resp.get_json()
         assert 'data' in data
-        # Verify data covers all 30 device IDs
+        # Verify data covers all device IDs
         device_ids_in_data = {item['device_id'] for item in data['data']}
         assert len(device_ids_in_data) == EXPECTED_DEVICE_COUNT, (
             f"Realtime data covers {len(device_ids_in_data)} devices, expected {EXPECTED_DEVICE_COUNT}"

@@ -26,7 +26,69 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 
+from core.safe_numeric import try_finite_float
+
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# 配置驱动派生：允许 YAML 声明某个点位由哪个基变量派生
+#
+# 背景（round 340）：原来「参数名 → 数值」是一张 90 项的硬编码表，
+# 只有表里出现过的名字才有数据，系数（如 mold_temperature = temp*0.8）
+# 也写死在代码里。结果是：
+#   · 新设备只要参数名不在表里 → 该点位永远没有数据（读出来是 None → 25.0 兜底）
+#   · 同一参数在不同设备上量纲不同（MPa / kPa / Pa）→ 只能靠再加一条硬编码
+#   · 新设备类型（压缩机/冷却塔/AGV…）必须改代码才能有像样的数值
+#
+# 现在：点位配置里可写 sim 段，优先于内置表。
+#   sim:
+#     source: temperature    # 派生源（见 _SIM_SOURCES）
+#     gain: 0.8              # 乘数
+#     offset: -5             # 偏移
+#     noise: 0.3             # 高斯噪声标准差
+#     min: 0 / max: 300      # 钳位
+#     decimals: 2            # 保留小数位；dtype: int 时取整
+# ============================================================
+
+_SIM_SOURCES = frozenset({
+    'temperature', 'pressure', 'flow', 'level', 'speed', 'vibration',
+    'current', 'voltage', 'power', 'power_factor', 'ph', 'humidity', 'turbidity',
+    'counter', 'status', 'status_raw', 'health', 'fault_severity',
+    'constant', 'random',
+})
+
+# 派生源的别名：内置参数字典里没有「current / voltage / speed / power」这些
+# 聚合名，只有 current_a / voltage_a / motor_speed / active_power。
+# 若不映射，配置里写 source: current 会取不到值 → **配了等于没配**。
+_SIM_SOURCE_ALIASES = {
+    'current': ('current_a', 'current_b', 'current_c', 'motor_current'),
+    'voltage': ('voltage_a', 'voltage_b', 'voltage_c'),
+    'speed': ('motor_speed', 'conveyor_speed', 'pump_speed', 'fan_speed',
+              'spindle_speed', 'injection_speed'),
+    'power': ('active_power', 'power'),
+    'vibration': ('vibration', 'vibration_x'),
+    'ph': ('ph', 'ph_value'),
+    'level': ('level', 'tank_level', 'water_level'),
+    'flow': ('flow', 'inlet_flow', 'outlet_flow'),
+    'humidity': ('humidity', 'dryer_humidity'),
+}
+
+#: ``simulation.process_model`` 允许覆盖的字段（白名单）。
+#:
+#: 为什么用白名单而不是 ``setattr`` 任意键：
+#: ① 安全 —— 任意键意味着配置能覆盖 ``process_model`` 上的**任何**属性，
+#:    包括将来可能加的方法名，等于把内部结构暴露给配置文件；
+#: ② 可静态检查 —— 仓库有 ``tests/test_config_keys_consumed.py`` 扫
+#:    「配置里声明的键在代码里有没有字面量读取点」。动态 ``setattr`` 让
+#:    所有 ``base_*`` 键看起来「没有任何读取点」，闸门直接红。
+#:    写成字面量元组后，既通过闸门又自我文档化。
+_PROCESS_MODEL_FIELDS = (
+    'base_temperature', 'base_pressure', 'base_flow', 'base_level',
+    'base_power_kw', 'base_current', 'base_speed',
+    'temp_pressure_coeff', 'temp_flow_coeff', 'pressure_flow_coeff',
+    'thermal_time_constant', 'pressure_time_constant', 'flow_time_constant',
+)
 
 
 class DeviceState(Enum):
@@ -124,6 +186,15 @@ class DeviceBehaviorSimulator:
         self.device_id = device_id
         self.device_config = device_config
         self.device_name = device_config.get('name', device_id)
+
+        # ===== 应用模拟参数档（配置/simulation_profiles.yaml）=====
+        # 只补设备配置里没写的键，内联 sim 段优先；没有对应档就原样返回。
+        try:
+            from .simulation_profiles import apply_profile
+            apply_profile(device_config)
+        except Exception as exc:  # noqa: BLE001 - 模拟档是调试期假设，不该阻断采集
+            logger.warning("[行为模拟] %s: 应用模拟参数档失败（已忽略）: %s",
+                           device_id, exc)
         
         # 设备状态
         self.state = DeviceState.IDLE
@@ -187,6 +258,8 @@ class DeviceBehaviorSimulator:
         self._device_param_names: set = set()
         self._register_address_map: Dict[int, Dict[str, Any]] = {}  # address -> {name, data_type, scale}
         self._build_param_names()
+        # ===== 配置驱动的点位派生规则（优先于内置硬编码表） =====
+        self._build_sim_specs()
         
         # 统计
         self.stats = {
@@ -202,7 +275,10 @@ class DeviceBehaviorSimulator:
         
         # 从预设simulation_params注入参数
         self._apply_simulation_params()
-        
+
+        # ===== 按本设备的基准量放大物理极限（见方法注释）=====
+        self._calibrate_limits()
+
         device_role = "监测" if self._is_monitoring_device else "工作"
         logger.info(f"[行为模拟] 设备 {self.device_name} 初始化完成, 角色: {device_role}, 参数: {len(self._device_param_names)} 个")
 
@@ -273,6 +349,93 @@ class DeviceBehaviorSimulator:
         elif '水质' in device_type or 'quality' in device_type:
             self.process_model.base_temperature = 22.0
             self.process_model.base_flow = 48.0
+
+        # ===== 配置覆盖（最高优先级，解锁「设备类型必须改代码」）=====
+        self._apply_process_model_overrides()
+
+    def _calibrate_limits(self):
+        """按本设备的基准量放大物理极限。
+
+        类常量（``CURRENT_MAX = 100`` / ``POWER_MAX_KW = 100`` /
+        ``SPEED_MAX = 3600`` / ``FLOW_MAX = 200``）是**一台通用小设备**的
+        上限。真实设备量级差得很远：
+
+        | 设备            | 基准        | 被类常量钳成 |
+        |-----------------|-------------|--------------|
+        | 离心冷水机      | 350 kW      | 100 kW       |
+        | 离心冷水机      | 620 A       | 100 A        |
+        | 光伏逆变器      | 100 kW      | 100 kW（临界）|
+        | 储能 BMS        | 250 kW      | 100 kW       |
+        | 离心机主轴      | 8000 RPM    | 3600 RPM     |
+
+        被钳住的后果不是「报错」，而是**所有大功率设备的电流/功率/转速都
+        停在同一个数字上**，而且看起来完全正常（就是一条被压平的直线）。
+
+        修法：实例级覆盖 —— 取 ``max(类常量, 基准量 × 倍数)``。
+        小设备仍受类常量保护（异常值不会飙到天上），大设备不再被误钳。
+        """
+        pm = self.process_model
+        # 用实例属性遮蔽类属性：所有使用点（17 处）无需改动
+        self.CURRENT_MAX = max(self.CURRENT_MAX, abs(pm.base_current) * 3.0)
+        self.POWER_MAX_KW = max(self.POWER_MAX_KW, abs(pm.base_power_kw) * 3.0)
+        self.SPEED_MAX = max(self.SPEED_MAX, abs(pm.base_speed) * 2.0)
+        self.FLOW_MAX = max(self.FLOW_MAX, abs(pm.base_flow) * 3.0)
+        self.PRESSURE_MAX = max(self.PRESSURE_MAX, abs(pm.base_pressure) * 5.0)
+        self.TEMP_MAX = max(self.TEMP_MAX, abs(pm.base_temperature) * 2.5 + 50.0)
+
+    def _apply_process_model_overrides(self):
+        """用 ``simulation.process_model`` 段覆盖过程模型。
+
+        允许 YAML 直接给出任意 ``ProcessModel`` 字段，例如：
+
+            simulation:
+              process_model:
+                base_temperature: 155.0
+                base_pressure: 1.0
+                thermal_time_constant: 180.0
+                base_power_kw: 55
+
+        这样新增设备类型（压缩机/冷却塔/AGV/光伏逆变器…）只需改配置，
+        不必再往 ``_configure_process_model`` 里加一个关键词分支。
+
+        未知字段只告警不抛异常：一台设备配错不该让采集进程起不来。
+        """
+        sim_cfg = self.device_config.get('simulation') or {}
+        if not isinstance(sim_cfg, dict):
+            logger.warning(
+                "[行为模拟] %s: simulation 段应为 dict，实际 %s，已忽略",
+                self.device_name, type(sim_cfg).__name__)
+            return
+        cfg = sim_cfg.get('process_model') or {}
+        if not isinstance(cfg, dict) or not cfg:
+            return
+
+        applied = []
+        for key, raw in cfg.items():
+            if key not in _PROCESS_MODEL_FIELDS:
+                logger.warning(
+                    "[行为模拟] %s: simulation.process_model.%s 不在可覆盖字段白名单里"
+                    "（可用: %s），已忽略",
+                    self.device_name, key, ', '.join(_PROCESS_MODEL_FIELDS))
+                continue
+            val = try_finite_float(raw)
+            if val is None:
+                logger.warning(
+                    "[行为模拟] %s: simulation.process_model.%s=%r 不是有限数值，已忽略",
+                    self.device_name, key, raw)
+                continue
+            setattr(self.process_model, key, val)
+            applied.append(key)
+
+        if applied:
+            # 同步「当前值」，否则第一个采集周期仍输出关键词分支的默认值
+            self._current_temp = self.process_model.base_temperature
+            self._current_pressure = self.process_model.base_pressure
+            self._current_flow = self.process_model.base_flow
+            self._current_level = self.process_model.base_level
+            self._current_power_kw = self.process_model.base_power_kw
+            logger.info("[行为模拟] %s: 过程模型按配置覆盖 %d 项 (%s)",
+                        self.device_name, len(applied), ', '.join(applied))
     
     def _build_param_names(self):
         """从设备配置中提取该设备拥有的参数名集合"""
@@ -306,7 +469,211 @@ class DeviceBehaviorSimulator:
             name = ep.get('name', '')
             if name:
                 self._device_param_names.add(name)
-    
+
+    def _build_sim_specs(self):
+        """收集配置中每个点位的 ``sim`` 派生规则。
+
+        扫描 registers / nodes / topics / endpoints 四个点位区，凡是写了
+        ``sim:`` 段的，登记到 ``self._sim_specs``，并在生成数据时优先于
+        内置的硬编码参数表。
+
+        设计取舍：非法 source 只告警不抛异常 —— 一台设备配错不该让整个
+        采集进程起不来；但也不静默忽略（否则「配了没效果」查不到）。
+        """
+        self._sim_specs: Dict[str, Dict[str, Any]] = {}
+        self._sim_order: List[str] = []
+
+        # 第一遍：先收齐所有声明了 sim 的点位名。
+        # 允许 source 指向**另一个派生点位**（如
+        # chilled_water_temp_out: {source: chilled_water_temp_in, offset: 5}），
+        # 这样配置能直接表达「出水 = 进水 + 温差」这类真实耦合，
+        # 而不是被迫让每个点位都从同一个基变量硬套系数。
+        declared = set()
+        for section in ('registers', 'nodes', 'topics', 'endpoints'):
+            for point in (self.device_config.get(section) or []):
+                if isinstance(point, dict) and isinstance(point.get('sim'), dict):
+                    if point.get('name'):
+                        declared.add(point['name'])
+
+        for section in ('registers', 'nodes', 'topics', 'endpoints'):
+            for point in (self.device_config.get(section) or []):
+                if not isinstance(point, dict):
+                    continue
+                spec = point.get('sim')
+                if not isinstance(spec, dict):
+                    continue
+                name = point.get('name')
+                if not name:
+                    logger.warning(
+                        "[行为模拟] %s: %s 区有点位写了 sim 段但没有 name，已跳过",
+                        self.device_name, section)
+                    continue
+
+                source = str(spec.get('source', '')).strip().lower()
+                if source not in _SIM_SOURCES and source not in declared:
+                    logger.warning(
+                        "[行为模拟] %s: 点位 %s 的 sim.source=%r 既不是内置源、"
+                        "也不是本设备声明过的点位（可用: %s），该点位退回内置表",
+                        self.device_name, name, spec.get('source'),
+                        ', '.join(sorted(_SIM_SOURCES)))
+                    continue
+
+                # 用默认参数把循环变量**显式绑定**到闭包上（B023）：
+                # 虽然这里定义后立即调用、行为本身没错，但一旦以后有人
+                # 把这个函数存起来延迟调用，就会静默读到下一轮的值。
+                def _num(key: str, default, _spec=spec, _name=name):
+                    raw = _spec.get(key, default)
+                    if raw is None:
+                        return default
+                    got = try_finite_float(raw)
+                    if got is None:
+                        logger.warning(
+                            "[行为模拟] %s: 点位 %s 的 sim.%s=%r 不是有限数值，用默认 %r",
+                            self.device_name, _name, key, raw, default)
+                        return default
+                    return got
+
+                self._sim_specs[name] = {
+                    'source': source,
+                    'gain': _num('gain', 1.0),
+                    'offset': _num('offset', 0.0),
+                    'noise': _num('noise', 0.0),
+                    'min': _num('min', None),
+                    'max': _num('max', None),
+                    'decimals': _num('decimals', None),
+                    'value': _num('value', 0.0),   # source=constant 时用
+                    'dtype': str(spec.get('dtype', '')).strip().lower(),
+                    # source=status 时的状态编码覆盖（状态名 → 点表编码）
+                    'map': spec.get('map') if isinstance(spec.get('map'), dict) else None,
+                }
+                self._sim_order.append(name)
+                # 配置声明的点位必然要出现在输出里
+                self._device_param_names.add(name)
+
+        if self._sim_specs:
+            logger.info(
+                "[行为模拟] %s: 配置驱动点位 %d 个 (%s)",
+                self.device_name, len(self._sim_specs),
+                ', '.join(self._sim_order[:8])
+                + ('…' if len(self._sim_order) > 8 else ''))
+
+    def _status_code(self, spec: Dict[str, Any]) -> int:
+        """把内部状态映射成**设备点表的编码**。
+
+        为什么需要映射：``DeviceState.value`` 是
+        ``STOPPED=0 / IDLE=1 / RUNNING=2 / FAULT=3``，
+        而现场点表绝大多数是 ``0=停机 / 1=运行 / 2=故障``。
+
+        直接输出 ``state.value`` 的后果（改造前就是这样）：设备在运行时
+        输出 **2**，而点表语义里 2 是**故障** —— 界面上所有正常设备都显示
+        「故障」，而真正故障时输出 3，落到点表范围外，被当成非法值丢弃。
+        这是「模拟器自己造出错误数据」里最难发现的一类：**数字合法、语义反了**。
+
+        可用 ``sim.map`` 覆盖，例如三档以上的状态字：
+            map: {RUNNING: 3, IDLE: 1, STOPPED: 0, FAULT: 9}
+        """
+        mapping = spec.get('map')
+        if isinstance(mapping, dict):
+            hit = mapping.get(self.state.name)
+            if hit is not None:
+                got = try_finite_float(hit)
+                if got is not None:
+                    return int(got)
+
+        if self.state in (DeviceState.RUNNING, DeviceState.SETUP):
+            return 1
+        if self.state == DeviceState.FAULT:
+            return 2
+        return 0
+
+    def _derive_configured_params(self, base: Dict[str, Any]) -> Dict[str, Any]:
+        """按 ``sim`` 规则从基变量派生点位值。
+
+        Args:
+            base: 当前周期已算出的参数字典（内置表的结果），作为派生源池。
+
+        Returns:
+            仅含配置声明点位的字典；源不可用时不输出该键
+            （**不补 0** —— 补 0 会让「没配好」看起来像「设备真读到 0」）。
+        """
+        if not self._sim_specs:
+            return {}
+
+        out: Dict[str, Any] = {}
+
+        # 状态/健康等元信息源
+        special = {
+            # status_raw 给的是内部枚举原值；对外一律走 status（映射成点表编码）
+            'status_raw': float(self.state.value),
+            'health': float(self.health.overall_score),
+            'fault_severity': float(self.fault_severity),
+            'counter': float(self._shot_count),
+        }
+
+        for name in self._sim_order:
+            spec = self._sim_specs[name]
+            source = spec['source']
+
+            if source == 'constant':
+                value = spec['value']
+            elif source == 'random':
+                lo = spec['min'] if spec['min'] is not None else 0.0
+                hi = spec['max'] if spec['max'] is not None else 100.0
+                if hi < lo:
+                    lo, hi = hi, lo
+                value = random.uniform(lo, hi)
+                # random 源直接用，不再走 gain/offset（否则量纲会二次变形）
+                out[name] = self._finalize_sim(name, value, spec, skip_transform=True)
+                continue
+            elif source == 'status':
+                # 状态位要映射成点表编码（0=停机/1=运行/2=故障），
+                # 不能直接输出 state.value（那是 0/1/2/3 的内部枚举）
+                out[name] = self._status_code(spec)
+                continue
+            elif source in special:
+                value = special[source]
+            else:
+                raw = base.get(source)
+                if raw is None:
+                    raw = out.get(source)
+                if raw is None:
+                    # 聚合名 → 具体列名（current → current_a 等）
+                    for alias in _SIM_SOURCE_ALIASES.get(source, ()):
+                        raw = base.get(alias)
+                        if raw is not None:
+                            break
+                if raw is None:
+                    logger.debug(
+                        "[行为模拟] %s: 点位 %s 的派生源 %s 本周期不可用，跳过",
+                        self.device_name, name, source)
+                    continue
+                got = try_finite_float(raw)
+                if got is None:
+                    continue
+                value = got
+
+            out[name] = self._finalize_sim(name, value, spec)
+
+        return out
+
+    @staticmethod
+    def _finalize_sim(name: str, value: float, spec: Dict[str, Any],
+                      skip_transform: bool = False) -> Any:
+        """套用 gain/offset/noise/钳位/取整。"""
+        if not skip_transform:
+            value = value * spec['gain'] + spec['offset']
+        if spec['noise']:
+            value += random.gauss(0, spec['noise'])
+        if spec['min'] is not None and value < spec['min']:
+            value = spec['min']
+        if spec['max'] is not None and value > spec['max']:
+            value = spec['max']
+        if spec['dtype'] == 'int':
+            return int(round(value))
+        if spec['decimals'] is not None:
+            return round(value, int(spec['decimals']))
+        return round(value, 3)
+
     def _apply_simulation_params(self):
         """从设备配置中的simulation_params注入参数到过程模型"""
         # simulation_params通常在SimulationInitializer中设置，
@@ -316,30 +683,54 @@ class DeviceBehaviorSimulator:
             return
         
         base_values = sim_params.get('base_values', {})
-        
+
         # 用base_values配置过程模型的基础参数
+        #
+        # round 340：原来每个分支都有 `if abs(value - 当前值) > 阈值` 的门槛
+        # （温度 20 / 压力 0.1 / 流量 2），本意是「别被噪声级别的差异扰动」，
+        # 但 base_values 是**配置值**不是测量值 —— 配置 55°C 而默认 50°C，
+        # 差 5 < 20 → **配置被静默忽略**，模拟器一直按 50°C 跑。
+        # 配置值应当无条件生效，差异大小与「是否生效」无关。
         for name, value in base_values.items():
+            got = try_finite_float(value)
+            if got is None:
+                logger.warning(
+                    "[行为模拟] %s: base_values.%s=%r 不是有限数值，已忽略",
+                    self.device_name, name, value)
+                continue
             name_lower = name.lower()
             if 'temperature' in name_lower or 'temp' in name_lower:
                 # 取第一个温度参数作为基础温度
-                if abs(value - self.process_model.base_temperature) > 20:
-                    self.process_model.base_temperature = float(value)
-                    self._current_temp = float(value)
+                self.process_model.base_temperature = got
+                self._current_temp = got
             elif 'pressure' in name_lower and 'spray' not in name_lower:
-                if abs(value - self.process_model.base_pressure) > 0.1:
-                    self.process_model.base_pressure = float(value)
-                    self._current_pressure = float(value)
+                self.process_model.base_pressure = got
+                self._current_pressure = got
             elif 'flow' in name_lower:
-                if abs(value - self.process_model.base_flow) > 2:
-                    self.process_model.base_flow = float(value)
-                    self._current_flow = float(value)
+                self.process_model.base_flow = got
+                self._current_flow = got
             elif 'level' in name_lower:
-                level_pct = float(value) / 300 * 100 if float(value) > 100 else float(value)
+                # 配置可能给百分比（0-100）或工程量（如 mm）；>100 视为工程量
+                level_pct = got / 300 * 100 if got > 100 else got
                 self.process_model.base_level = level_pct
                 self._current_level = level_pct
     
     def _detect_monitoring_device(self) -> bool:
-        """检测设备是否为监测/检测设备（不受停机命令影响）"""
+        """检测设备是否为监测/检测设备（不受停机命令影响）
+
+        优先用配置里的 ``simulation.monitoring`` 显式声明 —— 关键词猜测
+        只能覆盖「常见中文/英文叫法」，像「激光测厚仪」「张力计」这类
+        名字里不含「监测/传感器」的仪表会被误判成工作设备，停机时被归零。
+        """
+        sim_cfg = self.device_config.get('simulation') or {}
+        if isinstance(sim_cfg, dict) and 'monitoring' in sim_cfg:
+            declared = sim_cfg.get('monitoring')
+            if isinstance(declared, bool):
+                return declared
+            logger.warning(
+                "[行为模拟] %s: simulation.monitoring=%r 不是布尔值，回退关键词判定",
+                self.device_name, declared)
+
         desc = self.device_config.get('description', '').lower()
         name = self.device_config.get('name', '').lower()
         device_id = self.device_config.get('id', '').lower()
@@ -1213,6 +1604,8 @@ class DeviceBehaviorSimulator:
                 # 通用
                 'co2': round(400 + random.gauss(0, 10), 0),
             }
+            # 配置驱动的派生点位（源在 stopped_params 里已是环境值/零值，自动跟随停机）
+            stopped_params.update(self._derive_configured_params(stopped_params))
             # 过滤：只返回该设备实际拥有的参数
             return {k: v for k, v in stopped_params.items()
                     if k.startswith('_') or k in self._device_param_names}
@@ -1412,6 +1805,9 @@ class DeviceBehaviorSimulator:
             '_timestamp': datetime.now().isoformat()
         }
         
+        # ===== 配置驱动的派生点位（覆盖同名的内置值，并可新增内置表里没有的名字） =====
+        all_params.update(self._derive_configured_params(all_params))
+
         # ===== 过滤：只返回该设备拥有的参数 + 元数据 =====
         if self._device_param_names:
             filtered = {}

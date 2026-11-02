@@ -1914,3 +1914,1019 @@ devices:
     unit: °C
   username: scada
   vendor: 自研物联网节点
+- collection_interval: 5
+  description: 离心式冷水机组 — 冷冻/冷却水/压缩机
+  device_model: CVHE-500
+  enabled: true
+  host: 192.168.1.121
+  id: chiller_01
+  name: 约克CVHE-500离心冷水机组
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 冷冻水出水温度
+    length: 2
+    name: chw_supply_temp
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 冷冻水回水温度
+    length: 2
+    name: chw_return_temp
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 冷却水进水温度
+    length: 2
+    name: cw_inlet_temp
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 冷却水出水温度
+    length: 2
+    name: cw_outlet_temp
+    scale: 1.0
+    unit: °C
+  - address: 8
+    data_type: float32
+    description: 冷冻水流量
+    length: 2
+    name: chw_flow
+    scale: 1.0
+    unit: m³/h
+  - address: 10
+    data_type: float32
+    description: 冷却水流量
+    length: 2
+    name: cw_flow
+    scale: 1.0
+    unit: m³/h
+  - address: 12
+    data_type: float32
+    description: 压缩机电流
+    length: 2
+    name: compressor_current
+    scale: 1.0
+    unit: A
+  - address: 14
+    data_type: float32
+    description: 蒸发器压力
+    length: 2
+    name: evaporator_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 16
+    data_type: float32
+    description: 冷凝器压力
+    length: 2
+    name: condenser_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 18
+    data_type: float32
+    description: 机组负载率
+    length: 2
+    name: load_ratio
+    scale: 1.0
+    unit: '%'
+  - address: 20
+    data_type: float32
+    description: 累计运行时间
+    length: 2
+    name: run_hours
+    scale: 1.0
+    unit: h
+  - address: 22
+    data_type: uint16
+    description: 机组状态 0=停机/1=运行/2=故障/3=报警
+    length: 1
+    name: chiller_status
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 约克
+  zone: 公用工程
+- collection_interval: 5
+  description: 变频离心水泵 — 出口压力/流量/振动
+  device_model: CR95-3 + ACS580
+  enabled: true
+  host: 192.168.1.122
+  id: pump_vfd_01
+  name: 格兰富CR95变频水泵
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 出口压力
+    length: 2
+    name: outlet_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: 泵流量
+    length: 2
+    name: pump_flow
+    scale: 1.0
+    unit: m³/h
+  - address: 4
+    data_type: float32
+    description: 电机转速
+    length: 2
+    name: pump_speed_rpm
+    scale: 1.0
+    unit: RPM
+  - address: 6
+    data_type: float32
+    description: 电机电流
+    length: 2
+    name: pump_current
+    scale: 1.0
+    unit: A
+  - address: 8
+    data_type: float32
+    description: 电机功率
+    length: 2
+    name: pump_power
+    scale: 1.0
+    unit: kW
+  - address: 10
+    data_type: float32
+    description: 轴承温度
+    length: 2
+    name: bearing_temp
+    scale: 1.0
+    unit: °C
+  - address: 12
+    data_type: float32
+    description: 振动速度有效值
+    length: 2
+    name: pump_vibration
+    scale: 1.0
+    unit: mm/s
+  - address: 14
+    data_type: float32
+    description: 变频器输出频率
+    length: 2
+    name: vfd_frequency
+    scale: 1.0
+    unit: Hz
+  - address: 16
+    data_type: float32
+    description: 累计运行小时
+    length: 2
+    name: pump_run_hours
+    scale: 1.0
+    unit: h
+  - address: 18
+    data_type: uint16
+    description: 泵状态 0=停机/1=运行/2=故障
+    length: 1
+    name: pump_status
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 格兰富
+  zone: 公用工程
+- collection_interval: 10
+  description: 皮带输送线 — 速度/堵料/跑偏/急停
+  device_model: DTII-800
+  enabled: true
+  host: 192.168.1.123
+  id: conveyor_01
+  name: DTII-800皮带输送线
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 皮带线速度
+    length: 2
+    name: belt_speed
+    scale: 1.0
+    unit: m/s
+  - address: 2
+    data_type: float32
+    description: 驱动电机电流
+    length: 2
+    name: conveyor_current
+    scale: 1.0
+    unit: A
+  - address: 4
+    data_type: uint32
+    description: 累计输送件数
+    length: 2
+    name: conveyor_count
+    scale: 1.0
+    unit: 件
+  - address: 6
+    data_type: uint16
+    description: 堵料检测 1=堵料
+    length: 1
+    name: blockage_alarm
+    scale: 1.0
+    unit: ''
+  - address: 7
+    data_type: uint16
+    description: 跑偏检测 1=跑偏
+    length: 1
+    name: deviation_alarm
+    scale: 1.0
+    unit: ''
+  - address: 8
+    data_type: uint16
+    description: 拉绳急停 1=动作
+    length: 1
+    name: pullcord_estop
+    scale: 1.0
+    unit: ''
+  - address: 9
+    data_type: uint16
+    description: 输送线状态 0=停机/1=运行/2=故障
+    length: 1
+    name: conveyor_status
+    scale: 1.0
+    unit: ''
+  - address: 10
+    data_type: float32
+    description: 变频器频率
+    length: 2
+    name: conveyor_vfd_hz
+    scale: 1.0
+    unit: Hz
+  slave_id: 1
+  vendor: 自研
+  zone: 产线
+- auth_password: ${DEVICE_REST_ADMIN_PASSWORD}
+  auth_type: bearer
+  auth_username: scada
+  base_url: http://192.168.1.124:8080
+  collection_interval: 15
+  description: AGV调度系统 — 车辆/任务/电量
+  device_model: AGV-Fleet-20
+  enabled: true
+  endpoints:
+  - json_path: total
+    method: GET
+    name: agv_total
+    path: /api/agv/fleet
+    unit: 台
+  - json_path: active
+    method: GET
+    name: agv_active
+    path: /api/agv/fleet
+    unit: 台
+  - json_path: idle
+    method: GET
+    name: agv_idle
+    path: /api/agv/fleet
+    unit: 台
+  - json_path: charging
+    method: GET
+    name: agv_charging
+    path: /api/agv/fleet
+    unit: 台
+  - json_path: fault
+    method: GET
+    name: agv_fault
+    path: /api/agv/fleet
+    unit: 台
+  - json_path: avg_battery
+    method: GET
+    name: agv_avg_battery
+    path: /api/agv/fleet
+    unit: '%'
+  - json_path: tasks_completed
+    method: GET
+    name: agv_tasks_done
+    path: /api/agv/stats
+    unit: 单
+  - json_path: avg_cycle_seconds
+    method: GET
+    name: agv_avg_cycle_time
+    path: /api/agv/stats
+    unit: s
+  - json_path: status
+    method: GET
+    name: agv_system_status
+    path: /api/agv/status
+    unit: ''
+  host: 192.168.1.124
+  id: agv_system_01
+  name: AGV调度系统（20台）
+  port: 8080
+  protocol: rest
+  vendor: 自研
+  zone: 仓储
+- collection_interval: 5
+  description: 组串式光伏逆变器 — 直流/交流/发电量
+  device_model: SUN2000-100KTL
+  enabled: true
+  host: 192.168.1.125
+  id: pv_inverter_01
+  name: 华为SUN2000-100KTL逆变器
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 直流输入电压
+    length: 2
+    name: pv_dc_voltage
+    scale: 1.0
+    unit: V
+  - address: 2
+    data_type: float32
+    description: 直流输入电流
+    length: 2
+    name: pv_dc_current
+    scale: 1.0
+    unit: A
+  - address: 4
+    data_type: float32
+    description: 直流输入功率
+    length: 2
+    name: pv_dc_power
+    scale: 1.0
+    unit: kW
+  - address: 6
+    data_type: float32
+    description: 交流输出电压
+    length: 2
+    name: pv_ac_voltage
+    scale: 1.0
+    unit: V
+  - address: 8
+    data_type: float32
+    description: 交流输出电流
+    length: 2
+    name: pv_ac_current
+    scale: 1.0
+    unit: A
+  - address: 10
+    data_type: float32
+    description: 有功功率
+    length: 2
+    name: pv_active_power
+    scale: 1.0
+    unit: kW
+  - address: 12
+    data_type: float32
+    description: 无功功率
+    length: 2
+    name: pv_reactive_power
+    scale: 1.0
+    unit: kvar
+  - address: 14
+    data_type: float32
+    description: 功率因数
+    length: 2
+    name: pv_power_factor
+    scale: 1.0
+    unit: ''
+  - address: 16
+    data_type: float32
+    description: 电网频率
+    length: 2
+    name: pv_frequency
+    scale: 1.0
+    unit: Hz
+  - address: 18
+    data_type: float32
+    description: 日发电量
+    length: 2
+    name: pv_daily_energy
+    scale: 1.0
+    unit: kWh
+  - address: 20
+    data_type: float32
+    description: 累计发电量
+    length: 2
+    name: pv_total_energy
+    scale: 1.0
+    unit: MWh
+  - address: 22
+    data_type: float32
+    description: 组件温度
+    length: 2
+    name: pv_module_temp
+    scale: 1.0
+    unit: °C
+  - address: 24
+    data_type: float32
+    description: 逆变效率
+    length: 2
+    name: pv_efficiency
+    scale: 1.0
+    unit: '%'
+  - address: 26
+    data_type: uint16
+    description: 逆变器状态 0=待机/1=发电/2=故障/3=限功率
+    length: 1
+    name: pv_inverter_status
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 华为
+  zone: 能源站
+- collection_interval: 5
+  description: 储能电池管理系统 — SOC/SOH/单体压差
+  device_model: BESS-500kWh
+  enabled: true
+  host: 192.168.1.126
+  id: bess_bms_01
+  name: 宁德时代500kWh储能BMS
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 电池组总电压
+    length: 2
+    name: bms_total_voltage
+    scale: 1.0
+    unit: V
+  - address: 2
+    data_type: float32
+    description: 电池组总电流
+    length: 2
+    name: bms_total_current
+    scale: 1.0
+    unit: A
+  - address: 4
+    data_type: float32
+    description: 荷电状态 SOC
+    length: 2
+    name: bms_soc
+    scale: 1.0
+    unit: '%'
+  - address: 6
+    data_type: float32
+    description: 健康状态 SOH
+    length: 2
+    name: bms_soh
+    scale: 1.0
+    unit: '%'
+  - address: 8
+    data_type: uint16
+    description: 最高单体电压
+    length: 1
+    name: bms_cell_max_mv
+    scale: 1.0
+    unit: mV
+  - address: 9
+    data_type: uint16
+    description: 最低单体电压
+    length: 1
+    name: bms_cell_min_mv
+    scale: 1.0
+    unit: mV
+  - address: 10
+    data_type: float32
+    description: 最高单体温度
+    length: 2
+    name: bms_temp_max
+    scale: 1.0
+    unit: °C
+  - address: 12
+    data_type: float32
+    description: 最低单体温度
+    length: 2
+    name: bms_temp_min
+    scale: 1.0
+    unit: °C
+  - address: 14
+    data_type: float32
+    description: 充放电功率（正=放电）
+    length: 2
+    name: bms_power
+    scale: 1.0
+    unit: kW
+  - address: 16
+    data_type: uint32
+    description: 循环次数
+    length: 2
+    name: bms_cycle_count
+    scale: 1.0
+    unit: 次
+  - address: 18
+    data_type: float32
+    description: 绝缘电阻
+    length: 2
+    name: bms_insulation
+    scale: 1.0
+    unit: kΩ
+  - address: 20
+    data_type: uint16
+    description: BMS状态 0=待机/1=充电/2=放电/3=故障
+    length: 1
+    name: bms_status
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 宁德时代
+  zone: 能源站
+- collection_interval: 10
+  description: 干式变压器温控 — 三相绕组温度/负载
+  device_model: SCB13-1600
+  enabled: true
+  host: 192.168.1.127
+  id: transformer_01
+  name: SCB13-1600干式变压器温控
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: A相绕组温度
+    length: 2
+    name: winding_temp_a
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: B相绕组温度
+    length: 2
+    name: winding_temp_b
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: C相绕组温度
+    length: 2
+    name: winding_temp_c
+    scale: 1.0
+    unit: °C
+  - address: 6
+    data_type: float32
+    description: 铁芯温度
+    length: 2
+    name: core_temp
+    scale: 1.0
+    unit: °C
+  - address: 8
+    data_type: float32
+    description: 环境温度
+    length: 2
+    name: ambient_temp
+    scale: 1.0
+    unit: °C
+  - address: 10
+    data_type: float32
+    description: 负载率
+    length: 2
+    name: transformer_load
+    scale: 1.0
+    unit: '%'
+  - address: 12
+    data_type: float32
+    description: 高压侧电压
+    length: 2
+    name: hv_voltage
+    scale: 1.0
+    unit: kV
+  - address: 14
+    data_type: float32
+    description: 低压侧电压
+    length: 2
+    name: lv_voltage
+    scale: 1.0
+    unit: V
+  - address: 16
+    data_type: uint16
+    description: 冷却风机 0=停/1=运行
+    length: 1
+    name: cooling_fan_status
+    scale: 1.0
+    unit: ''
+  - address: 17
+    data_type: uint16
+    description: 超温报警 1=动作
+    length: 1
+    name: overtemp_alarm
+    scale: 1.0
+    unit: ''
+  - address: 18
+    data_type: uint16
+    description: 超温跳闸 1=动作
+    length: 1
+    name: trip_signal
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 顺特电气
+  zone: 配电房
+- collection_interval: 10
+  description: 桥式起重机 — 位置/起重量/限位
+  device_model: LD-5t-16.5m
+  enabled: true
+  host: 192.168.1.128
+  id: crane_01
+  name: LD-5t桥式起重机
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 大车位置
+    length: 2
+    name: crane_long_pos
+    scale: 1.0
+    unit: m
+  - address: 2
+    data_type: float32
+    description: 小车位置
+    length: 2
+    name: crane_cross_pos
+    scale: 1.0
+    unit: m
+  - address: 4
+    data_type: float32
+    description: 起升高度
+    length: 2
+    name: hoist_height
+    scale: 1.0
+    unit: m
+  - address: 6
+    data_type: float32
+    description: 起重量
+    length: 2
+    name: hoist_weight
+    scale: 1.0
+    unit: t
+  - address: 8
+    data_type: float32
+    description: 大车速度
+    length: 2
+    name: crane_long_speed
+    scale: 1.0
+    unit: m/min
+  - address: 10
+    data_type: float32
+    description: 小车速度
+    length: 2
+    name: crane_cross_speed
+    scale: 1.0
+    unit: m/min
+  - address: 12
+    data_type: float32
+    description: 起升速度
+    length: 2
+    name: hoist_speed
+    scale: 1.0
+    unit: m/min
+  - address: 14
+    data_type: float32
+    description: 起升电机电流
+    length: 2
+    name: crane_current
+    scale: 1.0
+    unit: A
+  - address: 16
+    data_type: uint16
+    description: 限位报警 1=动作
+    length: 1
+    name: limit_alarm
+    scale: 1.0
+    unit: ''
+  - address: 17
+    data_type: uint16
+    description: 超载报警 1=动作
+    length: 1
+    name: overload_alarm
+    scale: 1.0
+    unit: ''
+  - address: 18
+    data_type: uint16
+    description: 天车状态 0=停止/1=运行/2=故障
+    length: 1
+    name: crane_status
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 自研
+  zone: 车间
+- collection_interval: 10
+  description: 横流式冷却塔 — 出水/逼近度/风机/补水
+  device_model: CT-300
+  enabled: true
+  host: 192.168.1.129
+  id: cooling_tower_01
+  name: CT-300横流冷却塔
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 冷却水出水温度（进机组）
+    length: 2
+    name: ct_outlet_temp
+    scale: 1.0
+    unit: °C
+  - address: 2
+    data_type: float32
+    description: 冷却水回水温度（出机组）
+    length: 2
+    name: ct_return_temp
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 逼近度（出水-湿球）
+    length: 2
+    name: approach_temp
+    scale: 1.0
+    unit: K
+  - address: 6
+    data_type: float32
+    description: 湿球温度
+    length: 2
+    name: wet_bulb_temp
+    scale: 1.0
+    unit: °C
+  - address: 8
+    data_type: float32
+    description: 风机电流
+    length: 2
+    name: ct_fan_current
+    scale: 1.0
+    unit: A
+  - address: 10
+    data_type: float32
+    description: 风机转速
+    length: 2
+    name: ct_fan_speed
+    scale: 1.0
+    unit: RPM
+  - address: 12
+    data_type: float32
+    description: 补水量
+    length: 2
+    name: makeup_water
+    scale: 1.0
+    unit: m³/h
+  - address: 14
+    data_type: float32
+    description: 循环水电导率
+    length: 2
+    name: conductivity_us
+    scale: 1.0
+    unit: μS/cm
+  - address: 16
+    data_type: float32
+    description: 集水盘液位
+    length: 2
+    name: basin_level
+    scale: 1.0
+    unit: '%'
+  - address: 18
+    data_type: uint16
+    description: 风机状态 0=停/1=运行/2=故障
+    length: 1
+    name: ct_fan_status
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 自研
+  zone: 公用工程
+- collection_interval: 5
+  description: 锅炉给水泵 — 出口压力/流量/汽蚀/振动
+  device_model: DG25-30×5
+  enabled: true
+  host: 192.168.1.130
+  id: boiler_feed_pump_01
+  name: DG25-30×5锅炉给水泵
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 出口压力
+    length: 2
+    name: feed_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: 给水流量
+    length: 2
+    name: feed_flow
+    scale: 1.0
+    unit: t/h
+  - address: 4
+    data_type: float32
+    description: 电机电流
+    length: 2
+    name: feed_current
+    scale: 1.0
+    unit: A
+  - address: 6
+    data_type: float32
+    description: 轴承温度
+    length: 2
+    name: feed_bearing_temp
+    scale: 1.0
+    unit: °C
+  - address: 8
+    data_type: float32
+    description: 振动速度有效值
+    length: 2
+    name: feed_vibration
+    scale: 1.0
+    unit: mm/s
+  - address: 10
+    data_type: float32
+    description: 除氧器液位
+    length: 2
+    name: deaerator_level
+    scale: 1.0
+    unit: '%'
+  - address: 12
+    data_type: float32
+    description: 给水温度（除氧后）
+    length: 2
+    name: feed_water_temp
+    scale: 1.0
+    unit: °C
+  - address: 14
+    data_type: float32
+    description: 泵转速
+    length: 2
+    name: feed_pump_speed
+    scale: 1.0
+    unit: RPM
+  - address: 16
+    data_type: float32
+    description: 累计运行小时
+    length: 2
+    name: feed_run_hours
+    scale: 1.0
+    unit: h
+  - address: 18
+    data_type: uint16
+    description: 泵状态 0=停/1=运行/2=故障/3=汽蚀
+    length: 1
+    name: feed_pump_status
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 自研
+  zone: 动力站
+- collection_interval: 10
+  description: 除尘引风机 — 风量/全压/粉尘/滤袋压差
+  device_model: Y5-47-12.6D
+  enabled: true
+  host: 192.168.1.131
+  id: dust_fan_01
+  name: Y5-47引风机（除尘）
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 风量
+    length: 2
+    name: fan_air_volume
+    scale: 1.0
+    unit: m³/h
+  - address: 2
+    data_type: float32
+    description: 全压（负压运行）
+    length: 2
+    name: fan_total_pressure
+    scale: 1.0
+    unit: Pa
+  - address: 4
+    data_type: float32
+    description: 电机电流
+    length: 2
+    name: fan_current
+    scale: 1.0
+    unit: A
+  - address: 6
+    data_type: float32
+    description: 轴承振动
+    length: 2
+    name: fan_bearing_vibration
+    scale: 1.0
+    unit: mm/s
+  - address: 8
+    data_type: float32
+    description: 出口粉尘浓度
+    length: 2
+    name: outlet_dust
+    scale: 1.0
+    unit: mg/m³
+  - address: 10
+    data_type: float32
+    description: 电机绕组温度
+    length: 2
+    name: fan_winding_temp
+    scale: 1.0
+    unit: °C
+  - address: 12
+    data_type: float32
+    description: 风机转速
+    length: 2
+    name: fan_speed
+    scale: 1.0
+    unit: RPM
+  - address: 14
+    data_type: float32
+    description: 滤袋压差
+    length: 2
+    name: bag_diff_pressure
+    scale: 1.0
+    unit: kPa
+  - address: 16
+    data_type: uint16
+    description: 风机状态 0=停/1=运行/2=故障
+    length: 1
+    name: fan_status
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 自研
+  zone: 动力站
+- collection_interval: 10
+  description: 空压站总管 — 母管压力/露点/加载率
+  device_model: Header-DN100
+  enabled: true
+  host: 192.168.1.132
+  id: air_header_01
+  name: 空压站总管+冷干机
+  port: 502
+  protocol: modbus_tcp
+  registers:
+  - address: 0
+    data_type: float32
+    description: 母管压力
+    length: 2
+    name: header_pressure
+    scale: 1.0
+    unit: MPa
+  - address: 2
+    data_type: float32
+    description: 压力露点
+    length: 2
+    name: header_dew_point
+    scale: 1.0
+    unit: °C
+  - address: 4
+    data_type: float32
+    description: 标况流量
+    length: 2
+    name: header_flow
+    scale: 1.0
+    unit: Nm³/min
+  - address: 6
+    data_type: float32
+    description: 空压机加载率
+    length: 2
+    name: load_ratio_air
+    scale: 1.0
+    unit: '%'
+  - address: 8
+    data_type: float32
+    description: 储气罐压力
+    length: 2
+    name: tank_pressure_air
+    scale: 1.0
+    unit: MPa
+  - address: 10
+    data_type: float32
+    description: 停机保压压降速率
+    length: 2
+    name: pressure_decay
+    scale: 1.0
+    unit: kPa/min
+  - address: 12
+    data_type: float32
+    description: 总管温度
+    length: 2
+    name: header_temp
+    scale: 1.0
+    unit: °C
+  - address: 14
+    data_type: uint16
+    description: 冷干机状态 0=停/1=运行/2=故障
+    length: 1
+    name: dryer_status
+    scale: 1.0
+    unit: ''
+  - address: 16
+    data_type: uint16
+    description: 系统状态 0=停/1=运行/2=故障
+    length: 1
+    name: air_system_status
+    scale: 1.0
+    unit: ''
+  slave_id: 1
+  vendor: 自研
+  zone: 公用工程

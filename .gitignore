@@ -59,6 +59,8 @@ logs/*.log
 logs/*.log.*
 # 运行期审计流水（每跑一次服务/测试都会追加）—— 与 data/audit_log.jsonl 同一口径
 logs/ops_audit.jsonl
+# tools/run_tests.py 的全量日志（每次跑一份，由脚本自己保留最近 N 份）
+logs/test_runs/
 
 # IDE
 .vscode/

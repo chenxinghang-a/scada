@@ -1,0 +1,684 @@
+# =============================================================================
+# 模拟参数档（simulation profiles）
+# =============================================================================
+# 作用：声明「每台设备的每个点位怎么造数据」，替代代码里的硬编码参数表。
+#
+# 为什么单独一个文件，而不是写进 devices_simulated.yaml：
+#   1. 设备清单管的是**拓扑与协议**（谁、在哪、什么地址），这里管的是
+#      **数值怎么来**（基准量、量纲换算、噪声、钳位）。换真实设备时
+#      整个文件删掉即可，不用逐条清理设备配置。
+#   2. 一个点位在真机上是有物理意义的（MPa 就是 MPa），模拟系数属于
+#      「调试期的假设」，写在一起会让真实配置带上假的量纲假设。
+#
+# 优先级：设备配置内联的 sim 段 > 本文件 > 内置关键字表
+#
+# 字段说明（点位级）：
+#   source     派生源。内置源：
+#                temperature pressure flow level speed vibration current
+#                voltage power power_factor ph humidity turbidity
+#                counter(累计计数) status(设备状态值) health(健康分)
+#                fault_severity(故障严重度) constant(常量) random(区间随机)
+#              也可以是**本设备声明过的另一个点位名** —— 用来表达物理耦合，
+#              如「冷冻水出水 = 进水 + 5」。依赖按声明顺序解析。
+#   gain       乘数（默认 1.0）
+#   offset     偏移（默认 0.0）
+#   noise      高斯噪声标准差（默认 0）
+#   min / max  钳位（默认不钳）
+#   decimals   保留小数位（默认 3）
+#   dtype: int 取整（状态位/计数用）
+#   value      source=constant 时的常量值
+#
+# 字段说明（设备级）：
+#   process_model  覆盖 ProcessModel 的任意字段（base_temperature /
+#                  base_pressure / base_flow / base_level / base_speed /
+#                  base_power_kw / base_current / thermal_time_constant …）
+#   monitoring     是否「监测类设备」（停机不受影响）。不写则按关键词猜。
+#
+# 量纲基准（重要）：process_model 的基准量是**工程单位**：
+#   base_temperature °C / base_pressure MPa / base_flow 依设备而定
+#   base_level % / base_speed RPM / base_power_kw kW / base_current A
+# 所以点位的 gain/offset 负责把它换算到该点位的单位（Pa、m³/h、mg/m³…）。
+# =============================================================================
+
+profiles:
+
+  # ---------------------------------------------------------------------------
+  # 暖通 AHU（西门子 PXC36）
+  # 基准取「回风温度 24°C / 冷冻水流量 25 m³/h」，其余点位由它换算。
+  # ---------------------------------------------------------------------------
+  hvac_ahu_01:
+    process_model:
+      base_temperature: 24.0
+      base_flow: 25.0
+      base_power_kw: 15.0
+      thermal_time_constant: 240.0
+    points:
+      supply_air_temp:      {source: temperature, offset: -8.0, noise: 0.15, decimals: 1}
+      return_air_temp:      {source: temperature, noise: 0.15, decimals: 1}
+      # 室外温度与回风只弱相关（gain 小），否则四个温度会完全同步，一眼假
+      outdoor_temp:         {source: temperature, gain: 0.3, offset: 14.0, noise: 0.5, decimals: 1}
+      supply_air_humidity:  {source: humidity, offset: 5.0, min: 20, max: 95, decimals: 1}
+      return_air_humidity:  {source: humidity, min: 20, max: 95, decimals: 1}
+      chilled_water_temp_in:  {source: temperature, gain: 0.3, noise: 0.1, decimals: 1}
+      # 耦合：出水 = 进水 + 5K（真实机组的进出水温差就在 4-6K）
+      chilled_water_temp_out: {source: chilled_water_temp_in, offset: 5.0, noise: 0.1, decimals: 1}
+      chilled_water_flow:   {source: flow, noise: 0.3, decimals: 1}
+      fan_speed:            {source: speed, gain: 0.64, noise: 5, decimals: 0}
+      duct_static_pressure: {source: pressure, gain: 1000.0, noise: 5, decimals: 0}
+      damper_position:      {source: speed, gain: 0.04, min: 0, max: 100, decimals: 0}
+      ahu_status:           {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 螺杆空压机（阿特拉斯 GA90+）
+  # 基准：排气温度 88°C、排气压力 0.75 MPa、排气量 12 m³/min、75 kW
+  # ---------------------------------------------------------------------------
+  compressor_01:
+    process_model:
+      base_temperature: 88.0
+      base_pressure: 0.75
+      base_flow: 12.0
+      base_power_kw: 75.0
+      base_current: 140.0
+      thermal_time_constant: 300.0
+    points:
+      discharge_pressure: {source: pressure, noise: 0.005, decimals: 3}
+      discharge_temp:     {source: temperature, noise: 0.5, decimals: 1}
+      # 油温通常比排气温度高 5-15K（喷油螺杆机）
+      oil_temperature:    {source: temperature, offset: 8.0, noise: 0.3, decimals: 1}
+      motor_current:      {source: current, noise: 0.8, decimals: 1}
+      air_flow:           {source: flow, noise: 0.2, decimals: 1}
+      # 压力露点：常温常压下约 3-10°C，用排气温度弱相关表达
+      dew_point:          {source: temperature, gain: 0.05, offset: 1.0, noise: 0.3, decimals: 1}
+      tank_pressure:      {source: pressure, gain: 0.95, noise: 0.004, decimals: 3}
+      running_hours:      {source: counter, gain: 0.001, offset: 24500, decimals: 1}
+      compressor_status:  {source: status, dtype: int}
+      dryer_status:       {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 仓储物流（西门子 LOGO!）
+  # ---------------------------------------------------------------------------
+  warehouse_plc_01:
+    process_model:
+      base_temperature: 22.0
+      thermal_time_constant: 600.0
+    points:
+      inbound_count:      {source: counter, gain: 0.02, dtype: int}
+      outbound_count:     {source: counter, gain: 0.019, dtype: int}
+      agv_count_active:   {source: random, min: 3, max: 5, dtype: int}
+      agv_count_charging: {source: random, min: 1, max: 3, dtype: int}
+      rack_utilization:   {source: random, min: 70, max: 85, decimals: 1}
+      conveyor_status:    {source: status, dtype: int}
+      door_status:        {source: random, min: 0, max: 1, dtype: int}
+      warehouse_temp:     {source: temperature, noise: 0.2, decimals: 1}
+      warehouse_humidity: {source: humidity, offset: 5.0, decimals: 1}
+
+  # ---------------------------------------------------------------------------
+  # 烟气 CEMS（雪迪龙 SCS-900）
+  # 量纲 mg/m³。限值参考 GB 13223 超低排放：SO2 35 / NOx 50 / 颗粒物 10。
+  # 正常运行时在限值附近波动，故障/超标由 fault 机制叠加。
+  # ---------------------------------------------------------------------------
+  cems_01:
+    monitoring: true
+    process_model:
+      base_temperature: 140.0
+      base_pressure: 0.1
+      base_flow: 15.0
+      thermal_time_constant: 120.0
+    points:
+      so2_concentration:   {source: random, min: 15, max: 45, decimals: 1}
+      nox_concentration:   {source: random, min: 30, max: 80, decimals: 1}
+      particulate_matter:  {source: random, min: 3, max: 12, decimals: 1}
+      oxygen_content:      {source: random, min: 5, max: 9, decimals: 2}
+      flue_gas_temp:       {source: temperature, noise: 1.0, decimals: 1}
+      flue_gas_velocity:   {source: flow, gain: 0.5, noise: 0.1, decimals: 2}
+      # 烟气湿度约 8%，由环境湿度换算
+      flue_gas_moisture:   {source: humidity, gain: 0.16, noise: 0.2, decimals: 1}
+      # 烟道为负压（-50 ~ -200 Pa）
+      stack_pressure:      {source: pressure, gain: -1000.0, noise: 5, decimals: 0}
+      # NO2 约占 NOx 的 5-10%
+      no2_concentration:   {source: nox_concentration, gain: 0.08, noise: 0.2, decimals: 1}
+      cems_status:         {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 火灾报警（海湾 JB-QBL-QM300）
+  # 全部是开关量：正常态固定，报警由 fault 注入或人工置位。
+  # monitoring=true：消防主机本身不受「产线停机」影响。
+  # ---------------------------------------------------------------------------
+  fire_alarm_01:
+    monitoring: true
+    points:
+      smoke_detector_alarm: {source: constant, value: 0, dtype: int}
+      heat_detector_alarm:  {source: constant, value: 0, dtype: int}
+      manual_alarm:         {source: constant, value: 0, dtype: int}
+      gas_detector_alarm:   {source: constant, value: 0, dtype: int}
+      sprinkler_status:     {source: constant, value: 0, dtype: int}
+      # 常闭防火门 = 1（闭合）
+      fire_door_status:     {source: constant, value: 1, dtype: int}
+      evacuation_status:    {source: constant, value: 0, dtype: int}
+      system_fault:         {source: constant, value: 0, dtype: int}
+      # 1 = 自动模式
+      panel_mode:           {source: constant, value: 1, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 中控 DCS（JX-300XP）反应釜群
+  # 基准：反应温度 95°C、压力 0.4 MPa、液位 55%、搅拌 120 RPM
+  # ---------------------------------------------------------------------------
+  dcs_supcon_01:
+    process_model:
+      base_temperature: 95.0
+      base_pressure: 0.4
+      base_level: 55.0
+      base_speed: 120.0
+      thermal_time_constant: 200.0
+    points:
+      reactor1_temp:      {source: temperature, noise: 0.3, decimals: 1}
+      reactor1_pressure:  {source: pressure, noise: 0.003, decimals: 3}
+      # ⚠️ 基变量 level 的单位是**米**（_current_level/100*3），不是百分比：
+      #    55% → 1.65 m；釜内液位 550 mm → gain 330
+      reactor1_level:     {source: level, gain: 330.0, noise: 2, decimals: 0}
+      reactor1_speed:     {source: speed, gain: 0.08, noise: 0.5, decimals: 0}
+      # 2 号釜是并联釜，工况略高
+      reactor2_temp:      {source: temperature, offset: 5.0, noise: 0.3, decimals: 1}
+      reactor2_pressure:  {source: pressure, offset: 0.05, noise: 0.003, decimals: 3}
+      reactor2_level:     {source: level, gain: 300.0, noise: 2, decimals: 0}
+      feed_valve_1:       {source: speed, gain: 0.40, min: 0, max: 100, decimals: 0}
+      feed_valve_2:       {source: speed, gain: 0.35, min: 0, max: 100, decimals: 0}
+      discharge_valve:    {source: speed, gain: 0.20, min: 0, max: 100, decimals: 0}
+      cooling_valve:      {source: speed, gain: 0.50, min: 0, max: 100, decimals: 0}
+      reactor_status:     {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 温度变送器（横河 YTA610）多通道
+  # monitoring=true：变送器是仪表，不随产线停机
+  # ---------------------------------------------------------------------------
+  temp_xmitter_01:
+    monitoring: true
+    process_model:
+      base_temperature: 120.0
+      thermal_time_constant: 90.0
+    points:
+      tc_reactor_1:      {source: temperature, noise: 0.2, decimals: 1}
+      tc_reactor_2:      {source: temperature, offset: 3.0, noise: 0.2, decimals: 1}
+      # 管道温度低于釜温（有散热）
+      rtd_pipeline_1:    {source: temperature, gain: 0.70, offset: -10.0, noise: 0.2, decimals: 1}
+      rtd_pipeline_2:    {source: temperature, gain: 0.68, offset: -9.0, noise: 0.2, decimals: 1}
+      # 排气温度高于釜温
+      tc_exhaust_1:      {source: temperature, gain: 1.6, noise: 0.5, decimals: 1}
+      sensor_health:     {source: health, min: 0, max: 100, dtype: int}
+      comm_error_count:  {source: counter, gain: 0.0005, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 压力变送器（罗斯蒙特 3051S）多测点
+  # 同一台变送器不可能同时测 5 个位置 —— 这是「多点采集模块」的模拟，
+  # 用同一压力基准配不同 gain 表达不同管路压力等级。
+  # ---------------------------------------------------------------------------
+  pressure_xmitter_01:
+    monitoring: true
+    process_model:
+      base_pressure: 0.6
+      pressure_time_constant: 20.0
+    points:
+      pressure_steam_header: {source: pressure, gain: 1.6, noise: 0.005, decimals: 3}
+      pressure_water_supply: {source: pressure, gain: 0.7, noise: 0.003, decimals: 3}
+      # 液压站 12 MPa 量级
+      pressure_hydraulic:    {source: pressure, gain: 20.0, noise: 0.05, decimals: 2}
+      pressure_pneumatic:    {source: pressure, gain: 0.9, noise: 0.002, decimals: 3}
+      # 真空为负值（kPa）
+      pressure_vacuum:       {source: pressure, gain: -100.0, noise: 0.5, decimals: 1}
+      xmitter_status:        {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 电磁流量计（E+H Promag W）
+  # ---------------------------------------------------------------------------
+  flowmeter_01:
+    monitoring: true
+    process_model:
+      base_flow: 48.0
+      flow_time_constant: 10.0
+    points:
+      flow_raw_material: {source: flow, gain: 0.50, noise: 0.2, decimals: 2}
+      flow_product:      {source: flow, gain: 0.45, noise: 0.2, decimals: 2}
+      flow_cooling:      {source: flow, gain: 0.80, noise: 0.3, decimals: 2}
+      totalizer_raw:     {source: counter, gain: 0.05, offset: 285000.0, decimals: 1}
+      totalizer_product: {source: counter, gain: 0.045, offset: 262000.0, decimals: 1}
+      meter_status:      {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # FANUC 六轴机器人
+  # 关节角按 0-360 编码（uint16 不能存负角，真实驱动器也是这么映射的）
+  # ---------------------------------------------------------------------------
+  robot_fanuc_01:
+    points:
+      joint_1:        {source: random, min: 0, max: 360, decimals: 1}
+      joint_2:        {source: random, min: 0, max: 180, decimals: 1}
+      joint_3:        {source: random, min: 0, max: 180, decimals: 1}
+      joint_4:        {source: random, min: 0, max: 360, decimals: 1}
+      joint_5:        {source: random, min: 0, max: 180, decimals: 1}
+      joint_6:        {source: random, min: 0, max: 360, decimals: 1}
+      program_number: {source: constant, value: 1001, dtype: int}
+      robot_status:   {source: status, dtype: int}
+      alarm_code:     {source: constant, value: 0, dtype: int}
+      gripper_state:  {source: random, min: 0, max: 1, dtype: int}
+      torque_j1:      {source: current, gain: 0.8, noise: 0.3, decimals: 1}
+
+  # ---------------------------------------------------------------------------
+  # 马扎克加工中心（REST 通道）
+  # 基准主轴 8000 RPM：base_speed 默认 1500 → gain 5.33
+  # ---------------------------------------------------------------------------
+  cnc_mazak_01:
+    process_model:
+      base_speed: 8000.0
+      base_power_kw: 15.0
+      base_current: 45.0
+    points:
+      spindle_speed:  {source: speed, noise: 10, decimals: 0}
+      spindle_load:   {source: current, gain: 2.2, min: 0, max: 100, decimals: 0}
+      feed_override:  {source: constant, value: 100, dtype: int}
+      program_number: {source: constant, value: 2001, dtype: int}
+      program_runtime: {source: counter, gain: 1.0, dtype: int}
+      current_tool:   {source: counter, gain: 0.0005, offset: 1, dtype: int}
+      tool_life:      {source: health, min: 0, max: 100, dtype: int}
+      part_count:     {source: counter, gain: 0.01, dtype: int}
+      alarm_code:     {source: constant, value: 0, dtype: int}
+      machine_mode:   {source: constant, value: 1, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # ABB PSTX 软启动器
+  # 线电压 380V = 相电压 220 × 1.73
+  # ---------------------------------------------------------------------------
+  soft_starter_01:
+    process_model:
+      base_power_kw: 45.0
+      base_current: 85.0
+    points:
+      motor_voltage:       {source: voltage, gain: 1.73, noise: 0.8, decimals: 1}
+      motor_power:         {source: power, noise: 0.3, decimals: 2}
+      motor_power_factor:  {source: power_factor, noise: 0.005, decimals: 3}
+      start_count:         {source: counter, gain: 0.0002, dtype: int}
+      running_hours:       {source: counter, gain: 0.001, offset: 8600, decimals: 1}
+      starter_status:      {source: status, dtype: int}
+      fault_code:          {source: constant, value: 0, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 安科瑞 APM810 多功能电表
+  # ---------------------------------------------------------------------------
+  power_meter_sub_01:
+    process_model:
+      base_power_kw: 120.0
+      base_current: 200.0
+    points:
+      active_energy_import:  {source: counter, gain: 0.02, offset: 1580000.0, decimals: 1}
+      active_power_total:    {source: power, noise: 1.0, decimals: 2}
+      reactive_power_total:  {source: power, gain: 0.3, noise: 0.5, decimals: 2}
+      apparent_power_total:  {source: power, gain: 1.05, noise: 0.8, decimals: 2}
+      demand_power:          {source: power, gain: 0.95, noise: 0.8, decimals: 2}
+      power_factor_total:    {source: power_factor, noise: 0.005, decimals: 3}
+      voltage_ln_avg:        {source: voltage, noise: 0.8, decimals: 1}
+      current_avg:           {source: current, noise: 1.0, decimals: 1}
+      energy_today:          {source: counter, gain: 0.01, offset: 1240.0, decimals: 1}
+
+  # ---------------------------------------------------------------------------
+  # APC Smart-UPS 3000
+  # 电池组标称 96V（8×12V），容量 98%，满载续航约 30 min
+  # ---------------------------------------------------------------------------
+  ups_apc_01:
+    process_model:
+      base_power_kw: 3.0
+      base_temperature: 28.0
+      base_current: 20.0
+    points:
+      input_voltage:    {source: voltage, noise: 1.5, decimals: 1}
+      # 在线式 UPS 输出稳压，噪声比输入小一个量级
+      output_voltage:   {source: voltage, noise: 0.3, decimals: 1}
+      # 基变量 current 实测 ~4.6A → gain 9.8 得 45% 左右（3000VA 机型半载）
+      output_load:      {source: current, gain: 9.8, min: 0, max: 100, decimals: 1}
+      battery_voltage:  {source: voltage, gain: 0.5, offset: 30.0, noise: 0.2, decimals: 1}
+      battery_capacity: {source: health, min: 0, max: 100, decimals: 0}
+      battery_temp:     {source: temperature, gain: 0.5, offset: 16.0, noise: 0.2, decimals: 1}
+      battery_runtime:  {source: health, gain: 0.3, noise: 0.2, decimals: 0}
+      ups_status:       {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 松下 TM-1800WG 焊接机器人
+  # 基准焊接电流 180A、电弧电压 28V（MAG 焊 200A 档典型值）
+  # ---------------------------------------------------------------------------
+  welder_01:
+    process_model:
+      base_current: 180.0
+      base_power_kw: 8.0
+      base_temperature: 45.0
+    points:
+      # 基变量 current 默认 20A 量级 → gain 9 得 180A
+      # 基变量 current 实测 ~15A 量级 → gain 12 得 175A 左右
+      welding_current:  {source: current, gain: 12.0, noise: 3.0, decimals: 0}
+      welding_voltage:  {source: voltage, gain: 0.11, offset: 4.0, noise: 0.3, decimals: 1}
+      wire_feed_speed:  {source: current, gain: 0.45, noise: 0.05, decimals: 2}
+      welding_speed:    {source: current, gain: 31.0, noise: 5.0, decimals: 0}
+      gas_flow:         {source: current, gain: 0.96, noise: 0.2, decimals: 1}
+      torch_temperature: {source: temperature, gain: 1.5, offset: 15.0, noise: 0.5, decimals: 1}
+      weld_count:       {source: counter, gain: 0.05, dtype: int}
+      defect_count:     {source: counter, gain: 0.0005, dtype: int}
+      welder_status:    {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 施耐德 M340（水处理）补一个点位
+  # ---------------------------------------------------------------------------
+  schneider_m340_01:
+    points:
+      pump_speed: {source: speed, gain: 0.65, noise: 3.0, decimals: 0}
+
+  # ---------------------------------------------------------------------------
+  # 图尔克 IO-Link 主站补一个点位
+  # ---------------------------------------------------------------------------
+  turck_iolink_01:
+    points:
+      iol_distance_1: {source: flow, gain: 3.0, noise: 0.5, decimals: 1}
+
+  # ---------------------------------------------------------------------------
+  # 西门子 S7-1500 Web API 补一个点位
+  # ---------------------------------------------------------------------------
+  siemens_web_01:
+    points:
+      production_count: {source: counter, gain: 0.1, dtype: int}
+
+  # ===========================================================================
+  # 以下为 round 340 补齐的设备（冷水机组 / 变频泵 / 输送线 / AGV /
+  # 光伏逆变器 / 储能 BMS / 干变温控 / 天车）
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # 约克 CVHE-500 离心冷水机组（500 冷吨 ≈ 1750 kW 制冷量）
+  # 基准：冷冻水出水 7°C、冷冻水流量 180 m³/h、350 kW
+  # ---------------------------------------------------------------------------
+  chiller_01:
+    process_model:
+      base_temperature: 7.0
+      base_flow: 180.0
+      base_power_kw: 350.0
+      base_current: 620.0
+      thermal_time_constant: 600.0
+      pressure_time_constant: 60.0
+    points:
+      chw_supply_temp:     {source: temperature, noise: 0.1, decimals: 1}
+      # 冷冻水温差 5K（真实机组 4-6K）
+      chw_return_temp:     {source: chw_supply_temp, offset: 5.0, noise: 0.1, decimals: 1}
+      # 冷却水 32/37°C，比冷冻水高一个量级
+      cw_inlet_temp:       {source: temperature, gain: 0.3, offset: 30.0, noise: 0.2, decimals: 1}
+      cw_outlet_temp:      {source: cw_inlet_temp, offset: 5.0, noise: 0.2, decimals: 1}
+      chw_flow:            {source: flow, noise: 1.5, decimals: 1}
+      cw_flow:             {source: flow, gain: 1.2, noise: 2.0, decimals: 1}
+      compressor_current:  {source: current, noise: 3.0, decimals: 1}
+      # 蒸发器 ~0.4 MPa（对应 5°C 蒸发温度），冷凝器 ~0.85 MPa
+      evaporator_pressure: {source: pressure, gain: 0.5, noise: 0.003, decimals: 3}
+      condenser_pressure:  {source: pressure, gain: 1.1, noise: 0.005, decimals: 3}
+      load_ratio:          {source: current, gain: 0.08, min: 0, max: 105, decimals: 1}
+      # 初值：投运两年多的机组（从 0 开始不像真设备）
+      run_hours:           {source: counter, gain: 0.001, offset: 18600, decimals: 1}
+      chiller_status:      {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 格兰富 CR95 变频水泵
+  # 基准：出口 0.45 MPa、流量 95 m³/h、15 kW
+  # ---------------------------------------------------------------------------
+  pump_vfd_01:
+    process_model:
+      base_pressure: 0.45
+      base_flow: 95.0
+      base_power_kw: 15.0
+      base_current: 28.0
+      base_speed: 1450.0
+      flow_time_constant: 8.0
+    points:
+      outlet_pressure:  {source: pressure, noise: 0.004, decimals: 3}
+      pump_flow:        {source: flow, noise: 1.0, decimals: 1}
+      pump_speed_rpm:   {source: speed, noise: 8.0, decimals: 0}
+      pump_current:     {source: current, noise: 0.4, decimals: 1}
+      pump_power:       {source: power, noise: 0.2, decimals: 2}
+      bearing_temp:     {source: temperature, gain: 0.8, noise: 0.3, decimals: 1}
+      pump_vibration:   {source: vibration, noise: 0.05, min: 0, decimals: 2}
+      vfd_frequency:    {source: speed, gain: 0.033, noise: 0.1, decimals: 1}
+      pump_run_hours:   {source: counter, gain: 0.001, offset: 9200, decimals: 1}
+      pump_status:      {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # DTII-800 皮带输送线
+  # 基准：1.2 m/s（电机 1200 RPM 经减速机）
+  # ---------------------------------------------------------------------------
+  conveyor_01:
+    process_model:
+      base_speed: 1200.0
+      base_current: 12.0
+    points:
+      belt_speed:        {source: speed, gain: 0.001, noise: 0.01, decimals: 2}
+      conveyor_current:  {source: current, noise: 0.3, decimals: 1}
+      conveyor_count:    {source: counter, gain: 0.5, dtype: int}
+      # 堵料/跑偏/拉绳正常态为 0，故障由 fault 注入或人工置位
+      blockage_alarm:    {source: constant, value: 0, dtype: int}
+      deviation_alarm:   {source: constant, value: 0, dtype: int}
+      pullcord_estop:    {source: constant, value: 0, dtype: int}
+      conveyor_status:   {source: status, dtype: int}
+      conveyor_vfd_hz:   {source: speed, gain: 0.033, noise: 0.1, decimals: 1}
+
+  # ---------------------------------------------------------------------------
+  # AGV 调度系统（20 台车队）
+  # ---------------------------------------------------------------------------
+  agv_system_01:
+    points:
+      agv_total:           {source: constant, value: 20, dtype: int}
+      agv_active:          {source: random, min: 10, max: 15, dtype: int}
+      agv_idle:            {source: random, min: 3, max: 7, dtype: int}
+      agv_charging:        {source: random, min: 1, max: 3, dtype: int}
+      agv_fault:           {source: constant, value: 0, dtype: int}
+      agv_avg_battery:     {source: random, min: 55, max: 85, decimals: 1}
+      agv_tasks_done:      {source: counter, gain: 0.3, dtype: int}
+      agv_avg_cycle_time:  {source: random, min: 180, max: 320, decimals: 0}
+      agv_system_status:   {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 华为 SUN2000-100KTL 组串式光伏逆变器
+  # 基准：直流 660V / 100 kW
+  # ---------------------------------------------------------------------------
+  pv_inverter_01:
+    process_model:
+      base_power_kw: 100.0
+      base_temperature: 45.0
+      base_current: 140.0
+    points:
+      pv_dc_voltage:       {source: voltage, gain: 3.0, noise: 1.5, decimals: 1}
+      pv_dc_current:       {source: current, noise: 1.0, decimals: 1}
+      pv_dc_power:         {source: power, noise: 0.5, decimals: 2}
+      # 交流侧 380V 线电压 = 相电压 × 1.73
+      pv_ac_voltage:       {source: voltage, gain: 1.73, noise: 0.8, decimals: 1}
+      pv_ac_current:       {source: current, noise: 0.8, decimals: 1}
+      pv_active_power:     {source: power, gain: 0.97, noise: 0.5, decimals: 2}
+      pv_reactive_power:   {source: power, gain: 0.02, noise: 0.1, decimals: 2}
+      pv_power_factor:     {source: power_factor, noise: 0.004, decimals: 3}
+      pv_frequency:        {source: constant, value: 50.0, noise: 0.02, decimals: 2}
+      pv_daily_energy:     {source: counter, gain: 0.01, offset: 86.0, decimals: 1}
+      pv_total_energy:     {source: counter, gain: 0.00001, offset: 1280.0, decimals: 3}
+      pv_module_temp:      {source: temperature, gain: 1.2, noise: 0.5, decimals: 1}
+      pv_efficiency:       {source: random, min: 97.0, max: 98.5, decimals: 2}
+      pv_inverter_status:  {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 宁德时代 500 kWh 储能 BMS
+  # 基准：直流 700V / 250 kW
+  # ---------------------------------------------------------------------------
+  bess_bms_01:
+    process_model:
+      base_power_kw: 250.0
+      base_temperature: 28.0
+      # 700V 直流侧 250 kW ≈ 357 A；不给这个值会退回默认 20 A，
+      # 功率被算成 30 kW 左右（差一个数量级）
+      base_current: 380.0
+    points:
+      bms_total_voltage:   {source: voltage, gain: 3.2, noise: 1.0, decimals: 1}
+      # 基变量 current 由 250 kW 反算约 445 A；直流侧 700V 对应 357 A → gain 0.8
+      bms_total_current:   {source: current, gain: 0.8, noise: 2.0, decimals: 1}
+      bms_soc:             {source: random, min: 40, max: 90, decimals: 1}
+      bms_soh:             {source: constant, value: 98.0, noise: 0.05, decimals: 1}
+      # 磷酸铁锂单体 3.2-3.4V
+      bms_cell_max_mv:     {source: random, min: 3320, max: 3360, dtype: int}
+      # 单体压差 20-40 mV 属正常
+      bms_cell_min_mv:     {source: bms_cell_max_mv, offset: -30, dtype: int}
+      bms_temp_max:        {source: temperature, offset: 5.0, noise: 0.3, decimals: 1}
+      bms_temp_min:        {source: temperature, offset: -3.0, noise: 0.3, decimals: 1}
+      bms_power:           {source: power, noise: 1.0, decimals: 2}
+      bms_cycle_count:     {source: counter, gain: 0.001, offset: 620, dtype: int}
+      bms_insulation:      {source: random, min: 500, max: 2000, decimals: 0}
+      bms_status:          {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # SCB13-1600 干式变压器温控
+  # 基准：绕组 65°C（F 级绝缘限值 155°C，正常运行 60-90°C）
+  # ---------------------------------------------------------------------------
+  transformer_01:
+    process_model:
+      base_temperature: 65.0
+      thermal_time_constant: 900.0
+    points:
+      winding_temp_a:      {source: temperature, noise: 0.4, decimals: 1}
+      winding_temp_b:      {source: temperature, offset: 2.0, noise: 0.4, decimals: 1}
+      winding_temp_c:      {source: temperature, offset: -1.0, noise: 0.4, decimals: 1}
+      core_temp:           {source: temperature, gain: 0.9, noise: 0.3, decimals: 1}
+      ambient_temp:        {source: temperature, gain: 0.5, noise: 0.3, decimals: 1}
+      # 基变量 current 默认 20 A 量级 → gain 4 得 80% 左右（1600kVA 变压器常态负载）
+      transformer_load:    {source: current, gain: 4.0, min: 0, max: 120, decimals: 1}
+      hv_voltage:          {source: constant, value: 10.0, noise: 0.05, decimals: 2}
+      lv_voltage:          {source: voltage, gain: 1.73, noise: 0.8, decimals: 1}
+      cooling_fan_status:  {source: constant, value: 1, dtype: int}
+      overtemp_alarm:      {source: constant, value: 0, dtype: int}
+      trip_signal:         {source: constant, value: 0, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # LD-5t 桥式起重机（跨度 16.5m）
+  # ---------------------------------------------------------------------------
+  crane_01:
+    process_model:
+      base_speed: 1200.0
+      base_current: 25.0
+    points:
+      crane_long_pos:     {source: random, min: 0, max: 16.5, decimals: 2}
+      crane_cross_pos:    {source: random, min: 0, max: 5.0, decimals: 2}
+      hoist_height:       {source: random, min: 0, max: 8.0, decimals: 2}
+      hoist_weight:       {source: random, min: 0.5, max: 4.8, decimals: 2}
+      crane_long_speed:   {source: speed, gain: 0.017, decimals: 1}
+      crane_cross_speed:  {source: speed, gain: 0.012, decimals: 1}
+      hoist_speed:        {source: speed, gain: 0.007, decimals: 1}
+      crane_current:      {source: current, noise: 0.8, decimals: 1}
+      limit_alarm:        {source: constant, value: 0, dtype: int}
+      overload_alarm:     {source: constant, value: 0, dtype: int}
+      crane_status:       {source: status, dtype: int}
+
+  # ===========================================================================
+  # 公用工程耦合闭环（冷却塔 → 冷水机组、给水泵 → 锅炉、引风机 → CEMS、
+  # 空压站 → 气动执行器）。这四条链是「模拟看起来真」的关键：
+  # 没有上游设备时，下游设备的参数只能凭空造，看不出因果。
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # CT-300 横流冷却塔（配 chiller_01 的 300 m³/h 循环水量）
+  # 逼近度 2-4K 是冷却塔健康度的核心指标（结垢会先在这里体现）
+  # ---------------------------------------------------------------------------
+  cooling_tower_01:
+    process_model:
+      base_temperature: 32.0
+      base_flow: 300.0
+      base_current: 45.0
+      base_power_kw: 22.0
+      base_speed: 1500.0
+      thermal_time_constant: 300.0
+    points:
+      ct_outlet_temp:   {source: temperature, noise: 0.15, decimals: 1}
+      # 冷却水温差 5K，与 chiller_01 的 cw_inlet/cw_outlet 对得上
+      ct_return_temp:   {source: ct_outlet_temp, offset: 5.0, noise: 0.15, decimals: 1}
+      # 湿球 = 出水 - 逼近度；逼近度 3K 是设计值
+      wet_bulb_temp:    {source: ct_outlet_temp, offset: -3.1, noise: 0.1, decimals: 1}
+      approach_temp:    {source: temperature, gain: 0.05, offset: 1.5, noise: 0.15, decimals: 1}
+      ct_fan_current:   {source: current, noise: 0.3, decimals: 1}
+      ct_fan_speed:     {source: speed, gain: 0.65, noise: 5.0, decimals: 0}
+      # 补水量 ≈ 循环量的 1.5%（蒸发 + 排污）
+      makeup_water:     {source: flow, gain: 0.015, noise: 0.05, decimals: 2}
+      # 循环水浓缩倍率控制：电导率 800-1000 μS/cm
+      conductivity_us:  {source: constant, value: 850.0, noise: 20.0, decimals: 0}
+      basin_level:      {source: constant, value: 65.0, noise: 2.0, decimals: 1}
+      ct_fan_status:    {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # DG25-30×5 锅炉给水泵（5 级，扬程约 150 m）
+  # 出口 1.0-1.6 MPa、流量 5-20 t/h、2950 RPM（两极电机）
+  # ---------------------------------------------------------------------------
+  boiler_feed_pump_01:
+    process_model:
+      base_pressure: 1.2
+      base_flow: 12.0
+      base_current: 55.0
+      base_power_kw: 30.0
+      base_speed: 2950.0
+      base_temperature: 50.0
+      pressure_time_constant: 10.0
+    points:
+      feed_pressure:     {source: pressure, noise: 0.008, decimals: 3}
+      feed_flow:         {source: flow, noise: 0.2, decimals: 2}
+      feed_current:      {source: current, noise: 0.8, decimals: 1}
+      # 轴承温度上限 75°C（ISO 10816 配套的热保护动作点）
+      feed_bearing_temp: {source: temperature, gain: 1.4, noise: 0.3, decimals: 1}
+      feed_vibration:    {source: vibration, noise: 0.05, min: 0, decimals: 2}
+      # 基变量 level 单位是米（满量程 3 m）→ ×30 得百分比
+      deaerator_level:   {source: level, gain: 30.0, noise: 1.0, min: 0, max: 100, decimals: 1}
+      # 除氧后给水 104°C（对应除氧器 0.12 MPa 饱和温度）
+      feed_water_temp:   {source: temperature, gain: 2.1, noise: 0.4, decimals: 1}
+      feed_pump_speed:   {source: speed, noise: 10.0, decimals: 0}
+      feed_run_hours:    {source: counter, gain: 0.001, offset: 31200, decimals: 1}
+      feed_pump_status:  {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # Y5-47 除尘引风机（锅炉负压运行）
+  # 风量 45000 m³/h、全压 -3000 Pa、出口粉尘 10-20 mg/m³
+  # ---------------------------------------------------------------------------
+  dust_fan_01:
+    process_model:
+      base_flow: 45000.0
+      base_pressure: 0.003
+      base_current: 180.0
+      base_power_kw: 90.0
+      base_speed: 980.0
+      base_temperature: 50.0
+    points:
+      fan_air_volume:        {source: flow, noise: 200.0, decimals: 0}
+      # 引风机在负压下工作：0.003 MPa × -1e6 = -3000 Pa
+      # 引风机全压实测 -2000~-3500 Pa；pressure 基变量有 ±0.002 波动，
+      # 放大 1e6 后会变成 -9000~-2500，必须钳位（否则风机像在抽真空）
+      fan_total_pressure:    {source: pressure, gain: -1000000.0, noise: 20.0, min: -3500, max: -2000, decimals: 0}
+      fan_current:           {source: current, noise: 1.5, decimals: 1}
+      fan_bearing_vibration: {source: vibration, noise: 0.08, min: 0, decimals: 2}
+      # 出口粉尘：滤袋完好时 10-20，破袋会突升（由故障注入叠加）
+      outlet_dust:           {source: random, min: 8, max: 22, decimals: 1}
+      fan_winding_temp:      {source: temperature, gain: 1.6, noise: 0.5, decimals: 1}
+      fan_speed:             {source: speed, noise: 5.0, decimals: 0}
+      # 滤袋压差 1.2-2.0 kPa；积灰会缓慢爬升
+      bag_diff_pressure:     {source: random, min: 1.2, max: 2.0, decimals: 2}
+      fan_status:            {source: status, dtype: int}
+
+  # ---------------------------------------------------------------------------
+  # 空压站总管 + 冷干机
+  # 母管 0.6-0.8 MPa、露点 -20~-40°C、18 Nm³/min
+  # ---------------------------------------------------------------------------
+  air_header_01:
+    process_model:
+      base_pressure: 0.7
+      base_flow: 18.0
+      base_temperature: 45.0
+      pressure_time_constant: 30.0
+    points:
+      header_pressure:      {source: pressure, noise: 0.004, decimals: 3}
+      # 压力露点：温度基准 45 → ×0.4 - 38 = -20°C（冷干机正常值）
+      header_dew_point:     {source: temperature, gain: 0.4, offset: -38.0, noise: 0.3, decimals: 1}
+      header_flow:          {source: flow, noise: 0.3, decimals: 2}
+      load_ratio_air:       {source: current, gain: 4.0, min: 0, max: 100, decimals: 1}
+      tank_pressure_air:    {source: pressure, gain: 0.95, noise: 0.003, decimals: 3}
+      # 停机保压压降：管网泄漏的直接指标（<1 良好，>3 该查漏）
+      pressure_decay:       {source: random, min: 0.5, max: 3.0, decimals: 1}
+      header_temp:          {source: temperature, noise: 0.3, decimals: 1}
+      dryer_status:         {source: status, dtype: int}
+      air_system_status:    {source: status, dtype: int}

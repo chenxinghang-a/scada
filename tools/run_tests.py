@@ -48,6 +48,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 LOG_DIR = REPO / "logs" / "test_runs"
+# 只保留最近 N 份日志：每跑一次全量就多一个 700KB 文件，
+# 不管的话半年就是几个 G（主人明确要求「任务收尾顺手清，别攒着」）。
+KEEP_LOG_FILES = 20
 
 #: 统计行形如 `4328 passed, 10 skipped, 9 warnings in 1209.10s (0:20:09)`
 STATS_RE = re.compile(r"^(\d+) passed", re.M)
@@ -116,6 +119,13 @@ def main() -> int:
     cmd = [_python(), "-c", wrapper]
 
     print(f"[run_tests] 日志 → {log_path}")
+    # 保留策略：删掉最旧的，只留 KEEP_LOG_FILES 份
+    try:
+        old = sorted(LOG_DIR.glob("pytest_*.log"), key=lambda f: f.stat().st_mtime)
+        for stale in old[:-KEEP_LOG_FILES]:
+            stale.unlink(missing_ok=True)
+    except OSError:
+        pass
     print(f"[run_tests] 命令 → {' '.join(cmd)}", flush=True)
     started = time.time()
 

@@ -66,6 +66,13 @@ COVERAGE: dict[str, tuple[str, str]] = {
         'watch',
         '同 devices.yaml —— `SimulatedDeviceManager(config_path=...)` 指向它',
     ),
+    'simulation_profiles.yaml': (
+        'restart',
+        '`采集层/simulation_profiles.py::_load_profiles()` 按 mtime 缓存，'
+        '**下一次构造 DeviceBehaviorSimulator 时**才重读。已在运行的设备'
+        '不会重载（它们的 `_sim_specs` 在 __init__ 里固化），所以对「正在采集的'
+        '设备」而言是 restart 语义；新增设备会拿到新规则。',
+    ),
     'devices_modbus_sim.yaml': (
         'watch',
         '仿真 Modbus 从站启动时读取（`tools/modbus_simulator.py`），'

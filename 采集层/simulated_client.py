@@ -21,6 +21,42 @@ from .base_client import ModbusClientInterface, PushClientInterface
 logger = logging.getLogger(__name__)
 
 
+def encode_float32_registers(value: float, byte_order: str = 'ABCD') -> list[int]:
+    """按字节序把 float32 编成两个寄存器。
+
+    为什么需要这个函数（round 340）：本文件原来直接用
+    ``struct.pack('>f', ...)``，**硬编码大端 ABCD**；而
+    ``EnhancedSimulatedModbusClient`` 是读 ``config['byte_order']`` 的
+    四种字节序都支持。
+
+    于是「同一份配置」在两套模拟客户端下给出**不同的寄存器内容**：
+    基础版永远按 ABCD 编，配成 CDAB 的设备读到的是字节乱序的浮点数
+    （典型表现：温度读出来是 1.6e-38 或 -2.3e18 这种荒谬值）。
+    这属于本项目反复出现的「成对路径不等价」——两条路必须一致。
+
+    与 ``ByteOrderCapableDecoder._reorder_32`` 严格互逆：
+    编出来的两个寄存器经解码后必须还原原值。
+    """
+    raw = struct.pack('>f', float(value))
+    w_hi = struct.unpack('>H', raw[0:2])[0]
+    w_lo = struct.unpack('>H', raw[2:4])[0]
+
+    order = str(byte_order or 'ABCD').upper()
+    if order == 'CDAB':
+        return [w_lo, w_hi]
+    if order == 'BADC':
+        hi = ((w_hi & 0xFF) << 8) | ((w_hi >> 8) & 0xFF)
+        lo = ((w_lo & 0xFF) << 8) | ((w_lo >> 8) & 0xFF)
+        return [hi, lo]
+    if order == 'DCBA':
+        b0 = (w_hi >> 8) & 0xFF
+        b1 = w_hi & 0xFF
+        b2 = (w_lo >> 8) & 0xFF
+        b3 = w_lo & 0xFF
+        return [((b3 << 8) | b2) & 0xFFFF, ((b1 << 8) | b0) & 0xFFFF]
+    return [w_hi, w_lo]
+
+
 # ============================================================
 # 1/f (Pink) 噪声生成器
 # 真实传感器噪声的频谱密度遵循1/f分布
@@ -570,6 +606,9 @@ class SimulatedModbusClient(ModbusClientInterface):
         self.connected = False
         self.start_time = time.time()
 
+        # 字节序：与 EnhancedSimulatedModbusClient 保持一致（配置可覆盖）
+        self.byte_order = str(config.get('byte_order', 'ABCD')).upper()
+
         # 预缓存每个寄存器的模拟规则（只算一次）
         self._rules_cache = {}
         self._register_types = {}  # address -> data_type, scale
@@ -654,9 +693,8 @@ class SimulatedModbusClient(ModbusClientInterface):
                 raw = struct.pack('>d', float(random.uniform(0, 100)))
                 return [struct.unpack('>H', raw[i*2:(i+1)*2])[0] for i in range(4)]
             elif count >= 2:
-                # float32/int32/uint32: 返回2个寄存器
-                raw = struct.pack('>f', float(random.uniform(0, 100)))
-                return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
+                # float32/int32/uint32: 返回2个寄存器（按配置字节序）
+                return encode_float32_registers(random.uniform(0, 100), self.byte_order)
             return [random.randint(0, 1000)]
 
         # 用地址做相位偏移，避免同类型寄存器曲线完全一致
@@ -672,22 +710,35 @@ class SimulatedModbusClient(ModbusClientInterface):
         raw_value = value / scale if scale != 0 else value
 
         if data_type == 'float32':
-            raw = struct.pack('>f', float(raw_value))
-            return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
+            return encode_float32_registers(raw_value, self.byte_order)
         elif data_type in ('int32', 'uint32'):
             int_val = int(round(raw_value))
             raw = struct.pack('>i' if data_type == 'int32' else '>I', int_val)
             return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
         elif count >= 2:
-            # 兜底：未知类型但count>=2，按float32处理
-            raw = struct.pack('>f', float(raw_value))
-            return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
+            # 兜底：未知类型但count>=2，按float32处理（按配置字节序）
+            return encode_float32_registers(raw_value, self.byte_order)
         else:
             # uint16 / int16
             return [int(round(raw_value)) & 0xFFFF]
 
     def decode_float32(self, registers: list[int]) -> float:
-        raw = (registers[0] << 16) | registers[1]
+        """解码 float32，尊重配置的 byte_order（与编码侧严格互逆）。"""
+        w1, w2 = registers[0] & 0xFFFF, registers[1] & 0xFFFF
+        order = self.byte_order
+        if order == 'CDAB':
+            w1, w2 = w2, w1
+        elif order == 'BADC':
+            w1 = ((w1 & 0xFF) << 8) | ((w1 >> 8) & 0xFF)
+            w2 = ((w2 & 0xFF) << 8) | ((w2 >> 8) & 0xFF)
+        elif order == 'DCBA':
+            b0 = (w1 >> 8) & 0xFF
+            b1 = w1 & 0xFF
+            b2 = (w2 >> 8) & 0xFF
+            b3 = w2 & 0xFF
+            w1 = (b3 << 8) | b2
+            w2 = (b1 << 8) | b0
+        raw = ((w1 << 16) | w2) & 0xFFFFFFFF
         return struct.unpack('>f', struct.pack('>I', raw))[0]
 
     def decode_float64(self, registers: list[int]) -> float:
