@@ -62,8 +62,36 @@ class IDeviceManager(ABC):
     """设备管理器抽象接口"""
 
     @abstractmethod
-    def load_config(self):
-        """加载设备配置"""
+    def load_config(self) -> bool:
+        """加载设备配置。
+
+        Returns:
+            bool: True = 成功；False = 失败（**设备表必须保持原样**）。
+
+        round 341 起返回 bool：原来返回 None，调用方无法区分「加载成功」
+        与「文件不存在/语法错」—— 后者会让进程以 0 台设备正常启动。
+        """
+        pass
+
+    @abstractmethod
+    def reload_config(self, allow_empty: bool = False) -> dict[str, Any]:
+        """热重载设备配置（运行时调用，不中断已有连接）。
+
+        Returns:
+            dict: ``{'added': [...], 'removed': [...], 'kept': [...],
+                   'rejected': str | None}``
+
+        为什么必须是**抽象方法**（round 341）：
+        `core/device_config_watch.watch_once()` 每 10 秒调一次
+        `device_manager.reload_config()`，但这个方法原先只在
+        `DeviceManager` 上定义，生产用的 `RealDeviceManager` /
+        `SimulatedDeviceManager` 都没有 —— `AttributeError` 被 except 记成
+        「设备配置自动重载异常」，于是**两种模式下热重载从未生效**，
+        改 `devices_*.yaml` 必须重启，而维护任务每 10 秒刷一条 ERROR。
+
+        放进接口并标 `@abstractmethod`，是为了让「漏实现」在**实例化时**
+        就 TypeError，而不是等到线上第一次热重载才发现。
+        """
         pass
 
     @abstractmethod

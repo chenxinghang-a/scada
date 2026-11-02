@@ -221,7 +221,9 @@ class TestIDeviceManagerInterface:
     def test_set_estop_override_default(self):
         """Default implementation is a no-op"""
         class ConcreteMgr(IDeviceManager):
-            def load_config(self): pass
+            def load_config(self): return True
+            def reload_config(self, allow_empty=False):
+                return {'added': [], 'removed': [], 'kept': [], 'rejected': None}
             def get_client(self, device_id): return None
             def connect_device(self, device_id): return True
             def disconnect_device(self, device_id): pass
@@ -242,7 +244,9 @@ class TestIDeviceManagerInterface:
 
     def test_stop_device_default_returns_false(self):
         class ConcreteMgr(IDeviceManager):
-            def load_config(self): pass
+            def load_config(self): return True
+            def reload_config(self, allow_empty=False):
+                return {'added': [], 'removed': [], 'kept': [], 'rejected': None}
             def get_client(self, device_id): return None
             def connect_device(self, device_id): return True
             def disconnect_device(self, device_id): pass

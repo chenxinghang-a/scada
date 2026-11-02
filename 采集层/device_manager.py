@@ -182,8 +182,15 @@ class DeviceManager:
                 logger.error(f"配置文件不存在: {self.config_path}")
                 return False
 
+            # yaml.safe_load（语法错直接抛）+ expand_env_vars（展开 ${VAR}）。
+            #
+            # 不用 ConfigManager.load_yaml：它内部 `except Exception → return {}`，
+            # 于是「YAML 缩进写错」= 加载到 0 台设备、进程正常启动、
+            # 界面上设备全没了却没有一条错误日志。坏配置必须能被调用方看见。
+            from core.config_manager import expand_env_vars
             with open(config_file, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f) or {}
+                raw = yaml.safe_load(f)
+            config = expand_env_vars(raw or {}, _source=str(config_file))
 
             if not isinstance(config, dict):
                 logger.error(

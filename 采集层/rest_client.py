@@ -137,7 +137,15 @@ class RESTDeviceClient:
             self._setup_auth()
 
             # 设置超时（connect 3s, read 5s — 工业场景下不宜太长）
-            self._session.timeout = (3, 5)
+            #
+            # ⚠️ round 341：原来写的是 `self._session.timeout = (3, 5)` ——
+            # `requests.Session` **没有 timeout 属性**，这行只是给对象挂了
+            # 一个自定义属性，requests 完全不看它。结果是**所有 REST 请求
+            # 都没有超时**，对端不响应时永久阻塞：
+            # 采集线程卡死在这台设备上，该设备的采集任务再也不返回，
+            # 而日志里连「超时」都不会出现（因为根本没超时）。
+            # 必须作为 `timeout=` 参数逐个传（见下方 _request 调用）。
+            self._timeout = self._resolve_timeout()
 
             # 测试连通性（尝试第一个端点）
             if self.endpoints:
@@ -145,7 +153,8 @@ class RESTDeviceClient:
                 url = self.base_url.rstrip('/') + first_ep.get('path', '/')
                 resp = self._session.request(
                     method=first_ep.get('method', 'GET'),
-                    url=url
+                    url=url,
+                    timeout=getattr(self, '_timeout', (3, 5))
                 )
                 resp.raise_for_status()
 
@@ -204,7 +213,8 @@ class RESTDeviceClient:
                     method=method,
                     url=url,
                     params=params if method == 'GET' else None,
-                    json=body if method in ('POST', 'PUT', 'PATCH') else None
+                    json=body if method in ('POST', 'PUT', 'PATCH') else None,
+                    timeout=getattr(self, '_timeout', (3, 5))
                 )
                 resp.raise_for_status()
                 return resp.json()
@@ -264,7 +274,8 @@ class RESTDeviceClient:
             resp = self._session.request(
                 method=(method or endpoint_config.get('write_method', 'POST')),
                 url=url,
-                json=body
+                json=body,
+                timeout=getattr(self, '_timeout', (3, 5))
             )
             resp.raise_for_status()
             return True
@@ -272,6 +283,39 @@ class RESTDeviceClient:
         except Exception as e:
             logger.error(f"REST写入失败: {e}")
             return False
+
+    def _resolve_timeout(self) -> tuple[float, float]:
+        """解析超时配置，返回 ``(connect, read)`` 秒。
+
+        支持三种写法（现场网关响应速度差异很大，必须可配）：
+            timeout: 10                 → (10, 10)
+            timeout: [3, 10]            → (3, 10)
+            timeout: {connect: 3, read: 10}
+        非法值退回默认 (3, 5) 并告警 —— 不能因为一个配置写错就让采集无超时。
+        """
+        from core.safe_numeric import try_finite_float
+
+        default = (3.0, 5.0)
+        raw = self.config.get('timeout', default)
+
+        def _pair(connect_v, read_v):
+            c = try_finite_float(connect_v)
+            r = try_finite_float(read_v)
+            if c is None or r is None or c <= 0 or r <= 0:
+                logger.warning(
+                    "[REST] %s: timeout=%r 非法，用默认 %s", self.device_name, raw, default)
+                return default
+            return (c, r)
+
+        if isinstance(raw, dict):
+            return _pair(raw.get('connect', default[0]), raw.get('read', default[1]))
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            return _pair(raw[0], raw[1])
+        single = try_finite_float(raw)
+        if single is not None and single > 0:
+            return (single, single)
+        logger.warning("[REST] %s: timeout=%r 无法解析，用默认 %s", self.device_name, raw, default)
+        return default
 
     def _setup_auth(self):
         """设置HTTP认证"""

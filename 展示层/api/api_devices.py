@@ -381,10 +381,27 @@ def stop_device(device_id):
     if category != 'mechanical':
         return api_error(f'{category} 类型设备不支持启停操作')
 
-    result = device_manager.stop_device(device_id)
-    if result:
-        get_auth_manager().log_operation(request.current_user.get('username', 'system'), 'stop_device', device_id, f'设备停止: {device_id}')
-    return jsonify({'success': result, 'message': f'设备 {device_id} 已停止'})
+    # round 341：**改走安全层**，不再直接调 device_manager.stop_device。
+    #
+    # 原来这两个端点（/start /stop）绕过的是整个安全层：
+    # 急停期间仍能停设备、联锁触发时仍能启动、写失败/成功都没有回读验证、
+    # 审计只记「设备停止」（不记点位与结果）。
+    # 而 /api/control/* 走的是 device_control.write_with_verification，
+    # 同一件事两条路、闸门数量不同 —— 挑少的那条就绕过去了。
+    #
+    # 现在统一走 batch_control（单设备就是长度为 1 的批量）：
+    # 急停拦截、联锁拦截、点位类型严格、审计、部分成功语义全部继承。
+    device_control = getattr(current_app, 'device_control', None)
+    if device_control is None:
+        return api_error('安全模块不可用，已拒绝启停（无法执行急停/联锁校验）', 503)
+
+    operator = request.current_user.get('username', 'system')
+    outcome = device_control.batch_control('stop', operator, [device_id])
+    detail = (outcome.get('results') or {}).get(device_id) or {}
+    success = bool(detail.get('success'))
+    message = detail.get('message') or outcome.get('message') or (
+        f'设备 {device_id} 已停止' if success else f'设备 {device_id} 停止失败')
+    return jsonify({'success': success, 'message': message})
 
 
 @devices_bp.route('/devices/<device_id>/start', methods=['POST'])
@@ -401,10 +418,18 @@ def start_device(device_id):
     if category != 'mechanical':
         return jsonify({'success': False, 'message': f'{category} 类型设备不支持启停操作'}), 400
 
-    result = device_manager.start_device(device_id)
-    if result:
-        get_auth_manager().log_operation(request.current_user.get('username', 'system'), 'start_device', device_id, f'设备启动: {device_id}')
-    return jsonify({'success': result, 'message': f'设备 {device_id} 已启动'})
+    # 同 stop：统一走安全层（见上方注释）
+    device_control = getattr(current_app, 'device_control', None)
+    if device_control is None:
+        return api_error('安全模块不可用，已拒绝启停（无法执行急停/联锁校验）', 503)
+
+    operator = request.current_user.get('username', 'system')
+    outcome = device_control.batch_control('start', operator, [device_id])
+    detail = (outcome.get('results') or {}).get(device_id) or {}
+    success = bool(detail.get('success'))
+    message = detail.get('message') or outcome.get('message') or (
+        f'设备 {device_id} 已启动' if success else f'设备 {device_id} 启动失败')
+    return jsonify({'success': success, 'message': message})
 
 
 def _start_device_collection(device_id: str) -> bool:

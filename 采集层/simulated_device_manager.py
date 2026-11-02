@@ -49,46 +49,144 @@ class SimulatedDeviceManager(IDeviceManager):
         self.config_path = config_path or '配置/devices.yaml'
         self.simulation_mode = True  # 模拟设备管理器始终为模拟模式
         self.devices: dict[str, dict[str, Any]] = {}
+        #: 最近一次 load_config 失败的原因（None / missing / parse / structure）
+        self._load_failed_reason: str | None = None
         self.clients: dict[str, IDeviceClient] = {}
         # 保护 devices / clients 两张表：API 线程增删设备，重连循环与
         # `_save_config()` 同时在读它们。不可重入锁，临界区只包字典操作。
         self._lock = threading.Lock()
         
-        # 加载设备配置
-        self.load_config()
-        
+        # 加载设备配置；失败拒绝启动（0 台设备不许静默跑）
+        if not self.load_config():
+            # 分级处理：不存在 → 软失败；存在但坏了 → 硬失败（见真实模式同名注释）
+            if self._load_failed_reason == 'missing':
+                logger.error("模拟设备配置不存在，以 0 台设备启动: %s",
+                             self.config_path)
+            else:
+                raise RuntimeError(
+                    f"模拟设备配置加载失败（{self._load_failed_reason}），"
+                    f"拒绝以 0 台设备启动: {self.config_path}")
+
         logger.info("模拟设备管理器初始化完成")
 
-    def load_config(self) -> None:
-        """加载设备配置文件"""
+    def load_config(self) -> bool:
+        """加载设备配置文件（口径与 RealDeviceManager 一致）。
+
+        Returns:
+            bool: True = 成功；False = 失败且**设备表保持原样**。
+
+        fail-closed 的三条理由见 `RealDeviceManager.load_config` 的 docstring：
+        坏 YAML 不许变成空表、devices 必须是列表、全部成功才替换。
+        模拟模式同样需要 —— 「模拟配置写错 → 0 台设备 → 界面空白」
+        和真实模式的后果一样难排查。
+        """
+        self._load_failed_reason = None
+        config_file = paths.resolve(self.config_path)
+        if not config_file.exists():
+            logger.error("配置文件不存在: %s", self.config_path)
+            self._load_failed_reason = 'missing'
+            return False
+
         try:
-            config_file = paths.resolve(self.config_path)
-            if not config_file.exists():
-                logger.error(f"配置文件不存在: {self.config_path}")
-                return
-
+            from core.config_manager import expand_env_vars
             with open(config_file, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
+                raw = yaml.safe_load(f)
+            config = expand_env_vars(raw or {}, _source=str(config_file))
+        except yaml.YAMLError as exc:
+            logger.error("配置文件语法错误（保留原有设备表）: %s — %s",
+                         self.config_path, exc)
+            self._load_failed_reason = 'parse'
+            return False
+        except OSError as exc:
+            logger.error("配置文件读取失败: %s — %s", self.config_path, exc)
+            return False
 
-            # 解析设备配置
-            devices_config = config.get('devices', [])
-            for device_config in devices_config:
-                device_id = device_config.get('id')
-                if device_id:
-                    self.devices[device_id] = device_config
-                    protocol = device_config.get('protocol', 'modbus_tcp')
-                    logger.info(f"[模拟] 加载设备配置: {device_id} [{protocol}] - {device_config.get('name')}")
+        if not isinstance(config, dict):
+            logger.error("配置顶层不是映射，拒绝使用: %s", self.config_path)
+            self._load_failed_reason = 'structure'
+            return False
 
-            # 按协议统计
-            proto_count = {}
-            for d in list(self.devices.values()):
-                p = d.get('protocol', 'modbus_tcp')
-                proto_count[p] = proto_count.get(p, 0) + 1
-            summary = ', '.join(f"{k}:{v}" for k, v in proto_count.items())
-            logger.info(f"[模拟] 共加载 {len(self.devices)} 个设备 ({summary})")
+        devices_config = config.get('devices', [])
+        if not isinstance(devices_config, list):
+            logger.error("配置的 devices 段必须是列表，实际 %s，拒绝使用: %s",
+                         type(devices_config).__name__, self.config_path)
+            self._load_failed_reason = 'structure'
+            return False
 
-        except Exception as e:
-            logger.error(f"加载配置文件异常: {e}")
+        new_devices: dict[str, dict[str, Any]] = {}
+        for device_config in devices_config:
+            if not isinstance(device_config, dict):
+                logger.warning("[模拟] 跳过非映射的设备条目: %r", device_config)
+                continue
+            device_id = device_config.get('id')
+            if not device_id:
+                logger.warning("[模拟] 跳过没有 id 的设备条目")
+                continue
+            new_devices[device_id] = device_config
+
+        with self._lock:
+            self.devices = new_devices
+
+        proto_count: dict[str, int] = {}
+        for d in new_devices.values():
+            p = d.get('protocol', 'modbus_tcp')
+            proto_count[p] = proto_count.get(p, 0) + 1
+        summary = ', '.join(f"{k}:{v}" for k, v in proto_count.items())
+        logger.info("[模拟] 共加载 %d 个设备 (%s)", len(new_devices), summary)
+        return True
+
+
+    def reload_config(self, allow_empty: bool = False) -> dict[str, Any]:
+        """热重载设备配置（契约同 ``DeviceManager.reload_config``）。
+
+        Returns:
+            dict: ``{'added': [...], 'removed': [...], 'kept': [...],
+                   'rejected': str | None}``
+            ``rejected`` 非空表示本次重载被拒绝、配置表原样保留。
+
+        ⚠️ round 341：这个方法原来是**缺的**。
+
+        `core/device_config_watch.watch_once()` 每 10 秒调一次
+        `device_manager.reload_config()`，但只有 `DeviceManager` 定义了它；
+        生产用的 `RealDeviceManager` / `SimulatedDeviceManager` 都没有 ——
+        `AttributeError` 被 `except` 记成「设备配置自动重载异常」，
+        于是**两种模式下热重载都从未生效**，改 `devices_*.yaml` 必须重启，
+        而维护任务每 10 秒刷一条 ERROR，把真正的问题埋掉。
+
+        两条约束（与 DeviceManager 一致）：
+        · 解析失败 → 保留原配置表，返回 `rejected`；
+        · 重载成 0 台而原来有设备 → 回滚（文件被清空/编辑器先清后写的
+          中间态，照单全收等于**现场全部设备停止采集**）。
+        """
+        old_ids = set(self.devices.keys())
+        # 必须用 list(...) 快照：别的线程（API 增删设备）正在改这张表，
+        # 直接迭代活视图会抛 RuntimeError: dictionary changed size during iteration。
+        snapshot = {did: cfg for did, cfg in list(self.devices.items())}
+
+        if not self.load_config():
+            reason = (f'配置文件解析失败（{self.config_path}），'
+                      f'已保留原配置（{len(old_ids)} 台设备）')
+            logger.error("设备配置重载被拒绝: %s", reason)
+            return {'added': [], 'removed': [], 'kept': sorted(old_ids),
+                    'rejected': reason}
+
+        new_ids = set(self.devices.keys())
+        if not new_ids and old_ids and not allow_empty:
+            with self._lock:
+                self.devices = snapshot
+            reason = ('重载后设备数为 0，已回滚 —— 防止文件被清空时'
+                      '现场全部设备停止采集')
+            logger.error("设备配置重载被拒绝: %s", reason)
+            return {'added': [], 'removed': [], 'kept': sorted(old_ids),
+                    'rejected': reason}
+
+        added = sorted(new_ids - old_ids)
+        removed = sorted(old_ids - new_ids)
+        kept = sorted(new_ids & old_ids)
+        if added or removed:
+            logger.info("[重载] 设备变更: +%s -%s", added, removed)
+        return {'added': added, 'removed': removed, 'kept': kept,
+                'rejected': None}
 
     def _create_simulated_client(self, config: dict[str, Any]) -> IDeviceClient | None:
         """

@@ -50,12 +50,30 @@ class TestDeviceAPIEdgeCases:
         assert resp.status_code == 200
 
     def test_adjust_device_success(self, client, auth_headers, app):
-        """POST /api/devices/<id>/adjust 成功"""
-        app.device_manager.adjust_device.return_value = {'success': True}
+        """POST /api/devices/<id>/adjust 成功（round 341 起走安全层）"""
+        # /adjust 现在走 device_control.write_with_verification（原来直调
+        # device_manager.adjust_device，绕过了急停/联锁/量程/审计/回读）。
+        # 所以这里要注入安全模块，并 mock 地址解析与写入结果。
+        dc = MagicMock()
+        dc._resolve_register_address.return_value = 10
+        dc.write_with_verification.return_value = {
+            'success': True, 'message': '写入成功', 'verified': True,
+        }
+        app.device_control = dc
+
         resp = client.post('/api/devices/dev1/adjust',
                            json={'register_name': 'temp', 'value': 25.0},
                            headers=auth_headers)
         assert resp.status_code == 200
+        assert resp.get_json().get('verified') is True
+
+    def test_adjust_503_without_safety_module(self, client, auth_headers, app):
+        """安全模块缺失时必须 503，不能降级直写（与 write-register 口径一致）。"""
+        app.device_control = None
+        resp = client.post('/api/devices/dev1/adjust',
+                           json={'register_name': 'temp', 'value': 25.0},
+                           headers=auth_headers)
+        assert resp.status_code == 503
 
     def test_device_behavior_with_sim(self, client, auth_headers, app):
         """GET /api/devices/<id>/behavior 带增强模拟"""

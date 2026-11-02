@@ -277,6 +277,30 @@ class DeviceControlSafety:
         self._load_preset_interlocks()
         new_rules = self._interlock_rules
 
+        # ===== 回滚保护（round 341）=====
+        #
+        # 加载失败（`interlocks.yaml` 语法错 / 权限不足 / 被别的东西临时占位）
+        # 时新表会是 0 条。原实现照单全收 —— **运行中的联锁保护静默消失**：
+        # 上一秒还有 5 条规则在盯着，下一秒一条都没有，系统只留一行 warning。
+        # `validate_write` 在真实模式空规则时确实会 fail-closed 拒绝写入，
+        # 但**已经在触发的联锁不会继续执行动作**（该停机的设备不停）。
+        #
+        # 判据：**新表 0 条而旧表非空 → 视为加载失败，回滚**。
+        # 真要清空规则，应该在文件里写 `interlocks: []` 后重启，
+        # 而不是靠一次热重载把保护卸掉。
+        if not new_rules and old_rules:
+            logger.error(
+                "联锁重载后规则为 0（文件语法错或不可读），**已回滚到重载前的 %d 条** —— "
+                "否则运行中的联锁保护会静默消失。请检查 %s",
+                len(old_rules), INTERLOCK_CONFIG_PATH)
+            self._interlock_rules = old_rules
+            self._interlock_states = old_states
+            return {
+                'added': [], 'removed': [], 'changed': [],
+                'kept': sorted(old_rules), 'source': 'rollback',
+                'error': '重载后规则为 0，已回滚到重载前的规则',
+            }
+
         new_ids = set(new_rules)
         added = sorted(new_ids - old_ids)
         removed = sorted(old_ids - new_ids)
@@ -2247,7 +2271,26 @@ class DeviceControlSafety:
                         logger.warning(f"写入重试 {attempt + 1}/{max_retries}: {e}")
                         time.sleep(0.1)
                     else:
-                        raise
+                        # round 341：**异常必须在这里收住，不能 raise 出去**。
+                        #
+                        # 原来最后一次重试仍失败就 `raise`，异常一路穿到
+                        # API 层变成 **500 Internal Server Error**：
+                        #   ① 调用方看到 500，分不清「设备超时」还是「代码 bug」；
+                        #   ② **审计里没有 write_failed** —— 这次写入尝试
+                        #      在系统里不留任何痕迹，事后查不到「谁试过写什么」。
+                        # 写超时是现场最常见的失败，必须走正常失败路径。
+                        logger.error(
+                            "写入失败（已重试 %d 次）: %s/%s=%s — %s",
+                            max_retries, device_id, address, value, e)
+                        self._audit('write_failed', operator,
+                                    f'写入异常({kind}): {device_id}/{address}={value}'
+                                    f' — {type(e).__name__}: {e}')
+                        return {
+                            'success': False,
+                            'message': f'写入异常（已重试 {max_retries} 次）：{e}',
+                            'kind': kind,
+                            'verified': None,
+                        }
 
             if not success:
                 self._audit('write_failed', operator,
@@ -2267,18 +2310,39 @@ class DeviceControlSafety:
             verified: bool | None = None
             readback_value = None
             try:
+                # ⚠️ round 341：回读**必须是新鲜数据**。
+                #
+                # `ModbusClient` 在读取失败时会返回「最后已知良好值」并把
+                # `last_read_source` 置为 'cache'。这里原来只看 `if raw:`，
+                # 于是两个方向都会错：
+                #   ① 写失败 + 缓存里恰好是同一个值 → verified=True
+                #      → 报「写入成功且已校验」，设备其实没动；
+                #   ② 写成功 + 回读超时 → 缓存里是**旧值** → verified=False
+                #      → 误报失败，上层重试 → 对累加类寄存器**重复下发**。
+                # 判据：读回来不是 fresh，一律按「未验证」处理（None），
+                # 既不算通过也不算失败 —— 交给调用方按通信状态判断。
                 if kind == 'coil':
                     if hasattr(client, 'read_coils'):
                         raw = client.read_coils(int(address), 1)
-                        if raw:
+                        fresh = getattr(client, 'last_read_source', 'fresh') == 'fresh'
+                        if raw and fresh:
                             readback_value = bool(raw[0])
                             verified = (readback_value == bool(value))
+                        elif raw:
+                            logger.warning(
+                                "回读来自陈旧缓存，按未验证处理（不能当通过）: %s/%s",
+                                device_id, address)
                 else:
                     if hasattr(client, 'read_holding_registers'):
                         raw = client.read_holding_registers(int(address), 1)
-                        if raw:
+                        fresh = getattr(client, 'last_read_source', 'fresh') == 'fresh'
+                        if raw and fresh:
                             readback_value = int(raw[0])
                             verified = (readback_value == int(value))
+                        elif raw:
+                            logger.warning(
+                                "回读来自陈旧缓存，按未验证处理（不能当通过）: %s/%s",
+                                device_id, address)
                 if verified is False:
                     logger.warning(f"回读验证失败: 期望 {value}, 实际 {readback_value}")
             except Exception as e:

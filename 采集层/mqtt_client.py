@@ -14,6 +14,54 @@ from config import MQTTConfig
 
 logger = logging.getLogger(__name__)
 
+
+def parse_topic_entry(entry: Any) -> tuple[str, int]:
+    """解析一条 ``topics`` 配置，返回 ``(topic, qos)``。
+
+    支持两种写法 —— 两种都在本仓库的真实配置里出现过：
+
+    * **dict**（推荐，能带 json_path / name / unit）::
+
+          - name: vibration_x
+            topic: factory/motor_group/vibration/x_axis
+            json_path: value
+            qos: 1
+
+    * **裸字符串**（`配置/devices_real.yaml` 的原始格式）::
+
+          - env/warehouse/temperature
+
+    为什么必须兼容：原实现对每条都直接 ``entry.get('topic')``，
+    裸字符串会 ``AttributeError``。在 ``start()`` 里这个异常被外层
+    ``except`` 吞掉 → 整个 MQTT 设备**启动失败**，日志只有一句
+    「MQTT设备管理器启动失败」，看不出是配置格式的问题；
+    在 ``_register_configured_topics()`` 里则只留一行 warning 就跳过，
+    结果「配了 2 个主题，一条数据也收不到」。
+
+    两种都是**静默失败**，现场极难定位。统一在这里解析，两处调用点共用。
+    """
+    if isinstance(entry, dict):
+        topic = str(entry.get('topic') or '').strip()
+        raw_qos = entry.get('qos', MQTTConfig.QOS)
+    elif isinstance(entry, str):
+        topic = entry.strip()
+        raw_qos = MQTTConfig.QOS
+    else:
+        logger.warning("无法识别的 topic 配置（已跳过）: %r", entry)
+        return '', MQTTConfig.QOS
+
+    # 用 try_int 而不是裸 int()：裸转换只捕 (TypeError, ValueError) 会漏
+    # OverflowError（`int(float('inf'))`），而 MQTT 的 qos 来自配置，
+    # 一个 `qos: inf` 就能把订阅流程打成 500。项目有静态闸门专门扫这个。
+    from core.safe_numeric import try_int
+    parsed = try_int(raw_qos)
+    qos = MQTTConfig.QOS if parsed is None else parsed
+    if qos not in (0, 1, 2):
+        logger.warning("topic %s 的 qos=%r 非法，按 %d 处理", topic, raw_qos, MQTTConfig.QOS)
+        qos = MQTTConfig.QOS
+
+    return topic, qos
+
 try:
     import paho.mqtt.client as mqtt
     MQTT_AVAILABLE = True
@@ -214,13 +262,9 @@ class MQTTClient:
         """
         added = 0
         for topic_config in self.topics_config or []:
-            if not isinstance(topic_config, dict):
-                logger.warning(f"无法识别的 topic 配置（已跳过）: {topic_config!r}")
-                continue
-            topic = topic_config.get('topic', '')
+            topic, qos = parse_topic_entry(topic_config)
             if not topic:
                 continue
-            qos = topic_config.get('qos', MQTTConfig.QOS)
             if topic not in self._subscriptions:
                 added += 1
             self._subscriptions[topic] = qos
@@ -458,8 +502,7 @@ class MQTTDeviceManager:
             # 订阅主题
             topics = self.config.get('topics', [])
             for topic_config in topics:
-                topic = topic_config.get('topic', '')
-                qos = topic_config.get('qos', MQTTConfig.QOS)
+                topic, qos = parse_topic_entry(topic_config)
                 if topic:
                     self.client.subscribe(topic, qos)
 

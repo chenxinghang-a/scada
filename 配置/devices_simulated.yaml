@@ -36,7 +36,7 @@ devices:
     name: bearing_temperature
     topic: factory/motor_group/vibration/temperature
     unit: °C
-  username: scada
+  username: ${MQTT_SCADA_USER:-scada}
   vendor: 自研物联网节点
   zone: 监控区
 - auth_password: ${DEVICE_REST_ADMIN_PASSWORD}
@@ -1912,7 +1912,7 @@ devices:
     name: water_temperature
     topic: factory/water_outlet/quality/temperature
     unit: °C
-  username: scada
+  username: ${MQTT_SCADA_USER:-scada}
   vendor: 自研物联网节点
 - collection_interval: 5
   description: 离心式冷水机组 — 冷冻/冷却水/压缩机

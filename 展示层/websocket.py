@@ -38,6 +38,19 @@ _connected_clients: set[str] = set()
 # 等于永远取不到自己断线前缓存的消息（`offline_queue` 会一直空着）。
 _sid_user: dict[str, str] = {}
 
+#: 握手时**显式声明**支持 gzip 解压的客户端 sid。
+#:
+#: 为什么默认不压缩（round 341）：`compress_message()` 会把 >1KB 的载荷
+#: 换成 `{"__compressed": true, "data": "<base64 gzip>"}`，而当前前端
+#: **没有任何解压实现**（`静态资源/js`、`模板/` 里搜不到 __compressed /
+#: pako / DecompressionStream）。于是前端读 `msg.device_id` 得到 undefined，
+#: 界面**静默不更新** —— 不报错、不告警，只是曲线停在原地。
+#: 实测受影响的是一批大数据设备（42 台里除 3 台"重要设备"外都走压缩路径）。
+#:
+#: 判据：**服务端不得假设客户端能解压**。默认发原文，客户端在握手时
+#: `io(..., {query: {compress: 1}})` 声明后才发压缩包。
+_compression_clients: set[str] = set()
+
 # 曾经成功连接过的用户名 → 最后一次连接的时间戳 = 离线消息补发的目标集合。
 #
 # 只在 connect 成功后写入，因此「服务启动后从没人登录过」这段时间的报警
@@ -58,6 +71,19 @@ OFFLINE_TARGET_TTL = 24 * 3600
 OFFLINE_REPLAY_LIMIT = 200
 
 _clients_lock = threading.Lock()
+
+
+def _all_clients_support_compression() -> bool:
+    """房间里是否**所有**客户端都声明了支持解压。
+
+    只要有一个不支持就整批发原文 —— 宁可多占带宽，也不能让某个客户端
+    收到看不懂的包（那等于该客户端的数据流静默中断）。
+    无人连接时返回 False（没有发送对象，压不压都无所谓）。
+    """
+    with _clients_lock:
+        if not _connected_clients:
+            return False
+        return _connected_clients.issubset(_compression_clients)
 
 
 def get_connected_count() -> int:
@@ -279,6 +305,9 @@ def init_socketio(app, database, data_collector):
                 return False
             _connected_clients.add(request.sid)
             _sid_user[request.sid] = username
+            # 客户端握手时显式声明才登记（默认不压缩，见 _compression_clients 注释）
+            if str(request.args.get('compress', '')).strip().lower() in ('1', 'true', 'yes'):
+                _compression_clients.add(request.sid)
             _known_users[username] = time.time()
             current = len(_connected_clients)
 
@@ -310,6 +339,7 @@ def init_socketio(app, database, data_collector):
         with _clients_lock:
             _connected_clients.discard(request.sid)
             _sid_user.pop(request.sid, None)
+            _compression_clients.discard(request.sid)
             current = len(_connected_clients)
         logger.info(f"客户端断开: {request.sid}, 当前连接数: {current}")
         try:
@@ -556,7 +586,9 @@ def start_data_push_thread(database, data_collector):
                         latest = all_latest.get(device_id) if all_latest else None
                         if latest:
                             try:
-                                socketio.emit('data_update', compress_message(latest), room=f'device_{device_id}')
+                                payload = (compress_message(latest)
+                                           if _all_clients_support_compression() else latest)
+                                socketio.emit('data_update', payload, room=f'device_{device_id}')
                             except Exception as e:
                                 logger.debug(f"推送设备 {device_id} 数据失败: {e}")
 
@@ -582,7 +614,9 @@ def start_data_push_thread(database, data_collector):
 
                 if _cached_status:
                     try:
-                        socketio.emit('system_status', compress_message(_cached_status))
+                        status_payload = (compress_message(_cached_status)
+                                          if _all_clients_support_compression() else _cached_status)
+                        socketio.emit('system_status', status_payload)
                     except Exception as e:
                         logger.debug(f"推送系统状态失败: {e}")
 

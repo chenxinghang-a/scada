@@ -40,6 +40,12 @@ bad_secret=""
 for f in $files; do
     base=$(basename "$f" | tr 'A-Z' 'a-z')
     case "$base" in
+        # 模板文件必须进仓库（值是 CHANGE_ME，不含真实凭据），
+        # 否则新人 clone 下来不知道要配哪些变量。
+        # round 341：`.env.*` 这条规则把 `.env.example` 也拦了，
+        # 而 `tests/test_env_vars_wired.py` 要求配置里引用的变量
+        # 必须在模板里声明 —— 两条规则打架。
+        .env.example|.env.sample|.env.template|.env.dist) continue ;;
         .env|.env.*|*.key|*.pem|id_rsa*|id_ed25519*|*credentials*|*secret*|*token*)
             bad_secret="$bad_secret $f" ;;
     esac

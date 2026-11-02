@@ -542,7 +542,12 @@ class TestConfigRefsAreDeclared:
             "解析器多半坏了，此时「未声明集合为空」是平凡真"
         )
         # 抽查一个必然存在的真实引用（它在 .env.example 里有声明）
-        assert "PLC_HOST_01" in refs, "PLC_HOST_01 没被解析出来 —— 配置引用解析分支坏了"
+        # round 341：`devices_real.yaml` 从 2 台脱敏示例扩到 42 台现场清单后，
+        # 变量名统一成 `DEVICE_<ID>_HOST` 形式，不再有 `PLC_HOST_01`。
+        # 这里改为断言「解析分支能认出 DEVICE_* 系列」——
+        # 它防的是「解析器整体失效」，不该绑死某一个具体变量名。
+        assert any(r.startswith("DEVICE_") for r in refs), (
+            f"配置引用解析分支坏了：没解析出任何 DEVICE_* 变量（共 {len(refs)} 个）")
 
     # -- 合成夹具 ---------------------------------------------------------
 

@@ -228,15 +228,42 @@ def adjust_device(device_id):
     except ValueError as e:
         return api_error(str(e))
 
+    # round 341：**改走安全层**，不再直接调 device_manager.adjust_device。
+    #
+    # 原实现绕过的是：急停检查、联锁检查、量程校验、审计、回读验证，
+    # 而且内部 `int(value)` 会把 1.9 静默截成 1（PLC 收到 1，界面显示 1.9）。
+    # `/write-register` 走的是 write_with_verification（这些都有），
+    # `/adjust` 却走另一条 —— 同一件事两条路、闸门不同。
     operator = request.current_user['username']
-    result = current_app.device_manager.adjust_device(device_id, register_name, value) or {}
 
-    if result.get('success'):
-        get_auth_manager().log_operation(
-            operator, 'adjust_device',
-            f'设备 {device_id} 调节 {register_name} = {value}')
+    device_control = getattr(current_app, 'device_control', None)
+    if device_control is None:
+        return jsonify({
+            'success': False,
+            'message': '安全模块不可用，已拒绝调节（无法执行急停/联锁/量程/回读校验）',
+        }), 503
 
-    return jsonify(result)
+    address = device_control._resolve_register_address(device_id, register_name)
+    if address is None:
+        return jsonify({
+            'success': False,
+            'message': f'设备 {device_id} 没有点位 {register_name!r}，拒绝写入'
+                       f'（地址未知就无法做量程与联锁校验）',
+        }), 400
+
+    result = device_control.write_with_verification(
+        device_id, address, value, operator, kind='register') or {}
+
+    return jsonify({
+        'success': bool(result.get('success')),
+        'message': result.get('message') or (
+            '调节成功' if result.get('success') else '调节失败'),
+        # 把回读结论透传出去：前端要能区分「写成功且回读一致」
+        # 与「写成功但没读到回读值」（通信断时 verified=None）
+        'verified': result.get('verified'),
+        'value': value,
+        'address': address,
+    })
 
 
 @control_bp.route('/devices/<device_id>/write-endpoint', methods=['POST'])

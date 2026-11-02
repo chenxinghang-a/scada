@@ -70,7 +70,15 @@ class ModbusClient:
         self.device_name = config.get('name')
         self.protocol = config.get('protocol', 'modbus_tcp')
         self.slave_id = config.get('slave_id', 1)
-        self.byte_order = ByteOrder(config.get('byte_order', 'ABCD').upper())
+        # byte_order 非法值**构造时就抛**（fail-fast）。
+        #
+        # 为什么不静默退回 ABCD：字序配错的后果是「所有 32 位值读出来是乱码」，
+        # 而界面上的数字看起来完全正常（1.6e-38 也照样显示）。静默兜底等于
+        # 把「配置错」变成「数据错」，更难查。
+        #
+        # 抛出的异常不会扩散到整个启动流程 —— `RealDeviceManager.connect_all()`
+        # 已经逐台 try 隔离（见那里的注释），一台配错只影响它自己。
+        self.byte_order = ByteOrder(str(config.get('byte_order', 'ABCD') or 'ABCD').strip().upper())
 
         # 客户端实例
         self.client = None
