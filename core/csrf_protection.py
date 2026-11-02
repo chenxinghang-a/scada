@@ -56,7 +56,25 @@ class CSRFProtection:
             self.init_app(app)
 
     def init_app(self, app):
-        """初始化Flask应用"""
+        """初始化Flask应用（**幂等**）。
+
+        round 340：此前 `csrf.init_app(app)` 只写在 `run.py` 里，
+        而 `create_app()` 不挂 —— 于是「app 建完了但安全能力没装」是合法状态：
+        任何不走 run.py 的入口（WSGI、嵌入式、打包后的别的启动方式）
+        CSRF 都静默消失，而 `SecurityConfig.CSRF_ENABLED` 仍是 true，
+        日志里也看不出来。
+
+        这与 round 255 修的 `data_cleaner.set_db_path()` 是同一形状
+        （接线写在入口脚本里，而正确位置是 create_app）。
+
+        幂等的原因：`create_app` 与 `run.py` 都会调，重复注册会挂两个
+        `before_request`（每个请求校验两遍，无功能危害但会白烧 CPU）。
+        """
+        if app.extensions.get('csrf_initialized'):
+            logger.debug("CSRF 已初始化，跳过重复挂载")
+            return
+        app.extensions['csrf_initialized'] = True
+
         from config import SecurityConfig
         self._secret = SecurityConfig.CSRF_SECRET.encode('utf-8') if SecurityConfig.CSRF_ENABLED else None
 

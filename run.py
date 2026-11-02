@@ -448,7 +448,10 @@ def main():
         # 将启动时间传递给app
         app.system_start_time = SYSTEM_START_TIME
 
-        # 初始化CSRF防护 (GB/T 37980)
+        # CSRF 防护 (GB/T 37980) 已由 `create_app()` 内部挂载（round 340）。
+        # 这里保留一次**幂等**调用，只为兼容"run.py 之外直接拿 app 再补挂"的
+        # 历史用法；`CSRFProtection.init_app` 会识别 `app.extensions`
+        # 里的标记并直接返回，不会重复注册 before_request。
         from core.csrf_protection import csrf
         csrf.init_app(app)
 

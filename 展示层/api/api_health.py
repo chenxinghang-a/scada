@@ -4,6 +4,8 @@
 """
 
 import logging
+from typing import Any
+
 from flask import Blueprint, jsonify, current_app
 
 from core.health_checker import HealthChecker, HealthStatus
@@ -15,6 +17,63 @@ from 用户层.auth import jwt_required
 logger = logging.getLogger(__name__)
 
 health_bp = Blueprint('api_health', __name__, url_prefix='/api/health')
+
+
+def _compute_health_snapshot() -> dict[str, Any]:
+    """健康快照的**唯一**计算入口。
+
+    round 340：此前「整体状态」由 `get_health_status()` 自己算，
+    而明细（modules / checks）也只在它那里产出 —— 于是一个**免认证**端点
+    同时承担了「探活」和「内部诊断」两种用途，把组件名与异常原文一并暴露。
+
+    现在拆成「一份快照 + 两个视图」：
+      · `GET /status`（公开）    → 只回 version + global_status
+      · `GET /status/detail`（认证）→ 在快照之上叠加 database/websocket/... 明细
+
+    两个视图必须来自**同一次计算**。各自算一遍就是本项目反复踩的
+    「同一语义两种形状」—— 迟早两边的结论不一致。
+    """
+    modules_status = ModuleRegistry.get_status()
+    health_status = HealthChecker.get_status()
+
+    unhealthy_modules = [
+        name for name, info in modules_status.items()
+        if isinstance(info, dict)
+        and info.get('status') in ('error', 'disabled', 'unavailable')
+    ]
+
+    checks = health_status.get('checks', {}) if isinstance(health_status, dict) else {}
+    unhealthy_checks = [
+        name for name, info in checks.items()
+        if isinstance(info, dict) and info.get('status') == HealthStatus.UNHEALTHY
+    ]
+    degraded_checks = [
+        name for name, info in checks.items()
+        if isinstance(info, dict) and info.get('status') == HealthStatus.DEGRADED
+    ]
+    checks_global = health_status.get('global_status') if isinstance(health_status, dict) else None
+
+    # 两条线合并：模块注册表 OR 健康检查，取更严重的那个。
+    #
+    # 此前只统计 ModuleRegistry，健康检查结果**完全不参与** —— 磁盘写满、
+    # 数据库探测失败时各 check 已经 unhealthy，顶层却照样回 healthy；
+    # 而探活方只看顶层字段，等于这套健康检查对外不存在。
+    if (unhealthy_modules or unhealthy_checks
+            or checks_global == HealthStatus.UNHEALTHY):
+        global_status = 'unhealthy'
+    elif degraded_checks or checks_global == HealthStatus.DEGRADED:
+        global_status = 'degraded'
+    else:
+        global_status = 'healthy'
+
+    return {
+        'version': get_version(),
+        'global_status': global_status,
+        'modules': modules_status,
+        'checks': health_status,
+        'unhealthy_modules': unhealthy_modules,
+        'unhealthy_checks': unhealthy_checks,
+    }
 
 
 @health_bp.route('/status', methods=['GET'])
@@ -33,63 +92,23 @@ def get_health_status():
         }
     """
     try:
-        # 获取模块状态
-        modules_status = ModuleRegistry.get_status()
-
-        # 获取健康检查状态
-        health_status = HealthChecker.get_status()
-
-        # 计算整体状态。
+        snapshot = _compute_health_snapshot()
+        # round 340：公开端点只回**结论**。
         #
-        # 注意：此前只统计 ModuleRegistry（模块注册表的 error / disabled /
-        # unavailable），而 **健康检查的结果完全不参与** —— 磁盘写满、内存打爆、
-        # 数据库探测失败时各 check 已经是 unhealthy，顶层 `global_status`
-        # 却照样回 `healthy`。
-        #
-        # 而本接口的注释写明「供负载均衡器探活」，顶层字段就是**结论本身**：
-        # 探活方只看这个字段，不会去翻 checks 明细。所以「检查项挂了但结论健康」
-        # 等于这套健康检查对外不存在。
-        #
-        # 现在两条线合并：模块注册表 OR 健康检查，取更严重的那个。
-        unhealthy_modules = [
-            name for name, info in modules_status.items()
-            if info.get('status') in ('error', 'disabled', 'unavailable')
-        ]
-
-        checks = health_status.get('checks', {}) if isinstance(health_status, dict) else {}
-        unhealthy_checks = [
-            name for name, info in checks.items()
-            if isinstance(info, dict) and info.get('status') == HealthStatus.UNHEALTHY
-        ]
-        degraded_checks = [
-            name for name, info in checks.items()
-            if isinstance(info, dict) and info.get('status') == HealthStatus.DEGRADED
-        ]
-        checks_global = health_status.get('global_status') if isinstance(health_status, dict) else None
-
-        if (unhealthy_modules or unhealthy_checks
-                or checks_global == HealthStatus.UNHEALTHY):
-            global_status = 'unhealthy'
-        elif degraded_checks or checks_global == HealthStatus.DEGRADED:
-            global_status = 'degraded'
-        else:
-            global_status = 'healthy'
-
+        # 本端点免认证（供负载均衡器探活），原来却把 `modules` / `checks`
+        # 全量（含 `f'数据库连接失败: {e}'` 这类异常原文）一起返回 ——
+        # 内网任何人不带凭证即可读到内部组件名与错误文本。
+        # 探活方只看 `global_status` 与状态码，明细对它没有价值。
+        # 需要明细请用 `GET /status/detail`（带认证）。
         payload = {
-            'version': get_version(),
-            'global_status': global_status,
-            'modules': modules_status,
-            'checks': health_status,
-            'unhealthy_modules': unhealthy_modules,
-            'unhealthy_checks': unhealthy_checks
+            'version': snapshot['version'],
+            'global_status': snapshot['global_status'],
         }
         # round 298：**探活接口必须用状态码表达不健康**。
-        # 原来无条件 200 —— 而调用方（负载均衡 / K8s readiness）只看状态码：
-        # 磁盘写满、数据库探测失败、3 个 check unhealthy 时，
-        # 流量照样被打进来、Pod 永远 Ready，整套健康检查对自动化消费方
-        # 等于不存在。
+        # 无条件 200 时，磁盘写满 / 数据库探测失败也让 Pod 永远 Ready，
+        # 整套健康检查对自动化消费方等于不存在。
         response, _code = success_response(payload)
-        return response, (503 if global_status == 'unhealthy' else 200)
+        return response, (503 if snapshot['global_status'] == 'unhealthy' else 200)
     except Exception as e:
         logger.error(f"获取健康状态失败: {e}", exc_info=True)
         return error_response("服务器内部错误", 500)
@@ -210,6 +229,29 @@ def get_health_detail():
         except Exception as e:
             logger.warning("健康详情：熔断器状态探测失败: %s", e, exc_info=True)
             result['circuit_breakers'] = {'status': 'unknown', 'reason': str(e)}
+
+        # round 340：把「概览」并回这个**已认证**端点。
+        #
+        # 公开的 `/status` 现在只回结论，明细必须有个合法出口 ——
+        # 否则就是「为了去敏把功能删了」。这里复用同一个快照函数，
+        # 保证两个视图的结论永远一致。
+        #
+        # 快照自己抛异常时不能让整个诊断接口 500（那是 round 168e 定下的契约）：
+        # 单个组件探不到只降级为 unknown，`reason` 一定带上。
+        try:
+            snapshot = _compute_health_snapshot()
+            result['global_status'] = snapshot['global_status']
+            result['modules'] = snapshot['modules']
+            result['checks'] = snapshot['checks']
+            result['unhealthy_modules'] = snapshot['unhealthy_modules']
+            result['unhealthy_checks'] = snapshot['unhealthy_checks']
+        except Exception as e:
+            logger.warning("健康详情：整体快照计算失败: %s", e, exc_info=True)
+            result['global_status'] = 'unknown'
+            result['modules'] = {'status': 'unavailable', 'reason': str(e)}
+            result['checks'] = {'status': 'unavailable', 'reason': str(e)}
+            result['unhealthy_modules'] = []
+            result['unhealthy_checks'] = []
 
         return success_response(result)
     except Exception as e:

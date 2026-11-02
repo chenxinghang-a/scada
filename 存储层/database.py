@@ -1641,7 +1641,26 @@ class Database:
         Args:
             archive_days: 归档天数（默认7天前的数据归档）
             delete_days: 删除天数（默认30天前的数据删除）
+
+        Raises:
+            ValueError: ``archive_days > delete_days`` —— 那会让
+                ``delete_days``~``archive_days`` 天的数据**未归档就被删除**。
         """
+        # ⚠️ round 340：**必须先校验两个天数的关系**。
+        #
+        # 本方法的契约是「archive_days 之前的数据**归档**、delete_days 之前的
+        # 数据**删除**」，且归档在前、删除在后。若配成 archive_days=30 /
+        # delete_days=7（写反了），则：
+        #   · 只归档 30 天前的 → 归档表里只有 30 天前的日均值
+        #   · 却删除 7 天前的 → **7~30 天的原始采样直接消失，且从未进过归档表**
+        # 每天静默丢 23 天明细，没有任何告警，事后也无法回溯。
+        #
+        # 这是**配置错误**，应该在调用时就炸掉，不能"尽力而为"地继续删。
+        if archive_days > delete_days:
+            raise ValueError(
+                f'archive_days({archive_days}) 不能大于 delete_days({delete_days}) —— '
+                f'否则 {delete_days}~{archive_days} 天的数据会**未归档就被删除**，'
+                f'且无法事后回溯。请调大 delete_days 或调小 archive_days。')
         # ⚠️ 归档截止时间必须**对齐到天边界**（当天 00:00）。
         #    否则「此刻减 7 天」会把一个**只过了几小时的那一天**也归档进去：
         #    第 8 天 10:00 跑归档时，第 1 天只有 00:00–10:00 的采样落在 cutoff 之前，

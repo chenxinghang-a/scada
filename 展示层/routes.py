@@ -217,6 +217,19 @@ def create_app(database, device_manager, alarm_manager, data_collector,
     # 注册API蓝图（模块化拆分后的多个Blueprint）
     register_api_blueprints(app)
 
+    # CSRF 防护（GB/T 37980）—— **必须在这里挂，不能只在 run.py 挂**。
+    #
+    # round 340：此前唯一调用点是 `run.py`，于是「create_app 返回的 app
+    # 没有 CSRF」是一个合法状态。任何不走 run.py 的入口（WSGI 部署、
+    # 嵌入式调用、测试夹具、将来新增的启动方式）都会静默失去 CSRF，
+    # 而 SecurityConfig.CSRF_ENABLED 仍是 true、日志也不会报 ——
+    # 与 round 255 修的 `data_cleaner.set_db_path()` 完全同形状
+    # （接线写在入口脚本里，而正确位置是 create_app）。
+    #
+    # init_app 现在是幂等的，run.py 里那句保留也不会重复注册。
+    from core.csrf_protection import csrf as _csrf
+    _csrf.init_app(app)
+
     # 分级限流绑定：登录/改密接口严格限流，防暴力破解与令牌被盗后暴力改密
     from core.rate_limiter import apply_endpoint_limits
     apply_endpoint_limits(app, limiter)

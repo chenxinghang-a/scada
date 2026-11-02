@@ -24,15 +24,50 @@ class TestHealthAPI:
         assert data['success'] is True
         assert 'data' in data
 
-    def test_health_data_has_modules_and_checks(self, client):
-        """Health data contains modules and checks info"""
-        resp = client.get('/api/health/status')
+    def test_health_data_has_modules_and_checks(self, client, auth_headers):
+        """明细（modules / checks）在**已认证**的 /status/detail 上（round 340）。
+
+        公开的 `/api/health/status` 只回 version + global_status。
+        两个视图来自同一个快照函数
+        （`api_health.py::_compute_health_snapshot`），保证结论一致。
+        """
+        resp = client.get('/api/health/status/detail', headers=auth_headers)
         data = resp.get_json()
 
         health_data = data.get('data', {})
         assert 'global_status' in health_data
         assert 'modules' in health_data
         assert 'checks' in health_data
+
+
+class TestClientErrorReporting:
+    """round 340：免认证上报端点的**输入面**必须自我约束。
+
+    这个端点免认证 + 写日志 = 天然放大面。原来：
+      · `err.get(...)` 对非 dict 元素抛 AttributeError → 整个端点 500；
+      · `url` 不限长、且 `extra={'client_error': err}` 把原始 dict 整个落日志
+        → 一个请求就能把一行日志撑到几 MB。
+    """
+
+    def test_non_dict_items_do_not_crash(self, client):
+        r = client.post('/api/system/client-errors',
+                        json={'errors': ['not-a-dict', 123, None, []]})
+        assert r.status_code == 200, r.get_data(as_text=True)[:200]
+        assert r.get_json()['received'] == 0, '非 dict 元素不该被计入 received'
+
+    def test_overlong_fields_are_clipped_not_rejected(self, client):
+        r = client.post('/api/system/client-errors', json={
+            'errors': [{'type': 'e' * 500, 'message': 'm' * 500,
+                        'url': 'https://x/' + 'a' * 5000, 'userId': 'u' * 500}]
+        })
+        assert r.status_code == 200
+        assert r.get_json()['received'] == 1, '合法 dict 必须被接收（截断而不是拒收）'
+
+    def test_non_json_body_is_400_not_415(self, client):
+        r = client.post('/api/system/client-errors', data='not json',
+                        content_type='text/plain')
+        assert r.status_code == 400, (
+            f'非 JSON 体应统一按格式不对处理（400），实际 {r.status_code}')
 
 
 class TestDevicesAPI:

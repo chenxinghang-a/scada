@@ -934,9 +934,16 @@ def jwt_required(f):
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
 
-        # 也支持从查询参数获取（用于WebSocket等场景）
-        if not token:
-            token = request.args.get('token')
+        # round 340：**不再接受 `?token=`**。
+        #
+        # 原实现从这里兜底取查询参数，注释理由是「用于 WebSocket 等场景」——
+        # 但 WebSocket 握手在 `展示层/websocket.py::handle_connect`，
+        # 它自己读 `request.args`，**根本不经过本装饰器**。
+        # 也就是说这条兜底对 WS 毫无用处，代价却是让令牌进入 URL：
+        # nginx access log、浏览器历史、Referer 都会留下**长期有效**的 access token。
+        # 凭证只从 Header 进入（页面导航另有 httpOnly cookie，见 routes.py）。
+        # 已确认无调用方依赖：仓库内 `?token=` 仅出现在 main.js 的 WebSocket
+        # `io(..., {query: {token}})`，走的是 socket.io 自己的握手参数。
 
         if not token:
             return jsonify({'error': '未提供认证令牌', 'code': 'NO_TOKEN'}), 401

@@ -5,6 +5,8 @@
 
 import logging
 from pathlib import Path
+from typing import Any
+
 import yaml
 from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
@@ -232,6 +234,34 @@ def update_config():
 
 _client_error_logger = logging.getLogger('client_error')
 
+#: 未认证端点可接受的字段长度上限（round 340）。
+#:
+#: 这个端点**免认证**（错误可能发生在登录失败阶段），所以它是最容易被滥用
+#: 的写入口。原来只给 `message` 截了 200，`url` / `type` / `userId` 完全不限长，
+#: 且 `extra={'client_error': err}` 把**原始 dict** 整个塞进结构化日志 ——
+#: 一个请求就能让日志行膨胀到数 MB，配合轮转策略可以把磁盘写满。
+_CLIENT_ERROR_FIELD_MAX = {
+    'type': 50,
+    'message': 200,
+    'url': 300,
+    'userId': 64,
+}
+
+
+def _clip_field(value: Any, field: str) -> str:
+    """把上报字段规整成**有界字符串**。
+
+    三件事缺一不可：
+    1. 非字符串先 `str()` —— 否则 `message[:200]` 在 int/dict 上直接 TypeError，
+       一个格式错误的上报就能把端点打成 500；
+    2. 去换行 —— 否则可以在日志里伪造出「第二条日志」（log injection）；
+    3. 逐字段独立上限 —— `url` 天然比 `type` 长，统一 200 会截掉真正有用的路径。
+    """
+    limit = _CLIENT_ERROR_FIELD_MAX[field]
+    text = value if isinstance(value, str) else str(value)
+    text = text.replace('\r', ' ').replace('\n', ' ')
+    return text[:limit]
+
 
 @system_bp.route('/system/client-errors', methods=['POST'])
 def report_client_errors():
@@ -239,9 +269,13 @@ def report_client_errors():
 
     等保2.0 GB/T 22239 要求：应记录安全事件，便于事后追溯。
     无需认证（错误可能发生在认证失败时），但限流保护。
+
+    round 340：**输入面必须自我约束**。免认证 + 写日志 = 天然放大面，
+    所以每个字段都要有类型与长度上限，且只落清洗后的副本。
     """
-    data = request.get_json()
-    if not data or 'errors' not in data:
+    # silent=True：非 JSON 请求体不该抛 415/400，统一按"格式不对"处理
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or 'errors' not in data:
         return jsonify({'success': False, 'message': '无效的错误数据'}), 400
 
     errors = data['errors']
@@ -249,15 +283,22 @@ def report_client_errors():
         return jsonify({'success': False, 'message': '错误数据格式不正确'}), 400
 
     client_ip = request.remote_addr or 'unknown'
+    received = 0
     for err in errors:
+        # 元素必须是 dict：字符串 / 数字 / None 会让 `.get` 抛 AttributeError
+        if not isinstance(err, dict):
+            continue
+        cleaned = {k: _clip_field(err.get(k, ''), k) for k in _CLIENT_ERROR_FIELD_MAX}
         _client_error_logger.warning(
             "前端错误 [%s] %s | url=%s user=%s ip=%s",
-            err.get('type', 'unknown'),
-            err.get('message', '')[:200],
-            err.get('url', ''),
-            err.get('userId', 'anonymous'),
+            cleaned['type'] or 'unknown',
+            cleaned['message'],
+            cleaned['url'],
+            cleaned['userId'] or 'anonymous',
             client_ip,
-            extra={'client_error': err}
+            # 只落**清洗后**的字段，不落原始 dict
+            extra={'client_error': cleaned},
         )
+        received += 1
 
-    return jsonify({'success': True, 'received': len(errors)})
+    return jsonify({'success': True, 'received': received})

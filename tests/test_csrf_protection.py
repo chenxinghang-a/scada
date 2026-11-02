@@ -170,6 +170,33 @@ def test_post_without_token_is_403(app_with_csrf):
     assert r.status_code == 403
 
 
+def test_init_app_is_idempotent(monkeypatch):
+    """round 340：`create_app()` 与 `run.py` 都会调 init_app，必须幂等。
+
+    不幂等的后果：挂两个 `before_request`，每个请求校验两遍。
+    功能上仍正确，但每次写请求都白算一次 HMAC，且 `before_request_funcs`
+    里会出现两个同名函数 —— 排查中间件顺序时极易误导。
+    """
+    from flask import Flask
+
+    import config
+    monkeypatch.setattr(config.SecurityConfig, 'CSRF_ENABLED', True, raising=False)
+    monkeypatch.setattr(config.SecurityConfig, 'CSRF_SECRET', 'y' * 32, raising=False)
+
+    app = Flask(__name__)
+    csrf = CSRFProtection()
+    csrf.init_app(app)
+    first = len(app.before_request_funcs.get(None, []))
+    assert first == 1, f'第一次 init_app 应注册 1 个 before_request，实际 {first}'
+
+    csrf.init_app(app)          # 模拟 run.py 再调一次
+    CSRFProtection().init_app(app)   # 模拟另一个实例再调一次
+    second = len(app.before_request_funcs.get(None, []))
+    assert second == first, (
+        f'重复 init_app 注册了多余的 before_request（{first} → {second}）—— '
+        '每个写请求会被校验两遍')
+
+
 def test_post_with_valid_token_passes(app_with_csrf):
     r = app_with_csrf.test_client().post(
         '/api/devices', headers={'X-CSRF-Token': _token_for_app(app_with_csrf)})
