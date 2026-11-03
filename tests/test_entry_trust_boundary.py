@@ -58,6 +58,8 @@ PUBLIC_ROUTES = {
     ("api_health.py", "get_health_status"): "负载均衡器探活；只回 version + global_status",
     ("api_metrics.py", "prometheus_metrics"): "Prometheus 抓取；可选 scrape token（默认放行）",
     ("api_system.py", "report_client_errors"): "前端错误上报，可能发生在登录失败时；字段已限长",
+    ("api_i18n.py", "get_current_bundle"): "界面语言词条；登录页就要显示正确语言，此时无 token",
+    ("api_i18n.py", "get_bundle"): "同上（指定语言）；词条只有保存/取消这类界面文字",
     ("routes.py", "get_csrf_token"): "发放 CSRF 令牌本身不是敏感操作",
     # flask-restx 文档桩：方法体是 `pass`，不执行业务逻辑、不返回真实数据。
     # ⚠️ 后续项：生产环境应整块不注册文档蓝图（目前无开关）。

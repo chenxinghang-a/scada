@@ -37,6 +37,8 @@ INTENTIONAL_PUBLIC = {
     ('health_bp', '/status'): '健康探针，供监控系统匿名拉取',
     ('metrics_bp', '/metrics'): 'Prometheus 指标抓取端点',
     ('system_bp', '/system/client-errors'): '前端错误上报，允许匿名但已截断内容',
+    ('i18n_bp', '/'): '界面语言词条；登录页要显示正确语言，此时没有 token',
+    ('i18n_bp', '/<lang>'): '同上（指定语言）',
 }
 
 

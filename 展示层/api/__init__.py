@@ -14,6 +14,7 @@ from .api_alarms import alarms_bp
 from .api_system import system_bp
 from .api_industry40 import industry40_bp
 from .api_health import health_bp
+from .api_i18n import i18n_bp
 from .api_metrics import metrics_bp
 from .swagger import swagger_bp
 from .api_resilience import resilience_bp
@@ -30,6 +31,7 @@ ALL_BLUEPRINTS = [
     system_bp,
     industry40_bp,
     health_bp,
+    i18n_bp,
     metrics_bp,
     swagger_bp,
     resilience_bp,

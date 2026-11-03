@@ -39,7 +39,9 @@
 param(
     [string]$SetupExe,
     [string]$InstallDir,
-    [switch]$DeleteData
+    [switch]$DeleteData,
+    # 安装语言：en / chs。用来验证双语安装包两条路径都能正常装/卸。
+    [string]$Lang = 'chs'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,6 +86,7 @@ Write-Host "安装包 : $SetupExe"
 Write-Host "版本   : $Version"
 Write-Host "测试目录: $InstallDir"
 Write-Host "删数据 : $(if ($DeleteData) { '是' } else { '否（验证保留数据路径）' })"
+Write-Host "语言   : $Lang"
 
 # 清理可能存在的旧测试目录
 if (Test-Path $InstallDir) { Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue }
@@ -91,7 +94,7 @@ if (Test-Path $InstallDir) { Remove-Item -Path $InstallDir -Recurse -Force -Erro
 # ---------- 1. 静默安装 ----------
 Step "1. 静默安装"
 $installArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
-                 "/DIR=$InstallDir", "/LOG=$InstallLog", '/TASKS=""')
+                 '/CURRENTUSER', "/LANG=$Lang", "/DIR=$InstallDir", "/LOG=$InstallLog", '/TASKS=""')
 $p = Start-Process -FilePath $SetupExe -ArgumentList $installArgs -Wait -PassThru
 Check "安装程序退出码为 0" ($p.ExitCode -eq 0) "实际 $($p.ExitCode)"
 
@@ -112,7 +115,14 @@ Check "卸载程序存在" ($null -ne $uninst) "在 $InstallDir 下找 unins*.ex
 Check "安装日志已生成" (Test-Path $InstallLog) $InstallLog
 
 # 开始菜单
-$startMenu = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\SCADA"
+# `/CURRENTUSER` 装到用户级开始菜单（%APPDATA%），管理员装到全局（%ProgramData%）。
+# 两个都要查 —— 只查 ProgramData 会在 currentuser 模式下误报「快捷方式缺失」。
+$startMenuCandidates = @(
+    (Join-Path $env:ProgramData ('Microsoft\Windows\Start Menu\Programs\SCADA')),
+    (Join-Path $env:APPDATA     ('Microsoft\Windows\Start Menu\Programs\SCADA'))
+)
+$startMenu = $startMenuCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $startMenu) { $startMenu = $startMenuCandidates[0] }
 Check "开始菜单文件夹存在" (Test-Path $startMenu) $startMenu
 $lnk = Get-ChildItem -Path $startMenu -Filter '*.lnk' -ErrorAction SilentlyContinue
 Check "开始菜单有快捷方式" ($lnk.Count -ge 1) "找到 $($lnk.Count) 个"
@@ -170,7 +180,8 @@ Step "5. 残留检查"
 $leftExe = Get-ChildItem -Path $InstallDir -Filter '*.exe' -Recurse -ErrorAction SilentlyContinue
 Check "程序文件已删除" ($leftExe.Count -eq 0) "残留 $($leftExe.Count) 个 exe: $($leftExe.Name -join ', ')"
 
-Check "开始菜单已清理" (-not (Test-Path $startMenu)) $startMenu
+$menuLeft = $startMenuCandidates | Where-Object { Test-Path $_ }
+Check "开始菜单已清理" ($null -eq $menuLeft) ($menuLeft -join '; ')
 Check "注册表已清理" (-not (Test-Path $regPath)) $regPath
 
 $uninstLeft = Get-ItemProperty -Path $uninstKeys -ErrorAction SilentlyContinue |

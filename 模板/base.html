@@ -64,37 +64,37 @@
                 <ul class="navbar-nav">
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == '/dashboard' %}active{% endif %}" href="/dashboard">
-                            <i class="bi bi-speedometer2"></i> 仪表盘
+                            <i class="bi bi-speedometer2"></i> <span data-i18n="nav.dashboard">仪表盘</span>
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == '/devices' %}active{% endif %}" href="/devices">
-                            <i class="bi bi-hdd-rack"></i> 设备管理
+                            <i class="bi bi-hdd-rack"></i> <span data-i18n="nav.devices">设备管理</span>
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == '/control' %}active{% endif %}" href="/control">
-                            <i class="bi bi-joystick"></i> 设备控制
+                            <i class="bi bi-joystick"></i> <span data-i18n="nav.control">设备控制</span>
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == '/history' %}active{% endif %}" href="/history">
-                            <i class="bi bi-graph-up"></i> 历史数据
+                            <i class="bi bi-graph-up"></i> <span data-i18n="nav.history">历史数据</span>
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == '/alarms' %}active{% endif %}" href="/alarms">
-                            <i class="bi bi-bell"></i> 报警管理
+                            <i class="bi bi-bell"></i> <span data-i18n="nav.alarms">报警管理</span>
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == '/alarm-output' %}active{% endif %}" href="/alarm-output">
-                            <i class="bi bi-lightning-charge"></i> 报警输出
+                            <i class="bi bi-lightning-charge"></i> <span data-i18n="nav.alarm_output">报警输出</span>
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == '/industry40' %}active{% endif %}" href="/industry40">
-                            <i class="bi bi-cpu"></i> 工业4.0
+                            <i class="bi bi-cpu"></i> <span data-i18n="nav.industry40">工业4.0</span>
                         </a>
                     </li>
                     <!-- 隐藏图表分析导航入口
@@ -106,13 +106,24 @@
                     -->
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == '/config' %}active{% endif %}" href="/config">
-                            <i class="bi bi-sliders"></i> 系统配置
+                            <i class="bi bi-sliders"></i> <span data-i18n="nav.config">系统配置</span>
                         </a>
                     </li>
                 </ul>
                 
                 <!-- 系统状态指示器 -->
                 <ul class="navbar-nav ms-auto">
+                    <!-- 界面语言切换。不翻译设备名/点位名/报警内容（那是数据） -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="lang-menu" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false" title="语言 / Language">
+                            <i class="bi bi-translate"></i> <span id="lang-label">中文</span>
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="lang-menu">
+                            <li><a class="dropdown-item" href="#" data-lang="zh-CN">简体中文</a></li>
+                            <li><a class="dropdown-item" href="#" data-lang="en-US">English</a></li>
+                        </ul>
+                    </li>
                     <li class="nav-item">
                         <span class="nav-link" id="sim-mode-indicator" title="当前运行模式">
                             <i class="bi bi-cpu"></i> <span id="sim-mode-text">-</span>
@@ -348,5 +359,29 @@
     </script>
     
     {% block extra_js %}{% endblock %}
+
+    <!-- 界面语言：词条来自 /api/i18n/<lang>，缺词条的元素保留中文原文 -->
+    <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', function () {
+        function refreshLabel(lang) {
+            var lbl = document.getElementById('lang-label');
+            if (lbl) lbl.textContent = (lang === 'en-US') ? 'EN' : '中文';
+        }
+        document.querySelectorAll('[data-lang]').forEach(function (a) {
+            a.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.scadaI18n.apply(a.getAttribute('data-lang'));
+            });
+        });
+        document.addEventListener('scada:language-changed', function (e) {
+            refreshLabel(e.detail.language);
+        });
+        // 首次加载时同步一次标签（i18n.js 会在 DOMContentLoaded 里先跑）
+        setTimeout(function () {
+            if (window.scadaI18n) refreshLabel(window.scadaI18n.current());
+        }, 300);
+    });
+    </script>
 </body>
 </html>
