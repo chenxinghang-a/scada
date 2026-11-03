@@ -271,6 +271,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: Patlite (日本帕特莱)
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 安全系统
 - byte_order: ABCD
   collection_interval: 1
@@ -350,6 +357,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 研华科技 (Advantech)
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 安全系统
 - collection_interval: 3
   description: 支持OPC UA的PLC控制器
@@ -459,6 +473,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 和利时
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 生产车间
 - byte_order: ABCD
   collection_interval: 2
@@ -554,6 +575,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 西门子
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 生产车间
 - byte_order: ABCD
   collection_interval: 2
@@ -649,6 +677,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 三菱电机
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 生产车间
 - byte_order: ABCD
   collection_interval: 5
@@ -728,6 +763,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 台达电子
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 生产车间
 - byte_order: ABCD
   collection_interval: 5
@@ -855,6 +897,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 西门子
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 公用工程
 - byte_order: ABCD
   collection_interval: 5
@@ -966,6 +1015,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 阿特拉斯·科普柯
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 公用工程
 - byte_order: ABCD
   collection_interval: 5
@@ -1069,6 +1125,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 西门子
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 物流区
 - byte_order: ABCD
   collection_interval: 30
@@ -1180,6 +1243,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 雪迪龙
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 质检区
 - byte_order: ABCD
   collection_interval: 5
@@ -1283,6 +1353,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 海湾安全技术
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 安全系统
 - collection_interval: 5
   description: 中控DCS系统 — 反应釜群/进料/出料/冷却
@@ -1456,6 +1533,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 横河电机
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 质检区
 - byte_order: ABCD
   collection_interval: 5
@@ -1535,6 +1619,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: Emerson (艾默生)
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 质检区
 - byte_order: ABCD
   collection_interval: 5
@@ -1622,6 +1713,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: Endress+Hauser (E+H)
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 质检区
 - collection_interval: 1
   description: 工业机器人 — 六轴关节/循环/抓手/扭矩
@@ -1878,6 +1976,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: ABB
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 动力区
 - byte_order: ABCD
   collection_interval: 5
@@ -1981,6 +2086,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 安科瑞
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 动力区
 - byte_order: ABCD
   collection_interval: 5
@@ -2076,6 +2188,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: APC (施耐德)
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 动力区
 - byte_order: ABCD
   collection_interval: 5
@@ -2179,6 +2298,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 松下焊接 (Panasonic)
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 物流区
 - byte_order: ABCD
   collection_interval: 3
@@ -2258,6 +2384,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 汇川技术
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: ''
 - byte_order: ABCD
   collection_interval: 5
@@ -2353,6 +2486,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 施耐德电气
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: ''
 - byte_order: ABCD
   collection_interval: 2
@@ -2432,6 +2572,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 图尔克
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: ''
 - byte_order: ABCD
   collection_interval: 5
@@ -2543,6 +2690,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: ABB
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: ''
 - collection_interval: 15
   description: 出水口在线水质监测 — DO/浊度/电导率/pH
@@ -2711,6 +2865,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 约克
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 公用工程
 - byte_order: ABCD
   collection_interval: 5
@@ -2822,6 +2983,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 格兰富
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 公用工程
 - byte_order: ABCD
   collection_interval: 10
@@ -2917,6 +3085,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 自研
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 产线
 - auth_password: ${DEVICE_AGV_SYSTEM_01_PASSWORD}
   auth_type: bearer
@@ -3129,6 +3304,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 华为
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 能源站
 - byte_order: ABCD
   collection_interval: 5
@@ -3256,6 +3438,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 宁德时代
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 能源站
 - byte_order: ABCD
   collection_interval: 10
@@ -3375,6 +3564,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 顺特电气
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 配电房
 - byte_order: ABCD
   collection_interval: 10
@@ -3494,6 +3690,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 自研
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 车间
 - byte_order: ABCD
   collection_interval: 10
@@ -3605,6 +3808,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 自研
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 公用工程
 - byte_order: ABCD
   collection_interval: 5
@@ -3716,6 +3926,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 自研
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 动力站
 - byte_order: ABCD
   collection_interval: 10
@@ -3819,6 +4036,13 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 自研
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 动力站
 - byte_order: ABCD
   collection_interval: 10
@@ -3922,4 +4146,11 @@ devices:
   slave_id: 1
   timeout: 5
   vendor: 自研
+  write_limits:
+    cmd_start:
+    - 0
+    - 1
+    cmd_stop:
+    - 0
+    - 1
   zone: 公用工程
