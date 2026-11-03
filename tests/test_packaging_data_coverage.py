@@ -273,3 +273,29 @@ class TestSmokeGateWiring:
             "冒烟脚本里没有 UNKNOWN_VERSION_MARKER 常量 —— "
             "产物自报 unknown 时不会给出针对性提示"
         )
+
+
+# ---------------------------------------------------------------------------
+# round 354：第三条打包入口 —— `build.py`（--onefile）
+# ---------------------------------------------------------------------------
+#
+# 两个 `.spec` 的 datas 都有守卫，但仓库里还有第三条打包路径：
+# `build.py` 用 PyInstaller 命令行（`--onefile` + 一串 `--add-data`）。
+# 它的文件列表一直是 `['paths.py', 'config.py']`，**没有 VERSION** ——
+# 于是 `build.py` / `build.bat` 打出的 SCADA.exe 启动后版本号退化成 `0.0.0`
+# （界面、`/api/health/status`、升级检查全显示 0.0.0），
+# 而三条入口看起来都"正常完成"，谁也不会去核对 exe 里的版本号。
+
+def test_build_py_adds_version_to_onefile_bundle():
+    """`build.py` 的 `--add-data` 列表必须包含 `VERSION`。"""
+    import re
+
+    build_py = _REPO_ROOT / "build.py"
+    src = build_py.read_text(encoding="utf-8")
+
+    m = re.search(r"for f in \[([^\]]+)\]", src)
+    assert m, "build.py 里没找到 `for f in [...]` 形式的 --add-data 列表"
+    assert "VERSION" in m.group(1), (
+        f"build.py 的 --add-data 列表漏了 VERSION（当前: {m.group(1).strip()}）——"
+        " 打出的 exe 版本号会是 0.0.0"
+    )

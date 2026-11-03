@@ -58,17 +58,16 @@
 - 容量规划工具
 
 ## 测试覆盖
-- 测试套件: ~90 个测试文件（tests/ 下 test_*.py）
-- 集成测试: 覆盖核心API
+- 测试套件: 276 个测试文件（tests/ 下 test_*.py）
+- 集成测试: 覆盖核心 API 与端到端链路（Modbus / OPC UA / REST 均用真协议冒烟）
 - 安全测试: 渗透测试用例
 - 性能测试: 压力测试用例
-- 覆盖率门槛: 45%（见 .github/workflows/ci.yml 的 --cov-fail-under=45）
-- 当前覆盖率: ~47%（见 coverage.xml，line-rate≈0.47）
+- 覆盖率门槛: 60%（见 .github/workflows/ci.yml 的 --cov-fail-under=60）
+- 当前状态: **4504 passed / 11 skipped / 0 failed**（2026-11-04 全量实跑）
 
 ## 已知问题
-- 43个测试用例失败（主要为模拟环境限制）
-- 23个测试用例错误（依赖问题）
-- 11个安全扫描发现待修复
+- 无阻塞性缺陷。此前记录在此的「43 个用例失败 / 23 个错误」已全部清理。
+- 安全扫描结果以 `tools/security_scan.py` 的当次输出为准（不在此处维护固定条数）。
 
 ## 部署说明
 详见 `docs/DEPLOYMENT.md`

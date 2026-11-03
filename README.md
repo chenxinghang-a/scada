@@ -180,7 +180,7 @@ industrial_scada/
 │   ├── energy.yaml              # 能源管理配置
 │   └── simulation_presets.yaml  # 模拟预设方案
 │
-├── tests/                       # 测试套件 (~90 个测试文件; 覆盖率门槛 45% 见 .github/workflows/ci.yml 的 --cov-fail-under=45, 当前约 47% 见 coverage.xml)
+├── tests/                       # 测试套件（276 个测试文件；覆盖率门槛 60% 见 .github/workflows/ci.yml 的 --cov-fail-under=60）
 │   ├── test_api.py              # API测试
 │   ├── test_core.py             # 核心模块测试
 │   ├── test_alarm.py            # 报警测试

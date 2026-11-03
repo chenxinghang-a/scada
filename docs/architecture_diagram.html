@@ -273,7 +273,22 @@
 <body>
     <div class="container">
         <h1>工业SCADA系统架构图</h1>
-        
+
+        <!-- round 354：**这张图的状态标记已经不可信，先说清楚。**
+             图中的「假接口 / 未实现」标签写于早期版本（约 round 200 之前）。
+             之后几十轮里，设备控制、能源服务、OEE、预测维护、边缘决策、
+             依赖注入、模块注册表、事件总线、限流熔断、健康检查
+             都已经落地成真实实现（见 `智能层/`、`core/` 下同名模块）。
+             但**不要因为这行提示就反过来说「图里剩下的一定都实现了」**：
+             要判断某个模块当前是否真的接线生效，以代码和
+             `GET /api/health/status` 的实测为准。 -->
+        <div style="margin: 16px 0; padding: 12px 16px; border-left: 4px solid #e6a23c;
+                    background: #fdf6ec; color: #7a5c1e; border-radius: 4px;">
+            ⚠️ <strong>本图的状态标签已过时</strong>：下方模块卡片中的「假接口 / 未实现」
+            写于早期版本，其中多数模块现已实现。当前真实状态请以代码与
+            <code>GET /api/health/status</code> 为准，勿直接引用本图的状态颜色。
+        </div>
+
         <div class="architecture">
             <!-- 用户界面层 -->
             <div class="layer ui-layer">

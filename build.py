@@ -70,7 +70,12 @@ def build():
         if dp.exists():
             cmd.extend(['--add-data', f'{dp};{d}'])
 
-    for f in ['paths.py', 'config.py']:
+    # round 354：**`VERSION` 必须一起打进去**。
+    # `core/version.py` 用 `Path(__file__).parent.parent / 'VERSION'` 定位，
+    # 冻结后即 `_internal/VERSION`；两个 `.spec` 都加了它，唯独这条
+    # `--onefile` 路径漏了 → `build.py` 打出的 SCADA.exe 启动后版本号退化成
+    # `0.0.0`（界面、`/api/health/status`、升级检查全显示 0.0.0）。
+    for f in ['paths.py', 'config.py', 'VERSION']:
         fp = PROJECT_ROOT / f
         if fp.exists():
             cmd.extend(['--add-data', f'{fp};.'])
