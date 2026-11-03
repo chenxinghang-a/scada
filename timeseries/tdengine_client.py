@@ -187,7 +187,15 @@ class TDengineClient:
                 data=sql.encode('utf-8'),
                 auth=auth,
                 headers=headers,
-                timeout=30
+                timeout=30,
+                # round 364：**本地/内网时序库必须直连，不能走系统代理**。
+                # `requests` 默认会读环境变量里的 `HTTP_PROXY` / `HTTPS_PROXY`，
+                # 而开发机和不少现场服务器都配了代理 —— 于是连
+                # `localhost:6041` 也去走代理，报
+                # `ProxyError: Unable to connect to proxy`，
+                # 日志还是 **ERROR** 级别，看起来像「TDengine 挂了」。
+                # 时序库永远部署在本机或内网，这里显式关掉代理。
+                proxies={'http': None, 'https': None},
             )
 
             if response.status_code == 200:

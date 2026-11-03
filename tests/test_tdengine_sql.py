@@ -223,7 +223,8 @@ class TestExecuteDispatch:
 class TestExecuteRest:
     @staticmethod
     def _post(monkeypatch, *, status=200, payload=None, exc=None):
-        def fake_post(url, data=None, auth=None, headers=None, timeout=None):
+        def fake_post(url, data=None, auth=None, headers=None, timeout=None,
+                      **kwargs):    # round 364: 多了 proxies，这里必须接住
             if exc:
                 raise exc
             resp = MagicMock()
@@ -257,7 +258,8 @@ class TestExecuteRest:
     def test_sql_is_sent_as_utf8_body(self, monkeypatch):
         seen = {}
 
-        def fake_post(url, data=None, auth=None, headers=None, timeout=None):
+        def fake_post(url, data=None, auth=None, headers=None, timeout=None,
+                      **kwargs):    # round 364: 多了 proxies，这里必须接住
             seen['url'], seen['data'], seen['auth'] = url, data, auth
             resp = MagicMock(status_code=200)
             resp.json.return_value = {'code': 0}
