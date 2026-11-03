@@ -2634,6 +2634,48 @@ class AlarmManager:
             logger.error(f"添加报警规则异常: {e}")
             return False
 
+    def forget_device(self, device_id: str) -> bool:
+        """设备被删除时清掉它在报警层的全部内存状态（round 356）。
+
+        ⚠️ 四个容器的 key 都是 **`(rule_id, device_id, register_name)` 三元组**，
+        判据是 `key[1] == device_id`（不是裸 device_id —— 用裸 id 去 `in`
+        永远命中不到，正是 `predictive_maintenance` 那轮的坑）。
+
+        不清的后果：
+        · `alarm_states` 里该设备的「已触发」标记留在内存 ——
+          同 id 设备重新添加时**直接继承「已经报过」**，
+          第一次真的超温不会报警（边沿判断认为状态没变化）；
+        · `_shelved_alarms` 里未到期的旁路继续生效 —— 新设备**默认被旁路**，
+          超温不动作，而界面显示「旁路：否」（读的是另一份集合）；
+        · `_emit_history` / `_acknowledge_history` 的冷却与确认时间戳残留 ——
+          新设备的前几条报警被当成重复压掉；
+        · 升级计时器继续跑，给一台不存在的设备发升级通知。
+
+        数据库里的 `alarm_records` 由 `Database.delete_device_data()` 收尾
+        （标记 `cleared=1`，保留可追溯），这里只清内存态。
+        """
+        removed = False
+        with self._state_lock:
+            for container in (self.alarm_states, self._shelved_alarms,
+                              self._emit_history, self._acknowledge_history):
+                for key in [k for k in list(container)
+                            if isinstance(k, tuple) and len(k) >= 2
+                            and k[1] == device_id]:
+                    container.pop(key, None)
+                    removed = True
+
+        # 升级跟踪自己维护一份以字符串为 key 的状态，单独摘
+        if self._escalation_manager is not None:
+            try:
+                if self._escalation_manager.forget_device(device_id) > 0:
+                    removed = True
+            except Exception as e:      # noqa: BLE001 —— 清理失败不该阻断删除设备
+                logger.warning("清理升级跟踪失败（%s）: %s", device_id, e)
+
+        if removed:
+            logger.info("报警层已清理已删除设备的状态: %s", device_id)
+        return removed
+
     def remove_rule(self, rule_id: str) -> bool:
         """
         移除报警规则

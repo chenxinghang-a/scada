@@ -228,6 +228,25 @@ class AlarmEscalationManager:
             if key in self._states:
                 del self._states[key]
 
+    def forget_device(self, device_id: str) -> int:
+        """设备被删除时摘掉它的全部升级跟踪，返回清理条数（round 356）。
+
+        `_states` 的 key 是 `alarm_id:device_id:register_name` 字符串拼接，
+        但 `EscalationState` 自带 `device_id` 字段 —— **按字段匹配比拆 key 稳**：
+        `alarm_id` 里若含冒号（自定义规则 ID 完全可能），`split(':')` 会错位。
+
+        不清的后果：一台已删除设备的升级计时器继续跑，
+        `check_escalations()` 到点就给"一台不存在的设备"发升级通知。
+        """
+        with self._lock:
+            keys = [k for k, st in self._states.items()
+                    if getattr(st, 'device_id', None) == device_id]
+            for k in keys:
+                del self._states[k]
+        if keys:
+            logger.info("告警升级跟踪已清理已删除设备: %s（%d 条）", device_id, len(keys))
+        return len(keys)
+
     def add_callback(self, callback: Callable):
         """添加升级回调"""
         self._callbacks.append(callback)

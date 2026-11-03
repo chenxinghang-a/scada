@@ -883,6 +883,7 @@ def _start_device_collection(device_id: str) -> bool:
 _FORGET_DEVICE_HOLDERS = (
     'data_collector',       # 采集层：失败计数 / 间隔 / 断路器状态
     'device_control',       # 安全联锁：健康状态 / 通信失败计数 / 写锁
+    'alarm_manager',        # 报警层（round 356）：已触发标记 / 旁路 / 冷却 / 升级跟踪
     'oee_calculator',       # OEE：产量 / 班次 / 理论产能
     'energy_manager',       # 能耗：实时功率 / kWh 差分基准 / 能耗基线
     'vibration_analyzer',   # 振动：波形缓冲 / 评分 / 采样率
