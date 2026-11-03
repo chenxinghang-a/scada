@@ -231,9 +231,18 @@ class ChaosEngine:
         """
         try:
             import socket
+            # round 357：**端口不能硬编码 5000**。
+            # 真实/模拟器模式跑在 5001，自定义 `SCADA_PORT` 又是别的值 ——
+            # 硬编码时前置稳态检查恒定失败，演练一开始就判「API 不可响应」，
+            # 而服务其实好好的。端口以 `FlaskConfig.PORT` 为唯一真源。
+            # ⚠️ 必须**直接访问**而不是 `getattr(...)` —— `test_config_readers_gate`
+            # 明确禁止动态访问：静态扫描看不到 `getattr(Cls, 'NAME')` 里的属性名，
+            # 「这个配置项有消费方」就无法被证明，闸门会静默失效。
+            from config import FlaskConfig
+            port = FlaskConfig.PORT
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(3)
-            result = sock.connect_ex(('127.0.0.1', 5000))
+            result = sock.connect_ex(('127.0.0.1', port))
             sock.close()
             return result == 0
         except Exception as e:

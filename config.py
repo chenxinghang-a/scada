@@ -259,7 +259,7 @@ class BroadcastConfig:
     ENABLED = True
     SIMULATION = False
     MQTT_BROKER = os.environ.get('PA_BROKER', 'localhost')
-    MQTT_PORT = int(os.environ.get('PA_MQTT_PORT', 1883))
+    MQTT_PORT = _get_int('PA_MQTT_PORT', 1883, min_val=1, max_val=65535)
     TOPIC_PREFIX = 'pa/'  # 广播MQTT主题前缀
     AREAS = ['车间A', '车间B', '仓库', '办公楼']
     PRESET_TEMPLATES = {
@@ -360,7 +360,7 @@ class MQTTConfig:
     BROKER_HOST = os.environ.get('MQTT_BROKER', 'localhost')
 
     # MQTT端口
-    BROKER_PORT = int(os.environ.get('MQTT_PORT', 1883))
+    BROKER_PORT = _get_int('MQTT_PORT', 1883, min_val=1, max_val=65535)
 
     # 客户端ID前缀
     CLIENT_ID_PREFIX = 'scada_'
@@ -384,7 +384,7 @@ class SecurityConfig:
     # 是否启用安全响应头
     SECURITY_HEADERS = os.environ.get('SECURITY_HEADERS', 'true').lower() == 'true'
     # HSTS max-age（秒）
-    HSTS_MAX_AGE = int(os.environ.get('HSTS_MAX_AGE', '31536000'))
+    HSTS_MAX_AGE = _get_int('HSTS_MAX_AGE', 31536000, min_val=0)
     # CSP额外允许的脚本源（逗号分隔）
     CSP_EXTRA_SCRIPTS = [s.strip() for s in os.environ.get('CSP_EXTRA_SCRIPTS', '').split(',') if s.strip()]
     # 速率限制配置 (GB/T 22239 - 防暴力攻击和DDoS)
@@ -441,7 +441,7 @@ def _tdengine_password() -> str:
 
 class TDengineConfig:
     HOST = os.environ.get('TDENGINE_HOST', 'localhost')
-    PORT = int(os.environ.get('TDENGINE_PORT', 6041))
+    PORT = _get_int('TDENGINE_PORT', 6041, min_val=1, max_val=65535)
     USER = os.environ.get('TDENGINE_USER', 'root')
     # 默认值与 `timeseries/tdengine_client.py` 的构造默认值保持一致（taosdata）。
     #

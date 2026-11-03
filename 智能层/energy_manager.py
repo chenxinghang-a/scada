@@ -203,8 +203,20 @@ class EnergyManager:
                 'carbon_factor': self.carbon_factor,
                 'anomaly': self.anomaly_config,
             }
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
+            # round 357：走 `core.config_io.dump_yaml`（同目录临时文件 + fsync + os.replace）。
+            #
+            # 原来是 `open(self.config_path, 'w')` + `yaml.dump`：
+            # · **非原子** —— 序列化中途异常（磁盘满/进程被杀）会把 `配置/energy.yaml`
+            #   截成 0 字节，重启后能耗基线、峰谷时段、碳排放因子全部丢失；
+            # · **抹掉注释** —— 现场人员写的「峰时 8:00-11:30（厂区调整过）」这类说明
+            #   在第一次改电价时会整段消失；
+            # · **绕过测试写盘守卫** —— `conftest.py::isolate_config_writes`
+            #   拦的是 `dump_yaml` 那条路径，直写会让测试改掉仓库里真实的配置文件。
+            from core.config_io import dump_yaml
+
+            if not dump_yaml(self.config_path, config_data):
+                logger.error("能源配置落盘失败（原文件未被破坏）: %s", self.config_path)
+                return False
             logger.info(f"能源配置已保存到 {self.config_path}")
             return True
         except Exception as e:
