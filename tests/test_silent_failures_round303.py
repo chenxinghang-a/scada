@@ -67,10 +67,22 @@ def test_write_proceeds_when_state_unchanged():
 # ---------------------------------------------------------------------------
 
 def test_refresh_health_syncs_failure_counter():
-    """`refresh_device_health` 只清界面那份、不清判据那份 —— 两份真值分了叉。
+    """`refresh_device_health` 不许让两份失败计数分叉。
 
-    后果：界面显示 0 次失败，再失败一次就 `4 >= 阈值` 立刻判断线并再次降级，
-    而实际只失败了一次。
+    ## 契约在 round 343 变了
+
+    round 303 当时的修法是「两份一起清零」。但 round 343 的端到端冒烟发现
+    更根本的问题：**`refresh` 根本不该清零**。
+
+    `client.connected` 只说明 TCP 连着。现场更常见的是「连着但读不到数据」
+    （读超时 / 异常码 / 寄存器不存在）—— 这时 `connected=True`，
+    原实现会把连续失败计数清零，于是：
+    · 界面永远「连接正常」，实际数据几小时没进来；
+    · `_comm_failures` 是触发设备安全状态的依据，被清零 = 安全状态永不触发。
+
+    现在的契约：**失败计数只由「成功的采集」清零**（`update_device_health(True)`），
+    `refresh_device_health` 一律不动它。本用例守的是「两份不许分叉」，
+    所以断言两个都**保持原值**。
     """
     dc = _dc()
     dc.device_manager.get_all_devices.return_value = {'d1': {'name': 'D1'}}
@@ -82,8 +94,10 @@ def test_refresh_health_syncs_failure_counter():
 
     dc.refresh_device_health()
 
-    assert dc._comm_failures['d1'] == 0, '刷新只清了界面那份，判据那份还留着 3'
-    assert dc._device_health['d1']['consecutive_failures'] == 0
+    assert dc._comm_failures['d1'] == 3, (
+        '刷新把判据那份清零了 —— 连续失败计数永远攒不到阈值，设备安全状态不会触发')
+    assert dc._device_health['d1']['consecutive_failures'] == 3, (
+        '两份真值分叉：界面那份被改了、判据那份没动')
 
 
 def test_degradation_only_on_threshold_crossing():

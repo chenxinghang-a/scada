@@ -39,8 +39,16 @@
 #   1. 注入环境变量：每台设备的 ${DEVICE_<ID>_HOST} 等（命名规则见下）
 #   2. 逐点核对地址：本文件的 address 是**按典型手册填的**，不是现场实测值。
 #      核对项：address / data_type / byte_order（32 位字序！）/ scale
-#   3. 开放写入：默认全部 access: r（只读）。要控制的点位改成 rw 并补
-#      write_limits（min/max），否则写入会被安全校验拒绝
+#   3. 开放写入：默认全部 access: r（只读）。要控制的点位改成 rw，
+#      并在**设备级**加 write_limits —— 键是**点位名**，值是 [下限, 上限]：
+#
+#          write_limits:
+#            speed_setpoint: [0, 600]
+#            temperature_setpoint: [0, 150]
+#
+#      ⚠️ 写成寄存器内的 `{min: 0, max: 600}` **不生效**（会被当成
+#      点位名叫 min/max 的量程），于是真实模式下所有写入都被
+#      `validate_write` 拒绝，界面只报「未配置写入量程」。
 #   4. 用 tools/real_path_selftest.py 先验通路，再逐台 connect
 #
 # 环境变量命名规则：

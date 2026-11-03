@@ -254,12 +254,28 @@ DEVICES_YAML_2 = """devices:
 """
 
 
-def test_reload_config_returns_diff(tmp_path):
-    from 采集层.device_manager import DeviceManager
+@pytest.mark.parametrize('kind', ['base', 'real', 'simulated'])
+def test_reload_config_returns_diff(tmp_path, kind):
+    """三种 manager 都要能重载出正确差集。
 
-    cfg = tmp_path / 'devices.yaml'
+    round 342 之前这个用例只测 `DeviceManager` —— 而它在生产里
+    **零实例化**（`run.py` 用的是 `RealDeviceManager` /
+    `SimulatedDeviceManager`）。那两个类当时**根本没有 reload_config**，
+    于是「热重载」这件事测试全绿、功能全废：
+    `device_config_watch` 每 10 秒调一次 → AttributeError 被记成
+    「自动重载异常」→ 改 yaml 必须重启，而维护任务一直刷 ERROR。
+    参数化到三种实现，任何一个漏实现都会红。
+    """
+    from 采集层.device_manager import DeviceManager
+    from 采集层.real_device_manager import RealDeviceManager
+    from 采集层.simulated_device_manager import SimulatedDeviceManager
+
+    mgr_cls = {'base': DeviceManager, 'real': RealDeviceManager,
+               'simulated': SimulatedDeviceManager}[kind]
+
+    cfg = tmp_path / f'devices_{kind}.yaml'
     cfg.write_text(DEVICES_YAML, encoding='utf-8')
-    mgr = DeviceManager(config_path=str(cfg))
+    mgr = mgr_cls(config_path=str(cfg))
     assert 'dev_a' in mgr.get_all_devices()
 
     cfg.write_text(DEVICES_YAML_2, encoding='utf-8')

@@ -183,6 +183,9 @@ class DeviceControlSafety:
 
         # ===== 操作互斥锁 =====
         self._device_locks: dict[str, threading.Lock] = {}
+        #: 联锁去抖的计时表：rule_id -> {'first': monotonic, 'count': int}
+        #: 只对配了 `debounce` / `samples` 的规则生效，其余规则不写这里。
+        self._interlock_pending: dict[str, dict[str, float]] = {}
         self._device_lock_owners: dict[str, str] = {}  # device_id -> operator
 
         # ===== 紧急停机 =====
@@ -650,18 +653,37 @@ class DeviceControlSafety:
                         'protocol': config.get('protocol', 'unknown'),
                     }
                 health = self._device_health[device_id]
-                health['status'] = 'connected' if connected else 'disconnected'
-                if connected:
-                    health['last_seen'] = datetime.now().isoformat()
-                    # round 303：**同一份真值只能有一个写入口**。
-                    # 原来这里只清 `health['consecutive_failures']`、不清
-                    # `_comm_failures`：界面上的失败次数被抹成 0，而判据用的
-                    # 那一份还是 3 —— 再失败一次就 `4 >= 阈值` 立刻判断线并
-                    # 再次降级，实际只失败了一次。两处必须一起清。
-                    self._comm_failures[device_id] = 0
-                    health['consecutive_failures'] = 0
-                    # 恢复健康后允许下一次掉线重新降级
-                    self._degraded_devices.discard(device_id)
+
+                # ===== round 343：**不许用 `client.connected` 覆盖采集结论** =====
+                #
+                # `connected` 只说明 TCP 连着。现场更常见的是「连着但读不到数据」
+                # （读超时、异常码、寄存器不存在）—— 这时 `connected=True`，
+                # 原实现会把 `status` 改回 connected，并把
+                # `consecutive_failures` 和 `_comm_failures` **一起清零**。
+                # 后果：
+                #   · 界面永远显示「连接正常」，实际数据已经采不到；
+                #   · `_comm_failures` 是触发设备安全状态的依据，被清零 =
+                #     安全状态永不触发（关阀/切手动不会执行）。
+                #
+                # 实测（tools/e2e_smoke.py 第 7 步）：停掉从站后采集返回 False、
+                # `last_read_source='cache'`，但健康摘要仍报 `connected`。
+                #
+                # 现在的口径：
+                #   · 采集侧报过 → 以采集结果为准（`last_collect_ok`）；
+                #   · 从没报过（纯新增设备）→ 用 `connected` 做初判；
+                #   · 失败计数**只由成功的采集清零**，这里一律不动。
+                last_ok = health.get('last_collect_ok')
+                if last_ok is None:
+                    health['status'] = 'connected' if connected else 'disconnected'
+                    if connected:
+                        health['last_seen'] = datetime.now().isoformat()
+                elif last_ok:
+                    health['status'] = 'connected'
+                else:
+                    # 采集失败：TCP 也断了 → disconnected（更严重）；
+                    # 只是读不到 → degraded。
+                    health['status'] = 'disconnected' if not connected else 'degraded'
+
                 health['name'] = config.get('name', device_id)
                 health['protocol'] = config.get('protocol', 'unknown')
         except Exception as e:
@@ -1357,6 +1379,23 @@ class DeviceControlSafety:
                 if not matched:
                     continue
 
+                # ===== 去抖（round 343）=====
+                #
+                # 原实现条件一满足就立即动作。对「急停按钮」这类规则是对的
+                # （安全优先，不能等），但对「超温 / 超压」这类**测量值**规则
+                # 很危险：Modbus 偶发坏值（一次读到 9999、float32 位型异常）
+                # 会让联锁立即执行 `emergency_stop`，现场直接停线。
+                #
+                # 规则可选配：
+                #   samples: 2     连续 N 个采样点都满足才动作
+                #   debounce: 10   持续满足 N 秒才动作
+                # **默认不配 = 立即触发**（保持现有安全语义，不改变默认行为）。
+                if triggered and (rule.get('debounce') or rule.get('samples')):
+                    triggered = self._debounce_satisfied(rule_id, rule)
+                elif not triggered:
+                    # 条件已不满足 → 计时清零（下一轮重新开始计）
+                    self._interlock_pending.pop(rule_id, None)
+
                 # 处理联锁触发
                 was_triggered = self._interlock_states.get(rule_id, False)
                 if triggered and not was_triggered:
@@ -1394,6 +1433,45 @@ class DeviceControlSafety:
             with self._lock:
                 self._interlock_states[rule_id] = False
             logger.info(f"联锁条件解除: {rule_id}")
+
+    def _debounce_satisfied(self, rule_id: str, rule: dict[str, Any]) -> bool:
+        """判断这条联锁的去抖条件是否已满足。
+
+        由 `check_interlocks()` 每轮调用一次（**只有条件成立时**才会进来）。
+        返回 False 表示「还在计时，先别动作」。
+
+        为什么用 `time.monotonic()` 而不是 `time.time()`：墙上时钟会被
+        NTP 校正或运维手改，一次回拨 5 分钟会让 `debounce: 10` 的规则
+        永远等不到 10 秒。单调时钟不受影响。
+        """
+        now = time.monotonic()
+        entry = self._interlock_pending.get(rule_id)
+        if entry is None:
+            entry = {'first': now, 'count': 0.0}
+            self._interlock_pending[rule_id] = entry
+        entry['count'] += 1
+
+        from core.safe_numeric import try_finite_float, try_int
+
+        samples = rule.get('samples')
+        if samples is not None and samples != '':
+            # 用 try_int 而不是裸 int()：裸转换漏 OverflowError
+            # （`int(float('inf'))`），而 samples 来自配置。
+            parsed = try_int(samples)
+            need = 1 if parsed is None else max(1, parsed)
+            if entry['count'] < need:
+                logger.debug("[联锁] %s 去抖中: %d/%d 次", rule_id, int(entry['count']), need)
+                return False
+            return True
+
+        delay = rule.get('debounce')
+        parsed_sec = try_finite_float(delay)
+        need_sec = 0.0 if parsed_sec is None else max(0.0, parsed_sec)
+        elapsed = now - entry['first']
+        if elapsed < need_sec:
+            logger.debug("[联锁] %s 去抖中: %.1f/%.0f 秒", rule_id, elapsed, need_sec)
+            return False
+        return True
 
     def _execute_interlock_action(self, rule: dict[str, Any]) -> bool:
         """执行联锁动作。
@@ -2050,6 +2128,10 @@ class DeviceControlSafety:
             }
 
         health = self._device_health[device_id]
+        # 采集侧是**唯一权威**的健康来源（它真的去读了寄存器）。
+        # `refresh_device_health()` 只允许在「采集侧从没报过」时做初判，
+        # 一旦有这条记录就必须以它为准 —— 见那里的注释。
+        health['last_collect_ok'] = bool(connected)
 
         if connected:
             health['status'] = 'connected'
@@ -2070,7 +2152,13 @@ class DeviceControlSafety:
             health['consecutive_failures'] = failures
 
             if failures >= self._comm_threshold:
-                health['status'] = 'disconnected'
+                # round 343：用 `degraded` 而不是 `disconnected` ——
+                # 采集失败不等于 TCP 断开。区分两者对现场处置很关键：
+                #   disconnected = 网络/设备断电，先查线路；
+                #   degraded     = 连着但读不到，先查地址/从站号/异常码。
+                # `refresh_device_health()` 在确认 TCP 也断了时会升级成
+                # `disconnected`（见那里）。
+                health['status'] = 'degraded'
                 # round 303：**只在跨过阈值那一刻降级一次**。
                 # 原来这里没有任何「已降级」标记，`failures >= 阈值` 之后
                 # 每一个失败采样点都会重跑一遍：安全状态 handler（关阀/切手动）
