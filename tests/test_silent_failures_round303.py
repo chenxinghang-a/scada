@@ -105,7 +105,10 @@ def test_degradation_only_on_threshold_crossing():
     dc = _dc()
     dc._comm_threshold = 3
     fires = []
-    dc._trigger_fault_degradation = lambda device_id, n: fires.append(n)
+    # round 352：`_trigger_fault_degradation` 现在返回「handler 是否成功」，
+    # 调用方据此决定要不要把设备标记为已降级。桩必须跟着契约返回 True ——
+    # 返回 None 会被判成失败，于是每次采样都重试（正是本轮修掉的那个缺陷的反面）。
+    dc._trigger_fault_degradation = lambda device_id, n: (fires.append(n), True)[1]
 
     for _ in range(6):
         dc.update_device_health('d1', False)

@@ -393,18 +393,23 @@ class TestRealConfigIntegrity:
         return yaml.safe_load(REAL_CFG.read_text(encoding='utf-8')).get('devices') or []
 
     def test_ids_match_simulated(self, real_devices):
-        """真实清单与模拟清单的 id 必须一一对应。
+        """真实清单是模拟清单的**子集**：真机有的设备，模拟必须也有。
 
         对不上的后果：模拟验证过的告警规则/历史曲线/组态在真机上找不到设备，
         「模拟跑通了」这句话就不成立。
+
+        round 351 之后**允许模拟多于真实**（129 vs 42）：扩出来的 89 台是
+        `tools/gen_factory.py` 生成的演示产线，真机上并没有这些设备。
+        但方向不能反 —— 真机清单里出现的每一个 id 都必须在模拟侧存在，
+        否则那台设备的规则/曲线在模拟环境里无从验证。
         """
         if not SIM_CFG.exists() or not real_devices:
             pytest.skip('缺少配置')
         sim_ids = {d['id'] for d in yaml.safe_load(SIM_CFG.read_text(encoding='utf-8'))['devices']}
         real_ids = {d['id'] for d in real_devices}
-        assert real_ids == sim_ids, (
-            f'真实/模拟设备清单不一致：仅真实 {sorted(real_ids - sim_ids)}，'
-            f'仅模拟 {sorted(sim_ids - real_ids)}')
+        missing = sorted(real_ids - sim_ids)
+        assert not missing, (
+            f'真实设备在模拟清单里没有对应项（这些设备的规则无法在模拟环境验证）: {missing}')
 
     def test_no_plaintext_credentials(self, real_devices):
         """凭据只能是 `${VAR}`，不许明文。

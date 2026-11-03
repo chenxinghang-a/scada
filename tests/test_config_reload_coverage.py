@@ -120,6 +120,19 @@ COVERAGE: dict[str, tuple[str, str]] = {
         'dead',
         '示例文件（IEC104 设备配置样例），供人参考，不被任何代码加载',
     ),
+    'device_templates.yaml': (
+        'dead',
+        '**运行时零读取点**（round 351 新增）。它只是 `tools/gen_factory.py` 的'
+        '输入 —— 生成器把模板展开成 `配置/devices_simulated.yaml` 之后就与运行无关。'
+        '改模板必须重跑 `python tools/gen_factory.py --force` 才会体现，'
+        '改完不重跑等于没改（这一点已在 `docs/厂区拓扑与模拟接入.md` 写明）。',
+    ),
+    'topology.yaml': (
+        'watch',
+        '`展示层/api/api_devices.py::_load_topology_skeleton()` **每次请求都重读文件**'
+        '（无缓存），所以比 mtime 监视更及时：改完刷新页面即生效，不用重启、'
+        '也不用等轮询周期。归到 watch 是因为「改了会生效」与 watch 同类。',
+    ),
 }
 
 

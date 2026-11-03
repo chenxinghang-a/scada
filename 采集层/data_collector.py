@@ -2040,7 +2040,19 @@ class DataCollector:
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
                 db_write_ok = True
                 try:
-                    self.database.insert_data_batch(batch)
+                    # round 352：**必须看返回值**。
+                    # `insert_data_batch` 原来返回 None，而「整批记录都缺字段」时
+                    # 它走 `if not valid_rows: return` 静默返回 —— 不抛异常，
+                    # 于是下面 `db_write_ok` 恒 True、`clear_persistence(batch)`
+                    # 把磁盘上唯一一份崩溃保护删掉：内存已被消费线程取走、
+                    # 磁盘副本又被删 → 这批数据彻底消失，重启也捞不回来。
+                    written = self.database.insert_data_batch(batch)
+                    if not written:
+                        db_write_ok = False
+                        logger.warning(
+                            "批量写入数据库返回 0 条（%d 条全被落库层拒绝），"
+                            "保留磁盘副本待重试", len(batch))
+                        self._requeue_failed_batch(batch)
                 except Exception as e:
                     db_write_ok = False
                     logger.warning(f"批量写入数据库失败 ({len(batch)} 条): {e}")

@@ -316,7 +316,18 @@ class AlarmOutput:
 
             # 手动控制模式下不自动接管灯
             if self.current_state.get('level') == 'manual':
-                return
+                # round 352：**必须显式返回 False**。
+                #
+                # 巡检时用 `manual_control(duration=0)` 点了灯又没复位，`level`
+                # 就永远是 'manual'，此后**所有** critical 报警都不驱动红灯/蜂鸣器。
+                # 而这里原来 `return`（None），上游 `_call_output_method` 的契约是
+                # 「显式 False 才算失败」，None 一律记成功 —— 于是：
+                # 界面一切正常、`output_errors['alarm_output']` 不涨、
+                # 「声光通道故障」报警永远不会触发，现场一声不响也无人知。
+                logger.warning(
+                    "报警输出处于手动模式，本次 %s 级报警**未驱动声光**: %s",
+                    level, message)
+                return False
 
             self.current_state.update({
                 'level': level,

@@ -1,0 +1,371 @@
+# =============================================================================
+# 设备模板库 —— 按「设备族」定义点位结构，供 tools/gen_factory.py 批量造厂
+# =============================================================================
+# 为什么要有模板库：
+#
+# 42 台设备手写没问题，126 台手写必然出错（地址重叠、量纲写错、单位缺失、
+# 模拟参数漏配）。而同一族设备的点位结构高度相似 —— 泵、风机、压缩机
+# 都是「电流/转速/振动/轴承温度/出口压力/流量/状态」这一套。
+#
+# 所以：**结构用模板，数值用实例**。
+#   · 模板定义点位名/类型/单位/量程/模拟参数（本文件）
+#   · 实例只给「哪台设备、什么型号、什么量程」（tools/gen_factory.py 的 LAYOUT）
+#   · 单台要特调就在实例的 `override` 里写，覆盖模板
+#
+# 地址不在这里写 —— 生成器按 data_type 宽度自动累加分配（uint16=1,
+# float32/uint32/int32=2, float64=4），避免手填地址撞车。
+#
+# `sim` 段的语义见 配置/simulation_profiles.yaml 头部注释：
+#   source  基变量名，或另一个点位名（串链）
+#   gain/offset  线性变换
+#   noise   高斯噪声标准差
+#   min/max 物理限幅
+#   decimals 小数位（同时决定入库精度）
+#   map     枚举映射（如 status: {0: 停机, 1: 运行, 2: 故障}）
+# =============================================================================
+
+templates:
+
+  # ---------------------------------------------------------------- 旋转机械
+  # 泵 / 风机 / 压缩机 / 离心机 —— 工业现场占比最高的一类
+  rotating_machine:
+    protocol: modbus_tcp
+    description: 旋转机械 — 电流/转速/振动/温升/压力/流量
+    process_model:
+      base_current: 45.0
+      base_speed: 1480.0
+      base_temperature: 55.0
+      base_pressure: 0.6
+      base_flow: 60.0
+      base_power_kw: 22.0
+    points:
+      - {name: motor_current,    desc: 电机电流,       unit: A,     type: float32, sim: {source: current, noise: 0.8, decimals: 1}}
+      - {name: motor_speed,      desc: 电机转速,       unit: rpm,   type: float32, sim: {source: speed, noise: 6.0, decimals: 0}}
+      - {name: bearing_temp,     desc: 轴承温度,       unit: °C,    type: float32, sim: {source: temperature, offset: -5.0, noise: 0.4, decimals: 1}}
+      - {name: vibration_rms,    desc: 振动速度有效值, unit: mm/s,  type: float32, sim: {source: vibration, noise: 0.15, min: 0.2, max: 28, decimals: 2}}
+      - {name: outlet_pressure,  desc: 出口压力,       unit: MPa,   type: float32, sim: {source: pressure, noise: 0.008, decimals: 3}}
+      - {name: flow_rate,        desc: 流量,           unit: m³/h,  type: float32, sim: {source: flow, noise: 0.8, decimals: 1}}
+      - {name: active_power,     desc: 有功功率,       unit: kW,    type: float32, sim: {source: power, noise: 0.5, decimals: 1}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, access: r, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 热工设备
+  # 锅炉 / 烘干炉 / 焚烧炉 / 加热炉
+  thermal_machine:
+    protocol: modbus_tcp
+    description: 热工设备 — 多区温度/燃气/排烟/效率
+    process_model:
+      base_temperature: 180.0
+      base_flow: 30.0
+      base_pressure: 0.4
+      base_power_kw: 120.0
+      thermal_time_constant: 900.0
+    points:
+      - {name: zone1_temp,       desc: 一区温度,       unit: °C,    type: float32, sim: {source: temperature, offset: -30.0, noise: 1.2, decimals: 1}}
+      - {name: zone2_temp,       desc: 二区温度,       unit: °C,    type: float32, sim: {source: temperature, noise: 1.2, decimals: 1}}
+      - {name: zone3_temp,       desc: 三区温度,       unit: °C,    type: float32, sim: {source: temperature, offset: 25.0, noise: 1.5, decimals: 1}}
+      - {name: setpoint_temp,    desc: 设定温度,       unit: °C,    type: float32, access: rw, sim: {source: temperature, noise: 0.0, decimals: 1}}
+      - {name: gas_flow,         desc: 燃气流量,       unit: m³/h,  type: float32, sim: {source: flow, gain: 0.6, noise: 0.4, decimals: 1}}
+      - {name: flue_gas_temp,    desc: 排烟温度,       unit: °C,    type: float32, sim: {source: temperature, offset: 60.0, noise: 2.0, decimals: 1}}
+      - {name: o2_content,       desc: 烟气含氧量,     unit: '%',   type: float32, sim: {source: ratio, gain: 4.0, offset: 2.5, noise: 0.15, min: 1.5, max: 9.0, decimals: 2}}
+      - {name: thermal_efficiency, desc: 热效率,       unit: '%',   type: float32, sim: {source: ratio, gain: 8.0, offset: 84.0, noise: 0.4, min: 70, max: 96, decimals: 1}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 储罐/水箱
+  tank:
+    protocol: modbus_tcp
+    description: 储罐 — 液位/温度/压力/进出口阀
+    process_model:
+      base_level: 62.0
+      base_temperature: 32.0
+      base_pressure: 0.12
+    points:
+      - {name: level,            desc: 液位,           unit: '%',   type: float32, sim: {source: level, noise: 0.6, min: 0, max: 100, decimals: 1}}
+      - {name: volume,           desc: 容积,           unit: m³,    type: float32, sim: {source: level, gain: 0.5, noise: 0.4, decimals: 1}}
+      - {name: liquid_temp,      desc: 介质温度,       unit: °C,    type: float32, sim: {source: temperature, noise: 0.5, decimals: 1}}
+      - {name: tank_pressure,    desc: 罐内压力,       unit: MPa,   type: float32, sim: {source: pressure, noise: 0.003, decimals: 3}}
+      - {name: inlet_valve,      desc: 进口阀 0=关/1=开, unit: '',  type: uint16, sim: {source: ratio, gain: 1.0, offset: 0.6, min: 0, max: 1, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 换热器
+  heat_exchanger:
+    protocol: modbus_tcp
+    description: 换热器 — 一二次侧进出口温度/换热量
+    process_model:
+      base_temperature: 75.0
+      base_flow: 45.0
+      base_pressure: 0.5
+    points:
+      - {name: primary_inlet_temp,  desc: 一次侧进口温度, unit: °C,   type: float32, sim: {source: temperature, offset: 20.0, noise: 0.8, decimals: 1}}
+      - {name: primary_outlet_temp, desc: 一次侧出口温度, unit: °C,   type: float32, sim: {source: temperature, noise: 0.8, decimals: 1}}
+      - {name: secondary_inlet_temp, desc: 二次侧进口温度, unit: °C,  type: float32, sim: {source: temperature, offset: -25.0, noise: 0.6, decimals: 1}}
+      - {name: secondary_outlet_temp, desc: 二次侧出口温度, unit: °C, type: float32, sim: {source: temperature, offset: -8.0, noise: 0.6, decimals: 1}}
+      - {name: heat_load,           desc: 换热量,        unit: kW,   type: float32, sim: {source: power, noise: 1.5, decimals: 1}}
+      - {name: pressure_drop,       desc: 压降,          unit: kPa,  type: float32, sim: {source: pressure, gain: 80.0, noise: 0.5, decimals: 1}}
+      - {name: run_state,           desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 机床
+  machine_tool:
+    protocol: modbus_tcp
+    description: 机床 — 主轴/进给/刀具/冷却/计数
+    process_model:
+      base_speed: 8000.0
+      base_current: 18.0
+      base_temperature: 38.0
+      base_power_kw: 11.0
+    points:
+      - {name: spindle_speed,    desc: 主轴转速,       unit: rpm,   type: float32, sim: {source: speed, noise: 25.0, decimals: 0}}
+      - {name: spindle_load,     desc: 主轴负载,       unit: '%',   type: float32, sim: {source: ratio, gain: 30.0, offset: 45.0, noise: 1.5, min: 0, max: 100, decimals: 1}}
+      - {name: feed_rate,        desc: 进给速度,       unit: mm/min, type: float32, sim: {source: speed, gain: 0.12, noise: 8.0, decimals: 0}}
+      - {name: tool_life,        desc: 刀具剩余寿命,   unit: '%',   type: float32, sim: {source: ratio, gain: 20.0, offset: 62.0, noise: 0.2, min: 0, max: 100, decimals: 1}}
+      - {name: coolant_temp,     desc: 冷却液温度,     unit: °C,    type: float32, sim: {source: temperature, offset: -12.0, noise: 0.4, decimals: 1}}
+      - {name: spindle_current,  desc: 主轴电流,       unit: A,     type: float32, sim: {source: current, noise: 0.5, decimals: 1}}
+      - {name: part_count,       desc: 加工计数,       unit: 件,    type: uint32, sim: {source: counter, gain: 0.02, noise: 0.0, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 机器人
+  robot:
+    protocol: modbus_tcp
+    description: 工业机器人 — 节拍/计数/关节/报警
+    process_model:
+      base_current: 12.0
+      base_speed: 60.0
+      base_temperature: 42.0
+    points:
+      - {name: cycle_time,       desc: 循环节拍,       unit: s,     type: float32, sim: {source: ratio, gain: 3.0, offset: 18.0, noise: 0.3, min: 8, max: 60, decimals: 1}}
+      - {name: joint1_temp,      desc: J1 关节温度,    unit: °C,    type: float32, sim: {source: temperature, noise: 0.6, decimals: 1}}
+      - {name: joint2_temp,      desc: J2 关节温度,    unit: °C,    type: float32, sim: {source: temperature, offset: 3.0, noise: 0.6, decimals: 1}}
+      - {name: servo_current,    desc: 伺服电流,       unit: A,     type: float32, sim: {source: current, noise: 0.6, decimals: 1}}
+      - {name: cycle_count,      desc: 循环计数,       unit: 次,    type: uint32, sim: {source: counter, gain: 0.05, noise: 0.0, decimals: 0}}
+      - {name: alarm_code,       desc: 报警代码 0=无,  unit: '',    type: uint16, sim: {source: constant, value: 0, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 输送线
+  conveyor_line:
+    protocol: modbus_tcp
+    description: 输送线 — 线速/节拍/在制品/电机
+    process_model:
+      base_speed: 28.0
+      base_current: 6.5
+      base_power_kw: 3.0
+    points:
+      - {name: line_speed,       desc: 线速度,         unit: m/min, type: float32, sim: {source: speed, gain: 0.02, noise: 0.15, decimals: 2}}
+      - {name: takt_time,        desc: 节拍,           unit: s/件,  type: float32, sim: {source: ratio, gain: 1.2, offset: 4.2, noise: 0.05, min: 1.5, max: 12, decimals: 2}}
+      - {name: wip_count,        desc: 在制品数量,     unit: 件,    type: uint16, sim: {source: counter, gain: 0.01, noise: 0.0, decimals: 0}}
+      - {name: motor_current,    desc: 驱动电机电流,   unit: A,     type: float32, sim: {source: current, noise: 0.2, decimals: 2}}
+      - {name: belt_tension,     desc: 皮带张力,       unit: N,     type: float32, sim: {source: ratio, gain: 120.0, offset: 850.0, noise: 8.0, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 包装机械
+  packaging_machine:
+    protocol: modbus_tcp
+    description: 包装机械 — 速度/产量/合格率/气压
+    process_model:
+      base_speed: 120.0
+      base_current: 8.0
+      base_pressure: 0.55
+    points:
+      - {name: machine_speed,    desc: 运行速度,       unit: 件/min, type: float32, sim: {source: speed, gain: 0.09, noise: 0.8, decimals: 1}}
+      - {name: output_count,     desc: 累计产量,       unit: 件,    type: uint32, sim: {source: counter, gain: 0.08, noise: 0.0, decimals: 0}}
+      - {name: reject_count,     desc: 不合格数,       unit: 件,    type: uint32, sim: {source: counter, gain: 0.001, noise: 0.0, decimals: 0}}
+      - {name: air_pressure,     desc: 工作气压,       unit: MPa,   type: float32, sim: {source: pressure, noise: 0.006, decimals: 3}}
+      - {name: motor_current,    desc: 电机电流,       unit: A,     type: float32, sim: {source: current, noise: 0.3, decimals: 2}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 电气柜
+  electrical_panel:
+    protocol: modbus_tcp
+    description: 电气柜 — 电压/电流/功率/功率因数/开关
+    process_model:
+      base_voltage: 400.0
+      base_current: 320.0
+      base_power_kw: 180.0
+    points:
+      - {name: bus_voltage,      desc: 母线电压,       unit: V,     type: float32, sim: {source: voltage, noise: 0.8, decimals: 1}}
+      - {name: total_current,    desc: 总电流,         unit: A,     type: float32, sim: {source: current, noise: 2.5, decimals: 1}}
+      - {name: active_power,     desc: 有功功率,       unit: kW,    type: float32, sim: {source: power, noise: 1.8, decimals: 1}}
+      - {name: reactive_power,   desc: 无功功率,       unit: kvar,  type: float32, sim: {source: power, gain: 0.32, noise: 1.2, decimals: 1}}
+      - {name: power_factor,     desc: 功率因数,       unit: '',    type: float32, sim: {source: ratio, gain: 0.06, offset: 0.90, noise: 0.004, min: 0.7, max: 1.0, decimals: 3}}
+      - {name: frequency,        desc: 频率,           unit: Hz,    type: float32, sim: {source: ratio, gain: 0.08, offset: 49.98, noise: 0.01, decimals: 2}}
+      - {name: breaker_state,    desc: 断路器 0=分闸/1=合闸, unit: '', type: uint16, sim: {source: constant, value: 1, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 计量仪表
+  meter:
+    protocol: modbus_rtu
+    description: 计量仪表 — 瞬时值/累计值/状态
+    process_model:
+      base_flow: 42.0
+      base_temperature: 26.0
+      base_pressure: 0.35
+    points:
+      - {name: instant_value,    desc: 瞬时值,         unit: '',    type: float32, sim: {source: flow, noise: 0.25, decimals: 2}}
+      - {name: total_value,      desc: 累计值,         unit: '',    type: float32, sim: {source: counter, gain: 0.6, noise: 0.0, decimals: 1}}
+      - {name: medium_temp,      desc: 介质温度,       unit: °C,    type: float32, sim: {source: temperature, noise: 0.2, decimals: 1}}
+      - {name: medium_pressure,  desc: 介质压力,       unit: MPa,   type: float32, sim: {source: pressure, noise: 0.002, decimals: 3}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 反应釜
+  reactor:
+    protocol: modbus_tcp
+    description: 反应釜 — 釜温/夹套/压力/搅拌/液位/pH
+    process_model:
+      base_temperature: 78.0
+      base_pressure: 0.42
+      base_level: 58.0
+      base_speed: 120.0
+      thermal_time_constant: 1200.0
+    points:
+      - {name: reactor_temp,     desc: 釜内温度,       unit: °C,    type: float32, sim: {source: temperature, noise: 0.6, decimals: 1}}
+      - {name: jacket_temp,      desc: 夹套温度,       unit: °C,    type: float32, sim: {source: temperature, offset: 22.0, noise: 0.8, decimals: 1}}
+      - {name: reactor_pressure, desc: 釜内压力,       unit: MPa,   type: float32, sim: {source: pressure, noise: 0.004, decimals: 3}}
+      - {name: agitator_speed,   desc: 搅拌转速,       unit: rpm,   type: float32, sim: {source: speed, gain: 0.08, noise: 1.2, decimals: 0}}
+      - {name: reactor_level,    desc: 液位,           unit: '%',   type: float32, sim: {source: level, noise: 0.5, min: 0, max: 100, decimals: 1}}
+      - {name: ph_value,         desc: pH 值,          unit: '',    type: float32, sim: {source: ratio, gain: 1.2, offset: 6.8, noise: 0.03, min: 0, max: 14, decimals: 2}}
+      - {name: agitator_current, desc: 搅拌电机电流,   unit: A,     type: float32, sim: {source: current, noise: 0.4, decimals: 1}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 塔器
+  column:
+    protocol: modbus_tcp
+    description: 塔器 — 顶/底温度/压力/回流/液位
+    process_model:
+      base_temperature: 96.0
+      base_pressure: 0.18
+      base_level: 45.0
+      thermal_time_constant: 1500.0
+    points:
+      - {name: top_temp,         desc: 塔顶温度,       unit: °C,    type: float32, sim: {source: temperature, offset: -18.0, noise: 0.5, decimals: 1}}
+      - {name: bottom_temp,      desc: 塔底温度,       unit: °C,    type: float32, sim: {source: temperature, offset: 12.0, noise: 0.7, decimals: 1}}
+      - {name: column_pressure,  desc: 塔压,           unit: MPa,   type: float32, sim: {source: pressure, noise: 0.002, decimals: 3}}
+      - {name: reflux_ratio,     desc: 回流比,         unit: '',    type: float32, sim: {source: ratio, gain: 0.8, offset: 2.2, noise: 0.02, decimals: 2}}
+      - {name: bottom_level,     desc: 塔底液位,       unit: '%',   type: float32, sim: {source: level, noise: 0.5, min: 0, max: 100, decimals: 1}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 分析仪
+  analyzer:
+    protocol: modbus_rtu
+    description: 在线分析仪 — 浓度/温度/状态
+    process_model:
+      base_temperature: 28.0
+      base_flow: 2.5
+    points:
+      - {name: measured_value,   desc: 测量值,         unit: '',    type: float32, sim: {source: ratio, gain: 12.0, offset: 35.0, noise: 0.25, decimals: 2}}
+      - {name: sample_temp,      desc: 样品温度,       unit: °C,    type: float32, sim: {source: temperature, noise: 0.3, decimals: 1}}
+      - {name: sample_flow,      desc: 采样流量,       unit: L/min, type: float32, sim: {source: flow, gain: 0.04, noise: 0.05, decimals: 2}}
+      - {name: calibration_days, desc: 距下次校准天数, unit: 天,    type: uint16, sim: {source: ratio, gain: 6.0, offset: 22.0, noise: 0.0, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 注塑机
+  injection_machine:
+    protocol: modbus_tcp
+    description: 注塑机 — 料筒三段温度/注射/保压/锁模/循环
+    process_model:
+      base_temperature: 215.0
+      base_pressure: 1.2
+      base_speed: 85.0
+      base_current: 62.0
+      base_power_kw: 45.0
+      thermal_time_constant: 1200.0
+    points:
+      - {name: barrel_temp_1,    desc: 料筒一段温度,   unit: °C,    type: float32, sim: {source: temperature, offset: -25.0, noise: 1.0, decimals: 1}}
+      - {name: barrel_temp_2,    desc: 料筒二段温度,   unit: °C,    type: float32, sim: {source: temperature, offset: -8.0, noise: 1.0, decimals: 1}}
+      - {name: nozzle_temp,      desc: 喷嘴温度,       unit: °C,    type: float32, sim: {source: temperature, offset: 5.0, noise: 1.2, decimals: 1}}
+      - {name: mold_temp,        desc: 模具温度,       unit: °C,    type: float32, sim: {source: temperature, gain: 0.22, offset: 12.0, noise: 0.8, decimals: 1}}
+      - {name: injection_pressure, desc: 注射压力,     unit: MPa,   type: float32, sim: {source: pressure, gain: 1.4, noise: 0.02, decimals: 2}}
+      - {name: holding_pressure, desc: 保压压力,       unit: MPa,   type: float32, sim: {source: pressure, gain: 0.8, noise: 0.015, decimals: 2}}
+      - {name: injection_speed,  desc: 注射速度,       unit: mm/s,  type: float32, sim: {source: speed, gain: 0.6, noise: 1.5, decimals: 1}}
+      - {name: clamping_force,   desc: 锁模力,         unit: kN,    type: float32, sim: {source: ratio, gain: 200.0, offset: 1350.0, noise: 12.0, decimals: 0}}
+      - {name: cooling_time,     desc: 冷却时间,       unit: s,     type: float32, sim: {source: ratio, gain: 2.0, offset: 14.0, noise: 0.1, decimals: 1}}
+      - {name: cycle_time,       desc: 成型周期,       unit: s,     type: float32, sim: {source: ratio, gain: 4.0, offset: 32.0, noise: 0.2, decimals: 1}}
+      - {name: shot_count,       desc: 模次计数,       unit: 模,    type: uint32, sim: {source: counter, gain: 0.03, noise: 0.0, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 干燥机
+  dryer:
+    protocol: modbus_tcp
+    description: 干燥机 — 干燥温度/露点/风量/料位
+    process_model:
+      base_temperature: 120.0
+      base_flow: 18.0
+      base_power_kw: 12.0
+      thermal_time_constant: 900.0
+    points:
+      - {name: drying_temp,      desc: 干燥温度,       unit: °C,    type: float32, sim: {source: temperature, noise: 0.8, decimals: 1}}
+      - {name: setpoint_temp,    desc: 设定温度,       unit: °C,    type: float32, access: rw, sim: {source: temperature, noise: 0.0, decimals: 1}}
+      - {name: dew_point,        desc: 露点,           unit: °C,    type: float32, sim: {source: temperature, gain: -0.35, offset: -25.0, noise: 0.4, min: -60, max: 10, decimals: 1}}
+      - {name: air_flow,         desc: 风量,           unit: m³/h,  type: float32, sim: {source: flow, noise: 0.5, decimals: 1}}
+      - {name: hopper_level,     desc: 料斗料位,       unit: '%',   type: float32, sim: {source: level, noise: 1.2, min: 0, max: 100, decimals: 1}}
+      - {name: heater_power,     desc: 加热功率,       unit: kW,    type: float32, sim: {source: power, noise: 0.4, decimals: 1}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 模温机
+  mold_temp_controller:
+    protocol: modbus_tcp
+    description: 模温机 — 出/回水温度/泵电流/加热功率
+    process_model:
+      base_temperature: 95.0
+      base_flow: 22.0
+      base_power_kw: 9.0
+      thermal_time_constant: 600.0
+    points:
+      - {name: outlet_temp,      desc: 出水温度,       unit: °C,    type: float32, sim: {source: temperature, noise: 0.5, decimals: 1}}
+      - {name: return_temp,      desc: 回水温度,       unit: °C,    type: float32, sim: {source: temperature, offset: -6.0, noise: 0.5, decimals: 1}}
+      - {name: setpoint_temp,    desc: 设定温度,       unit: °C,    type: float32, access: rw, sim: {source: temperature, noise: 0.0, decimals: 1}}
+      - {name: pump_current,     desc: 循环泵电流,     unit: A,     type: float32, sim: {source: current, gain: 0.3, noise: 0.2, decimals: 2}}
+      - {name: heater_power,     desc: 加热功率,       unit: kW,    type: float32, sim: {source: power, noise: 0.3, decimals: 1}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 堆垛机
+  stacker_crane:
+    protocol: modbus_tcp
+    description: 堆垛机 — 位置/速度/载重/任务
+    process_model:
+      base_speed: 1.8
+      base_current: 14.0
+      base_power_kw: 7.5
+    points:
+      - {name: position_x,       desc: X 轴位置,       unit: m,     type: float32, sim: {source: level, gain: 0.35, noise: 0.02, decimals: 2}}
+      - {name: travel_speed,     desc: 行走速度,       unit: m/s,   type: float32, sim: {source: speed, gain: 0.02, noise: 0.03, decimals: 2}}
+      - {name: load_weight,      desc: 载重,           unit: kg,    type: float32, sim: {source: ratio, gain: 300.0, offset: 420.0, noise: 6.0, decimals: 0}}
+      - {name: task_count,       desc: 任务计数,       unit: 次,    type: uint32, sim: {source: counter, gain: 0.02, noise: 0.0, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 充电桩
+  agv_charger:
+    protocol: modbus_tcp
+    description: AGV 充电桩 — 电压/电流/SOC/状态
+    process_model:
+      base_voltage: 54.0
+      base_current: 40.0
+      base_power_kw: 2.2
+    points:
+      - {name: charge_voltage,   desc: 充电电压,       unit: V,     type: float32, sim: {source: voltage, gain: 0.135, noise: 0.05, decimals: 1}}
+      - {name: charge_current,   desc: 充电电流,       unit: A,     type: float32, sim: {source: current, gain: 0.9, noise: 0.8, decimals: 1}}
+      - {name: battery_soc,      desc: 电池 SOC,       unit: '%',   type: float32, sim: {source: ratio, gain: 25.0, offset: 62.0, noise: 0.3, min: 0, max: 100, decimals: 1}}
+      - {name: charge_count,     desc: 充电次数,       unit: 次,    type: uint32, sim: {source: counter, gain: 0.005, noise: 0.0, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 服务器
+  server_node:
+    protocol: rest
+    role: controller
+    description: 服务器/网关 — CPU/内存/磁盘/连接数
+    points:
+      - {name: cpu_usage,        desc: CPU 使用率,     unit: '%',   type: float32, sim: {source: ratio, gain: 18.0, offset: 34.0, noise: 1.8, min: 0, max: 100, decimals: 1}}
+      - {name: memory_usage,     desc: 内存使用率,     unit: '%',   type: float32, sim: {source: ratio, gain: 12.0, offset: 56.0, noise: 0.9, min: 0, max: 100, decimals: 1}}
+      - {name: disk_usage,       desc: 磁盘使用率,     unit: '%',   type: float32, sim: {source: ratio, gain: 4.0, offset: 61.0, noise: 0.05, min: 0, max: 100, decimals: 1}}
+      - {name: connection_count, desc: 连接数,         unit: 个,    type: float32, sim: {source: ratio, gain: 22.0, offset: 118.0, noise: 2.0, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}
+
+  # ---------------------------------------------------------------- 安全设备
+  safety_device:
+    protocol: modbus_tcp
+    description: 安全设备 — 测量值/报警/自检
+    process_model:
+      base_temperature: 26.0
+      base_pressure: 0.45
+    points:
+      - {name: measured_value,   desc: 测量值,         unit: '',    type: float32, sim: {source: ratio, gain: 8.0, offset: 12.0, noise: 0.15, decimals: 2}}
+      - {name: alarm_state,      desc: 报警状态 0=正常/1=预警/2=报警, unit: '', type: uint16, sim: {source: constant, value: 0, decimals: 0}}
+      - {name: self_test_ok,     desc: 自检 0=失败/1=通过, unit: '',  type: uint16, sim: {source: constant, value: 1, decimals: 0}}
+      - {name: run_state,        desc: 运行状态 0=停机/1=运行/2=故障/3=报警, unit: '', type: uint16, sim: {source: status, decimals: 0}}

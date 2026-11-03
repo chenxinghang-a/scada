@@ -1,0 +1,293 @@
+# 厂区拓扑骨架 —— 车间/产线/工序顺序
+# 设备清单在 devices_simulated.yaml / devices_real.yaml，靠 workshop/line/stage 挂上来。
+site:
+  id: east_plant
+  name: 华东制造基地
+  code: EP-01
+workshops:
+- id: injection
+  name: 注塑车间
+  icon: 🏭
+  order: 10
+  lines:
+  - id: injection_a
+    name: 注塑A线
+    stages:
+    - 上料
+    - 干燥
+    - 注塑
+    - 取件
+    - 粉碎
+  - id: injection_b
+    name: 注塑B线
+    stages:
+    - 上料
+    - 干燥
+    - 注塑
+    - 取件
+  - id: mold_temp
+    name: 模温单元
+    stages:
+    - 供水
+    - 回水
+- id: paint
+  name: 涂装车间
+  icon: 🎨
+  order: 20
+  lines:
+  - id: paint_a
+    name: 涂装A线
+    stages:
+    - 前处理
+    - 喷涂
+    - 流平
+    - 烘干
+    - 废气处理
+  - id: paint_b
+    name: 涂装B线
+    stages:
+    - 喷涂
+    - 流平
+    - 烘干
+  - id: paint_supply
+    name: 供漆单元
+    stages:
+    - 调漆
+    - 供漆
+    - 喷房送风
+- id: packaging
+  name: 包装车间
+  icon: 📦
+  order: 30
+  lines:
+  - id: pack_a
+    name: 包装A线
+    stages:
+    - 灌装
+    - 旋盖
+    - 贴标
+    - 装箱
+    - 码垛
+  - id: pack_b
+    name: 包装B线
+    stages:
+    - 输送
+    - 称重
+    - 金检
+    - 装箱
+- id: assembly
+  name: 装配车间
+  icon: 🔧
+  order: 40
+  lines:
+  - id: assembly_a
+    name: 装配A线
+    stages:
+    - 上料
+    - 装配
+    - 拧紧
+    - 气密检测
+    - 视觉检测
+    - 打标
+  - id: welding
+    name: 焊接线
+    stages:
+    - 定位
+    - 焊接
+    - 打磨
+    - 检验
+- id: machining
+  name: 机加车间
+  icon: ⚙️
+  order: 50
+  lines:
+  - id: cnc_a
+    name: 机加A线
+    stages:
+    - 粗加工
+    - 精加工
+    - 磨削
+    - 清洗
+  - id: cnc_b
+    name: 机加B线
+    stages:
+    - 加工
+    - 清洗
+    - 检测
+- id: chemical
+  name: 化工车间
+  icon: ⚗️
+  order: 60
+  lines:
+  - id: reaction_a
+    name: 反应A线
+    stages:
+    - 进料
+    - 反应
+    - 精馏
+    - 储运
+  - id: reaction_b
+    name: 反应B线
+    stages:
+    - 进料
+    - 反应
+    - 换热
+    - 尾气
+  - id: chemical_meter
+    name: 反应A线计量
+    stages:
+    - 测温
+    - 测压
+    - 流量
+- id: power
+  name: 动力站
+  icon: ⚡
+  order: 70
+  lines:
+  - id: compressed_air
+    name: 压缩空气
+    stages:
+    - 空压
+    - 干燥
+    - 储气
+    - 用气
+  - id: chilled_water
+    name: 冷冻水
+    stages:
+    - 制冷
+    - 循环
+    - 散热
+  - id: steam
+    name: 蒸汽
+    stages:
+    - 软化
+    - 给水
+    - 锅炉
+  - id: aux
+    name: 辅助
+    stages:
+    - 除尘
+    - 制氮
+- id: electrical
+  name: 配电房
+  icon: 🔌
+  order: 80
+  lines:
+  - id: hv
+    name: 高压配电
+    stages:
+    - 进线
+    - 变压
+  - id: lv
+    name: 低压配电
+    stages:
+    - 进线
+    - 馈出
+    - 计量
+  - id: backup
+    name: 后备与补偿
+    stages:
+    - 后备
+    - 补偿
+    - 控制
+- id: utility
+  name: 公用工程
+  icon: 🏢
+  order: 90
+  lines:
+  - id: hvac
+    name: 暖通
+    stages:
+    - 空调
+    - 送风
+    - 排风
+  - id: water
+    name: 给排水
+    stages:
+    - 储水
+    - 输水
+    - 换热
+    - 排放
+  - id: vibration_monitor
+    name: 旋转设备监测
+    stages:
+    - 监测
+- id: logistics
+  name: 仓储物流
+  icon: 🚚
+  order: 100
+  lines:
+  - id: asrs
+    name: 立体库
+    stages:
+    - 入库
+    - 堆垛
+    - 出库
+  - id: agv
+    name: AGV
+    stages:
+    - 调度
+    - 充电
+  - id: yard
+    name: 厂区物流
+    stages:
+    - 吊运
+    - 称重
+    - 装卸
+- id: qc
+  name: 质检中心
+  icon: 🔬
+  order: 110
+  lines:
+  - id: env_monitor
+    name: 环保监测
+    stages:
+    - 烟气
+  - id: material_lab
+    name: 材料实验室
+    stages:
+    - 成分
+    - 力学
+    - 表面
+    - 水分
+- id: safety
+  name: 安全系统
+  icon: 🔥
+  order: 120
+  lines:
+  - id: fire
+    name: 消防
+    stages:
+    - 探测
+    - 报警
+    - 灭火
+    - 疏散
+- id: energy
+  name: 能源站
+  icon: 🌱
+  order: 130
+  lines:
+  - id: solar
+    name: 光伏
+    stages:
+    - 发电
+    - 并网
+  - id: storage
+    name: 储能与风电
+    stages:
+    - 储能
+    - 风电
+- id: it
+  name: 信息中心
+  icon: 💻
+  order: 140
+  lines:
+  - id: integration
+    name: 数据集成
+    stages:
+    - 采集
+    - 平台
+    - 上层
+notes:
+- 本文件只描述骨架（车间/产线/工序顺序）。设备挂载靠 devices_*.yaml 的 workshop/line/stage 字段，加设备不用改这里。
+- stages 的顺序决定拓扑图从左到右的列；同一列多台设备纵向排列。

@@ -273,14 +273,201 @@
     }
 
     /* ===== 数字孪生 - 车间布局 ===== */
+    /* ---------- 厂区拓扑（车间 / 产线 / 工序列） ---------- */
+    /* 容器从「固定 820px 画布」改成「可滚动的车间列表」：
+       128 台设备不可能塞进一屏，硬塞就是一坨。 */
     .twin-floor {
         position: relative;
-        min-height: 350px;
-        min-width: 820px;
+        min-height: 420px;
+        max-height: 720px;
+        overflow: auto;
         background: var(--bg-sunken);
         border: 1px solid var(--border-base);
         border-radius: var(--radius-lg);
+        padding: var(--space-2);
+    }
+    .topo-ws {
+        border-bottom: 1px solid var(--border-base);
+        padding: var(--space-3) var(--space-2);
+    }
+    .topo-ws:last-child { border-bottom: none; }
+    .topo-ws-head {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        margin-bottom: var(--space-3);
+        flex-wrap: wrap;
+    }
+    .topo-ws-icon { font-size: var(--font-xl); line-height: 1; }
+    .topo-ws-title {
+        font-size: var(--font-md);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+    .topo-ws-stats {
+        display: flex;
+        gap: var(--space-3);
+        margin-left: auto;
+        font-size: var(--font-xs);
+        font-family: var(--font-mono);
+        flex-wrap: wrap;
+    }
+    .topo-stat--run   { color: var(--color-success); }
+    .topo-stat--fault { color: var(--color-danger); }
+    .topo-stat--stop  { color: var(--color-warning); }
+    .topo-stat--off   { color: var(--color-offline); }
+    .topo-stat--total { color: var(--text-muted); }
+
+    .topo-line { margin-bottom: var(--space-4); }
+    .topo-line:last-child { margin-bottom: 0; }
+    .topo-line-head {
+        display: flex;
+        align-items: baseline;
+        gap: var(--space-3);
+        margin-bottom: var(--space-2);
+        flex-wrap: wrap;
+    }
+    .topo-line-name {
+        font-size: var(--font-sm);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+        padding-left: var(--space-2);
+        border-left: 3px solid var(--color-info);
+    }
+    .topo-line-flow {
+        font-size: var(--font-xs);
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+    }
+    .topo-canvas {
+        position: relative;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-base);
+        border-radius: var(--radius-md);
         overflow: hidden;
+    }
+    .topo-stage {
+        position: absolute;
+        top: 6px;
+        text-align: center;
+        font-size: 11px;
+        line-height: 14px;
+        color: var(--text-muted);
+        letter-spacing: 0.04em;
+        z-index: 1;
+        pointer-events: none;
+    }
+    .topo-edges {
+        position: absolute;
+        left: 0;
+        top: 0;
+        z-index: 1;
+        pointer-events: none;
+        color: var(--border-strong);
+    }
+    .topo-edge {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.5;
+        opacity: 0.55;
+    }
+    .topo-edge--run {
+        color: var(--color-info);
+        stroke-width: 2;
+        opacity: 0.9;
+    }
+    .topo-node {
+        position: absolute;
+        box-sizing: border-box;
+        padding: var(--space-1) var(--space-2);
+        border-radius: var(--radius-md);
+        background: var(--bg-elevated, var(--bg-surface));
+        border: 1.5px solid var(--border-strong);
+        cursor: pointer;
+        transition: box-shadow var(--duration-fast) var(--ease-out),
+                    transform var(--duration-fast) var(--ease-out);
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 2px;
+        overflow: hidden;
+    }
+    .topo-node:hover {
+        box-shadow: var(--shadow-md);
+        transform: translateY(-1px);
+        z-index: 10;
+    }
+    .topo-node--running { border-color: var(--color-success); }
+    .topo-node--stopped { border-color: var(--color-offline); }
+    .topo-node--fault   { border-color: var(--color-danger); }
+    .topo-node--offline { border-color: var(--border-base); opacity: 0.72; }
+    .topo-node--ctrl {
+        background: var(--bg-sunken);
+        border-style: dashed;
+    }
+    .topo-node-name {
+        font-size: var(--font-xs);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.3;
+    }
+    .topo-node-kv {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        line-height: 1.25;
+        color: var(--text-muted);
+        overflow: hidden;
+    }
+    .topo-kv {
+        display: flex;
+        gap: 3px;
+        align-items: baseline;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .topo-kv i { font-style: normal; opacity: 0.75; overflow: hidden; text-overflow: ellipsis; }
+    .topo-kv b { color: var(--text-primary); font-weight: var(--weight-semibold); }
+    .topo-kv em { font-style: normal; opacity: 0.6; }
+    .topo-kv--none { opacity: 0.5; }
+    .topo-dot {
+        position: absolute;
+        right: 5px;
+        top: 5px;
+        width: 7px;
+        height: 7px;
+        border-radius: var(--radius-pill);
+        background: var(--text-muted);
+    }
+    .topo-dot--running { background: var(--color-success); }
+    .topo-dot--fault   { background: var(--color-danger); }
+    .topo-dot--stopped { background: var(--color-warning); }
+    .topo-dot--offline { background: var(--color-offline); }
+    .topo-ctrl-band {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 0;
+        border-top: 1px dashed var(--border-base);
+        z-index: 0;
+        pointer-events: none;
+    }
+    .topo-ctrl-label {
+        position: absolute;
+        right: 8px;
+        font-size: 10px;
+        color: var(--text-muted);
+        background: var(--bg-surface);
+        padding: 0 4px;
+        z-index: 1;
+        pointer-events: none;
     }
     .twin-node {
         position: absolute;
@@ -1058,13 +1245,11 @@
                             <thead>
                                 <tr>
                                     <th>设备</th>
+                                    <th>车间</th>
                                     <th>状态</th>
-                                    <th class="num">温度 (°C)</th>
-                                    <th class="num">压力 (MPa)</th>
-                                    <th class="num">流量 (m³/h)</th>
-                                    <th class="num">功率 (kW)</th>
-                                    <th class="num">OEE</th>
-                                    <th class="num">健康分</th>
+                                    <th class="num">主读数</th>
+                                    <th class="num">次读数</th>
+                                    <th>工序</th>
                                 </tr>
                             </thead>
                             <tbody></tbody>
@@ -2714,223 +2899,208 @@
         });
     }
 
-    // ==================== 数字孪生 ====================
-    var TWIN_DEVICE_MAP = {
-        'siemens_1500_01': {
-            label: '锅炉产线', icon: '🔥',
-            x: 30, y: 60,
-            process: '热处理',
-            params: { temp: [180, 220], pressure: [0.8, 1.2], flow: [15, 25] }
-        },
-        'hollysys_lk_01': {
-            label: '化工车间', icon: '⚗️',
-            x: 200, y: 20,
-            process: '化学反应',
-            params: { temp: [60, 90], pressure: [0.3, 0.6], flow: [8, 15] }
-        },
-        'mitsubishi_fx5u_01': {
-            label: '注塑车间', icon: '🏭',
-            x: 200, y: 160,
-            process: '注塑成型',
-            params: { temp: [200, 260], pressure: [1.0, 1.5], flow: [5, 10] }
-        },
-        'delta_dvp_01': {
-            label: '包装线', icon: '📦',
-            x: 380, y: 90,
-            process: '包装封装',
-            params: { temp: [20, 35], pressure: [0.1, 0.3], flow: [30, 50] }
-        },
-        'inovance_h5u_01': {
-            label: '涂装车间', icon: '🎨',
-            x: 540, y: 50,
-            process: '喷涂烘干',
-            params: { temp: [120, 180], pressure: [0.4, 0.8], flow: [10, 20] }
-        },
-        'schneider_m340_01': {
-            label: '配电系统', icon: '⚡',
-            x: 540, y: 200,
-            process: '电力分配',
-            params: { temp: [25, 45], pressure: null, flow: null }
-        },
-        'abb_m4m_01': {
-            label: '电力监测', icon: '📊',
-            x: 680, y: 120,
-            process: '电力监控',
-            params: { temp: [20, 35], pressure: null, flow: null }
-        }
-    };
+    // ==================== 数字孪生（厂区拓扑） ====================
+    //
+    // 数据来源：GET /api/devices/topology
+    //
+    // 结构与坐标**全部由后端算**（配置驱动），前端只负责画。
+    //
+    // 旧实现是一张硬编码的 `TWIN_DEVICE_MAP`：7 台设备 + 手填像素坐标。
+    // 后果是 42 台设备里只有 7 台在图上，其余按 id 字母序挤在别处 ——
+    // 用户看到的就是「cems_01 / cnc_mazak_01 / compressor_01 ... 乱成一坨」。
+    // 而且设备一改名、一扩容，图立刻失真，**没有任何报错**。
+    //
+    // 现在：车间 → 产线 → 工序列 → 设备，全部来自配置；
+    // 加一台设备只需改 YAML，图自动长出来。
 
-    var TWIN_CONNECTIONS = [
-        { from: 'siemens_1500_01', to: 'hollysys_lk_01' },
-        { from: 'siemens_1500_01', to: 'mitsubishi_fx5u_01' },
-        { from: 'hollysys_lk_01', to: 'delta_dvp_01' },
-        { from: 'mitsubishi_fx5u_01', to: 'delta_dvp_01' },
-        { from: 'delta_dvp_01', to: 'inovance_h5u_01' },
-        { from: 'inovance_h5u_01', to: 'schneider_m340_01' },
-        { from: 'schneider_m340_01', to: 'abb_m4m_01' }
-    ];
-
+    var TWIN_TOPOLOGY = null;
+    var TWIN_NODE_INDEX = {};          // device_id -> 节点（详情面板用）
     var TWIN_SELECTED_DEVICE = null;
+    var TOPO_STATUS_TEXT = { running: '运行', stopped: '停机', fault: '故障', offline: '离线' };
 
-    function loadDigitalTwin() {
-        debugLog('加载数字孪生数据...');
-        return Promise.all([
-            i40Fetch('/devices/status'),
-            i40Fetch('/health'),
-            i40Fetch('/oee'),
-            i40Fetch('/energy/power')
-        ]).then(function(results) {
-            var deviceStates = results[0] || {};
-            var healthScores = results[1] || {};
-            var oeeData = results[2] || {};
-            var powerData = results[3] || {};
-
-            var twinData = {};
-            for (var deviceId in TWIN_DEVICE_MAP) {
-                if (!TWIN_DEVICE_MAP.hasOwnProperty(deviceId)) continue;
-                var config = TWIN_DEVICE_MAP[deviceId];
-                var state = deviceStates[deviceId] || {};
-                var oee = oeeData[deviceId] || {};
-
-                var deviceHealth = [];
-                for (var key in healthScores) {
-                    if (healthScores.hasOwnProperty(key) && healthScores[key].device_id === deviceId) {
-                        deviceHealth.push(healthScores[key]);
-                    }
+    function topoFetch(path) {
+        return fetch('/api' + path, { headers: i40Headers() })
+            .then(function(resp) {
+                if (resp.status === 401) {
+                    window.location.href = '/login';
+                    return null;
                 }
-                var avgHealth = deviceHealth.length > 0
-                    ? deviceHealth.reduce(function(s, h) { return s + (h.health_score || 0); }, 0) / deviceHealth.length
-                    : 0;
-
-                var power = 0;
-                if (powerData && powerData.devices) {
-                    var pd = powerData.devices[deviceId];
-                    if (pd) power = pd.power_kw || 0;
+                if (!resp.ok) {
+                    debugLog('拓扑接口 HTTP ' + resp.status, 'warn');
+                    return null;
                 }
+                return resp.json();
+            });
+    }
 
-                var status = state.status || 'idle';
-                var params = {};
-                if (config.params) {
-                    var isActive = status === 'running';
-                    params.temp = isActive
-                        ? (config.params.temp[0] + Math.random() * (config.params.temp[1] - config.params.temp[0])).toFixed(1)
-                        : (config.params.temp[0] * 0.3 + Math.random() * 5).toFixed(1);
-                    params.pressure = config.params.pressure && isActive
-                        ? (config.params.pressure[0] + Math.random() * (config.params.pressure[1] - config.params.pressure[0])).toFixed(2)
-                        : config.params.pressure ? (config.params.pressure[0] * 0.1).toFixed(2) : '--';
-                    params.flow = config.params.flow && isActive
-                        ? (config.params.flow[0] + Math.random() * (config.params.flow[1] - config.params.flow[0])).toFixed(1)
-                        : config.params.flow ? '0.0' : '--';
-                }
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
 
-                twinData[deviceId] = {
-                    id: deviceId,
-                    label: config.label,
-                    icon: config.icon,
-                    process: config.process,
-                    x: config.x,
-                    y: config.y,
-                    status: status,
-                    oee: oee.oee_percent || '--',
-                    health: avgHealth > 0 ? avgHealth.toFixed(1) : '--',
-                    power: power > 0 ? power.toFixed(1) : '--',
-                    params: params
-                };
+    // 设备名太长（"灌装机1# (克朗斯Modulfill)"），节点里放不下。
+    // 截断到 14 字，全名放 title —— 图上一眼看清是什么设备，鼠标悬停看全称。
+    function shortName(name) {
+        var s = String(name || '');
+        return s.length > 14 ? s.slice(0, 13) + '…' : s;
+    }
+
+    function fmtVal(v) {
+        if (v === null || v === undefined) return '--';
+        if (typeof v !== 'number') return String(v);
+        if (Math.abs(v) >= 1000) return v.toFixed(0);
+        if (Math.abs(v) >= 100) return v.toFixed(1);
+        return v.toFixed(2).replace(/\.?0+$/, '') || '0';
+    }
+
+    function loadTopology() {
+        return topoFetch('/devices/topology').then(function(d) {
+            if (!d) {
+                var box = document.getElementById('twin-floor');
+                if (box) box.innerHTML = i40EmptyHTML('拓扑加载失败（接口无响应）');
+                return;
             }
-
-            var totalDevices = Object.keys(twinData).length;
-            var runningCount = 0, faultCount = 0, totalHealth = 0, healthCount = 0;
-            for (var id in twinData) {
-                if (twinData[id].status === 'running') runningCount++;
-                if (twinData[id].status === 'fault') faultCount++;
-                if (twinData[id].health !== '--') {
-                    totalHealth += parseFloat(twinData[id].health);
-                    healthCount++;
-                }
-            }
-            safeText('twin-total', totalDevices);
-            safeText('twin-running', runningCount);
-            safeText('twin-faults', faultCount);
-            safeText('twin-avg-health', healthCount > 0 ? (totalHealth / healthCount).toFixed(1) : '--');
-
-            renderTwinFloor(twinData);
-            renderTwinParams(twinData);
-
-            if (TWIN_SELECTED_DEVICE && twinData[TWIN_SELECTED_DEVICE]) {
-                renderTwinDetail(twinData[TWIN_SELECTED_DEVICE]);
-            }
-
+            TWIN_TOPOLOGY = d;
+            TWIN_NODE_INDEX = {};
+            (d.workshops || []).forEach(function(w) {
+                (w.lines || []).forEach(function(l) {
+                    (l.nodes || []).forEach(function(n) { TWIN_NODE_INDEX[n.device_id] = n; });
+                });
+            });
+            renderTopology();
+            renderTwinParams();
+            updateTwinSummary();
             updateLastTime();
-            debugLog('数字孪生数据加载完成: ' + totalDevices + ' 个设备');
+            debugLog('拓扑加载完成: ' + d.summary.devices + ' 台设备 / '
+                     + d.summary.workshops + ' 车间 / ' + d.summary.lines + ' 产线');
         });
     }
 
-    function renderTwinFloor(data) {
+    function updateTwinSummary() {
+        var s = (TWIN_TOPOLOGY || {}).summary || {};
+        safeText('twin-total', s.devices != null ? s.devices : '--');
+        safeText('twin-running', s.running != null ? s.running : '--');
+        safeText('twin-faults', s.fault != null ? s.fault : '--');
+        // 健康评分来自 /health 接口，拓扑里没有 —— 单独拉一次
+        i40Fetch('/health').then(function(hs) {
+            if (!hs) { safeText('twin-avg-health', '--'); return; }
+            var arr = Array.isArray(hs) ? hs : Object.keys(hs).map(function(k) { return hs[k]; });
+            var vals = arr.map(function(h) { return h && h.health_score; })
+                          .filter(function(v) { return typeof v === 'number'; });
+            safeText('twin-avg-health', vals.length
+                ? (vals.reduce(function(a, b) { return a + b; }, 0) / vals.length).toFixed(1)
+                : '--');
+        });
+    }
+
+    function renderTopology() {
         var container = document.getElementById('twin-floor');
         if (!container) return;
 
-        if (!data || Object.keys(data).length === 0) {
-            container.innerHTML = i40EmptyHTML('暂无设备数据');
+        var d = TWIN_TOPOLOGY;
+        if (!d || !(d.workshops || []).length) {
+            container.innerHTML = i40EmptyHTML('暂无设备拓扑');
             return;
         }
 
-        var t = i40Theme();
         var html = '';
-
-        // 渲染连接线和流动粒子（颜色取令牌，无发光）
-        TWIN_CONNECTIONS.forEach(function(conn, idx) {
-            var from = data[conn.from];
-            var to = data[conn.to];
-            if (!from || !to) return;
-
-            var x1 = from.x + 65;
-            var y1 = from.y + 45;
-            var x2 = to.x + 65;
-            var y2 = to.y + 45;
-
-            var dx = x2 - x1;
-            var dy = y2 - y1;
-            var length = Math.sqrt(dx * dx + dy * dy);
-            var angle = Math.atan2(dy, dx) * 180 / Math.PI;
-
-            var isRunning = from.status === 'running' && to.status === 'running';
-            var pipeColor = isRunning ? t.info : t.gridStrong;
-
-            html += '<div class="twin-link" style="left:' + x1 + 'px; top:' + y1 + 'px; width:' + length + 'px; height:6px; transform:rotate(' + angle + 'deg); transform-origin:0 50%;">';
-            html += '<div style="width:100%; height:2px; background:' + pipeColor + '; position:absolute; top:50%; transform:translateY(-50%); opacity:0.6;"></div>';
-            if (isRunning) {
-                html += '<div class="twin-particle" style="animation-delay:' + (idx * 0.4) + 's;"></div>';
-                html += '<div class="twin-particle" style="animation-delay:' + (idx * 0.4 + 1.2) + 's;"></div>';
-            }
+        d.workshops.forEach(function(w) {
+            var st = w.stats || {};
+            html += '<div class="topo-ws">';
+            html += '<div class="topo-ws-head">';
+            html += '<span class="topo-ws-icon">' + escapeHtml(w.icon || '🏭') + '</span>';
+            html += '<span class="topo-ws-title">' + escapeHtml(w.name) + '</span>';
+            html += '<span class="topo-ws-stats">';
+            html += '<span class="topo-stat topo-stat--run">● ' + (st.running || 0) + ' 运行</span>';
+            if (st.fault) html += '<span class="topo-stat topo-stat--fault">● ' + st.fault + ' 故障</span>';
+            if (st.stopped) html += '<span class="topo-stat topo-stat--stop">● ' + st.stopped + ' 停机</span>';
+            if (st.offline) html += '<span class="topo-stat topo-stat--off">● ' + st.offline + ' 离线</span>';
+            html += '<span class="topo-stat topo-stat--total">共 ' + (st.devices || 0) + ' 台</span>';
+            html += '</span></div>';
+            (w.lines || []).forEach(function(l) { html += renderLineCanvas(l); });
             html += '</div>';
         });
+        container.innerHTML = html;
+    }
 
-        // 渲染设备节点
-        for (var deviceId in data) {
-            if (!data.hasOwnProperty(deviceId)) continue;
-            var d = data[deviceId];
+    function renderLineCanvas(line) {
+        if (!line || line.empty) return '';
 
-            html += '<div class="twin-node ' + d.status + '" style="left:' + d.x + 'px; top:' + d.y + 'px;" ';
-            html += 'onclick="selectTwinDevice(\'' + deviceId + '\')" ';
-            html += 'title="' + d.label + ' — ' + d.process + '">';
-            html += '<span class="twin-node-icon">' + d.icon + '</span>';
-            html += '<span class="twin-node-label">' + d.label + '</span>';
-            html += '<div class="twin-node-status">';
-            if (d.params.temp !== undefined && d.params.temp !== '--') {
-                var tempVal = parseFloat(d.params.temp);
-                html += '<span class="twin-param' + (tempVal > 100 ? ' hot' : '') + '">\uD83C\uDF21' + d.params.temp + '°C</span>';
-            }
-            if (d.oee !== '--') {
-                html += '<span class="twin-param">' + d.oee + '%</span>';
-            }
-            html += '</div></div>';
+        var h = '<div class="topo-line">';
+        h += '<div class="topo-line-head">';
+        h += '<span class="topo-line-name">' + escapeHtml(line.name) + '</span>';
+        if (line.stages && line.stages.length) {
+            h += '<span class="topo-line-flow">' + line.stages.map(escapeHtml).join(' → ') + '</span>';
+        }
+        h += '</div>';
+        h += '<div class="topo-canvas" style="width:' + line.width + 'px;height:' + line.height + 'px;">';
+
+        // 工序列标题（只在设备层节点上取，控制层 col=-1 不参与）
+        var stageX = {};
+        (line.nodes || []).forEach(function(n) {
+            if (n.layer === 'process' && stageX[n.stage] === undefined) stageX[n.stage] = n.x;
+        });
+        Object.keys(stageX).forEach(function(s) {
+            h += '<div class="topo-stage" style="left:' + stageX[s] + 'px;width:136px;">'
+               + escapeHtml(s) + '</div>';
+        });
+
+        // 连线：贝塞尔曲线 + 箭头。只在「上下游都在运行」时高亮，
+        // 断料/停机时线是灰的 —— 一眼看出哪一段断了。
+        var markerId = 'topo-arrow-' + String(line.id || 'x').replace(/[^a-zA-Z0-9_-]/g, '_');
+        h += '<svg class="topo-edges" width="' + line.width + '" height="' + line.height + '">';
+        h += '<defs><marker id="' + markerId + '" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">'
+           + '<path d="M0,0 L0,6 L7,3 z" fill="currentColor"/></marker></defs>';
+        (line.edges || []).forEach(function(e) {
+            var a = TWIN_NODE_INDEX[e.from], b = TWIN_NODE_INDEX[e.to];
+            if (!a || !b) return;
+            var x1 = a.x + a.w, y1 = a.y + a.h / 2;
+            var x2 = b.x, y2 = b.y + b.h / 2;
+            var mx = (x1 + x2) / 2;
+            var running = a.status.state === 'running' && b.status.state === 'running';
+            h += '<path class="topo-edge' + (running ? ' topo-edge--run' : '') + '"'
+               + ' d="M' + x1 + ',' + y1 + ' C' + mx + ',' + y1 + ' ' + mx + ',' + y2 + ' ' + x2 + ',' + y2 + '"'
+               + ' marker-end="url(#' + markerId + ')"/>';
+        });
+        h += '</svg>';
+
+        // 控制层分隔带：让「上面是工艺、下面是控制」这件事在视觉上成立
+        var ctrlNodes = (line.nodes || []).filter(function(n) { return n.layer === 'control'; });
+        if (ctrlNodes.length) {
+            var ctrlY = Math.min.apply(null, ctrlNodes.map(function(n) { return n.y; }));
+            h += '<div class="topo-ctrl-band" style="top:' + (ctrlY - 14) + 'px;"></div>';
+            h += '<div class="topo-ctrl-label" style="top:' + (ctrlY - 13) + 'px;">控制层</div>';
         }
 
-        // 入口/出口标识
-        html += '<div style="position:absolute; left:2px; top:85px; color:' + t.success + '; font-size:12px; writing-mode:vertical-lr; letter-spacing:2px;">原料入口</div>';
-        html += '<div style="position:absolute; right:2px; top:85px; color:' + t.danger + '; font-size:12px; writing-mode:vertical-lr; letter-spacing:2px;">成品出口</div>';
+        (line.nodes || []).forEach(function(n) { h += renderTopoNode(n); });
+        h += '</div></div>';
+        return h;
+    }
 
-        container.innerHTML = html;
+    function renderTopoNode(n) {
+        var st = n.status.state;
+        var h = '<div class="topo-node topo-node--' + st
+              + (n.layer === 'control' ? ' topo-node--ctrl' : '') + '"';
+        h += ' style="left:' + n.x + 'px;top:' + n.y + 'px;width:' + n.w + 'px;height:' + n.h + 'px;"';
+        h += ' onclick="selectTwinDevice(\'' + n.device_id + '\')"';
+        h += ' title="' + escapeHtml(n.name) + '（' + escapeHtml(n.stage || '控制层') + '）'
+           + ' · ' + (TOPO_STATUS_TEXT[st] || st) + '">';
+        h += '<span class="topo-dot topo-dot--' + st + '"></span>';
+        h += '<div class="topo-node-name">' + escapeHtml(shortName(n.name)) + '</div>';
+        h += '<div class="topo-node-kv">';
+        var kvs = n.key_values || [];
+        if (kvs.length) {
+            kvs.forEach(function(kv) {
+                h += '<span class="topo-kv"><i>' + escapeHtml(kv.name) + '</i>'
+                   + '<b>' + escapeHtml(fmtVal(kv.value)) + '</b>'
+                   + '<em>' + escapeHtml(kv.unit || '') + '</em></span>';
+            });
+        } else {
+            h += '<span class="topo-kv topo-kv--none">--</span>';
+        }
+        h += '</div></div>';
+        return h;
     }
 
     function selectTwinDevice(deviceId) {
@@ -2938,29 +3108,24 @@
         debugLog('选择设备: ' + deviceId);
 
         var container = document.getElementById('twin-detail');
-        if (container) {
-            container.innerHTML = i40LoadingHTML('加载中...');
-        }
+        if (container) container.innerHTML = i40LoadingHTML('加载中...');
 
         Promise.all([
             i40Fetch('/health/' + encodeURIComponent(deviceId)),
             i40Fetch('/oee/' + encodeURIComponent(deviceId))
         ]).then(function(results) {
             if (TWIN_SELECTED_DEVICE !== deviceId) return;
-            var health = results[0];
-            var oee = results[1];
-
-            var config = TWIN_DEVICE_MAP[deviceId];
-            var detail = {
+            var node = TWIN_NODE_INDEX[deviceId] || {};
+            renderTwinDetail({
                 id: deviceId,
-                label: config ? config.label : deviceId,
-                icon: config ? config.icon : '🔧',
-                process: config ? config.process : '--',
-                health: health,
-                oee: oee
-            };
-
-            renderTwinDetail(detail);
+                label: node.name || deviceId,
+                icon: node.layer === 'control' ? '💻' : '⚙️',
+                process: node.stage || (node.layer === 'control' ? '控制层' : '--'),
+                status: node.status,
+                key_values: node.key_values || [],
+                health: results[0],
+                oee: results[1]
+            });
         });
     }
     window.selectTwinDevice = selectTwinDevice;
@@ -2970,25 +3135,28 @@
         if (!container) return;
 
         var html = '';
-
         html += '<div style="text-align:center; padding: var(--space-3); border-bottom: 1px solid var(--border-base); margin-bottom: var(--space-3);">';
         html += '<span style="font-size: var(--font-3xl);">' + detail.icon + '</span>';
-        html += '<h5 class="mt-2 mb-0">' + detail.label + '</h5>';
-        html += '<span class="text-muted" style="font-size: var(--font-xs); font-family: var(--font-mono);">' + detail.id + '</span>';
+        html += '<h5 class="mt-2 mb-0">' + escapeHtml(detail.label) + '</h5>';
+        html += '<span class="text-muted" style="font-size: var(--font-xs); font-family: var(--font-mono);">' + escapeHtml(detail.id) + '</span>';
         html += '</div>';
 
-        html += '<div class="twin-detail-row"><span class="twin-detail-label">工艺类型</span><span class="twin-detail-value">' + detail.process + '</span></div>';
+        html += '<div class="twin-detail-row"><span class="twin-detail-label">工序</span><span class="twin-detail-value">' + escapeHtml(detail.process) + '</span></div>';
+        if (detail.status) {
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">状态</span><span class="twin-detail-value">'
+                 + (TOPO_STATUS_TEXT[detail.status.state] || detail.status.state) + '</span></div>';
+        }
+        (detail.key_values || []).forEach(function(kv) {
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">' + escapeHtml(kv.name)
+                 + '</span><span class="twin-detail-value">' + escapeHtml(fmtVal(kv.value)) + ' '
+                 + escapeHtml(kv.unit || '') + '</span></div>';
+        });
 
         if (detail.health && typeof detail.health === 'object') {
             var h = detail.health;
             var score = h.health_score || 0;
-            var scoreClass = 'health-' + i40HealthLevel(score);
-            html += '<div class="twin-detail-row"><span class="twin-detail-label">健康评分</span><span class="twin-detail-value ' + scoreClass + '">' + score + '</span></div>';
+            html += '<div class="twin-detail-row"><span class="twin-detail-label">健康评分</span><span class="twin-detail-value health-' + i40HealthLevel(score) + '">' + score + '</span></div>';
             html += '<div class="twin-detail-row"><span class="twin-detail-label">异常次数</span><span class="twin-detail-value">' + (h.anomaly_count || 0) + '</span></div>';
-            if (h.trend) {
-                var trendIcon = h.trend.direction === 'rising' ? '↑' : h.trend.direction === 'falling' ? '↓' : '→';
-                html += '<div class="twin-detail-row"><span class="twin-detail-label">趋势</span><span class="twin-detail-value">' + trendIcon + ' ' + (h.trend.direction || '-') + '</span></div>';
-            }
             if (h.failure_prediction) {
                 html += '<div class="twin-detail-row"><span class="twin-detail-label">预计故障</span><span class="twin-detail-value metric-value--warning">' + h.failure_prediction.days_to_limit + ' 天后</span></div>';
             }
@@ -3002,55 +3170,45 @@
             html += '<div class="twin-detail-row"><span class="twin-detail-label">可用率(A)</span><span class="twin-detail-value">' + ((o.availability || 0) * 100).toFixed(1) + '%</span></div>';
             html += '<div class="twin-detail-row"><span class="twin-detail-label">性能率(P)</span><span class="twin-detail-value">' + ((o.performance || 0) * 100).toFixed(1) + '%</span></div>';
             html += '<div class="twin-detail-row"><span class="twin-detail-label">质量率(Q)</span><span class="twin-detail-value">' + ((o.quality || 0) * 100).toFixed(1) + '%</span></div>';
-            html += '<div class="twin-detail-row"><span class="twin-detail-label">等级</span><span class="twin-detail-value">' + (o.grade || '-') + '</span></div>';
-            html += '<div class="twin-detail-row"><span class="twin-detail-label">总产量</span><span class="twin-detail-value">' + (o.total_count || 0) + '</span></div>';
-            html += '<div class="twin-detail-row"><span class="twin-detail-label">合格品</span><span class="twin-detail-value">' + (o.good_count || 0) + '</span></div>';
         } else {
             html += '<div class="twin-detail-row"><span class="twin-detail-label">OEE</span><span class="twin-detail-value text-muted">暂无数据</span></div>';
         }
 
-        html += '<div style="text-align:center; margin-top:20px;">';
-        html += '<button class="btn btn-sm btn-outline-info" onclick="selectTwinDevice(\'' + detail.id + '\')">';
-        html += '<i class="bi bi-arrow-clockwise"></i> 刷新数据</button>';
-        html += '</div>';
-
         container.innerHTML = html;
     }
 
-    function renderTwinParams(data) {
+    function renderTwinParams() {
         var tbody = document.querySelector('#twin-params-table tbody');
         if (!tbody) return;
 
-        if (!data || Object.keys(data).length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">暂无设备数据</td></tr>';
+        var d = TWIN_TOPOLOGY;
+        if (!d || !(d.workshops || []).length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">暂无设备数据</td></tr>';
             return;
         }
 
-        tbody.innerHTML = '';
-        for (var deviceId in data) {
-            if (!data.hasOwnProperty(deviceId)) continue;
-            var d = data[deviceId];
-
-            var statusText = d.status === 'running' ? '运行' : d.status === 'fault' ? '故障' : d.status === 'idle' ? '空闲' : '停机';
-            // 状态点复用 design-tokens 的 .status-dot--* 语义色
-            var dotClass = d.status === 'running' ? 'status-dot--success'
-                : d.status === 'fault' ? 'status-dot--danger'
-                : d.status === 'idle' ? 'status-dot--warning' : 'status-dot--offline';
-
-            var tr = document.createElement('tr');
-            tr.onclick = (function(id) { return function() { selectTwinDevice(id); }; })(deviceId);
-
-            tr.innerHTML =
-                '<td><strong>' + d.icon + ' ' + d.label + '</strong></td>' +
-                '<td><span class="status-dot ' + dotClass + '"></span>' + statusText + '</td>' +
-                '<td class="num">' + (d.params.temp || '--') + '</td>' +
-                '<td class="num">' + (d.params.pressure || '--') + '</td>' +
-                '<td class="num">' + (d.params.flow || '--') + '</td>' +
-                '<td class="num">' + (d.power || '--') + '</td>' +
-                '<td class="num">' + (d.oee !== '--' ? d.oee + '%' : '--') + '</td>' +
-                '<td class="num">' + (d.health || '--') + '</td>';
-            tbody.appendChild(tr);
-        }
+        var rows = '';
+        d.workshops.forEach(function(w) {
+            (w.lines || []).forEach(function(l) {
+                (l.nodes || []).forEach(function(n) {
+                    var st = n.status.state;
+                    var dot = st === 'running' ? 'status-dot--success'
+                            : st === 'fault' ? 'status-dot--danger'
+                            : st === 'stopped' ? 'status-dot--warning' : 'status-dot--offline';
+                    var kv = n.key_values || [];
+                    var k1 = kv[0], k2 = kv[1];
+                    rows += '<tr onclick="selectTwinDevice(\'' + n.device_id + '\')">'
+                          + '<td><strong>' + escapeHtml(shortName(n.name)) + '</strong></td>'
+                          + '<td>' + escapeHtml(w.name) + '</td>'
+                          + '<td><span class="status-dot ' + dot + '"></span>' + (TOPO_STATUS_TEXT[st] || st) + '</td>'
+                          + '<td class="num">' + (k1 ? escapeHtml(fmtVal(k1.value)) + ' ' + escapeHtml(k1.unit || '') : '--') + '</td>'
+                          + '<td class="num">' + (k2 ? escapeHtml(fmtVal(k2.value)) + ' ' + escapeHtml(k2.unit || '') : '--') + '</td>'
+                          + '<td>' + escapeHtml(n.stage || (n.layer === 'control' ? '控制层' : '--')) + '</td>'
+                          + '</tr>';
+                });
+            });
+        });
+        tbody.innerHTML = rows || '<tr><td colspan="6" class="text-muted text-center">暂无设备数据</td></tr>';
     }
 
     // ==================== 刷新逻辑 ====================
@@ -3071,7 +3229,7 @@
             case 'energy': loadEnergy(); break;
             case 'edge': loadEdge(); break;
             case 'vibration': loadVibrationTab(); break;
-            case 'twin': loadDigitalTwin(); break;
+            case 'twin': loadTopology(); break;
         }
     }
 

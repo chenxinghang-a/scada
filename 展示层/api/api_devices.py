@@ -36,6 +36,426 @@ def get_devices():
     return jsonify({'devices': devices})
 
 
+# ==================== 拓扑 ====================
+#
+# 为什么拓扑要后端算布局，而不是前端硬编码坐标：
+#
+# 之前 industry40.html 里有一张 `TWIN_DEVICE_MAP`，硬编码 7 台设备 + 手填像素坐标。
+# 结果：42 台设备里只有 7 台出现在图上，其余的全挤在别处按 id 字母序平铺 ——
+# 就是用户看到的「乱成一坨」。设备一多、一改名，图立刻失真，而且**没有报错**。
+#
+# 现在：结构从配置来（devices_*.yaml 的 workshop/line/stage/role + topology.yaml
+# 的工序顺序），坐标由这里算。加设备只需改配置，图自动长出来。
+
+#: 节点盒尺寸与间距（前端按这个画，后端按这个算坐标，两边不会错位）
+_TOPO_NODE_W = 136
+_TOPO_NODE_H = 74
+_TOPO_GAP_X = 58
+_TOPO_GAP_Y = 18
+#: 上边距要留出工序标题的位置（14px 字高 + 余量）。
+#: 坐标全由后端算，前端不再做「画布 padding + 节点 margin」的二次偏移 ——
+#: 那种偏移在控制层分隔带那里会算错（band 用节点 y，节点 y 又要加 margin）。
+_TOPO_PAD = 30
+#: 控制层/仪表层单独成行时，与设备层之间的额外间隔
+_TOPO_LAYER_GAP = 34
+
+#: 一台设备在图上最多带几个关键读数（多了挤成一团，少了看不出状态）
+_TOPO_KEY_VALUE_LIMIT = 2
+
+
+def _load_topology_skeleton() -> dict[str, Any]:
+    """读厂区骨架。读不到就返回空骨架 —— 拓扑页不该因为配置缺失而 500。"""
+    import yaml
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent.parent / '配置' / 'topology.yaml'
+    try:
+        data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.error('拓扑骨架读取失败（将只按设备配置聚合）: %s — %s', path, exc)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _device_points(dev_cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """合并四段点位定义（registers/nodes/topics/endpoints）。"""
+    out: list[dict[str, Any]] = []
+    for section in ('registers', 'nodes', 'topics', 'endpoints'):
+        for p in (dev_cfg.get(section) or []):
+            if isinstance(p, dict) and p.get('name'):
+                out.append(p)
+    return out
+
+
+def _pick_key_values(dev_cfg: dict[str, Any], latest: dict[str, Any],
+                     limit: int = _TOPO_KEY_VALUE_LIMIT) -> list[dict[str, Any]]:
+    """挑几个「一眼能看出设备在干什么」的读数。
+
+    优先级：工艺量（温度/压力/流量/速度/电流）> 计数 > 状态位。
+    命令类点位（cmd_start 等线圈）永远不选 —— 它们平时是 0，
+    画在图上等于告诉运维「这台设备没在动」。
+    """
+    #: 越靠前越优先。用名字匹配而不是配置里的顺序，因为配置顺序是地址顺序，
+    #: 往往把「状态」放最后、把「设定值」放最前，不代表重要性。
+    priority = ('temp', 'pressure', 'flow', 'speed', 'current', 'power',
+                'level', 'vibration', 'weight', 'count', 'ratio')
+    skip = ('cmd_', 'status', 'state', 'alarm', 'fault', 'self_test')
+
+    def score(p: dict[str, Any]) -> int:
+        name = str(p.get('name', '')).lower()
+        if any(s in name for s in skip):
+            return 999
+        for i, kw in enumerate(priority):
+            if kw in name:
+                return i
+        return 500
+
+    picked: list[dict[str, Any]] = []
+    for p in sorted(_device_points(dev_cfg), key=score):
+        name = p.get('name')
+        if score(p) >= 999:
+            continue
+        raw = latest.get(name)
+        value = raw.get('value') if isinstance(raw, dict) else raw
+        if value is None:
+            continue
+        picked.append({'name': name, 'value': value, 'unit': p.get('unit', '')})
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def _status_of(dev_id: str, status_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """把设备状态归一成拓扑图用的四个值。"""
+    st = status_map.get(dev_id) or {}
+    if st.get('stopped'):
+        return {'state': 'stopped', 'text': '停机'}
+    if not st.get('connected'):
+        return {'state': 'offline', 'text': '离线'}
+    if st.get('status') == 'fault':
+        return {'state': 'fault', 'text': '故障'}
+    return {'state': 'running', 'text': '运行'}
+
+
+def _layout_line(line: dict[str, Any], devices: list[dict[str, Any]],
+                 status_map: dict[str, dict[str, Any]],
+                 latest_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """算一条产线的节点坐标与连线。
+
+    坐标算法（后端算，前端只画）：
+      · 列 = 工序（stage），顺序取自 topology.yaml 的 stages
+      · 行 = 同一工序内的设备，按 role 分层：设备层在上，仪表层中，控制层下
+      · 空工序列会被跳过并重新编号 —— 否则图上会出现一段空白，
+        看起来像「这里应该有设备但没有」
+    """
+    stages = list(line.get('stages') or [])
+
+    # ===== 控制层单独一行 =====
+    #
+    # PLC / DCS / 服务器不属于「工序」。之前把它们和设备画在同一列，
+    # 图上会出现「干燥机 → 西门子S7-1500 → 注塑机」—— 中间那个箭头
+    # 物理上不存在（PLC 不输送物料，它只是控制）。
+    # 现场看板的标准画法是：上面一条工艺流水线，下面一条控制层总线。
+    controllers = [d for d in devices if d.get('role') == 'controller']
+    flow_devices = [d for d in devices if d.get('role') != 'controller']
+
+    by_stage: dict[str, list[dict[str, Any]]] = {s: [] for s in stages}
+    orphan: list[dict[str, Any]] = []
+    for d in flow_devices:
+        st = d.get('stage')
+        if st in by_stage:
+            by_stage[st].append(d)
+        else:
+            orphan.append(d)
+
+    # 没写 stage（或写了个不在骨架里的工序）的设备不能丢 —— 丢了就是
+    # 「设备存在但图上找不到」，比放错位置更难查。挂到最后一列并标记。
+    if orphan and stages:
+        by_stage[stages[-1]].extend(orphan)
+
+    # 去掉空列后重新编号
+    cols: list[tuple[str, list[dict[str, Any]]]] = [
+        (s, by_stage[s]) for s in stages if by_stage[s]
+    ]
+    if not cols and not controllers:
+        return {'id': line.get('id'), 'name': line.get('name'),
+                'width': 0, 'height': 0, 'stages': stages,
+                'nodes': [], 'edges': [], 'empty': True}
+
+    #: 列内排序：equipment 在上，instrument 在下（仪表挂在设备旁边）
+    layer_order = {'equipment': 0, 'instrument': 1}
+    for _stage, group in cols:
+        group.sort(key=lambda d: (layer_order.get(d.get('role', 'equipment'), 0),
+                                  d.get('id', '')))
+
+    max_rows = max((len(g) for _s, g in cols), default=0)
+    flow_width = (_TOPO_PAD * 2 + len(cols) * _TOPO_NODE_W
+                  + max(0, len(cols) - 1) * _TOPO_GAP_X) if cols else 0
+    ctrl_width = (_TOPO_PAD * 2 + len(controllers) * _TOPO_NODE_W
+                  + max(0, len(controllers) - 1) * _TOPO_GAP_X) if controllers else 0
+    width = max(flow_width, ctrl_width, _TOPO_NODE_W + _TOPO_PAD * 2)
+
+    flow_height = ((_TOPO_PAD * 2 + max_rows * _TOPO_NODE_H
+                    + max(0, max_rows - 1) * _TOPO_GAP_Y) if cols else _TOPO_PAD)
+    height = flow_height + ((_TOPO_LAYER_GAP + _TOPO_NODE_H) if controllers else 0)
+
+    nodes: list[dict[str, Any]] = []
+    for ci, (stage_name, group) in enumerate(cols):
+        col_h = len(group) * _TOPO_NODE_H + max(0, len(group) - 1) * _TOPO_GAP_Y
+        y0 = _TOPO_PAD + (flow_height - _TOPO_PAD * 2 - col_h) / 2.0
+        for ri, d in enumerate(group):
+            dev_id = d.get('id')
+            nodes.append({
+                'device_id': dev_id,
+                'name': d.get('name', dev_id),
+                'stage': stage_name,
+                'role': d.get('role', 'equipment'),
+                'layer': 'process',
+                'protocol': d.get('protocol', 'modbus_tcp'),
+                'vendor': d.get('vendor', ''),
+                'model': d.get('device_model', ''),
+                'col': ci,
+                'row': ri,
+                'x': _TOPO_PAD + ci * (_TOPO_NODE_W + _TOPO_GAP_X),
+                'y': round(y0 + ri * (_TOPO_NODE_H + _TOPO_GAP_Y), 1),
+                'w': _TOPO_NODE_W,
+                'h': _TOPO_NODE_H,
+                'status': _status_of(dev_id, status_map),
+                'key_values': _pick_key_values(d, latest_map.get(dev_id) or {}),
+            })
+
+    # 控制层：底部一行，按宽度均匀铺开
+    ctrl_y = flow_height + _TOPO_LAYER_GAP
+    ctrl_span = max(0.0, width - _TOPO_PAD * 2 - _TOPO_NODE_W)
+    for i, d in enumerate(sorted(controllers, key=lambda x: x.get('id', ''))):
+        dev_id = d.get('id')
+        if len(controllers) == 1:
+            cx = (width - _TOPO_NODE_W) / 2.0
+        else:
+            cx = _TOPO_PAD + ctrl_span * i / (len(controllers) - 1)
+        nodes.append({
+            'device_id': dev_id,
+            'name': d.get('name', dev_id),
+            'stage': '',
+            'role': 'controller',
+            'layer': 'control',
+            'protocol': d.get('protocol', 'modbus_tcp'),
+            'vendor': d.get('vendor', ''),
+            'model': d.get('device_model', ''),
+            'col': -1,
+            'row': i,
+            'x': round(cx, 1),
+            'y': ctrl_y,
+            'w': _TOPO_NODE_W,
+            'h': _TOPO_NODE_H,
+            'status': _status_of(dev_id, status_map),
+            'key_values': _pick_key_values(d, latest_map.get(dev_id) or {}),
+        })
+
+    # ---- 连线 ----
+    # 只连「相邻工序之间的工艺设备」。控制器和仪表不参与物料流 ——
+    # 把 PLC 连到机械手上，图上会出现一条物理上不存在的箭头。
+    def _flow(devs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [d for d in devs if d.get('role', 'equipment') == 'equipment']
+
+    edges: list[dict[str, Any]] = []
+    # round 352：**`cols` 可能为空**。
+    # 一条只有控制器（PLC/服务器）、没有任何工艺设备的产线也会走到这里
+    # （上面的 `if not cols and not controllers: return empty` 挡不住它，
+    # 因为 controllers 非空），`cols[0][1]` 直接 IndexError → 拓扑接口 500 →
+    # **整张厂区图空白**，而真正的原因只是「这条线没配工艺设备」。
+    # tests/test_topology_layout.py::test_controller_only_line_still_renders 钉住这条。
+    if cols:
+        prev = _flow(cols[0][1])
+        prev_stage = cols[0][0]
+        for stage_name, group in cols[1:]:
+            cur = _flow(group)
+            if prev and cur:
+                if len(cur) == 1:
+                    # 多台汇到一台（如三台注塑机 → 一条总输送线）
+                    pairs = [(u, cur[0]) for u in prev]
+                elif len(prev) == 1:
+                    # 一台分成多台（如一条主线 → 三个工位）
+                    pairs = [(prev[0], dn) for dn in cur]
+                else:
+                    # 一一对应；下游少时多余的接到最后一台
+                    pairs = [(u, cur[min(i, len(cur) - 1)]) for i, u in enumerate(prev)]
+                for up, dn in pairs:
+                    edges.append({
+                        'from': up.get('id'), 'to': dn.get('id'),
+                        'from_stage': prev_stage, 'to_stage': stage_name,
+                    })
+            if cur:
+                prev, prev_stage = cur, stage_name
+
+    return {
+        'id': line.get('id'),
+        'name': line.get('name', line.get('id')),
+        'width': width,
+        'height': height,
+        'stages': [s for s, _g in cols],
+        'nodes': nodes,
+        'edges': edges,
+        'empty': False,
+    }
+
+
+@devices_bp.route('/devices/topology', methods=['GET'])
+@_require_auth
+def get_topology():
+    """厂区拓扑：车间 → 产线 → 设备（含布局坐标与实时状态）。
+
+    查询参数：
+        workshop  只看某个车间
+        line      只看某条产线
+    """
+    manager = current_app.device_manager
+    try:
+        devices = manager.get_all_devices()
+    except AttributeError:
+        # 真实/模拟管理器都有 get_all_devices；走到这里说明装配出了问题，
+        # 明确报 503 而不是给一个空拓扑（空拓扑会被当成「厂里没设备」）。
+        return api_error('设备管理器不可用，无法生成拓扑', 503)
+
+    status_map: dict[str, dict[str, Any]] = {}
+    try:
+        for st in manager.get_all_status(brief=True):
+            status_map[st.get('device_id') or st.get('id')] = st
+    except (AttributeError, TypeError) as exc:
+        logger.warning('拓扑：状态获取失败，状态将全部显示为未知: %s', exc)
+
+    # 实时值：只读**已创建**的客户端。
+    #
+    # 不能用 `manager.get_client(dev_id)` —— 那是懒创建，会把 128 台设备
+    # 的客户端（每台带一个行为模拟器）全部实例化。拓扑是只读接口，
+    # 一次 GET 顺手把整个采集层的对象都建出来，既慢又有副作用
+    # （真实模式下等于对 128 台设备各建一个 TCP 连接）。
+    #
+    # 没连上的设备就没有值 —— 拓扑上显示 `--`，这是对的。
+    latest_map: dict[str, dict[str, Any]] = {}
+    clients = getattr(manager, 'clients', None) or {}
+    for dev_id, client in list(clients.items()):
+        try:
+            latest_map[dev_id] = client.get_latest_data() or {}
+        except Exception as exc:      # noqa: BLE001
+            # 单个客户端取数失败不该让整张拓扑图变空白 —— 记下来继续
+            logger.debug('拓扑：设备 %s 取数失败: %s', dev_id, exc)
+
+    skeleton = _load_topology_skeleton()
+    site = skeleton.get('site') or {'id': 'default', 'name': '厂区'}
+    workshops_def = skeleton.get('workshops') or []
+
+    want_ws = (request.args.get('workshop') or '').strip()
+    want_line = (request.args.get('line') or '').strip()
+
+    # 骨架里没登记的车间/产线也要出现在图上 —— 现场临时加设备很常见，
+    # 不能因为忘了改 topology.yaml 就让它从图上消失。
+    ws_index: dict[str, dict[str, Any]] = {}
+    for w in workshops_def:
+        ws_index[w.get('id')] = {
+            'id': w.get('id'), 'name': w.get('name', w.get('id')),
+            'icon': w.get('icon', ''), 'order': w.get('order', 999),
+            'lines': [dict(ln) for ln in (w.get('lines') or [])],
+        }
+
+    # 把设备挂到 (workshop, line)
+    buckets: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for dev_id, cfg in devices.items():
+        if not isinstance(cfg, dict):
+            continue
+        ws = cfg.get('workshop') or 'unassigned'
+        ln = cfg.get('line') or 'unassigned'
+        buckets.setdefault((ws, ln), []).append(cfg)
+        if ws not in ws_index:
+            ws_index[ws] = {
+                'id': ws,
+                'name': cfg.get('zone') or ws,
+                'icon': '❓', 'order': 999,
+                'lines': [],
+            }
+
+    # 补上「设备里有、骨架里没写」的产线
+    for ws, ln in buckets:
+        entry = ws_index[ws]
+        if not any(l.get('id') == ln for l in entry['lines']):
+            sample = buckets[(ws, ln)][0]
+            entry['lines'].append({
+                'id': ln,
+                'name': ln,
+                # 没有骨架就没有工序顺序 —— 按设备在配置里的出现顺序当列，
+                # 至少保证每台设备都画得出来
+                'stages': [],
+                '_implicit': True,
+                '_sample_stage': sample.get('stage'),
+            })
+
+    out_workshops: list[dict[str, Any]] = []
+    for ws_id, ws in sorted(ws_index.items(), key=lambda kv: (kv[1].get('order', 999), kv[0])):
+        if want_ws and ws_id != want_ws:
+            continue
+        ws_devices = [d for (w, _l), group in buckets.items() if w == ws_id for d in group]
+        if not ws_devices:
+            # 骨架里有、但一台设备都没挂的车间：跳过（画个空框没意义）
+            continue
+
+        lines_out: list[dict[str, Any]] = []
+        for ln in ws['lines']:
+            ln_id = ln.get('id')
+            if want_line and ln_id != want_line:
+                continue
+            group = buckets.get((ws_id, ln_id)) or []
+            if not group:
+                continue
+            stages = ln.get('stages') or []
+            if not stages:
+                # 隐式产线：按设备出现顺序去重当工序
+                seen: list[str] = []
+                for d in group:
+                    st = d.get('stage') or '未分工序'
+                    if st not in seen:
+                        seen.append(st)
+                stages = seen
+            lines_out.append(_layout_line({'id': ln_id, 'name': ln.get('name'), 'stages': stages},
+                                          group, status_map, latest_map))
+
+        if not lines_out:
+            continue
+
+        all_nodes = [n for l in lines_out for n in l['nodes']]
+        out_workshops.append({
+            'id': ws_id,
+            'name': ws.get('name', ws_id),
+            'icon': ws.get('icon', ''),
+            'stats': {
+                'devices': len(all_nodes),
+                'running': sum(1 for n in all_nodes if n['status']['state'] == 'running'),
+                'stopped': sum(1 for n in all_nodes if n['status']['state'] == 'stopped'),
+                'fault': sum(1 for n in all_nodes if n['status']['state'] == 'fault'),
+                'offline': sum(1 for n in all_nodes if n['status']['state'] == 'offline'),
+            },
+            'lines': lines_out,
+        })
+
+    total_nodes = sum(w['stats']['devices'] for w in out_workshops)
+    return jsonify({
+        'site': {'id': site.get('id'), 'name': site.get('name')},
+        'generated_at': __import__('datetime').datetime.now().isoformat(timespec='seconds'),
+        'summary': {
+            'workshops': len(out_workshops),
+            'lines': sum(len(w['lines']) for w in out_workshops),
+            'devices': total_nodes,
+            'running': sum(w['stats']['running'] for w in out_workshops),
+            'stopped': sum(w['stats']['stopped'] for w in out_workshops),
+            'fault': sum(w['stats']['fault'] for w in out_workshops),
+            'offline': sum(w['stats']['offline'] for w in out_workshops),
+        },
+        #: 车间之间的物料流（全厂视图用）。目前按「工艺顺序」推导：
+        #: 注塑 → 涂装 → 包装 → 装配。写死会过时，但配置里没有这个信息，
+        #: 先给默认链，等 topology.yaml 补了 flows 段就以配置为准。
+        'flows': skeleton.get('flows') or [],
+        'workshops': out_workshops,
+    })
+
+
 @devices_bp.route('/devices/<device_id>', methods=['GET'])
 @_require_auth
 def get_device(device_id):

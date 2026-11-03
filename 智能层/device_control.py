@@ -1841,6 +1841,7 @@ class DeviceControlSafety:
 
         # 只停止机械类设备（传感器和安全设备继续工作）
         stopped_devices = []
+        failed_devices = []
         if self.device_manager:
             from 采集层.interfaces import IDeviceManager
             all_devices = self.device_manager.get_all_devices()
@@ -1849,10 +1850,19 @@ class DeviceControlSafety:
             logger.warning(f"紧急停机: 停止 {len(mechanical)} 个机械类设备（共 {len(all_devices)} 个设备）")
             for device_id in mechanical:
                 try:
-                    success = self.device_manager.stop_device(device_id)
-                    if success:
+                    if self.device_manager.stop_device(device_id):
                         stopped_devices.append(device_id)
+                    else:
+                        # round 352：**停机失败必须留下痕迹**。
+                        # 原来 False 被静默丢弃：10 台只停了 3 台，接口照样回
+                        # `success: True`；下游 `_execute_interlock_action` 读
+                        # `estop_res.get('success', True)` 拿到 True，把
+                        # `_interlock_states[rule_id]` 锁成「已触发」——
+                        # 剩下 7 台**永不再重试停机**。
+                        failed_devices.append(device_id)
+                        logger.error("紧急停机未成功: %s（stop_device 返回 False）", device_id)
                 except Exception as e:
+                    failed_devices.append(device_id)
                     logger.error(f"紧急停机失败 {device_id}: {e}")
 
         self._estop_devices = stopped_devices
@@ -1873,10 +1883,22 @@ class DeviceControlSafety:
         # 审计
         self._audit('emergency_stop', 'system', f'紧急停机: {reason}，影响设备: {stopped_devices}')
 
+        # 审计：失败清单必须进审计，不然事后只看到"已停机 N 台"
+        self._audit('emergency_stop', 'system',
+                    f'紧急停机: {reason}，已停 {len(stopped_devices)} 台'
+                    + (f'，**停机失败 {len(failed_devices)} 台: {failed_devices}**'
+                       if failed_devices else ''))
+
         return {
-            'success': True,
-            'message': f'紧急停机已触发: {reason}',
+            # round 352：**有设备没停下来就不能叫成功**。
+            # 急停的语义是"所有机械类设备停止"，部分成功等于没成功 ——
+            # 下游联锁与界面都据此判断是否进入安全态。
+            'success': not failed_devices,
+            'message': (f'紧急停机已触发: {reason}' if not failed_devices
+                        else f'紧急停机部分失败: {reason}'
+                             f'（{len(failed_devices)} 台未能停止，请立即现场确认）'),
             'stopped_devices': stopped_devices,
+            'failed_devices': failed_devices,
             'timestamp': self._estop_time.isoformat()
         }
 
@@ -2185,32 +2207,58 @@ class DeviceControlSafety:
                 # 判据与联锁的 `triggered and not was_triggered` 同源：
                 # 状态迁移必须只在**边沿**发生。
                 if device_id not in self._degraded_devices:
-                    self._degraded_devices.add(device_id)
-                    self._trigger_fault_degradation(device_id, failures)
+                    # round 352：**先执行、成功后才标记**。
+                    # 原来先 `add` 再执行，而 `_trigger_fault_degradation`
+                    # 把 handler 异常吞成一行日志 —— 于是"关阀/切手动"没执行时
+                    # 设备已进 `_degraded_devices`，该标记只在采集成功时才清：
+                    # 一次失败 = 整个掉线期间**永不重试**，而审计写着"已降级"。
+                    if self._trigger_fault_degradation(device_id, failures):
+                        self._degraded_devices.add(device_id)
 
-    def _trigger_fault_degradation(self, device_id: str, failures: int):
-        """触发故障降级"""
+    def _trigger_fault_degradation(self, device_id: str, failures: int) -> bool:
+        """触发故障降级。
+
+        Returns:
+            bool: 安全状态 handler 是否执行成功。**False 时调用方不得把设备
+            标记为「已降级」** —— 否则整个掉线期间都不会再重试（见
+            `update_device_health` 里的 round 352 注释）。
+        """
         logger.warning(f"设备 {device_id} 通信失败 {failures} 次，触发故障降级")
 
         # 执行安全状态
         handler = self._safe_state_handlers.get(device_id)
+        handler_ok = True
         if handler:
             try:
                 handler(device_id)
             except Exception as e:
-                logger.error(f"安全状态执行失败 {device_id}: {e}")
+                # round 352：**handler 失败不能被吞成"降级成功"**。
+                # 原来这里只记一行 error 就往下走，调用方照样把设备加进
+                # `_degraded_devices`（该标记只在采集成功时才清）——
+                # 一次 handler 异常 = 设备整个掉线期间**一次都不重试**
+                # 「关阀/切手动」，而审计里写着"已降级到安全状态"。
+                handler_ok = False
+                logger.error(f"安全状态执行失败 {device_id}: {e}", exc_info=True)
+        else:
+            # 没有注册 handler 不算失败（有些设备本来就没有安全动作），
+            # 但要让这件事可见 —— 掉线了却没有任何安全动作，本身值得看一眼。
+            logger.warning("设备 %s 掉线但没有注册安全状态 handler", device_id)
 
         # 触发报警
         if self.alarm_manager:
             if self.alarm_manager.alarm_output:
                 self.alarm_manager.alarm_output.trigger_alarm(
                     'warning',
-                    f'设备 {device_id} 通信中断（{failures}次），已进入安全状态',
+                    f'设备 {device_id} 通信中断（{failures}次），'
+                    f'{"已进入安全状态" if handler_ok else "安全动作执行失败"}',
                     device_id
                 )
 
+        # 审计要如实记录结果 —— 失败时写"已降级"比不写更糟
         self._audit('fault_degradation', 'system',
-                    f'设备 {device_id} 通信失败 {failures} 次，已降级到安全状态')
+                    f'设备 {device_id} 通信失败 {failures} 次，'
+                    f'{"已降级到安全状态" if handler_ok else "安全状态执行失败，待重试"}')
+        return handler_ok
 
     def register_safe_state_handler(self, device_id: str, handler: Callable[..., Any]):
         """注册设备安全状态处理函数"""

@@ -82,9 +82,6 @@ DOCUMENTATION_ONLY: dict[str, str] = {
     'fault_presets.yaml:fault_types.':
         '纯文档：故障类型的典型持续时间与恢复方式描述（运维手册素材）。'
         '真正的注入逻辑读的是 `scenarios.*`。',
-    'simulation_presets.yaml:categories[].icon':
-        '前端字段，由独立仓库 `scada-app` 消费（本仓库的前端只做静态渲染）。'
-        '此处的字面量扫描看不到那个仓库。',
     'presets[].simulation_params.base_values.':
         '**以寄存器/变量名为 key 的数据映射表**，不是开关。消费方式是'
         '`base_values.get(var_name)`（core/simulation_initializer.py:360）与'

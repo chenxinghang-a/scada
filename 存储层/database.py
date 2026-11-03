@@ -692,11 +692,22 @@ class Database:
             - 跳过无效记录时记录 ``logger.warning``。
 
         Exceptions:
-            ``batch`` 为空时直接返回，不执行任何操作。
+            ``batch`` 为空时直接返回 0，不执行任何操作。
             单条记录字段缺失不影响其他记录的插入。
+
+        Returns:
+            int: **实际写入的条数**。round 352 起返回该值 —— 原来它返回 None，
+            于是「整批记录都缺字段」这条路径（`if not valid_rows: return`）
+            在调用方看来与「全部写入成功」完全同形：
+            `data_collector.py` 只用 `try/except` 判成败，
+            None 不抛异常 → 认定成功 → 调 `clear_persistence(batch)`
+            把磁盘上唯一一份崩溃保护删掉。内存已被消费线程取走、
+            磁盘副本又被删 → **这批数据彻底消失**，重启也捞不回来。
+            返回真实条数后，调用方可以按 `written > 0` 判定，
+            0 就保留磁盘副本。
         """
         if not batch:
-            return
+            return 0
 
         # Validate each record individually to avoid losing entire batch on one bad record
         valid_rows = []
@@ -753,7 +764,7 @@ class Database:
             self._inc_skipped_invalid(skipped_invalid)
 
         if not valid_rows:
-            return
+            return 0
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -773,6 +784,8 @@ class Database:
                 INSERT INTO history_data (device_id, register_name, value, unit, timestamp, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', [row[:5] + (row[6],) for row in valid_rows])
+
+        return len(valid_rows)
 
     def delete_device_data(self, device_id: str):
         """
@@ -1672,6 +1685,15 @@ class Database:
         )
         delete_cutoff = datetime.now() - timedelta(days=delete_days)
 
+        # round 352：**归档与删除必须分两个事务**。
+        #
+        # 原来它们挤在同一个 `with self.get_connection()` 里：归档是
+        # 「全表 GROUP BY 聚合」、删除是「全表 DELETE」，两者合起来在 200 万行
+        # 的库上持写锁远超本文件注释里记的 14.4 秒 —— 而业务写入的
+        # `busy_timeout=30000` 等不到锁就抛错，那一批采集数据直接丢
+        # （`insert_data_batch` 无重试）。
+        # 拆开后：归档单独提交、尽早放锁；删除走本模块已有的分块实现
+        # （`_delete_older_than_chunked`，块间放锁，与 `cleanup_old_data` 同款）。
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
@@ -1694,20 +1716,16 @@ class Database:
 
             archived_rows = cursor.rowcount
 
-            # 2. 删除过期原始数据
-            #
+        # 2. 删除过期原始数据（分块提交，块间放锁 —— 不给采集写入饿死）
+        with self.get_connection() as conn:
             # ⚠️ 必须用 `delete_cutoff`，**不能**用 `archive_cutoff`。
             # 本方法的契约是「archive_days 之前的数据归档，delete_days 之前的
             # 数据删除」（默认 7 / 30）。原先这里写的是 archive_cutoff，
             # 等于**原始采样只保留 7 天** —— 每天静默丢掉 23 天的明细，
             # 只剩 history_archive 里的日均值，无法再回溯单条采样、无法做审计。
-            # `delete_cutoff` 此前算出来就是个没人用的死变量。
-            cursor.execute('''
-                DELETE FROM history_data
-                WHERE timestamp < ?
-            ''', (delete_cutoff,))
-
-            deleted_rows = cursor.rowcount
+            deleted_rows = _delete_older_than_chunked(
+                conn, 'history_data', 'timestamp',
+                delete_cutoff.isoformat(sep=' '))
 
             # 3. realtime_data 是"最新值"缓存，不按时间清理
             realtime_deleted = 0

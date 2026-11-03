@@ -106,7 +106,18 @@ def main():
         from 展示层.routes import create_app
 
         # 判断运行模式
-        if '--simulator' in sys.argv:
+        #
+        # `--sim-live`：模拟设备跑在**真实协议线**上。
+        #   起一组真服务端（Modbus 从站 / OPC UA Server / REST 网关 / MQTT Broker），
+        #   采集层用真实客户端连 127.0.0.1:<sim_endpoint>。
+        #   和默认模拟的区别：默认是进程内假客户端，**不经协议**，
+        #   所以字节序、寄存器拼接、JSON 路径这些从没被验证过。
+        sim_live_mode = '--sim-live' in sys.argv
+        if sim_live_mode:
+            simulation_mode = True
+            config_path = paths.get_config_path('devices_simulated.yaml')
+            logger.info("模拟-真实协议线模式：起模拟服务端，采集层用真实客户端连接")
+        elif '--simulator' in sys.argv:
             simulation_mode = False
             config_path = paths.get_config_path('devices_modbus_sim.yaml')
             db_path = paths.get_db_path('simulator')
@@ -224,10 +235,27 @@ def main():
         from core.retention_scheduler import start_retention_scheduler
         start_retention_scheduler(database)
 
+        # 模拟-真实协议线：先起服务端，再建设备管理器
+        if sim_live_mode:
+            from 模拟服务端.server_main import start_all, stop_all
+            import atexit
+            logger.info("启动模拟协议服务端...")
+            _sim_summary = start_all(config_path)
+            atexit.register(stop_all)
+            if _sim_summary.get('errors'):
+                logger.warning("部分协议未启动（其余照常）: %s",
+                               '; '.join(_sim_summary['errors']))
+            logger.info("模拟服务端就绪：Modbus %d 个从站 / OPC UA %s / REST %d 个 / MQTT %s",
+                        len(_sim_summary.get('modbus') or {}),
+                        '✓' if _sim_summary.get('opcua') else '✗',
+                        len(_sim_summary.get('rest') or {}),
+                        '✓' if _sim_summary.get('mqtt') else '✗')
+
         # 初始化设备管理器（根据模式选择不同的管理器）
         logger.info("加载设备配置...")
         if simulation_mode:
-            device_manager = SimulatedDeviceManager(config_path)
+            device_manager = SimulatedDeviceManager(
+                config_path, live_protocol=sim_live_mode)
         else:
             device_manager = RealDeviceManager(config_path)
 

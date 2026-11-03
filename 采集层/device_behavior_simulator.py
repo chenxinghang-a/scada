@@ -54,6 +54,10 @@ logger = logging.getLogger(__name__)
 _SIM_SOURCES = frozenset({
     'temperature', 'pressure', 'flow', 'level', 'speed', 'vibration',
     'current', 'voltage', 'power', 'power_factor', 'ph', 'humidity', 'turbidity',
+    # `ratio` = 负荷率 0~1。工业模拟里极常用（负荷率/开度/占空比），
+    # 大量点位的量纲都是「基准值 + 量程 × 负荷率」，没有它就得为每个点位
+    # 单独编一个基变量名，配置会膨胀。
+    'ratio',
     'counter', 'status', 'status_raw', 'health', 'fault_severity',
     'constant', 'random',
 })
@@ -85,7 +89,7 @@ _SIM_SOURCE_ALIASES = {
 #:    写成字面量元组后，既通过闸门又自我文档化。
 _PROCESS_MODEL_FIELDS = (
     'base_temperature', 'base_pressure', 'base_flow', 'base_level',
-    'base_power_kw', 'base_current', 'base_speed',
+    'base_power_kw', 'base_current', 'base_speed', 'base_voltage',
     'temp_pressure_coeff', 'temp_flow_coeff', 'pressure_flow_coeff',
     'thermal_time_constant', 'pressure_time_constant', 'flow_time_constant',
 )
@@ -148,6 +152,10 @@ class ProcessModel:
     base_power_kw: float = 10.0             # 基础功率(kW)
     base_current: float = 20.0              # 基础电机电流(A)
     base_speed: float = 1500.0              # 基础电机转速(RPM)
+    base_voltage: float = 380.0             # 基础线电压(V)
+    # 为什么单独给电压：电气柜/变压器/逆变器的点位以电压为主，
+    # 而内置的 `voltage_a` 是硬编码 220V 相电压 —— 低压柜是 400V 线电压、
+    # 光伏逆变器是 800V 直流侧，量纲差一倍以上，不覆盖就读不出合理值。
 
 
 class DeviceBehaviorSimulator:
@@ -252,6 +260,10 @@ class DeviceBehaviorSimulator:
         
         # ===== 写操作反馈：存储写入值，影响后续读取 =====
         self._written_values: Dict[int, Any] = {}  # address -> value
+        #: 外部按**点位名**写入的值（OPC UA / REST / MQTT 用）。
+        #: 与 `_written_values`（按寄存器地址）并存 —— 两种协议的写入语义不同，
+        #: 合并成一份会互相覆盖。
+        self._point_overrides: Dict[str, float] = {}
         self._written_coils: Dict[int, bool] = {}  # address -> bool
         
         # ===== 设备特定参数名集合（用于过滤输出） =====
@@ -753,6 +765,37 @@ class DeviceBehaviorSimulator:
         self._apply_simulation_params()
         logger.info(f"[行为模拟] 设备 {self.device_name} 已注入模拟参数")
     
+    def set_point_override(self, name: str, value: Any) -> bool:
+        """按点位名设定值（OPC UA / REST / MQTT 的写入入口）。
+
+        语义是**设定值**：写入后一直保持，直到下次写入。
+        不做「过一会儿自动回归工况值」—— 那样运维在界面上改了参数，
+        几秒后自己变回去，会以为是写入失败。
+
+        返回 False 表示这个点位不在本设备上（调用方应报点位不存在）。
+        """
+        from core.safe_numeric import try_finite_float
+
+        point = str(name or '').strip()
+        if not point:
+            return False
+        if point not in self._device_param_names:
+            logger.warning('[行为模拟] %s 没有点位 %r，拒绝写入（避免写入一个不存在的量）',
+                           self.device_name, point)
+            return False
+        num = try_finite_float(value)
+        if num is None:
+            logger.warning('[行为模拟] %s 点位 %s 的写入值 %r 不是有限数值',
+                           self.device_name, point, value)
+            return False
+        self._point_overrides[point] = num
+        logger.info('[行为模拟] %s 点位 %s 被外部写入 = %s', self.device_name, point, num)
+        return True
+
+    def clear_point_override(self, name: str) -> None:
+        """清除某个点位的写入值（恢复正常模型输出）。"""
+        self._point_overrides.pop(str(name or ''), None)
+
     def handle_write_register(self, address: int, value: int):
         """
         处理写寄存器命令 — 写操作影响后续读取
@@ -961,7 +1004,18 @@ class DeviceBehaviorSimulator:
         
         # 6. 生成输出数据
         data = self._generate_output_data()
-        
+
+        # 6.5 叠加「外部写入」的点位值
+        #
+        # 为什么需要这个：OPC UA / REST / MQTT 这类协议没有寄存器地址，
+        # 写进来的是**点位名 + 工程值**。如果只把它们转成寄存器语义
+        # （hub.write_point 找地址），nodes/topics/endpoints 段的点位
+        # 永远写不进去 —— 表现为「模拟设备能读不能控」。
+        # 这里做最后一步覆盖：写入值优先于模型算出来的值。
+        if self._point_overrides:
+            for _name, _val in self._point_overrides.items():
+                data[_name] = _val
+
         # 7. 触发回调
         for callback in self._data_callbacks:
             try:
@@ -1603,6 +1657,9 @@ class DeviceBehaviorSimulator:
                 'motor_speed': 0.0,
                 # 通用
                 'co2': round(400 + random.gauss(0, 10), 0),
+                # 停机时负荷率为 0 —— 有确定值比「点位消失」好：
+                # 前端不会因为少一个点而误以为设备没这个参数。
+                'ratio': 0.0,
             }
             # 配置驱动的派生点位（源在 stopped_params 里已是环境值/零值，自动跟随停机）
             stopped_params.update(self._derive_configured_params(stopped_params))
@@ -1655,6 +1712,17 @@ class DeviceBehaviorSimulator:
 
         # 生成所有可能的参数值
         all_params = {
+            # 负载率 0~1 —— 工业现场极常用的归一化量（负荷率/开度/占空比）。
+            #
+            # round 351：之前没有这个基变量，而配置里的 `source: ratio` 全都
+            # 静默取不到值（`_SIM_SOURCE_ALIASES` 里没有它），表现为「新增设备
+            # 一半点位是空的」。加在 base 而不是特判，是因为它就该和其他基变量
+            # 一样参与 gain/offset 变换。
+            #
+            # 取值：由流量负载比推导，钳到 0~1。不用随机数 —— 随机数会让
+            # 「负荷率」和「流量」各走各的，出现「流量 0 但负荷率 80%」。
+            'ratio': round(max(0.0, min(1.0, load_ratio)), 4),
+
             # 温度相关
             'temperature': round(self._current_temp, 2),
             'boiler_temperature': round(self._current_temp, 2),

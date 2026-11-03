@@ -1089,6 +1089,11 @@ UNUSED_BACKEND_PREFIX_RULES: dict[str, str] = {
         "解除旁路（round 307）：Flask 模板 `alarms.html` 的「解除旁路」按钮调用。"
         "同理不在本测试的扫描范围"
     ),
+    "/api/devices/topology": (
+        "厂区拓扑（round 351）：**由 Flask 模板 `模板/industry40.html` 使用** ——"
+        "本契约测试只扫 scada-app 的 .ts，看不到 Jinja 侧的 fetch。"
+        "「前端不调用」在这里是假象，不是漏接。"
+    ),
 }
 
 

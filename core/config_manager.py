@@ -111,8 +111,20 @@ class ConfigManager:
 
             return config
         except Exception as e:
-            logger.error(f"加载配置文件失败: {config_path}, 错误: {e}")
-            return {}
+            # round 352：**解析失败不许降级成空配置**。
+            #
+            # 上面 `if not path.exists(): return {}` 已经把「文件不存在」单独处理了，
+            # 所以走到这里的都是**真异常**（YAML 语法错、编码错、权限不足）。
+            # 原来一律 `return {}`，于是：
+            # · `配置/system.yaml` 缩进错一格 → 连接池 50 / 采集并发 20 /
+            #   日志 100MB 全部静默回退代码常量；
+            # · 服务照常启动、接口全 200，运维改的参数**一个都没生效**；
+            # · 与「文件确实不存在」在返回值上完全同形，事后无从区分。
+            # 现场后果是「改了配置没反应」，而日志里只有一行 error 混在启动日志里。
+            logger.error("配置文件解析失败（拒绝降级为空配置）: %s, 错误: %s",
+                         config_path, e)
+            raise ValueError(
+                f"配置文件解析失败，拒绝以降级配置启动: {config_path}: {e}") from e
     
     @classmethod
     def save_yaml(cls, config_path: str, config: Dict[str, Any]) -> bool:

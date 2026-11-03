@@ -39,15 +39,26 @@ class SimulatedDeviceManager(IDeviceManager):
 
     SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest', 'mc', 'fins']
 
-    def __init__(self, config_path: str | None = None):
+    def __init__(self, config_path: str | None = None,
+                 live_protocol: bool = False):
         """
         初始化模拟设备管理器
-        
+
         Args:
             config_path: 设备配置文件路径
+            live_protocol: **真实协议线模式**。为 True 时不用进程内假客户端，
+                而是用真实客户端（pymodbus / asyncua / paho / requests）连
+                ``sim_endpoint``（`模拟服务端` 起的真服务端）。
+
+                为什么要有这个开关：
+                进程内假客户端**根本不经协议**，所以 float32 字序、寄存器拼接、
+                JSON 路径这些最容易出错的地方从来没被验证过。开着它跑一遍，
+                等于把「现场调试」提前到本机 —— 切现场只改 IP，代码一行不动。
         """
         self.config_path = config_path or '配置/devices.yaml'
         self.simulation_mode = True  # 模拟设备管理器始终为模拟模式
+        #: True = 走真实协议线（连 模拟服务端），False = 进程内假客户端
+        self.live_protocol = bool(live_protocol)
         self.devices: dict[str, dict[str, Any]] = {}
         #: 最近一次 load_config 失败的原因（None / missing / parse / structure）
         self._load_failed_reason: str | None = None
@@ -188,6 +199,55 @@ class SimulatedDeviceManager(IDeviceManager):
         return {'added': added, 'removed': removed, 'kept': kept,
                 'rejected': None}
 
+    def _create_live_client(self, config: dict[str, Any]) -> IDeviceClient | None:
+        """用**真实客户端**连模拟服务端（真实协议线模式）。
+
+        配置里的 `host`/`port` 是**现场地址**，这里换成 `sim_endpoint`
+        （127.0.0.1:<端口>）。这样同一份设备清单既能连模拟服务端、
+        也能连现场设备，切换只改一个开关。
+
+        没有 `sim_endpoint` 的设备**明确报错**而不是偷偷退回假客户端 ——
+        悄悄退回会让「我在测真实协议」这句话变成假的。
+        """
+        from .real_device_manager import create_protocol_client
+
+        endpoint = config.get('sim_endpoint') or {}
+        host = endpoint.get('host')
+        port = endpoint.get('port')
+        if not host or not isinstance(port, int):
+            logger.error(
+                "设备 %s 没有 sim_endpoint，无法在真实协议线模式下连接。"
+                "请用 tools/gen_factory.py 重新生成设备清单（会自动补端口）",
+                config.get('id'))
+            return None
+
+        proto = str(config.get('protocol', '')).lower()
+        live_cfg = dict(config)
+        live_cfg['host'] = host
+        live_cfg['port'] = port
+
+        if proto == 'rest':
+            # REST 客户端读的是 base_url，不是 host/port
+            live_cfg['base_url'] = f'http://{host}:{port}'
+        elif proto == 'opcua':
+            # OPC UA 客户端读的是 **endpoint 字符串**（opc.tcp://host:port），
+            # 不是 host/port 两个字段。只改 host/port 的话，客户端会去连
+            # 配置里那个现场地址（192.168.1.50:4840）—— 本机当然连不上，
+            # 而报错是「连接超时」，看不出是地址没换。
+            live_cfg['endpoint'] = f'opc.tcp://{host}:{port}'
+        elif proto == 'modbus_rtu':
+            # 模拟服务端用 **TCP 从站**承载 RTU 设备（现场也常这样：
+            # 串口服务器把 RTU 转成 Modbus TCP）。不转的话真实客户端会去
+            # 开串口，报「Serial client requires pyserial」—— 一个和
+            # 模拟服务端完全无关的错。
+            live_cfg['protocol'] = 'modbus_tcp'
+
+        client = create_protocol_client(live_cfg)
+        if client is not None:
+            logger.info("[模拟-真实协议] %s → %s:%s (%s)",
+                        config.get('id'), host, port, config.get('protocol'))
+        return client
+
     def _create_simulated_client(self, config: dict[str, Any]) -> IDeviceClient | None:
         """
         根据协议类型创建模拟客户端
@@ -199,6 +259,9 @@ class SimulatedDeviceManager(IDeviceManager):
             模拟客户端实例
         """
         protocol = config.get('protocol', 'modbus_tcp')
+
+        if self.live_protocol:
+            return self._create_live_client(config)
 
         if protocol in ('modbus_tcp', 'modbus_rtu'):
             return EnhancedSimulatedModbusClient(config)

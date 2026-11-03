@@ -22,6 +22,39 @@ from core.device_lifecycle import notify_device_removed
 logger = logging.getLogger(__name__)
 
 
+def create_protocol_client(config: dict[str, Any]) -> IDeviceClient | None:
+    """按 ``protocol`` 创建真实协议客户端。
+
+    Args:
+        config: 设备配置（host/port/凭据/点位表）
+
+    Returns:
+        客户端实例；协议不支持时返回 None。
+
+    注意：这里**不做连接**，只构造。连接失败的处理在各自的 ``connect()`` 里，
+    由 ``connect_all()`` 逐台隔离。
+    """
+    protocol = config.get('protocol', 'modbus_tcp')
+
+    if protocol in ('modbus_tcp', 'modbus_rtu'):
+        return ModbusClient(config)
+    if protocol == 'opcua':
+        return OPCUAClient(config)
+    if protocol == 'mqtt':
+        return MQTTClient(config)
+    if protocol == 'rest':
+        return RESTDeviceClient(config)
+    if protocol == 'mc':
+        from .mc_client import MCClient
+        return MCClient(config)
+    if protocol == 'fins':
+        from .fins_client import FINSClient
+        return FINSClient(config)
+
+    logger.error("不支持的协议类型: %s", protocol)
+    return None
+
+
 class RealDeviceManager(IDeviceManager):
     """
     真实设备管理器
@@ -234,34 +267,13 @@ class RealDeviceManager(IDeviceManager):
                 'rejected': None}
 
     def _create_real_client(self, config: dict[str, Any]) -> IDeviceClient | None:
+        """按协议创建真实客户端（薄包装，实现在模块级 ``create_protocol_client``）。
+
+        提成模块级是为了让 ``SimulatedDeviceManager`` 的「真实协议线」模式
+        复用同一套客户端 —— 模拟和现场必须走同一份实现，否则模拟验证的
+        不是现场真正会跑的那段代码。
         """
-        根据协议类型创建真实客户端
-
-        Args:
-            config: 设备配置
-
-        Returns:
-            真实客户端实例
-        """
-        protocol = config.get('protocol', 'modbus_tcp')
-
-        if protocol in ('modbus_tcp', 'modbus_rtu'):
-            return ModbusClient(config)
-        elif protocol == 'opcua':
-            return OPCUAClient(config)
-        elif protocol == 'mqtt':
-            return MQTTClient(config)
-        elif protocol == 'rest':
-            return RESTDeviceClient(config)
-        elif protocol == 'mc':
-            from .mc_client import MCClient
-            return MCClient(config)
-        elif protocol == 'fins':
-            from .fins_client import FINSClient
-            return FINSClient(config)
-        else:
-            logger.error(f"不支持的协议类型: {protocol}")
-            return None
+        return create_protocol_client(config)
 
     def get_client(self, device_id: str) -> IDeviceClient | None:
         """获取设备客户端（懒创建）"""
