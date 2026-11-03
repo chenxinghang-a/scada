@@ -28,12 +28,14 @@
 from __future__ import annotations
 
 import argparse
+import http.server
 import json
 import os
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -84,7 +86,69 @@ devices:
         unit: m/min
         scale: 1
         access: rw
+  # ---- 第二台：REST 网关（验证 HTTP 协议的端到端，不只是 Modbus）----
+  - id: smoke_rest_01
+    name: 冒烟测试网关
+    protocol: rest
+    base_url: http://127.0.0.1:{http_port}
+    poll_interval: 1
+    collection_interval: 1
+    enabled: true
+    zone: 测试
+    endpoints:
+      - name: line_status
+        path: /api/status
+        json_path: data.value
+        method: GET
+        description: 产线状态
+        unit: ''
+      - name: oven_temp
+        path: /api/temp
+        json_path: data.value
+        method: GET
+        description: 烘箱温度
+        unit: °C
 """
+
+
+
+class _FakeGateway(http.server.BaseHTTPRequestHandler):
+    """一个极简的「现场网关」：返回固定 JSON，用来验证 REST 真实链路。"""
+
+    #: 由测试改写的返回值（模拟现场数值变化）
+    values = {'status': 1, 'temp': 88.5}
+    #: 让网关返回 500，验证「HTTP 错误不能当成功」
+    fail_mode = False
+
+    def do_GET(self):      # noqa: N802 —— BaseHTTPRequestHandler 规定的名字
+        if self.fail_mode:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b'{"error": "internal"}')
+            return
+        payload = {
+            '/api/status': {'data': {'value': self.values['status']}},
+            '/api/temp': {'data': {'value': self.values['temp']}},
+        }.get(self.path)
+        if payload is None:
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = json.dumps(payload).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):     # 静音，否则每个请求刷一行
+        pass
+
+
+def _start_fake_http(port: int) -> http.server.HTTPServer:
+    srv = http.server.HTTPServer(('127.0.0.1', port), _FakeGateway)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
 
 
 class Reporter:
@@ -122,27 +186,32 @@ def _start_slave(port: int) -> subprocess.Popen:
     )
 
 
-def run(port: int) -> int:
+def run(port: int, http_port: int) -> int:
     from 采集层.real_device_manager import RealDeviceManager
     from 采集层.data_collector import DataCollector
     from 智能层.device_control import DeviceControlSafety
 
     rep = Reporter()
     slave = None
+    gateway = None
     tmpdir = Path(tempfile.mkdtemp(prefix='e2e_smoke_'))
     cfg_path = tmpdir / 'devices_real_smoke.yaml'
-    cfg_path.write_text(DEVICE_YAML.format(port=port), encoding='utf-8')
+    cfg_path.write_text(DEVICE_YAML.format(port=port, http_port=http_port),
+                        encoding='utf-8')
 
     try:
-        # ---------- 1. 起真从站 ----------
-        print('\n=== 1. 启动真 Modbus 从站 ===')
+        # ---------- 1. 起真设备 ----------
+        print('\n=== 1. 启动真 Modbus 从站 + 假 HTTP 网关 ===')
         slave = _start_slave(port)
         rep.check('从站监听', _wait_port(port), f'127.0.0.1:{port}')
+        gateway = _start_fake_http(http_port)
+        rep.check('HTTP 网关监听', _wait_port(http_port), f'127.0.0.1:{http_port}')
 
         # ---------- 2. 真实模式加载配置 ----------
         print('\n=== 2. 真实模式加载配置 ===')
         mgr = RealDeviceManager(config_path=str(cfg_path))
-        rep.check('加载 1 台设备', len(mgr.devices) == 1, f'实际 {len(mgr.devices)}')
+        rep.check('加载 2 台设备（Modbus + REST）', len(mgr.devices) == 2,
+                  f'实际 {len(mgr.devices)}: {sorted(mgr.devices)}')
         cfg = mgr.devices.get('smoke_plc_01') or {}
         rep.check('点位表解析', len(cfg.get('registers') or []) == 3,
                   f"实际 {len(cfg.get('registers') or [])} 个点位")
@@ -151,6 +220,7 @@ def run(port: int) -> int:
         print('\n=== 3. 连接真实设备 ===')
         results = mgr.connect_all(timeout=10)
         rep.check('connect_all 成功', results.get('smoke_plc_01') is True, str(results))
+        rep.check('REST 网关连接成功', results.get('smoke_rest_01') is True, str(results))
         client = mgr.get_client('smoke_plc_01')
         rep.check('客户端已连接', bool(client and client.connected))
 
@@ -183,6 +253,47 @@ def run(port: int) -> int:
         speed = vals.get('line_speed')
         rep.check('float32 值正确', speed is not None and abs(speed - 1234.5678) < 1e-3,
                   f'got={speed}')
+
+        # ---------- 4b. REST 采集 ----------
+        print('\n=== 4b. 采集 REST 网关（真 HTTP 请求） ===')
+        # REST 客户端是**轮询型**：`connect()` 起线程按 poll_interval 拉数据，
+        # 采集器再从它的 `latest_data` 缓存读。所以要先等它拉一轮。
+        rest_cfg = mgr.devices.get('smoke_rest_01') or {}
+        deadline = time.time() + 6
+        while time.time() < deadline:
+            rest_client = mgr.get_client('smoke_rest_01')
+            if rest_client and rest_client.get_latest_data():
+                break
+            time.sleep(0.3)
+
+        rest_client = mgr.get_client('smoke_rest_01')
+        latest = rest_client.get_latest_data() if rest_client else {}
+        rep.check('REST 已拉到数据', bool(latest), f'点位 {sorted(latest)}')
+
+        ok_rest = collector._collect_device_data('smoke_rest_01', rest_cfg, 'rest')
+        rep.check('REST 采集返回成功', ok_rest is True, f'got={ok_rest}')
+
+        rest_items = []
+        while not collector.data_queue.empty():
+            try:
+                it = collector.data_queue.get_nowait()
+            except Exception:      # noqa: BLE001
+                break
+            if it.get('device_id') == 'smoke_rest_01':
+                rest_items.append(it)
+        rest_vals = {it['register_name']: it['value'] for it in rest_items}
+        rep.check('REST 采到 2 个点位', len(rest_items) == 2, f'实际 {sorted(rest_vals)}')
+        rep.check('REST 值正确（status=1, temp=88.5）',
+                  rest_vals.get('line_status') == 1 and rest_vals.get('oven_temp') == 88.5,
+                  str(rest_vals))
+
+        # ---------- 4c. HTTP 500 不能当成功 ----------
+        print('\n=== 4c. 网关返回 500 时不许当成功 ===')
+        _FakeGateway.fail_mode = True
+        time.sleep(2.2)          # 等轮询线程拉到一次 500
+        ok_bad = collector._collect_device_data('smoke_rest_01', rest_cfg, 'rest')
+        rep.check('网关 500 → 采集计失败', ok_bad is False, f'got={ok_bad}')
+        _FakeGateway.fail_mode = False
 
         # ---------- 5. 健康上报 ----------
         print('\n=== 5. 设备健康（采集后应上报） ===')
@@ -232,6 +343,13 @@ def run(port: int) -> int:
             rep.check('健康状态恢复 connected', health3.get('status') == 'connected', str(health3))
 
     finally:
+        if gateway is not None:
+            try:
+                gateway.shutdown()
+            except Exception as e:      # noqa: BLE001
+                # 收尾阶段的异常不该让冒烟「看起来失败」，但也不能吞干净 ——
+                # 端口没释放会导致下一次跑不起来，必须留下痕迹。
+                print(f'  [warn] 关闭 HTTP 网关异常: {type(e).__name__}: {e}')
         if slave is not None:
             slave.kill()
             try:
@@ -250,6 +368,7 @@ def run(port: int) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description='真实模式端到端冒烟')
     ap.add_argument('--port', type=int, default=15030)
+    ap.add_argument('--http-port', type=int, default=15080)
     ap.add_argument('--slave', action='store_true', help=argparse.SUPPRESS)
     ap.add_argument('--order', default='ABCD', help=argparse.SUPPRESS)
     args = ap.parse_args()
@@ -265,7 +384,7 @@ def main() -> int:
         run_slave(args.port, args.order)
         return 0
 
-    rc = run(args.port)
+    rc = run(args.port, args.http_port)
     print('\n' + ('✅ 真实模式端到端冒烟通过' if rc == 0 else '❌ 有失败项'))
     return rc
 
