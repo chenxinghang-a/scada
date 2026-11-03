@@ -82,18 +82,40 @@ class PredictiveMaintenance:
         logger.info("预测性维护模块初始化完成")
 
     def forget_device(self, device_id: str) -> bool:
-        """设备被删除时清掉它的健康评分（round 310）。
+        """设备被删除时清掉它的健康评分、滑动窗口与维护提醒（round 310 / 355）。
 
-        `health_scores` 以 `device_id` 为 key 且没有删除点：设备删掉后
-        `get_health_scores()` 仍返回它，运维在维护看板上看到一台不存在的
-        设备的"健康度 62%，建议 30 天内保养"。
-        重新添加同名设备时也会继承旧评分（首轮分析前就显示一个历史分数）。
+        ⚠️ `health_scores` / `data_windows` 的 key 是
+        **`device_id:register_name` 复合键**（见 `_run_analysis` 里的
+        `score_key = f"{device_id}:{register_name}"`），不是裸 device_id。
+
+        原来这里写的是 `if device_id in self.health_scores` —— **永远命中不到**
+        且不会报错，是最容易「看起来修了其实没删」的形态。后果：
+        · 删掉的设备在维护看板上继续显示「健康度 62%，建议 30 天内保养」；
+        · 重新添加同名设备时继承旧评分（首轮分析前就显示历史分数）；
+        · `maintenance_alerts`（列表，元素带 device_id）里的旧提醒继续被返回。
+
+        与 `spc_analyzer.forget_device` 是同一族的坑 —— 那边当初就按前缀写对了，
+        这边漏了。两处现在口径一致。
         """
-        if device_id in self.health_scores:
-            self.health_scores.pop(device_id, None)
-            logger.info("预测性维护已清理已删除设备的评分: %s", device_id)
-            return True
-        return False
+        prefix = f'{device_id}:'
+        removed = False
+
+        for container in (self.health_scores, self.data_windows):
+            for key in [k for k in list(container) if k.startswith(prefix)]:
+                container.pop(key, None)
+                removed = True
+
+        # 维护提醒是列表，元素形如 {'device_id': ..., ...}
+        before = len(self.maintenance_alerts)
+        self.maintenance_alerts = [
+            a for a in self.maintenance_alerts if a.get('device_id') != device_id
+        ]
+        if len(self.maintenance_alerts) != before:
+            removed = True
+
+        if removed:
+            logger.info("预测性维护已清理已删除设备的数据: %s", device_id)
+        return removed
 
     def feed_data(self, device_id: str, register_name: str,
                   value: float, timestamp: datetime | None = None):

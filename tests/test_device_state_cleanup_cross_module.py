@@ -137,10 +137,17 @@ def test_predictive_forget_device_clears_health_scores():
     from 智能层.predictive_maintenance import PredictiveMaintenance
 
     pm = PredictiveMaintenance(MagicMock(), {})
-    pm.health_scores['d1'] = {'score': 62}
+    # ⚠️ 真实键是 `device_id:register_name`（见 `_run_analysis` 的
+    # `score_key = f"{device_id}:{register_name}"`）。
+    # 原来这里塞的是裸 `'d1'` —— 与真实数据结构不符，等于**用假数据给实现续命**：
+    # 实现里 `if device_id in self.health_scores` 永远命中不到，
+    # 而这条测试一直是绿的（round 355 才发现）。
+    pm.health_scores['d1:temp'] = {'score': 62}
+    pm.health_scores['d1:pressure'] = {'score': 70}
+    pm.health_scores['d10:temp'] = {'score': 88}      # 前缀不得误伤
 
     assert pm.forget_device('d1') is True
-    assert 'd1' not in pm.health_scores
+    assert list(pm.health_scores) == ['d10:temp'], '前缀匹配误伤了 d10 或没删干净'
 
 
 def test_mqtt_subscriber_forget_device_clears_caches():

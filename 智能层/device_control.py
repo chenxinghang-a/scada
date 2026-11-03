@@ -1652,10 +1652,22 @@ class DeviceControlSafety:
         """
         removed = False
         for container in (self._device_health, self._comm_failures,
-                          self._device_locks, self._safe_state_handlers):
+                          self._device_locks, self._safe_state_handlers,
+                          self._device_lock_owners):
             if device_id in container:
                 container.pop(device_id, None)
                 removed = True
+
+        # round 355：`_degraded_devices` 是 **set**（上面循环都是 dict.pop），
+        # 所以它从来没被清过。后果：删掉再重加的设备如果之前处于故障降级态，
+        # 会一直留在集合里 —— 而 `update_device_health` 的判断是
+        # `if device_id not in self._degraded_devices:`，
+        # 于是新设备**再次掉线时不会触发安全降级**（关阀/切手动），
+        # 而界面上它看起来是台正常设备。
+        if device_id in self._degraded_devices:
+            self._degraded_devices.discard(device_id)
+            removed = True
+
         if removed:
             logger.info("设备控制安全模块已清理已删除设备的状态: %s", device_id)
         return removed

@@ -789,8 +789,8 @@ class Database:
 
     def delete_device_data(self, device_id: str):
         """
-        删除指定设备的所有数据（实时数据 + 历史数据）
-        
+        删除指定设备的所有数据（实时数据 + 历史数据 + 未恢复报警）
+
         Args:
             device_id: 设备ID
         """
@@ -798,7 +798,20 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM realtime_data WHERE device_id = ?', (device_id,))
             cursor.execute('DELETE FROM history_data WHERE device_id = ?', (device_id,))
-            logger.info(f"已清除设备 {device_id} 的数据库数据")
+
+            # round 355：**报警记录也要收尾**。
+            # 原来只删两张数据表，`alarm_records` 里该设备 `cleared=0` 的记录
+            # 原样留着 —— 下次启动 `_restore_active_alarms()` 会把它们重新捞上屏，
+            # 于是「已删除的设备」变成一条活跃报警挂在看板上，
+            # 而设备列表里根本没有这台设备，运维无从处理（点确认也只能确认一条幽灵）。
+            # 不物理删除：留着可追溯「这台设备在删除前报过什么」，
+            # 只标记为已清除，让它不再被当成活跃报警恢复。
+            cursor.execute(
+                'UPDATE alarm_records SET cleared = 1, cleared_at = ? '
+                'WHERE device_id = ? AND (cleared = 0 OR cleared IS NULL)',
+                (datetime.now(), device_id))
+
+            logger.info(f"已清除设备 {device_id} 的数据库数据（含未恢复报警）")
 
     def get_realtime_data(self, device_id: str | None = None,
                           limit: int = 100) -> list[dict[str, Any]]:
