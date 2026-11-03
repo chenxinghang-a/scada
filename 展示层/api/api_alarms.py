@@ -433,11 +433,26 @@ def update_alarm_rule(rule_id):
     if not save_yaml_config('配置/alarms.yaml', config):
         return api_error('保存报警配置失败', 500)
 
-    current_app.alarm_manager.rules[rule_id] = rules[[r['id'] for r in rules].index(rule_id)]
-    current_app.alarm_manager._rebuild_rules_index()
+    manager = current_app.alarm_manager
+    manager.rules[rule_id] = rules[[r['id'] for r in rules].index(rule_id)]
+    manager._rebuild_rules_index()
+
+    # round 358：**改成 `enabled: false` 与「删规则」是同一件事** ——
+    # `_rebuild_rules_index()` 只索引 enabled 的规则，所以被禁用的规则
+    # 同样「后续采样永远不会再检查」，它留下的活跃报警会永久残留。
+    # 与上面 DELETE 的处理保持一致。
+    retired = 0
+    if not manager.rules[rule_id].get('enabled', True):
+        retired = manager._retire_inactive_rules({rule_id})
+
     get_auth_manager().log_operation(
-        request.current_user['username'], 'update_alarm_rule', f"更新报警规则: {rule_id}")
-    return jsonify({'success': True, 'message': f'规则 {rule_id} 已更新'})
+        request.current_user['username'], 'update_alarm_rule',
+        f"更新报警规则: {rule_id}" + (f"（连带收尾 {retired} 条活跃报警）" if retired else ""))
+    return jsonify({
+        'success': True,
+        'message': f'规则 {rule_id} 已更新' + (f'，已收尾 {retired} 条活跃报警' if retired else ''),
+        'retired_alarms': retired,
+    })
 
 
 @alarms_bp.route('/alarm-rules/<rule_id>', methods=['DELETE'])
@@ -462,13 +477,33 @@ def delete_alarm_rule(rule_id):
     if not save_yaml_config('配置/alarms.yaml', config):
         return api_error('保存报警配置失败', 500)
 
-    if rule_id in current_app.alarm_manager.rules:
-        del current_app.alarm_manager.rules[rule_id]
-        current_app.alarm_manager._rebuild_rules_index()
+    manager = current_app.alarm_manager
+    retired = 0
+    if rule_id in manager.rules:
+        with manager._state_lock:
+            del manager.rules[rule_id]
+            manager._rebuild_rules_index()
+
+        # round 358：**删规则必须连带收尾它的活跃报警**。
+        # 原来只删规则 + 重建索引：该规则已经触发的报警仍留在 `alarm_states`
+        # 和数据库里（`cleared=0`），而索引里已经没有它 ——
+        # **后续采样永远不会再检查这个点位**，于是那条报警永远不会「恢复」。
+        # 看板永久挂着一条「规则已经不存在的报警」，点确认也只是标成已确认；
+        # `get_active_alarms()` 与「未恢复报警数」永久偏大。
+        # `_retire_inactive_rules` 就是 `reload_config`（第 1364 行）里处理
+        # 「规则被删/被禁用」的同一套逻辑，这里直接复用。
+        #
+        # ⚠️ 必须在锁**外**调用：它内部自己拿 `_state_lock`（不可重入）。
+        retired = manager._retire_inactive_rules({rule_id})
 
     get_auth_manager().log_operation(
-        request.current_user['username'], 'delete_alarm_rule', f"删除报警规则: {rule_id}")
-    return jsonify({'success': True, 'message': f'规则 {rule_id} 已删除'})
+        request.current_user['username'], 'delete_alarm_rule',
+        f"删除报警规则: {rule_id}" + (f"（连带收尾 {retired} 条活跃报警）" if retired else ""))
+    return jsonify({
+        'success': True,
+        'message': f'规则 {rule_id} 已删除' + (f'，已收尾 {retired} 条活跃报警' if retired else ''),
+        'retired_alarms': retired,
+    })
 
 
 @alarms_bp.route('/alarm-rules/notification', methods=['PUT'])
