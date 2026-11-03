@@ -263,3 +263,23 @@ class TestDeviceHealthReporting:
         # 返回 None 且不抛 AttributeError 即正确（有安全模块时才会写库）
         assert collector._report_device_health('dev1', True, 1.0) is None
         assert collector.device_control is None, '前提不成立：这个用例要求没有安全模块'
+
+
+class TestOpcuaSubscriptionStats:
+    """OPC UA 订阅失败必须能被上层看见（round 345）。
+
+    `node_id` 写错（现场最常见：照手册抄成 `ns=2;s=温度`，设备实际是
+    `ns=2;i=2`）时 `subscribe_data_change` 抛 `BadNodeIdUnknown`。原实现
+    每个节点打一条 ERROR 就继续，于是：`connected=True`（界面显示在线）、
+    `latest_data` 永远空、日志里没有一条说「全失败了」。
+
+    实测（`tools/opcua_e2e_smoke.py`）：node_id 猜错时 2 个节点全部失败，
+    而 `connected=True`。
+    """
+
+    def test_counts_subscribed_nodes(self):
+        """结构守卫：必须统计成功订阅数并置 `subscription_failed`。"""
+        src = (REPO / '采集层' / 'opcua_client.py').read_text(encoding='utf-8')
+        assert 'nodes_subscribed_ok' in src, '没有统计订阅成功数 —— 上层无法判断设备是否真可用'
+        assert 'subscription_failed' in src, '全部订阅失败时没有置标志位'
+        assert '全部订阅失败' in src, '全部失败时没有一条明确的总结日志（只有 N 条单点 ERROR）'

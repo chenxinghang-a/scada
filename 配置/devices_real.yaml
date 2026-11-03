@@ -58,6 +58,14 @@
 #   未注入时该变量保持字面量 ${...}，连接会失败并记 WARNING（不会崩，也不会
 #   回退到 devices.yaml —— 见 run.py 的 --allow-fallback 说明）
 #
+# OPC UA 的 node_id **必须按设备地址空间实测填写**，不能猜：
+#   · 数字标识符：ns=2;i=2
+#   · 字符串标识符：ns=2;s=TagName
+# 本文件里的 `ns=2;s=<点位名>` 是**占位值**，照抄会得到 BadNodeIdUnknown ——
+# 设备显示「已连接」但一个点位都读不到。用 UaExpert / opcua-client 浏览确认。
+# 订阅成功率会记在 stats['nodes_subscribed_ok']；全部失败时
+# stats['subscription_failed'] = True 并打一条总结 ERROR。
+#
 # 控制点位约定：
 #   Modbus 设备额外给了 cmd_start(线圈 900) / cmd_stop(线圈 901)，
 #   地址是占位值，**必须按现场手册改**。其它协议的启停走各自的原生方式

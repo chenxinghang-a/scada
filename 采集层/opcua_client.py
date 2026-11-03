@@ -176,16 +176,47 @@ class OPCUAClient:
                 self.stats['nodes_subscribed'] = len(self.node_configs)
 
                 # 订阅所有配置的节点
+                #
+                # ⚠️ round 345：**必须统计订阅成功率**。
+                #
+                # `node_id` 写错（现场最常见：照手册抄成 `ns=2;s=温度`，
+                # 而设备实际是 `ns=2;i=2`）时，`subscribe_data_change` 抛
+                # `BadNodeIdUnknown` —— 原实现只 `logger.error` 一条然后继续，
+                # 于是：
+                #   · `connected` 仍是 True，界面显示「设备在线」；
+                #   · `latest_data` 永远是空的，采集侧拿不到任何数据；
+                #   · 日志里 N 条「订阅节点失败」，但没有一条说「全失败了」。
+                # 实测（tools/opcua_e2e_smoke.py）：node_id 猜错时 2 个节点
+                # 全部 `BadNodeIdUnknown`，而 `connected=True`。
+                #
+                # 现在统计成功数，一个都没订上时打**一条明确的总结**并置标志位，
+                # 让上层（采集/健康/告警）能据此判「设备不可用」。
+                ok_nodes = 0
                 for node_cfg in self.node_configs:
                     node_id = node_cfg.get('node_id')
                     node_name = node_cfg.get('name', node_id)
                     try:
                         node = self.client.get_node(node_id)
                         await self.subscription.subscribe_data_change(node)
+                        ok_nodes += 1
                         logger.info(f"订阅节点: {node_name} ({node_id})")
                     except Exception as e:
-                        logger.error(f"订阅节点失败 {node_name}: {e}")
+                        logger.error(f"订阅节点失败 {node_name} ({node_id}): {e}")
                         self.stats['errors'] += 1
+
+                self.stats['nodes_subscribed_ok'] = ok_nodes
+                if self.node_configs and ok_nodes == 0:
+                    self.stats['subscription_failed'] = True
+                    logger.error(
+                        "OPC UA %s 的 %d 个节点**全部订阅失败** —— 设备连上了但"
+                        "一个点位都读不到。99%% 是 node_id 与设备地址空间不一致"
+                        "（用 UaExpert / opcua-client 浏览确认实际 NodeId，"
+                        "数字标识符形如 ns=2;i=2，字符串形如 ns=2;s=TagName）。"
+                        "已配置: %s",
+                        self.endpoint, len(self.node_configs),
+                        [n.get('node_id') for n in self.node_configs])
+                elif ok_nodes:
+                    self.stats.pop('subscription_failed', None)
 
                 # 保持运行
                 while self._running:
