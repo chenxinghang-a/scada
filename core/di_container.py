@@ -20,10 +20,29 @@ class DIContainer:
     3. scoped - 作用域内共享实例（如每个请求）
     """
     
-    _lock = threading.Lock()
+    # round 359：**`Lock` → `RLock`**。
+    #
+    # `resolve()` 在持有这把锁的**同时**调用 `service['factory'](*dependencies)`
+    # 创建单例/作用域实例。只要某个工厂内部再调 `DIContainer.resolve()`
+    # （解析一个辅助服务、或间接依赖），同线程会二次申请这把不可重入锁
+    # → **进程死锁**，而且表现为「服务卡住不响应」，没有任何报错。
+    # 换 `RLock` 后同线程可重入；跨线程仍互斥，语义不变。
+    _lock = threading.RLock()
     _services: Dict[str, Dict[str, Any]] = {}
     _singletons: Dict[str, Any] = {}
     _scoped: Dict[str, Dict[str, Any]] = {}
+
+    #: 每个线程自己的解析链（防循环依赖 + 报错时给出完整环路）。
+    #: 不用类级 set：并发解析时会被别的线程的链路污染，误报循环。
+    _resolving = threading.local()
+
+    @classmethod
+    def _resolve_chain(cls) -> list[str]:
+        chain = getattr(cls._resolving, 'chain', None)
+        if chain is None:
+            chain = []
+            cls._resolving.chain = chain
+        return chain
     
     @classmethod
     def register(cls, name: str, factory: Callable[..., Any], 
@@ -65,14 +84,33 @@ class DIContainer:
     def resolve(cls, name: str, scope_id: str = None) -> Any:
         """
         解析服务
-        
+
         Args:
             name: 服务名称
             scope_id: 作用域ID（用于scoped生命周期）
-            
+
         Returns:
             服务实例
+
+        Raises:
+            RuntimeError: 检测到循环依赖（报错信息里带完整环路）
         """
+        # round 359：**循环依赖检测**。
+        # 原来 A→B→A 会一路递归到 RecursionError，报错栈里几十层
+        # `resolve` 互相调用，完全看不出是谁依赖了谁。这里用线程本地的
+        # 解析链直接报出完整环路。
+        chain = cls._resolve_chain()
+        if name in chain:
+            raise RuntimeError(
+                "检测到循环依赖: " + ' → '.join([*chain, name]))
+        chain.append(name)
+        try:
+            return cls._resolve_inner(name, scope_id)
+        finally:
+            chain.pop()
+
+    @classmethod
+    def _resolve_inner(cls, name: str, scope_id: str = None) -> Any:
         # 检查单例
         with cls._lock:
             if name in cls._singletons:
