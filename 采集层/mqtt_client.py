@@ -398,12 +398,25 @@ class MQTTClient:
             topic = msg.topic
             payload = msg.payload.decode('utf-8')
 
+            # ⚠️ round 342：**retained 消息不是"刚发生的事件"**。
+            #
+            # MQTT Broker 会把每个 topic 的**最后一条**带 retain 标志的消息
+            # 存下来，新订阅者一连上就立刻收到 —— 那可能是几天前的值。
+            # 原实现不看 `msg.retain`，还给这类消息打 `now()` 的时间戳，
+            # 于是几天前的旧值以「刚更新 / GOOD 质量码」入库，
+            # 并参与报警判定与联锁计算。
+            # 这里把标记透传下去，由 `_collect_from_cache` 降级为 stale。
+            retain = bool(getattr(msg, 'retain', False))
+            if retain:
+                self.stats.setdefault('retained_messages', 0)
+                self.stats['retained_messages'] += 1
+
             try:
                 data = json.loads(payload)
                 self.stats['messages_parsed'] += 1
-                self._process_message(topic, data)
+                self._process_message(topic, data, retain=retain)
             except json.JSONDecodeError:
-                self._process_raw_message(topic, payload)
+                self._process_raw_message(topic, payload, retain=retain)
 
         except Exception as e:
             logger.error(f"处理MQTT消息失败: {e}")
@@ -413,7 +426,7 @@ class MQTTClient:
         """订阅成功回调"""
         logger.debug(f"订阅确认: mid={mid}, QoS={granted_qos}")
 
-    def _process_message(self, topic: str, data: dict[str, Any]):
+    def _process_message(self, topic: str, data: dict[str, Any], retain: bool = False):
         """
         处理JSON格式消息
 
@@ -428,23 +441,23 @@ class MQTTClient:
             register_name = data['register']
             value = float(data.get('value', 0))
             unit = data.get('unit', '')
-            self._notify_callbacks(device_id, register_name, value, unit)
+            self._notify_callbacks(device_id, register_name, value, unit, retain=retain)
 
         # 格式3: 嵌套数据格式
         elif 'device_id' in data and 'data' in data:
             device_id = data['device_id']
             for register_name, value in data['data'].items():
                 if isinstance(value, (int, float)):
-                    self._notify_callbacks(device_id, register_name, float(value), '')
+                    self._notify_callbacks(device_id, register_name, float(value), '', retain=retain)
 
         # 格式2: 简单键值对
         else:
             device_id = topic.split('/')[-1] if '/' in topic else topic
             for register_name, value in data.items():
                 if isinstance(value, (int, float)):
-                    self._notify_callbacks(device_id, register_name, float(value), '')
+                    self._notify_callbacks(device_id, register_name, float(value), '', retain=retain)
 
-    def _process_raw_message(self, topic: str, payload: str):
+    def _process_raw_message(self, topic: str, payload: str, retain: bool = False):
         """处理非JSON格式消息"""
         try:
             if '=' in payload:
@@ -453,7 +466,7 @@ class MQTTClient:
                     device_id = topic.split('/')[-1] if '/' in topic else topic
                     register_name = parts[0].strip()
                     value = to_finite_float(parts[1].strip(), 'mqtt_value')
-                    self._notify_callbacks(device_id, register_name, value, '')
+                    self._notify_callbacks(device_id, register_name, value, '', retain=retain)
             else:
                 value = to_finite_float(payload.strip(), 'mqtt_value')
                 device_id = topic.split('/')[-1] if '/' in topic else topic
@@ -461,18 +474,20 @@ class MQTTClient:
         except (ValueError, IndexError):
             logger.debug(f"无法解析原始消息: {topic} = {payload}")
 
-    def _notify_callbacks(self, device_id: str, register_name: str, 
-                         value: float, unit: str):
+    def _notify_callbacks(self, device_id: str, register_name: str,
+                         value: float, unit: str, retain: bool = False):
         """
         通知所有回调函数
         签名统一: callback(device_id, register_name, value, unit)
         与OPCUA/REST客户端的DataCollector.on_data回调签名一致
         """
-        # 更新数据缓存
+        # 更新数据缓存。`retained` 必须带上：消费方据此判断
+        # 「这是 Broker 缓存的旧状态，不是刚采集的实时值」。
         self.latest_data[register_name] = {
             'value': value,
             'unit': unit,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'retained': bool(retain),
         }
 
         for callback in self._data_callbacks:

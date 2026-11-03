@@ -599,11 +599,45 @@ def main():
 
                 # 注册边缘决策PID输出回调
                 def edge_write_register(device_id, address, value):
-                    """边缘决策PID输出回调：实际写入设备"""
-                    try:
+                    """边缘决策 PID 输出回调：**必须走安全层**。
+
+                    round 342 之前是：
+
                         device_manager.adjust_device(device_id, str(address), float(value))
-                    except Exception as e:
-                        logger.error(f"边缘决策写入失败: {e}")
+
+                    三个问题叠在一起：
+
+                    1. **绕过安全层** —— 急停期间照写、联锁触发照写、
+                       没有量程校验、没有审计、没有回读验证。
+                       `/adjust`、`/start`、`/stop` 都在 round 341 收敛了，
+                       这是最后一条漏网的写通道。
+                    2. **参数传错** —— `adjust_device` 的第二个参数是
+                       **点位名**（它内部 `reg.get('name') == register_name`），
+                       而这里传的是 `str(address)`（"10"）。
+                       除非某个点位恰好叫 "10"，否则它永远返回
+                       `{'success': False, 'message': '寄存器 10 不存在'}`。
+                       **PID 输出从未真正写进过设备。**
+                    3. **返回值被丢掉** —— 只 `except Exception`，
+                       而失败是正常返回（不抛异常），于是全程静默：
+                       日志干净、PID 以为调了、现场没动。
+                    """
+                    try:
+                        result = device_control.write_with_verification(
+                            device_id, int(address), value,
+                            operator='edge_decision', kind='register') or {}
+                    except Exception as e:      # noqa: BLE001
+                        logger.error("边缘决策写入异常: %s/%s=%s — %s",
+                                     device_id, address, value, e)
+                        return
+
+                    if not result.get('success'):
+                        logger.error("边缘决策写入失败: %s/%s=%s — %s",
+                                     device_id, address, value,
+                                     result.get('message') or '未知原因')
+                    elif result.get('verified') is False:
+                        # 写下去了但回读不一致：现场没变成期望值，
+                        # 必须报出来，否则闭环会在错误的实际值上继续调节。
+                        logger.warning("边缘决策写入已下发但回读不一致: %s/%s", device_id, address)
 
                 edge_decision.register_action('write_register', edge_write_register)
 

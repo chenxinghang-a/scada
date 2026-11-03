@@ -1507,7 +1507,42 @@ class DataCollector:
             return interval
         return interval * multiplier
 
-    def _collect_device_data(self, device_id: str, device_config: dict[str, Any], protocol: str) -> bool:
+    def _collect_device_data(self, device_id: str, device_config: dict[str, Any],
+                             protocol: str) -> bool:
+        """采集单个设备并**上报健康状态**（包装器）。
+
+        ## 为什么需要这一层
+
+        `DeviceControlSafety.update_device_health()` 是唯一累加
+        `_comm_failures`、触发设备安全状态与「设备离线」告警的入口，
+        但**生产代码零调用方**（round 342 前 grep 不到任何调用点）。
+        后果：
+        · 设备掉线后系统**不会产生任何告警**，看板上也不会变红；
+        · `get_device_health()` 永远返回空，健康面板是摆设；
+        · `alarm_manager` 里那句「设备真离线会有 failed_collections 兜底」
+          是错的 —— 那个计数只进 stats，没有任何消费者。
+
+        包一层而不是在每个 return 点插调用：原函数有 6 个 return，
+        逐个插必然漏，而漏掉的那个分支就是"不报健康"的静默缺口。
+        """
+        started = time.monotonic()
+        ok = self._collect_device_data_inner(device_id, device_config, protocol)
+        self._report_device_health(device_id, ok, (time.monotonic() - started) * 1000.0)
+        return ok
+
+    def _report_device_health(self, device_id: str, ok: bool, elapsed_ms: float) -> None:
+        """把本次采集结果上报给安全层（失败不致命）。"""
+        control = getattr(self, 'device_control', None)
+        if control is None:
+            return
+        try:
+            control.update_device_health(device_id, bool(ok), elapsed_ms)
+        except Exception as e:      # noqa: BLE001
+            # 健康上报失败不能影响采集本身 —— 它只是观测手段
+            logger.debug("设备健康上报失败 %s: %s", device_id, e)
+
+    def _collect_device_data_inner(self, device_id: str, device_config: dict[str, Any],
+                                   protocol: str) -> bool:
         """采集单个轮询型设备的数据，返回是否成功"""
 
         def _metric_error(kind: str):
@@ -1550,8 +1585,15 @@ class DataCollector:
                     self.stats['last_collection_time'] = timestamp
                 return ok
             elif protocol in ('rest', 'opcua', 'mqtt'):
-                # REST/OPC-UA/MQTT都是缓存型协议，统一从缓存采集
-                self._collect_from_cache(client, device_id, timestamp)
+                # REST/OPC-UA/MQTT都是缓存型协议，统一从缓存采集。
+                # **必须看返回值**：0 条 = 没采到任何数据（未连接/缓存空/全坏值），
+                # 不能计成功 —— 否则断路器对这三类设备永不打开。
+                produced = self._collect_from_cache(client, device_id, timestamp)
+                if produced == 0:
+                    logger.debug("设备 %s 缓存无可用数据（未连接或缓存为空）", device_id)
+                    self._inc_stat('failed_collections')
+                    _metric_error('no_fresh_data')
+                    return False
             else:
                 logger.warning(f"设备 {device_id} 不支持的协议: {protocol}")
                 self._inc_stat('failed_collections')
@@ -1754,11 +1796,26 @@ class DataCollector:
         except Exception:
             return None
 
-    def _collect_from_cache(self, client, device_id: str, timestamp):
-        """通用方法：从客户端缓存采集数据（适用于REST/OPC UA/MQTT）"""
+    def _collect_from_cache(self, client, device_id: str, timestamp) -> int:
+        """通用方法：从客户端缓存采集数据（适用于REST/OPC UA/MQTT）。
+
+        Returns:
+            int: 本次真正入队的数据条数。**0 表示什么都没采到**
+            （未连接 / 缓存为空 / 全是 NaN·Infinity），调用方必须据此计失败。
+
+        ⚠️ round 342：原来返回 None，而调用方无条件
+        `successful_collections += 1; return True`。于是 REST / OPC UA / MQTT
+        三条协议**永远"采集成功"**：
+        · 网关断电、Broker 断线 → `connected=False` → 这里静默 return
+          → 上层仍计成功 → 断路器永不打开、`failed_collections` 恒 0；
+        · 监控看板上这三类设备一直绿灯，实际已经几小时没数据。
+        Modbus 分支早就正确透传返回值（见 `_collect_modbus` 的注释），
+        两条路径相反 —— 又是「同一件事两种行为」。
+        """
         if not getattr(client, 'connected', False):
-            return
-        latest = client.get_latest_data()
+            return 0
+        latest = client.get_latest_data() or {}
+        produced = 0
         for name, data in latest.items():
             value = data.get('value')
             if value is not None:
@@ -1779,6 +1836,11 @@ class DataCollector:
                         'timestamp': timestamp,
                         'unit': data.get('unit', '')
                     }
+                    if data.get('retained'):
+                        # MQTT retained：Broker 缓存的上一条状态，可能是几天前的。
+                        # 打 stale 让质量评估降级为 UNCERTAIN_LAST_USABLE ——
+                        # 否则旧值以 GOOD 身份进库，并参与报警与联锁计算。
+                        item['stale'] = True
                     if self.data_queue.full():
                         try:
                             self.data_queue.get_nowait()
@@ -1786,6 +1848,7 @@ class DataCollector:
                             # 安全忽略：full() 与 get_nowait() 之间消费线程可能已取空队列
                             pass
                     self.data_queue.put_nowait(item)
+                    produced += 1
                 except (ValueError, TypeError, queue.Full) as e:
                     # 本条数据被丢弃：value 非数值(float()失败) 或 队列满。
                     # 属于"丢数据"，必须留痕，否则表现为数据缺口却查不到原因
@@ -1793,6 +1856,7 @@ class DataCollector:
                         f"缓存采集数据丢弃 device={device_id} register={name} "
                         f"value={value!r}: {type(e).__name__}: {e}"
                     )
+        return produced
 
     def _read_register(self, client, register: dict[str, Any]) -> float | None:
         """读取单个Modbus寄存器数据"""
