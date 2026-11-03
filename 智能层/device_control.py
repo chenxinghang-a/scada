@@ -1156,10 +1156,26 @@ class DeviceControlSafety:
             if approver in request.approvals:
                 return False, "已经审批过了"
 
-            request.approvals.append(approver)
-            progress = f'{len(request.approvals)}/{request.required_approvals}'
+            # ===== round 347：审批记录是**合规核心证据**，审计写不进去就不算审批成功 =====
+            #
+            # 原顺序是「先 append 审批人、再写审计」，且不看审计返回值。
+            # 磁盘满 / 目录只读时：内存里显示「已 2/2 审批通过、旁路生效」，
+            # 而磁盘上**没有任何审批记录** —— 事故调查时无法证明「谁批的」，
+            # 而联锁旁路恰恰是最需要双人复核留痕的操作。
+            #
+            # 现在：先写审计，成功才落 approvals；失败则整个审批不生效。
+            # 这是**唯一**可以 fail-closed 的地方 —— 审批本身还没生效，
+            # 拒绝执行不会造成任何现场影响，只是让操作员重试。
+            new_progress = f'{len(request.approvals) + 1}/{request.required_approvals}'
+            if not self._audit(
+                    'bypass_approved', approver,
+                    f'审批旁路请求 {request_id}, 联锁 {request.interlock_id}, '
+                    f'进度 {new_progress}'):
+                return False, ("审计写入失败，审批未生效 —— 无法自证的审批不允许通过"
+                               "（请检查审计目录权限与磁盘空间）")
 
-            self._audit('bypass_approved', approver, f'审批旁路请求 {request_id}, 联锁 {request.interlock_id}, 进度 {progress}')
+            request.approvals.append(approver)
+            progress = new_progress
 
             if request.is_approved:
                 request.status = 'approved'
@@ -2523,7 +2539,23 @@ class DeviceControlSafety:
             except Exception as e:
                 # 落盘失败：**不进内存列表、不推进链尾** —— 内存与文件保持一致，
                 # 否则接口里能看到一条"文件里没有"的记录。
-                logger.error("审计日志写入失败（本次操作将不被记录）: %s", e)
+                #
+                # round 347：**日志必须带上是哪次操作**，级别升为 CRITICAL。
+                #
+                # 全仓 19 处 `_audit` 调用里只有 2 处检查了返回值
+                # （`write_with_verification` 与 `batch_control` 的 attempt），
+                # 其余 17 处（急停、旁路审批、降级、结果记录）**丢弃返回值**。
+                # 原来这里只打一行「审计日志写入失败」，不带 action/operator ——
+                # 现场看到这行也不知道「哪次操作没被记下来」，
+                # 而急停/旁路审批正是最需要自证的两类动作。
+                #
+                # 现在把三元组打进日志，级别 CRITICAL（自证缺口是严重事件）。
+                # 不在这里强制 fail-closed：急停必须执行，不能因为记不下来就不停设备；
+                # 需要 fail-closed 的调用点自己检查返回值（已由调用点决定）。
+                logger.critical(
+                    "【自证缺口】审计写入失败 —— 本次操作**不会留下任何记录**: "
+                    "action=%s operator=%s detail=%s — %s",
+                    action, operator, detail, e)
                 return False
 
             self._audit_log.append(entry)
