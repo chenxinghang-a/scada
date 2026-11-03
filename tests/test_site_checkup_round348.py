@@ -191,3 +191,51 @@ class TestRealConfig:
             if missing:
                 bad.append(f"{d['id']}: {missing[:3]}")
         assert not bad, f'真实清单里有 rw 点位缺 write_limits（写入会被拒）：{bad[:5]}'
+
+
+def test_comment_placeholders_are_not_counted_as_variables(tmp_path):
+    """注释里的 `${VAR}` 是文档示例，不能当成「未设置的环境变量」（round 363）。
+
+    `配置/devices_simulated.yaml` 的文件头就写着
+    「凭据字段一律使用 ${VAR} 环境变量占位，禁止明文入库」——
+    原来工具直接扫整个文件文本，把这个示例算进「未设置」，
+    于是这一项**永远红**，提示还是「设备将拿占位符当主机名去连」。
+    假红比不检查更糟：跑几次之后没人再看这一项。
+    """
+    cfg = tmp_path / 'devices.yaml'
+    cfg.write_text(
+        '# 凭据字段一律使用 ${VAR} 占位，禁止明文入库\n'
+        '# 加载方需支持 ${VAR} 展开\n'
+        + yaml.dump({'devices': [{
+            'id': 'a', 'name': 'A', 'protocol': 'modbus_tcp',
+            'host': '127.0.0.1', 'port': 502, 'byte_order': 'ABCD',
+            'enabled': True,
+            'registers': [{'name': 't', 'address': 0, 'type': 'holding',
+                           'data_type': 'uint16', 'unit': '℃'}],
+        }]}, allow_unicode=True),
+        encoding='utf-8')
+
+    rep = Report()
+    check_config(cfg, rep)
+
+    assert _levels(rep, '环境变量已注入') == [OK], (
+        f'注释里的 ${{VAR}} 被当成了真实变量: {rep.rows}')
+
+
+def test_real_var_in_config_still_blocks(tmp_path):
+    """反向对照：配置正文里的 `${REAL_HOST}` 仍必须报阻断。"""
+    cfg = tmp_path / 'devices.yaml'
+    cfg.write_text(
+        yaml.dump({'devices': [{
+            'id': 'a', 'name': 'A', 'protocol': 'modbus_tcp',
+            'host': '${DEV_HOST_SHOULD_BE_MISSING}', 'port': 502,
+            'byte_order': 'ABCD', 'enabled': True,
+            'registers': [{'name': 't', 'address': 0, 'type': 'holding',
+                           'data_type': 'uint16', 'unit': '℃'}],
+        }]}, allow_unicode=True),
+        encoding='utf-8')
+
+    rep = Report()
+    check_config(cfg, rep)
+
+    assert BLOCK in _levels(rep, '环境变量已注入'), '正文里的占位符必须报阻断'

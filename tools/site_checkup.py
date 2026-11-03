@@ -123,12 +123,26 @@ def check_config(cfg_path: Path, rep: Report) -> dict | None:
         return cfg
 
     # ---- 环境变量注入 ----
-    used = {m.group(1) for m in VAR_PATTERN.finditer(raw_text)}
+    # round 363：**扫描前先剥掉注释行**。
+    # `配置/devices_simulated.yaml` 的文件头注释里写着
+    # 「凭据字段一律使用 ${VAR} 环境变量占位，禁止明文入库」——
+    # 那个 `VAR` 是说明里的示例，不是真实变量。原来直接扫整个文件文本，
+    # 于是这一项**永远红**（提示「设备将拿占位符当主机名去连」），
+    # 而配置里根本没有这个变量。假红比不检查更糟：跑几次之后没人再看这一项。
+    code_only = '\n'.join(
+        line for line in raw_text.splitlines() if not line.lstrip().startswith('#'))
+    used = {m.group(1) for m in VAR_PATTERN.finditer(code_only)}
     missing = sorted(v for v in used if not os.environ.get(v))
     if missing:
+        # round 363：把「开发机上必然如此」说清楚，否则这条硬红会让人
+        # 以为配置坏了。`devices_real.yaml` 的头部注释写明「密码/主机一律用
+        # ${VAR}，在部署环境注入」，所以在没有 .env 的开发机上跑本工具，
+        # 这一项**一定会红** —— 它是给「准备上现场」那一刻用的，不是日常体检。
         rep.add(group, BLOCK, '环境变量已注入',
                 f'{len(missing)} 个未设置，设备将拿占位符当主机名去连: {missing[:5]}'
-                f'{" ..." if len(missing) > 5 else ""}')
+                f'{" ..." if len(missing) > 5 else ""}\n'
+                '      ⓘ 开发机上这是预期状态：这些变量在部署环境（.env / 密钥管理）'
+                '注入。只有准备上现场时才需要它全绿。')
     else:
         rep.add(group, OK, '环境变量已注入', f'{len(used)} 个')
 
