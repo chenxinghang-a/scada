@@ -81,6 +81,12 @@ class OpcuaSimServer:
         self._stop = threading.Event()
         self._start_error: str | None = None
 
+        # round 353：`_build_address_space()` 的异常分支会写 `self.stats['errors']`，
+        # 但这里原来**没有定义 stats** —— 只要有一个节点创建失败，
+        # 就抛 AttributeError 把整个 OPC UA 模拟服务端的启动带崩，
+        # 而错误信息会指向 stats（一个和建节点毫无关系的地方）。
+        self.stats: dict[str, int] = {'errors': 0}
+
     # ------------------------------------------------------------------ 生命周期
 
     def start(self) -> bool:

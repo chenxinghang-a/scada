@@ -295,9 +295,14 @@ class BaseGateway(ABC):
                 ca_cert = tls_config.get('ca_cert')
                 if ca_cert:
                     tls_context.load_verify_locations(ca_cert)
-                else:
-                    tls_context.check_hostname = False
-                    tls_context.verify_mode = ssl.CERT_NONE
+                # round 353：**没填 ca_cert ≠ 可以不校验证书**。
+                #
+                # `ssl.create_default_context()` 默认就会用**系统根证书**校验证书链，
+                # 而原来这里的 else 分支直接 `check_hostname=False` +
+                # `verify_mode=CERT_NONE`。于是「对接公网 EMQX、证书是标准 CA 签的、
+                # 只是没额外填 ca_cert」这种最常见的情况被静默降级成完全不校验，
+                # 中间人可以截获并篡改全部报文，而界面只显示「TLS 已启用」。
+                # 要放宽必须显式写 `insecure: true`（下面那条分支，且会告警）。
 
                 client_cert = tls_config.get('client_cert')
                 client_key = tls_config.get('client_key')
@@ -305,6 +310,10 @@ class BaseGateway(ABC):
                     tls_context.load_cert_chain(client_cert, client_key)
 
                 if tls_config.get('insecure', False):
+                    # 显式不安全：只允许用于测试环境，且必须留下告警
+                    self.logger.warning(
+                        "MQTT TLS: 配置了 insecure=true，**已关闭证书与主机名校验** "
+                        "—— 仅可用于测试环境，生产环境请移除该项")
                     tls_context.check_hostname = False
                     tls_context.verify_mode = ssl.CERT_NONE
 

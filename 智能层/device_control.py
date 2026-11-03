@@ -205,7 +205,13 @@ class DeviceControlSafety:
         # 哈希链的作用：每条记录带上前一条的哈希，**删/改中间任何一条都会断链**，
         # 事后能证明"日志没被篡改过"。成本只是多一次 sha256。
         self._audit_lock = threading.Lock()
-        self._audit_last_hash = ''
+        # round 353：**从落盘日志恢复链尾哈希**。
+        #
+        # 原来这里恒为 `''`，而 `_audit()` 以追加模式写同一个文件 ——
+        # 进程每次重启后首条记录的 `prev` 都是空串 → **哈希链在每个重启点断开**。
+        # 「日志没被篡改过」这个结论因此只在单次运行内成立，
+        # 而审计日志的价值恰恰是跨重启、跨班次自证。
+        self._audit_last_hash = self._load_last_audit_hash()
 
         # ===== 通信监控 =====
         self._comm_failures: dict[str, int] = {}  # device_id -> consecutive failures
@@ -1046,13 +1052,24 @@ class DeviceControlSafety:
     def remove_interlock(self, rule_id: str) -> bool:
         """移除联锁规则"""
         with self._lock:
-            if rule_id in self._interlock_rules:
-                del self._interlock_rules[rule_id]
-                self._interlock_states.pop(rule_id, None)
-                self._interlock_bypass.discard(rule_id)
-                logger.info(f"移除联锁规则: {rule_id}")
-                return True
-        return False
+            if rule_id not in self._interlock_rules:
+                return False
+            del self._interlock_rules[rule_id]
+            self._interlock_states.pop(rule_id, None)
+            # round 353：**旁路状态有两份，必须一起清**。
+            #
+            # 原来只 `discard(_interlock_bypass)`，漏了 `_active_bypasses` 与落盘 ——
+            # 而 `_persist_bypasses()` 遍历的正是 `_active_bypasses`。于是：
+            # 删掉的联锁在库里仍是「已旁路」，进程重启后又加载回来；
+            # 同 id 规则重新添加时**默认就处于旁路状态**，超温不动作，
+            # 而界面显示「旁路：否」（它读的是 `_interlock_bypass`）。
+            # `restore_interlock` 早就是正确的对称实现，这里跟着对齐。
+            self._interlock_bypass.discard(rule_id)
+            self._active_bypasses.discard(rule_id)
+        logger.info(f"移除联锁规则: {rule_id}")
+        # 落盘放在锁外（与 `restore_interlock` 一致，避免持锁做文件 I/O）
+        self._persist_bypasses()
+        return True
 
     def bypass_interlock(self, rule_id: str, operator: str, reason: str) -> bool:
         """[已废弃] 旁路联锁 — 请使用 request_bypass + approve_bypass 流程
@@ -1880,10 +1897,9 @@ class DeviceControlSafety:
                     f'紧急停机！{reason}，所有设备已停止运行，请立即检查！',
                     level='critical', source='estop')
 
-        # 审计
-        self._audit('emergency_stop', 'system', f'紧急停机: {reason}，影响设备: {stopped_devices}')
-
-        # 审计：失败清单必须进审计，不然事后只看到"已停机 N 台"
+        # 审计：失败清单必须进审计，不然事后只看到"已停机 N 台"。
+        # ⚠️ 这里**只能有一条** `emergency_stop` 审计 —— 上一轮加这条时
+        # 没注意到上面已经有一条同类型调用，结果每次急停写两条重复记录。
         self._audit('emergency_stop', 'system',
                     f'紧急停机: {reason}，已停 {len(stopped_devices)} 台'
                     + (f'，**停机失败 {len(failed_devices)} 台: {failed_devices}**'
@@ -2546,6 +2562,34 @@ class DeviceControlSafety:
             self.release_device_lock(device_id)
 
     # ==================== 操作审计 ====================
+
+    def _load_last_audit_hash(self) -> str:
+        """从落盘日志恢复链尾哈希 —— 让哈希链跨重启连续。
+
+        只倒读文件尾部 8KB：审计日志是 `deque(maxlen=50000)` + 追加文件，
+        可能几万行，没必要整读。倒读会截断首行，`json.loads` 失败就跳过，
+        这正是我们要的（那一行本来就不完整）。
+        """
+        try:
+            if not self._audit_file.exists():
+                return ''
+            size = self._audit_file.stat().st_size
+            if size <= 0:
+                return ''
+            with open(self._audit_file, 'rb') as f:
+                f.seek(max(0, size - 8192))
+                tail = f.read().decode('utf-8', 'replace')
+            for line in reversed([ln for ln in tail.splitlines() if ln.strip()]):
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                h = entry.get('hash')
+                if isinstance(h, str) and h:
+                    return h
+        except Exception as e:      # noqa: BLE001 —— 恢复失败不该挡住启动
+            logger.warning("恢复审计链尾失败，本次以空 prev 起链: %s", e)
+        return ''
 
     def _audit(self, action: str, operator: str, detail: str) -> bool:
         """记录操作审计日志。返回**是否成功落盘**（round 322）。

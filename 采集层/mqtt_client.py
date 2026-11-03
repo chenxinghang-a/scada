@@ -217,14 +217,20 @@ class MQTTClient:
 
                 if self.ca_cert:
                     tls_context.load_verify_locations(self.ca_cert)
-                else:
-                    tls_context.check_hostname = False
-                    tls_context.verify_mode = ssl.CERT_NONE
+                # round 353：**没填 ca_cert ≠ 可以不校验证书**。
+                # `create_default_context()` 默认就用系统根证书校验；
+                # 原来 else 分支直接关掉主机名校验并设 CERT_NONE，
+                # 于是「标准 CA 签发的证书、只是没额外指定 ca_cert」这种
+                # 最常见的情况变成完全不校验 —— 中间人可截获全部采集报文。
+                # 要放宽只能用 `tls_insecure`（下面那条，会告警）。
 
                 if self.client_cert and self.client_key:
                     tls_context.load_cert_chain(self.client_cert, self.client_key)
 
                 if self.tls_insecure:
+                    logger.warning(
+                        "MQTT 采集端 TLS: tls_insecure=true，**已关闭证书与主机名校验**"
+                        " —— 仅可用于测试环境")
                     tls_context.check_hostname = False
                     tls_context.verify_mode = ssl.CERT_NONE
 

@@ -125,14 +125,19 @@ class MQTTSubscriber:
 
                 if self.ca_cert:
                     tls_context.load_verify_locations(self.ca_cert)
-                else:
-                    tls_context.check_hostname = False
-                    tls_context.verify_mode = ssl.CERT_NONE
+                # round 353：**没填 ca_cert ≠ 可以不校验证书**（与 base_gateway 同因）：
+                # `create_default_context()` 本身就用系统根证书校验，
+                # 原来 else 分支直接降级成 CERT_NONE —— 标准 CA 签发的证书
+                # 只要没额外填 ca_cert 就完全不校验，MITM 可截获全部报文。
+                # 放宽必须显式 `tls_insecure`（下面那条，且会告警）。
 
                 if self.client_cert and self.client_key:
                     tls_context.load_cert_chain(self.client_cert, self.client_key)
 
                 if self.tls_insecure:
+                    self.logger.warning(
+                        "MQTT 订阅端 TLS: insecure=true，**已关闭证书与主机名校验** "
+                        "—— 仅可用于测试环境")
                     tls_context.check_hostname = False
                     tls_context.verify_mode = ssl.CERT_NONE
 

@@ -2033,9 +2033,21 @@ class DataCollector:
                     # 同一把 `_tracking_lock`；这两个键必须一起更新，不能只写一半）
                     if value is not None and not (isinstance(value, float) and math.isnan(value)):
                         with self._tracking_lock:
+                            # round 353：**`_last_times` 只在值变化时更新**。
+                            #
+                            # 它被 `assess()` 当作「这个 last_value 是什么时候的」用，
+                            # 而卡死判据是
+                            #   `abs(value - last_value) < 0.001 and now - last_time > 300`。
+                            # 原来这里**每次采样**都刷新它，于是 `now - last_time`
+                            # 永远约等于采样间隔（5s），**300s 的分支永远达不到** ——
+                            # 卡在恒值的传感器一直以 GOOD 入库，继续参与报警与联锁判断，
+                            # 而现场那个点位其实早就死了（这是最典型的「数据看着很稳」）。
+                            # 现在只有值真变了才重置计时，值不变就让它一直往上走。
+                            _prev = self._last_values.get(key)
+                            _changed = (_prev is None or abs(value - _prev) >= 0.001)
                             self._last_values[key] = value
-                            # 与 QualityAssessor 的卡死判断同一时钟（单调）
-                            self._last_times[key] = time.monotonic()
+                            if _changed or key not in self._last_times:
+                                self._last_times[key] = time.monotonic()
 
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
                 db_write_ok = True

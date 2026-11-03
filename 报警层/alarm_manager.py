@@ -1908,7 +1908,6 @@ class AlarmManager:
             # 看板上"没有新报警"与"新报警被去重吞了"此前无法区分。
             self._inc_alarm_suppressed(alarm_level, dedup_reason)
             return
-        self._record_emit(rule_id, device_id, register_name)
         alarm_payload = {
             'alarm_id': rule_id,
             'device_id': device_id,
@@ -1924,7 +1923,15 @@ class AlarmManager:
             # 会被当成前端 bug，而真实原因是库写不进去。
             'persisted': persist_ok,
         }
-        self._emit_websocket_alarm(alarm_payload)
+        # round 353：**先推送、成功了才记账**。
+        #
+        # 原来是 `_record_emit()` 在推送**之前**，与 1642 行那句注释
+        # （"记账只在确实推送成功后发生"）正好相反。前端 socket 抖动一次，
+        # 这条报警的弹窗/语音就永久错过 —— 接下来 300 秒内同 key 一律被
+        # `dedup_cooldown` 压掉，而运维只看到 `errors['websocket']` 涨了一个
+        # 没人看的计数，界面显示"没有新报警"。
+        if self._emit_websocket_alarm(alarm_payload):
+            self._record_emit(rule_id, device_id, register_name)
 
         # Prometheus：报警总数（round 253）。放在去重点**之后**、与推送同一位置，
         # 所以它统计的是「真正推出去的报警」—— 被冷却/确认抑制掉的重复报警不计入，
@@ -2095,10 +2102,16 @@ class AlarmManager:
             f"{type(target).__name__} 既不提供 speak_alarm 也不提供 speak，广播无法发出")
         return False
 
-    def _emit_websocket_alarm(self, alarm_data: dict[str, Any]):
-        """通过WebSocket向前端推送报警"""
+    def _emit_websocket_alarm(self, alarm_data: dict[str, Any]) -> bool:
+        """通过WebSocket向前端推送报警。
+
+        Returns:
+            bool: 是否**真的推出去**了。调用方据此决定要不要记去重账 ——
+            False 时不能记账，否则这条报警会在冷却期（默认 300s）内被永久压掉。
+            未注册推送通道时返回 False（没有出口 = 没推出去）。
+        """
         if not self._websocket_emit:
-            return
+            return False
         try:
             self._websocket_emit(alarm_data)
             # Prometheus（round 255）：推送方向的消息计数。
@@ -2107,8 +2120,10 @@ class AlarmManager:
                 WS_MESSAGES.labels(direction='out').inc()
             except Exception as e:      # noqa: BLE001
                 logger.debug(f"WebSocket 消息指标打点失败: {e}")
+            return True
         except Exception as e:
             self._record_output_failure('websocket', f"前端推送异常: {e}")
+            return False
 
     def _send_notification(self, rule_config: dict[str, Any], device_id: str,
                            register_name: str, value: float, timestamp: datetime):
