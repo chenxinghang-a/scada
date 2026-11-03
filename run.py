@@ -449,8 +449,11 @@ def main():
         # 监听器**显式捕获模块实例**、不碰 `current_app`：
         # 热重载发生在后台维护线程里，那里没有 app context。
         def _forget_device_state(device_id: str) -> None:
-            for _mod in (data_collector, device_control, oee_calculator,
-                         energy_manager, vibration_analyzer,
+            # round 360：**加上 `alarm_manager`** —— 它此前只清 8 个模块，
+            # 而报警层的「已触发标记 / 旁路 / 冷却 / 升级跟踪」同样按设备存。
+            # （`alarm_manager.forget_device` 是 round 356 新增的）
+            for _mod in (data_collector, device_control, alarm_manager,
+                         oee_calculator, energy_manager, vibration_analyzer,
                          predictive_maintenance, spc_analyzer, tsdb_adapter):
                 if _mod is None:
                     continue

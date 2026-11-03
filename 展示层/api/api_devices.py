@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, request, current_app
 
 from 用户层.auth import jwt_required, role_required
 from core.safe_numeric import to_int
+from core.device_lifecycle import notify_device_removed
 from ._common import get_auth_manager, api_error_handler, api_error, safe_int
 
 logger = logging.getLogger(__name__)
@@ -734,6 +735,16 @@ def delete_device(device_id):
                 request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
             # round 310：删掉之后必须清各模块的按设备状态
             _forget_device_everywhere(device_id)
+            # round 360：**还要通知设备生命周期监听器**。
+            # `run.py` 早就 `add_device_remove_listener()` 注册了一个清理回调
+            # （覆盖 data_collector / device_control / alarm_manager / OEE /
+            # 能耗 / 振动 / 预测维护 / SPC / **tsdb_adapter**），
+            # 但 `notify_device_removed()` 在**生产代码里零调用** ——
+            # 监听器从注册那天起就没被触发过，时序库侧的按设备状态从未清理。
+            # 两个清理函数内容有重叠，但各自覆盖的模块不完全一致
+            # （`_forget_device_state` 有 tsdb_adapter，`_forget_device_everywhere`
+            #   走 current_app 拿不到它）；`forget_device` 都是幂等的，重复调用无害。
+            notify_device_removed(device_id)
             return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
         # 回退到 device_manager
         success = current_app.device_manager.remove_device(device_id)
@@ -744,6 +755,8 @@ def delete_device(device_id):
         get_auth_manager().log_operation(
             request.current_user['username'], 'delete_device', f"删除设备: {device_id}")
         _forget_device_everywhere(device_id)
+        # round 360：同上一分支 —— 生命周期监听器必须收到通知（见上方注释）
+        notify_device_removed(device_id)
         return jsonify({'success': True, 'message': f'设备 {device_id} 已删除'})
     # round 302：删除同样会因落盘失败而回滚（设备被放回内存）。
     # 保持 400（与 add 一致：该返回值也可能是「设备本就不存在」），
