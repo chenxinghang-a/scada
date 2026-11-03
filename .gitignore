@@ -22,6 +22,8 @@ dist.prev*/
 # 保留 dist/ 与 build/ 的忽略是因为 CI 与 electron 打包仍在用这两个固定路径。
 dist-scada-*/
 build-scada-*/
+# Inno Setup 产出的安装包（50+ MB，不进仓库；发布走 Release 附件）
+dist-installer/
 dist-iso/
 build-iso/
 .pytest_tmp*/
