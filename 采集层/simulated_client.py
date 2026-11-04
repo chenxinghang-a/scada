@@ -16,7 +16,11 @@ import threading
 from datetime import datetime
 from typing import Any, Callable, Dict
 
-from .base_client import ModbusClientInterface, PushClientInterface
+from .base_client import (
+    ModbusClientInterface,
+    PushClientInterface,
+    encode_float32_registers as _encode_float32_registers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,25 +40,11 @@ def encode_float32_registers(value: float, byte_order: str = 'ABCD') -> list[int
 
     与 ``ByteOrderCapableDecoder._reorder_32`` 严格互逆：
     编出来的两个寄存器经解码后必须还原原值。
-    """
-    raw = struct.pack('>f', float(value))
-    w_hi = struct.unpack('>H', raw[0:2])[0]
-    w_lo = struct.unpack('>H', raw[2:4])[0]
 
-    order = str(byte_order or 'ABCD').upper()
-    if order == 'CDAB':
-        return [w_lo, w_hi]
-    if order == 'BADC':
-        hi = ((w_hi & 0xFF) << 8) | ((w_hi >> 8) & 0xFF)
-        lo = ((w_lo & 0xFF) << 8) | ((w_lo >> 8) & 0xFF)
-        return [hi, lo]
-    if order == 'DCBA':
-        b0 = (w_hi >> 8) & 0xFF
-        b1 = w_hi & 0xFF
-        b2 = (w_lo >> 8) & 0xFF
-        b3 = w_lo & 0xFF
-        return [((b3 << 8) | b2) & 0xFFFF, ((b1 << 8) | b0) & 0xFFFF]
-    return [w_hi, w_lo]
+    round 369：实现已上移到 ``base_client``（真实/模拟两条路必须同源），
+    这里保留同名再导出，避免历史调用点断裂。
+    """
+    return _encode_float32_registers(value, byte_order)
 
 
 # ============================================================

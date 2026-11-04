@@ -19,7 +19,12 @@ import threading
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from .base_client import ModbusClientInterface, PushClientInterface
+from .base_client import (
+    ModbusClientInterface,
+    PushClientInterface,
+    encode_float32_registers,
+    encode_int32_registers,
+)
 from .device_behavior_simulator import DeviceBehaviorSimulator, DeviceState, FaultType
 from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
 from .modbus_client import ByteOrder
@@ -226,14 +231,22 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         device_stopped = is_device_stopped(self.device_id)
         estop_active = _ESTOP_ACTIVE
         if device_stopped or estop_active:
-            results = []
-            for i in range(count):
+            # round 369：**按点位宽度步进**。
+            # 原来 `for i in range(count)` 遇到 float32 会追加 2 个字，
+            # 下一轮又访问 address+1（浮点的第二个字地址），多寄存器批量读取
+            # 的长度与地址映射彻底错位（读 2 个点位返回 3 个值，且第 2 个值
+            # 实际是第 1 个点位的高/低字）。
+            results: List[int] = []
+            i = 0
+            while i < count:
                 reg_addr = address + i
                 reg_cfg = self._register_map.get(reg_addr, {})
                 reg_name = reg_cfg.get('name', '')
                 is_mach = self._is_machinery(reg_name)
+                data_type = reg_cfg.get('data_type', 'uint16')
+                width = 2 if data_type in ('float32', 'int32', 'uint32') else 1
                 if device_stopped or (estop_active and is_mach):
-                    results.append(0)
+                    results.extend([0] * width)
                 else:
                     # 传感器：从缓存读取（行为模拟器仍在更新环境值）
                     val = self._latest_data.get(reg_name)
@@ -241,12 +254,16 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                         val = 25.0
                     scale = reg_cfg.get('scale', 1.0)
                     raw = val / scale if scale != 0 else val
-                    dt = reg_cfg.get('data_type', 'uint16')
-                    if dt == 'float32':
-                        b = struct.pack('>f', float(raw))
-                        results.extend([struct.unpack('>H', b[0:2])[0], struct.unpack('>H', b[2:4])[0]])
+                    if data_type == 'float32':
+                        results.extend(encode_float32_registers(
+                            float(raw), self.byte_order))
+                    elif data_type in ('int32', 'uint32'):
+                        results.extend(encode_int32_registers(
+                            int(round(raw)), self.byte_order,
+                            signed=data_type == 'int32'))
                     else:
                         results.append(int(round(raw)) & 0xFFFF)
+                i += width
             return results[:count]
 
         # 模拟通信延迟
@@ -302,16 +319,18 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         # 根据数据类型编码
         data_type = reg_config.get('data_type', 'uint16')
         
+        # round 369：**编解码必须同源**。原来这里硬编码 `>f` / `>i` / `>I`
+        # （固定 ABCD），而 decode_float32 是按 byte_order 解的 ——
+        # 配成 CDAB（施耐德 M340）、BADC、DCBA 的设备，写进去的浮点数
+        # 读回来就是乱码或 NaN。
         if data_type == 'float32':
-            raw = struct.pack('>f', float(raw_value))
-            return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
+            return encode_float32_registers(float(raw_value), self.byte_order)
         elif data_type in ('int32', 'uint32'):
-            int_val = int(round(raw_value))
-            raw = struct.pack('>i' if data_type == 'int32' else '>I', int_val)
-            return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
+            return encode_int32_registers(
+                int(round(raw_value)), self.byte_order,
+                signed=data_type == 'int32')
         elif count >= 2:
-            raw = struct.pack('>f', float(raw_value))
-            return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
+            return encode_float32_registers(float(raw_value), self.byte_order)
         else:
             return [int(round(raw_value)) & 0xFFFF]
     
@@ -329,9 +348,23 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
         
-        # 根据设备状态返回
+        # round 369：**优先返回被写入的线圈值**。
+        # 原来恒返回「设备是否 RUNNING」：非 RUNNING 时调用
+        # `write_single_coil(..., verify=True)` 回读必然不一致 → 判定写入失败，
+        # 而线圈其实已经写进去了。回读校验的前提是「读得到刚写的东西」。
         state = self.behavior_simulator.state
-        return [state == DeviceState.RUNNING for _ in range(count)]
+        default_on = state == DeviceState.RUNNING
+        getter = getattr(self.behavior_simulator, 'get_written_coil_value', None)
+        result: List[bool] = []
+        for offset in range(count):
+            written = None
+            if getter is not None:
+                try:
+                    written = getter(address + offset)
+                except Exception:       # noqa: BLE001
+                    written = None
+            result.append(default_on if written is None else bool(written))
+        return result
     
     def read_discrete_inputs(self, address: int, count: int,
                              slave_id: Optional[int] = None) -> Optional[List[bool]]:

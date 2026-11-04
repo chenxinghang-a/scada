@@ -104,7 +104,7 @@ class ModbusClient:
         # Fix 2: 最后已知良好值缓存 — 读取失败时返回缓存值而非 None，
         # 避免重连期间数据断流。key = (address, count), value = list[int]
         self._last_good_values: dict[tuple, list[int]] = {}
-        # 缓存写入时刻（time.time()），key 与 _last_good_values 一致。
+        # 缓存写入时刻（time.monotonic()），key 与 _last_good_values 一致。
         # 没有它就无法回答"这个值到底有多旧"——这正是"静默假成功"的根源。
         self._last_good_at: dict[tuple, float] = {}
 
@@ -164,12 +164,15 @@ class ModbusClient:
         cached_at = self._last_good_at.get((address, count))
         if cached_at is None:
             return None
-        return max(0.0, time.time() - cached_at)
+        # round 369：与 `_mark_read_fresh` 同基准 —— 必须用单调时钟。
+        # 墙钟被 NTP 回拨时 `time.time() - cached_at` 变负，
+        # 几小时前的陈旧缓存会被算成"0.0 秒，完全新鲜"。
+        return max(0.0, time.monotonic() - cached_at)
 
     def _mark_read_fresh(self, cache_key: tuple, registers: list[int]):
         """成功读取：写入缓存 + 时间戳，并标记本次读取为新鲜数据"""
         self._last_good_values[cache_key] = registers
-        self._last_good_at[cache_key] = time.time()
+        self._last_good_at[cache_key] = time.monotonic()
         with self._stats_lock:
             self.last_read_source = 'fresh'
             self.last_read_ok = True
@@ -444,12 +447,15 @@ class ModbusClient:
         """自动重连（指数退避）"""
         if self._reconnect_attempts > 0:
             delay = min(2 ** self._reconnect_attempts, self._max_reconnect_delay)
-            now = time.time()
+            # round 369：退避间隔是**时长**，必须用单调时钟。
+            # 墙钟回拨后 `now - last` 变负，该设备会永久停在"还在退避中"，
+            # 再也不重连（现场表现：断线设备永远离线，重启才恢复）。
+            now = time.monotonic()
             if now - self._last_reconnect_time < delay:
                 return False  # 还在退避中
 
         self._reconnect_attempts += 1
-        self._last_reconnect_time = time.time()
+        self._last_reconnect_time = time.monotonic()
 
         try:
             self.disconnect()

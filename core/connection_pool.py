@@ -96,6 +96,8 @@ class ConnectionPool:
             # 漂移/误用计数：非零即说明调用方有 bug，属于必须可见的信号
             'release_mismatch': 0,
             'stats_drift': 0,
+            # 因连接正被占用而拒绝的获取次数（round 369）
+            'busy_rejected': 0,
         }
 
         # 后台清理线程
@@ -176,14 +178,21 @@ class ConnectionPool:
                     # 该 key 的连接正被占用。池是 key → 连接的**一一对应**结构，
                     # 不能再建一条新连接去覆盖这个槽位：旧连接会立刻失去引用，
                     # 永远不会被 disconnect/close（连接泄漏 → 长期运行耗尽句柄）。
-                    # 这里复用既有连接，保证调用方仍拿到可用客户端。
-                    conn.last_used = time.monotonic()
-                    conn.use_count += 1
-                    self._stats['hits'] += 1
+                    #
+                    # round 369：但**也不能把同一个连接交给两个线程**。
+                    # 设备客户端（socket / 串口）不是线程安全的：线程 A 正在
+                    # 收报文时线程 B 写入同一 socket，TCP 流里两个请求的字节
+                    # 交织在一起，双方都收到错帧（"串包"）。而且原来这里没
+                    # 递增 active、也没有引用计数，A 先 release 就把 in_use 置
+                    # False（B 还在读写），B 再 release 时统计下溢。
+                    # 正确语义：占用中 → 明确拒绝，由调用方退避重试。
+                    self._stats['busy_rejected'] += 1
+                    self._stats['misses'] += 1
                     logger.warning(
-                        f"连接池 {self._name}: 连接 {key} 正在使用中，复用同一连接"
-                        f"（不再新建，避免覆盖导致旧连接泄漏）")
-                    return conn.client
+                        f"连接池 {self._name}: 连接 {key} 正被其他线程使用，"
+                        f"拒绝并发复用（客户端非线程安全，累计拒绝 "
+                        f"{self._stats['busy_rejected']} 次）")
+                    return None
                 else:
                     # 空闲但不健康：先销毁再重建，避免覆盖时泄漏旧连接
                     self._destroy_connection(key, conn)

@@ -29,6 +29,12 @@ services:
       # 生成方式：python -c "import secrets;print(secrets.token_hex(32))"
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY 未设置：请在 .env 或部署环境中提供强随机值}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 未设置：请在 .env 或部署环境中提供强随机值}
+      # ⚠️ 这一行是**必填**，不是可选加固。
+      # config.py 在 IS_PRODUCTION 且 SCADA_ADMIN_PASSWORD 缺失/为弱默认值时
+      # 直接 raise RuntimeError（fail-closed）；而上面已钉死 SCADA_ENV=production，
+      # 因此漏传本变量 = 容器启动即崩，被 restart: unless-stopped 拉成无限重启。
+      # Compose 只透传 environment:/env_file: 里声明过的变量，宿主机 export 无效。
+      - SCADA_ADMIN_PASSWORD=${SCADA_ADMIN_PASSWORD:?SCADA_ADMIN_PASSWORD 未设置：请在 .env 或部署环境中提供强管理员口令}
     volumes:
       - scada-data:/app/data
       - scada-logs:/app/logs

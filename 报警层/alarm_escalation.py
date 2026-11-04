@@ -124,6 +124,10 @@ class AlarmEscalationManager:
 
     def __init__(self, config: Dict[str, Any] = None):
         self._lock = threading.Lock()
+        #: round 369：键仍是字符串（对外 `get_status()` 的 states 键契约不能变），
+        #: 但各段做了 `:` 转义，消除拼接碰撞：alarm_id 里带冒号（自定义规则 ID）
+        #: 时，`a:b`+`c`+`d` 与 `a`+`b:c`+`d` 原来会拼成同一个 key，
+        #: 两条不同报警共用一份升级计时/已升级级别，其中一条永远不升级。
         self._states: Dict[str, EscalationState] = {}
         self._rules: List[EscalationRule] = self.DEFAULT_RULES.copy()
         self._callbacks: List[Callable] = []
@@ -133,6 +137,14 @@ class AlarmEscalationManager:
 
         if config:
             self._load_config(config)
+
+    @staticmethod
+    def _state_key(alarm_id: str, device_id: str, register_name: str) -> str:
+        """构造升级跟踪键：普通 ID 保持 `a:b:c` 原样，含冒号的段会被转义。"""
+        def esc(value: str) -> str:
+            return str(value).replace('\\', '\\\\').replace(':', '\\:')
+
+        return f"{esc(alarm_id)}:{esc(device_id)}:{esc(register_name)}"
 
     def _load_config(self, config: Dict[str, Any]):
         """加载配置
@@ -193,7 +205,7 @@ class AlarmEscalationManager:
                 未确认报警，重启后升级倒计时归零，**永远不会升级**）。
                 缺省取当前时刻。
         """
-        key = f"{alarm_id}:{device_id}:{register_name}"
+        key = self._state_key(alarm_id, device_id, register_name)
         with self._lock:
             if key not in self._states:
                 now_wall = time.time()
@@ -215,7 +227,7 @@ class AlarmEscalationManager:
 
     def acknowledge_alarm(self, alarm_id: str, device_id: str, register_name: str):
         """确认告警"""
-        key = f"{alarm_id}:{device_id}:{register_name}"
+        key = self._state_key(alarm_id, device_id, register_name)
         with self._lock:
             if key in self._states:
                 self._states[key].acknowledged = True
@@ -223,7 +235,7 @@ class AlarmEscalationManager:
 
     def remove_alarm(self, alarm_id: str, device_id: str, register_name: str):
         """移除告警"""
-        key = f"{alarm_id}:{device_id}:{register_name}"
+        key = self._state_key(alarm_id, device_id, register_name)
         with self._lock:
             if key in self._states:
                 del self._states[key]

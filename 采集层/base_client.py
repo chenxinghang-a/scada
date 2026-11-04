@@ -117,6 +117,58 @@ class ByteOrderCapableDecoder:
         return raw
 
 
+def encode_float32_registers(value: float, byte_order: str = 'ABCD') -> list[int]:
+    """按字节序把 float32 编码成两个寄存器（``_reorder_32`` 的严格逆运算）。
+
+    round 369：原来只有 ``模拟`` 侧有这个函数，而**真实**侧
+    （``RealDeviceManager.adjust_device``）直接 ``struct.pack('>f', ...)``
+    硬编码 ABCD —— 对 CDAB/BADC/DCBA 的 PLC 调节浮点设定值时，
+    写进去的是高低字颠倒的错误数值。编码逻辑必须与解码同源。
+    """
+    raw = struct.pack('>f', float(value))
+    w_hi = struct.unpack('>H', raw[0:2])[0]
+    w_lo = struct.unpack('>H', raw[2:4])[0]
+
+    if hasattr(byte_order, 'value'):        # 兼容 ByteOrder 枚举
+        byte_order = byte_order.value
+    order = str(byte_order or 'ABCD').upper()
+    if order == 'CDAB':
+        return [w_lo, w_hi]
+    if order == 'BADC':
+        hi = ((w_hi & 0xFF) << 8) | ((w_hi >> 8) & 0xFF)
+        lo = ((w_lo & 0xFF) << 8) | ((w_lo >> 8) & 0xFF)
+        return [hi, lo]
+    if order == 'DCBA':
+        b0 = (w_hi >> 8) & 0xFF
+        b1 = w_hi & 0xFF
+        b2 = (w_lo >> 8) & 0xFF
+        b3 = w_lo & 0xFF
+        return [((b3 << 8) | b2) & 0xFFFF, ((b1 << 8) | b0) & 0xFFFF]
+    return [w_hi, w_lo]
+
+
+def encode_int32_registers(value: int, byte_order: str = 'ABCD',
+                           signed: bool = True) -> list[int]:
+    """按字节序把 32 位整数编码成两个寄存器（``decode_int32/uint32`` 的逆运算）。"""
+    raw = struct.pack('>i' if signed else '>I', int(value))
+    w_hi = struct.unpack('>H', raw[0:2])[0]
+    w_lo = struct.unpack('>H', raw[2:4])[0]
+
+    if hasattr(byte_order, 'value'):        # 兼容 ByteOrder 枚举
+        byte_order = byte_order.value
+    order = str(byte_order or 'ABCD').upper()
+    if order == 'CDAB':
+        return [w_lo, w_hi]
+    if order == 'BADC':
+        hi = ((w_hi & 0xFF) << 8) | ((w_hi >> 8) & 0xFF)
+        lo = ((w_lo & 0xFF) << 8) | ((w_lo >> 8) & 0xFF)
+        return [hi, lo]
+    if order == 'DCBA':
+        return [((w_lo & 0xFF) << 8) | ((w_lo >> 8) & 0xFF),
+                ((w_hi & 0xFF) << 8) | ((w_hi >> 8) & 0xFF)]
+    return [w_hi, w_lo]
+
+
 class BaseDeviceClient(ABC):
     """
     设备客户端基类

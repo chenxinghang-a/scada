@@ -408,13 +408,21 @@ class SecurityConfig:
             # 读取 .env 失败：无法复用已持久化的 CSRF 密钥，将退化为本次随机生成，
             # 重启后 CSRF 令牌全部失效（功能降级），必须留痕。
             logger.warning("读取 %s 中的 CSRF_SECRET 失败，将重新生成: %s", _env_file, e)
-        if not CSRF_SECRET:
-            CSRF_SECRET = _generated
+        if not CSRF_SECRET or CSRF_SECRET.strip().lower() in _WEAK_SECRET_VALUES:
+            # round 369：**与 SECRET_KEY / JWT_SECRET 同一套 fail-closed 口径**。
+            # 原来生产环境缺密钥只打一条 critical 日志，然后继续用随机值启动：
+            #   · 多 worker 部署时每个进程密钥不同 → CSRF 令牌互相不认；
+            #   · 每次重启全部令牌失效，表单提交随机 403；
+            #   · 还会往容器只读层 .env 追加写入（必然失败）。
+            # 缺失或弱占位符（CHANGE_ME 之类）都必须拒绝启动。
             if IS_PRODUCTION:
-                logger.critical(
-                    "【生产环境密钥缺失】CSRF_SECRET 未设置，本次使用随机生成值，"
-                    "重启后所有 CSRF 令牌失效！请在部署环境中显式配置 CSRF_SECRET。"
+                raise RuntimeError(
+                    "CSRF_SECRET 未配置或使用了弱默认值：生产环境"
+                    "（SCADA_ENV=production）必须通过环境变量 CSRF_SECRET 提供强随机密钥，"
+                    "已拒绝启动。"
+                    '生成方式：python -c "import secrets;print(secrets.token_hex(32))"'
                 )
+            CSRF_SECRET = _generated
             try:
                 with open(_env_file, 'a', encoding='utf-8') as f:
                     f.write(f'\nCSRF_SECRET={_generated}\n')

@@ -201,11 +201,13 @@ class VibrationAnalyzer:
         报表里出现一台不存在的设备的振动评分。
         """
         removed = False
-        for container in (self._buffers, self._scores,
-                          self._device_sample_rates, self._feed_sample_rates):
-            if device_id in container:
-                container.pop(device_id, None)
-                removed = True
+        # round 369：持锁清理（feed_data / refresh_scores 并发访问同一批容器）
+        with self._lock:
+            for container in (self._buffers, self._scores,
+                              self._device_sample_rates, self._feed_sample_rates):
+                if device_id in container:
+                    container.pop(device_id, None)
+                    removed = True
         if removed:
             logger.info("振动分析器已清理已删除设备的状态: %s", device_id)
         return removed

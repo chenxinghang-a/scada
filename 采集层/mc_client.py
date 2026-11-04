@@ -455,23 +455,66 @@ class MCClient(ByteOrderCapableDecoder):
         bit_area = self.config.get('bit_area', 'M')
         return self.read_bits(bit_area, address, count)
 
+    # ---- 写兼容面（round 369）----
+    #
+    # 与 FINS 同因：`device_control` 按 `write_single_register` /
+    # `write_single_coil` 判断可写性，而 MC 只有私有的 `write_single_word` /
+    # `write_single_bit` —— 三菱 PLC 的联锁动作与远程控制全部 100% 失败。
+    def write_single_register(self, address: int, value: int,
+                              slave_id: int | None = None,
+                              verify: bool = False) -> bool:
+        """写入单个保持寄存器（映射到字设备区，默认 D）。"""
+        if not self.connected:
+            return False
+        word_area = self.config.get('word_area', 'D')
+        ok = self.write_single_word(word_area, address, int(value))
+        if ok and verify:
+            read_back = self.read_holding_registers(address, 1, slave_id=slave_id)
+            if not read_back or int(read_back[0]) != (int(value) & 0xFFFF):
+                logger.warning("MC 寄存器回读验证失败: D%d 写=%s 回读=%s",
+                               address, value, read_back)
+                return False
+        return ok
+
+    def write_single_coil(self, address: int, value: bool,
+                          slave_id: int | None = None,
+                          verify: bool = False) -> bool:
+        """写入单个线圈（映射到位设备区，默认 M）。"""
+        if not self.connected:
+            return False
+        bit_area = self.config.get('bit_area', 'M')
+        ok = self.write_single_bit(bit_area, address, bool(value))
+        if ok and verify:
+            read_back = self.read_coils(address, 1, slave_id=slave_id)
+            if not read_back or bool(read_back[0]) != bool(value):
+                logger.warning("MC 线圈回读验证失败: M%d 写=%s 回读=%s",
+                               address, value, read_back)
+                return False
+        return ok
+
     # decode_float32/uint16/int16/uint32/int32/float64 来自 ByteOrderCapableDecoder，
     # 已按 self.config['byte_order'] 正确解码四种字节序。
 
     def read_float32(self, device: str, address: int) -> float | None:
-        """读取32位浮点数（占用2个字，大端字序）"""
+        """读取32位浮点数（占用2个字）。
+
+        round 369：三菱 PLC 是**低字在前**；先换成基类约定的「高字在前」，
+        再按设备 ``byte_order`` 解码（原来硬编码 `<HH`/`<f`，等价只支持 ABCD）。
+        """
         result = self.read_words(device, address, 2)
         if result and len(result) >= 2:
-            # 三菱PLC字序：低地址在前
-            raw = struct.pack('<HH', result[0], result[1])
-            return struct.unpack('<f', raw)[0]
+            return self.decode_float32([result[1], result[0]])
         return None
 
     def read_int32(self, device: str, address: int) -> int | None:
-        """读取32位整数"""
+        """读取32位有符号整数（补码 + 四种字节序）。
+
+        round 369：原来 `(result[1] << 16) | result[0]` 不做符号扩展，
+        -1 会被读成 +4294967295，且忽略 byte_order。
+        """
         result = self.read_words(device, address, 2)
         if result and len(result) >= 2:
-            return (result[1] << 16) | result[0]
+            return self.decode_int32([result[1], result[0]])
         return None
 
     def write_float32(self, device: str, address: int, value: float) -> bool:

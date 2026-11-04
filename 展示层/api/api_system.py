@@ -145,6 +145,50 @@ def toggle_simulation_mode():
     return jsonify(result)
 
 
+@system_bp.route('/system/interlocks/reload', methods=['POST'])
+@role_required('admin', 'engineer')
+def reload_interlocks():
+    """热重载 `配置/interlocks.yaml`，返回新旧规则差集。
+
+    round 369（BUG-36）：`DeviceControlSafety.reload_interlocks()` 早就实现了
+    差集重载 + 空表回滚保护，但**没有任何生产调用点** —— 现场调联锁阈值
+    只能重启进程（24/7 系统）。这里把它接到运维接口上。
+
+    安全语义（与 `reload_interlocks` 的约定一致）：
+      * 重载后规则为 0 而原来非 0 → 视为加载失败，**保留旧规则**并回 500；
+      * `changed` / `removed` 的规则运行时状态（已触发位、旁路审批）会被重置；
+      * `kept` 规则的状态原样保留，不会重复触发。
+    """
+    device_control = getattr(current_app, 'device_control', None)
+    if device_control is None or not hasattr(device_control, 'reload_interlocks'):
+        return api_error('控制安全模块未初始化，无法重载联锁', 503)
+
+    try:
+        diff = device_control.reload_interlocks() or {}
+    except Exception as e:
+        logger.error("安全联锁重载异常: %s", e, exc_info=True)
+        return api_error(f'联锁重载失败: {e}', 500)
+
+    if diff.get('error'):
+        # 回滚保护触发：旧规则仍在生效，但这次重载**没有成功**
+        return jsonify({
+            'success': False,
+            'message': diff['error'],
+            'rolled_back': True,
+            **{k: diff.get(k, []) for k in ('added', 'removed', 'changed', 'kept')},
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'message': '联锁规则已重载',
+        'added': diff.get('added', []),
+        'removed': diff.get('removed', []),
+        'changed': diff.get('changed', []),
+        'kept': diff.get('kept', []),
+        'source': diff.get('source'),
+    })
+
+
 # ==================== 系统配置API ====================
 
 @system_bp.route('/config', methods=['GET'])

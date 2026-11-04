@@ -179,15 +179,19 @@ class RequestQueue:
                     task['status'] = TaskStatus.RUNNING
                     task['started_at'] = time.time()
 
+            started_mono = time.monotonic()
             try:
                 result = func(*args, **kwargs)
+                # round 369：耗时用单调时钟。墙钟在 NTP 校时后会出现
+                # "任务耗时 -3600s" 这种荒谬值（运维按它排查性能会得出反向结论）。
+                duration = time.monotonic() - started_mono
                 with self._tasks_lock:
                     task = self._tasks.get(task_id)
                     if task:
                         task['status'] = TaskStatus.COMPLETED
                         task['result'] = result
                         task['completed_at'] = time.time()
-                        duration = task['completed_at'] - task['started_at']
+                        task['duration'] = duration
                         logger.info("任务完成: %s/%s (%.1fs)", self.name, task_id, duration)
             except Exception as e:
                 with self._tasks_lock:
@@ -215,10 +219,17 @@ def queued_task(queue: RequestQueue):
             task_id = queue.submit(f, *args, **kwargs)
             status = queue.get_status(task_id)
 
-            if status and status['status'] == TaskStatus.FAILED:
+            # round 369：**只把「入队就失败」当 503**。
+            # 原实现对**任何** FAILED 都回 503 —— 但 submit() 之后才检查，
+            # 后台线程里刚跑失败的任务也会命中；反过来，真正的异步失败
+            # （任务已入队、稍后执行失败）此时状态还是 PENDING/RUNNING，
+            # 仍然回 202，调用方永远感知不到。判据：`started_at is None`
+            # 说明它**从没被执行过**（队列满被拒），那才是同步失败。
+            if (status and status['status'] == TaskStatus.FAILED
+                    and not status.get('started_at')):
                 return jsonify({
                     'success': False,
-                    'error': status['error'],
+                    'error': status.get('error') or '任务提交失败',
                     'task_id': task_id,
                 }), 503
 

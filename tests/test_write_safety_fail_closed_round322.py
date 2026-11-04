@@ -343,13 +343,21 @@ def test_audit_failure_does_not_pollute_memory(tmp_path, monkeypatch):
 
 
 def test_write_attempt_is_audited_before_execution(tmp_path, monkeypatch):
-    """写入必须留下 `write_attempt`（执行前）与 `write_success`（执行后）两条。"""
+    """写入必须留下 `write_attempt`（执行前）与结果审计（执行后）两条。
+
+    round 369：结果动作分三档 ——
+      · 回读一致   → write_success
+      · 无法回读   → write_unverified（本用例的假客户端属于这档）
+      · 回读不一致 → write_verify_failed（且 success 会被置 False）
+    """
     dc = _dc(tmp_path, monkeypatch)
     res = dc.write_with_verification('d1', 1, 50, 'op')
     assert res['success'] is True
 
     actions = [e['action'] for e in dc.get_audit_log(limit=20)]
     assert 'write_attempt' in actions, '缺少执行前的意图记录'
-    assert 'write_success' in actions
-    # attempt 必须在 success 之前（时间序：get_audit_log 是倒序，所以 attempt 在后）
-    assert actions.index('write_success') < actions.index('write_attempt')
+    result_actions = [a for a in actions
+                      if a in ('write_success', 'write_unverified')]
+    assert result_actions, f'缺少写入结果审计，实际动作: {actions}'
+    # attempt 必须在结果之前（时间序：get_audit_log 是倒序，所以 attempt 在后）
+    assert actions.index(result_actions[0]) < actions.index('write_attempt')

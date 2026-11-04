@@ -131,11 +131,22 @@ class DataExport:
 
         try:
             filepath = self._resolve_target(filename)
-            # 获取字段名
-            fieldnames = data[0].keys()
+            # round 369：**汇总全部行的键，而不是只看首行**。
+            # 历史/报警记录里后面几行可能带可选字段（extra_json 展开后的键、
+            # 单条记录单独补的 unit/quality…），只取 data[0].keys() 时
+            # `DictWriter.writerows` 遇到多余键直接抛 ValueError ——
+            # 整个导出返回空串，用户看到"导出失败"却不知道少了一列。
+            fieldnames: list[str] = []
+            seen: set[str] = set()
+            for row in data:
+                for key in row.keys():
+                    if key not in seen:
+                        seen.add(key)
+                        fieldnames.append(key)
 
             with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=fieldnames,
+                                        extrasaction='ignore')
                 writer.writeheader()
                 # 逐格中和公式前缀（CWE-1236），见 _sanitize_cell 的说明
                 writer.writerows(_sanitize_rows(data))

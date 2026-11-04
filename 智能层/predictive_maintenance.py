@@ -100,18 +100,23 @@ class PredictiveMaintenance:
         prefix = f'{device_id}:'
         removed = False
 
-        for container in (self.health_scores, self.data_windows):
-            for key in [k for k in list(container) if k.startswith(prefix)]:
-                container.pop(key, None)
-                removed = True
+        # round 369：**必须持锁**。API 线程删设备时，后台分析线程正在
+        # feed_data / _run_analysis 里读写同一批容器 —— 无锁 pop 会让
+        # 「遍历中改变字典大小」抛 RuntimeError（分析循环整轮中断），
+        # 或读到半删状态的评分。
+        with self._lock:
+            for container in (self.health_scores, self.data_windows):
+                for key in [k for k in list(container) if k.startswith(prefix)]:
+                    container.pop(key, None)
+                    removed = True
 
-        # 维护提醒是列表，元素形如 {'device_id': ..., ...}
-        before = len(self.maintenance_alerts)
-        self.maintenance_alerts = [
-            a for a in self.maintenance_alerts if a.get('device_id') != device_id
-        ]
-        if len(self.maintenance_alerts) != before:
-            removed = True
+            # 维护提醒是列表，元素形如 {'device_id': ..., ...}
+            before = len(self.maintenance_alerts)
+            self.maintenance_alerts = [
+                a for a in self.maintenance_alerts if a.get('device_id') != device_id
+            ]
+            if len(self.maintenance_alerts) != before:
+                removed = True
 
         if removed:
             logger.info("预测性维护已清理已删除设备的数据: %s", device_id)
@@ -128,6 +133,12 @@ class PredictiveMaintenance:
             value: 数值
             timestamp: 时间戳
         """
+        # round 369：**过滤 bool / NaN / Infinity**。
+        # 原来只挡 None：一个 NaN 混进滑动窗口后，后续 100 次回归计算
+        # 全部变成 NaN（健康分恒为 NaN，看板显示"--"且永不恢复）。
+        # 与 SPCAnalyzer / VibrationAnalyzer 的入口守卫保持同一口径。
+        from core.safe_numeric import try_finite_float
+        value = try_finite_float(value)
         if value is None:
             return
         key = f"{device_id}:{register_name}"

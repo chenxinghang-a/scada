@@ -172,11 +172,13 @@ class OEECalculator:
         与 round 274 修 `DataCollector._device_intervals` 同型。
         """
         removed = False
-        for container in (self.device_states, self._last_production,
-                          self.shift_data, self.theoretical_rates):
-            if device_id in container:
-                container.pop(device_id, None)
-                removed = True
+        # round 369：持锁清理（record_production / update_device_status 并发访问）
+        with self._lock:
+            for container in (self.device_states, self._last_production,
+                              self.shift_data, self.theoretical_rates):
+                if device_id in container:
+                    container.pop(device_id, None)
+                    removed = True
         if removed:
             logger.info("OEE 已清理已删除设备的状态: %s", device_id)
         return removed
@@ -240,15 +242,28 @@ class OEECalculator:
             planned_hours: 计划生产时间(小时)
         """
         with self._lock:
+            # round 369：先取旧数据再覆盖 —— 原写法在字典**已被替换之后**
+            # 才去读 `self.shift_data[device_id].get('ideal_cycle_time')`，
+            # 读到的永远是刚建的新字典（ideal_cycle_time 恒为 0），
+            # 新班次的理想节拍被清零，OEE 性能率直接失真。
+            old = self.shift_data.get(device_id) or {}
+            now = datetime.now()
             self.shift_data[device_id] = {
-                'shift_start': datetime.now(),
+                'shift_start': now,
                 'planned_production_time': planned_hours * 3600,
                 'actual_run_time': 0,
                 'downtime': 0,
                 'total_count': 0,
                 'good_count': 0,
-                'ideal_cycle_time': self.shift_data[device_id].get('ideal_cycle_time', 0),
+                'ideal_cycle_time': old.get('ideal_cycle_time', 0),
             }
+            # round 369：**必须同步重置 `since`**。
+            # 否则新班次第一次 update_device_state 会把「上一班次自上次状态
+            # 变化以来的全部时长」一次性累加进新班次的运行/停机时间，
+            # 新班次一开班可用率就超过 100%。
+            state = self.device_states.get(device_id)
+            if state is not None:
+                state['since'] = now
             logger.info(f"设备 {device_id} 新班次开始，计划生产 {planned_hours} 小时")
 
     # ==================== OEE计算核心 ====================

@@ -274,15 +274,23 @@ class ModbusGateway(BaseGateway):
             elif data_type == 'uint32':
                 if len(registers) < 2:
                     return None
-                return float((registers[0] << 16) | registers[1])
+                # round 369：**32 位整数也必须按 byte_order 解码**。
+                # 上面 float32/float64 走了 BinaryPayloadDecoder，这里却硬编码
+                # 大端字序 —— CDAB/DCBA 仪表上的 32 位整数高低字颠倒。
+                bo, wo = byte_order or (Endian.BIG, Endian.BIG)
+                decoder = BinaryPayloadDecoder.fromRegisters(
+                    registers, byteorder=bo, wordorder=wo
+                )
+                return float(decoder.decode_32bit_uint())
 
             elif data_type == 'int32':
                 if len(registers) < 2:
                     return None
-                value = (registers[0] << 16) | registers[1]
-                if value > 2147483647:
-                    value -= 4294967296
-                return float(value)
+                bo, wo = byte_order or (Endian.BIG, Endian.BIG)
+                decoder = BinaryPayloadDecoder.fromRegisters(
+                    registers, byteorder=bo, wordorder=wo
+                )
+                return float(decoder.decode_32bit_int())
 
             else:
                 self.logger.error(f"不支持的数据类型: {data_type}")

@@ -87,20 +87,22 @@ class SPCAnalyzer:
         """
         prefix = f'{device_id}:'
         removed = False
-        for container in (self.control_limits, self.spec_limits, self.violations):
-            for key in [k for k in list(container) if k.startswith(prefix)]:
-                container.pop(key, None)
-                removed = True
+        # round 369：**必须持锁**（与 feed_data / _run_analysis 共用这批容器）
+        with self._lock:
+            for container in (self.control_limits, self.spec_limits, self.violations):
+                for key in [k for k in list(container) if k.startswith(prefix)]:
+                    container.pop(key, None)
+                    removed = True
 
-        # round 355：**还有三个同样用复合键的容器被漏掉了**。
-        # `data_buffers`（测量值缓冲，deque）与 `_total_fed`（喂入计数）
-        # 不清 → 删掉的设备的样本继续占内存，且重新添加同名设备时
-        # **首轮判异直接继承旧样本**（控制图一上来就报警或一上来就"样本充足"）；
-        # `_violation_seen`（已报过的判异指纹）不清 → 同一违规在新设备上不再报。
-        for container in (self.data_buffers, self._total_fed, self._violation_seen):
-            for key in [k for k in list(container) if k.startswith(prefix)]:
-                container.pop(key, None)
-                removed = True
+            # round 355：**还有三个同样用复合键的容器被漏掉了**。
+            # `data_buffers`（测量值缓冲，deque）与 `_total_fed`（喂入计数）
+            # 不清 → 删掉的设备的样本继续占内存，且重新添加同名设备时
+            # **首轮判异直接继承旧样本**（控制图一上来就报警或一上来就"样本充足"）；
+            # `_violation_seen`（已报过的判异指纹）不清 → 同一违规在新设备上不再报。
+            for container in (self.data_buffers, self._total_fed, self._violation_seen):
+                for key in [k for k in list(container) if k.startswith(prefix)]:
+                    container.pop(key, None)
+                    removed = True
 
         if removed:
             logger.info("SPC 已清理已删除设备的控制限与缓冲: %s", device_id)

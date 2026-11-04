@@ -626,6 +626,43 @@ function formatNumber(value, decimals = 2) {
 }
 
 /**
+ * 全局登出（round 369）
+ *
+ * 空闲超时（下方 15 分钟定时器）原来调用的是一个**不存在的** `logout()`：
+ * 整个 main.js / dashboard.js / screen.js 里都没有定义它 —— 会话超时后
+ * 浏览器抛 `Uncaught ReferenceError: logout is not defined`，
+ * 既不清理 auth_token、也不跳登录页。等保 2.0 要求的"会话空闲自动登出"
+ * 完全失效（用户第二天回来页面还停在原处、令牌仍然有效）。
+ */
+window.logout = async function logout() {
+    const token = localStorage.getItem('auth_token');
+    try {
+        if (token) {
+            await fetch('/api/auth/logout', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                },
+                body: JSON.stringify({ token }),
+            });
+        }
+    } catch (e) {
+        // 服务端不可达也必须完成本地清理 —— 否则用户以为登出了、令牌还在
+        console.warn('登出请求失败，仍将清理本地会话:', e);
+    } finally {
+        try { localStorage.removeItem('auth_token'); } catch (e) { /* 隐私模式 */ }
+        try { sessionStorage.clear(); } catch (e) { /* 隐私模式 */ }
+        if (!window.location.pathname.includes('/login')) {
+            window.location.href = '/login';
+        }
+    }
+};
+
+// 兼容直接调用 `logout()` 的旧代码（非模块脚本，全局作用域）
+var logout = window.logout;
+
+/**
  * 页面加载完成后初始化
  */
 document.addEventListener('DOMContentLoaded', function() {

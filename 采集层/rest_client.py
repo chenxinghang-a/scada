@@ -130,6 +130,13 @@ class RESTDeviceClient:
         """
         try:
             self._session = requests.Session()
+            # round 369：**禁用系统代理**。REST 设备是现场内网/本机服务，
+            # 一旦服务器上配置了 HTTP_PROXY/HTTPS_PROXY，requests 会走
+            # `trust_env` 把采集与控制写入全部发给代理 —— 内网地址代理不可达，
+            # 表现为"所有 REST 设备同时掉线"。
+            # （与 Round 364 对 tdengine_client 的修复同口径。）
+            self._session.trust_env = False
+            self._session.proxies = {'http': None, 'https': None}
             self._session.headers.update({'Content-Type': 'application/json'})
             self._session.headers.update(self.custom_headers)
 
@@ -162,8 +169,10 @@ class RESTDeviceClient:
             self.stats['connected_since'] = datetime.now().isoformat()
             logger.info(f"REST设备已连接: {self.base_url}")
 
-            # 启动轮询
+            # 启动轮询。用 Event 而不是 sleep：断开设备时能立刻唤醒退出，
+            # 不用等满一个轮询周期。
             self._running = True
+            self._stop_event = threading.Event()
             self._thread = threading.Thread(target=self._poll_loop, daemon=True)
             self._thread.start()
 
@@ -178,6 +187,9 @@ class RESTDeviceClient:
     def disconnect(self):
         """断开连接"""
         self._running = False
+        stop_event = getattr(self, '_stop_event', None)
+        if stop_event is not None:
+            stop_event.set()      # 立刻唤醒 sleep 中的轮询线程
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
         if self._session:
@@ -364,7 +376,13 @@ class RESTDeviceClient:
             except Exception as e:
                 logger.error(f"轮询异常: {e}")
 
-            time.sleep(self.poll_interval)
+            # round 369：阻塞式 sleep 换成 Event.wait —— disconnect() 能立刻
+            # 唤醒线程退出；原来最长要等一个 poll_interval（现场可配到几十秒）。
+            stop_event = getattr(self, '_stop_event', None)
+            if stop_event is not None:
+                stop_event.wait(self.poll_interval)
+            else:
+                time.sleep(self.poll_interval)
 
     @staticmethod
     def _extract_by_path(data: Any, path: str) -> Any:

@@ -701,7 +701,8 @@ class DiagnosticExporter:
         Returns:
             导出结果和文件路径
         """
-        start = time.time()
+        # round 369：耗时统计用单调时钟（墙钟回拨会算出负耗时）
+        start = time.monotonic()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         diag_dir = self._output_dir / f"diag_{timestamp}"
         diag_dir.mkdir(parents=True, exist_ok=True)
@@ -741,9 +742,8 @@ class DiagnosticExporter:
             # 打包为zip
             zip_path = self._output_dir / f"diag_{timestamp}.zip"
             shutil.make_archive(str(zip_path.with_suffix('')), 'zip', diag_dir)
-            shutil.rmtree(diag_dir, ignore_errors=True)
 
-            elapsed = time.time() - start
+            elapsed = time.monotonic() - start
             return {
                 'status': 'success',
                 'zip_path': str(zip_path),
@@ -752,7 +752,14 @@ class DiagnosticExporter:
                 'duration_sec': round(elapsed, 2),
             }
         except Exception as e:
-            return {'status': 'error', 'error': str(e), 'duration_sec': time.time() - start}
+            return {'status': 'error', 'error': str(e),
+                    'duration_sec': round(time.monotonic() - start, 2)}
+        finally:
+            # round 369：**临时目录必须无条件清理**。
+            # 原来 `rmtree` 只写在 try 的末尾：中间任何一步（收集日志/DB 统计/
+            # 打包）抛异常，`diag_YYYYMMDD_HHMMSS/` 就永久留在磁盘上 ——
+            # 里面是完整配置与系统状态（含敏感项），既泄密又占空间。
+            shutil.rmtree(diag_dir, ignore_errors=True)
 
     def _collect_system_state(self) -> Dict[str, Any]:
         """收集系统状态"""

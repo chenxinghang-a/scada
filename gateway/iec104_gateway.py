@@ -154,6 +154,14 @@ class IEC104ASDU:
         if len(data) < 6:
             return {}
         type_id = data[0]
+        # round 369：**VSQ 的 bit7 是 SQ（顺序寻址）标志**。
+        # SQ=0：每个信息对象各带 3 字节 IOA；
+        # SQ=1：只有第一个对象带起始 IOA，后续对象地址依次 +1
+        #       （总召唤 GI 响应最常见的形态）。
+        # 原实现只取 `data[1] & 0x7F` 并每轮都强行消费 3 字节 IOA ——
+        # 收到任何 SQ=1 报文时，从第 2 个点位开始整段错位 3 字节，
+        # 解码出完全错乱的数值。
+        sq = bool(data[1] & 0x80)
         num = data[1] & 0x7F
         cot = data[2]
         originator = data[3]
@@ -161,19 +169,24 @@ class IEC104ASDU:
 
         info_objects: list[dict] = []
         offset = 6
-        for _ in range(num):
+        base_ioa = None
+        for idx in range(num):
             if offset >= len(data):
                 break
 
-            # 信息对象地址 (IOA) — 3字节
-            if offset + 2 < len(data):
-                ioa = data[offset] | (data[offset + 1] << 8)
+            # 信息对象地址 (IOA) — 3 字节小端（低字节在前）
+            if sq and base_ioa is not None:
+                ioa = base_ioa + idx
             else:
-                ioa = data[offset]
-            offset += 2
-            # 第三字节 (高位，通常为0)
-            if offset < len(data):
-                offset += 1
+                if offset + 3 > len(data):
+                    break
+                # round 369：**必须取满 24 位**。原来只取低 16 位，
+                # IOA > 65535 的点位高位被抹零，数据全部映射到错误的点。
+                ioa = (data[offset] | (data[offset + 1] << 8)
+                       | (data[offset + 2] << 16))
+                offset += 3
+                if sq:
+                    base_ioa = ioa
 
             if type_id == TypeID.M_ME_NC_1:        # 短浮点数
                 if offset + 5 <= len(data):
@@ -284,6 +297,8 @@ class IEC104Client:
         self.connected = False
         self.send_seq = 0
         self.recv_seq = 0
+        #: 协议级统计（round 369：坏帧必须可观测，否则噪声/错帧永远查不出来）
+        self.stats: dict[str, int] = {'bad_frames': 0}
 
         self._lock = threading.Lock()
         self._recv_buffer = b''
@@ -352,13 +367,24 @@ class IEC104Client:
             if self.socket:
                 self.socket.send(frame)
 
-    def _send_i_frame(self, asdu: bytes):
-        """发送I帧"""
+    def _send_i_frame(self, asdu: bytes) -> bool:
+        """发送I帧。返回是否真的写到了套接字。
+
+        round 369：原来 socket 为 None 时静默什么都不做，调用方无条件
+        `return True` —— 未连接状态下所有控制命令都"成功"。
+        """
         frame = IEC104APCI.build_i_frame(self.send_seq, self.recv_seq, asdu)
         with self._lock:
-            if self.socket:
-                self.socket.send(frame)
-                self.send_seq = (self.send_seq + 1) % 32768
+            if not self.connected or not self.socket:
+                self.logger.error("I帧未发送：IEC104 连接未建立（seq=%s）", self.send_seq)
+                return False
+            try:
+                self.socket.sendall(frame)
+            except Exception as e:      # noqa: BLE001
+                self.logger.error("I帧发送失败: %s", e)
+                return False
+            self.send_seq = (self.send_seq + 1) % 32768
+            return True
 
     # ── 接收 ──────────────────────────────────
 
@@ -398,6 +424,15 @@ class IEC104Client:
                 continue
 
             length = self._recv_buffer[1]
+            # round 369：**APDU 长度下限校验**。
+            # IEC 60870-5-104 规定 length >= 4（4 个控制域字节）。
+            # 噪声字节恰好是 0x68 且后一字节很小（如 0x68 0x00）时，
+            # 原实现会把 2 字节当成一整帧喂给解析器，不仅坏帧统计失真，
+            # 还可能把后续真实帧从中间切断。
+            if length < 4:
+                self._recv_buffer = self._recv_buffer[1:]
+                self.stats['bad_frames'] = self.stats.get('bad_frames', 0) + 1
+                continue
             if len(self._recv_buffer) < length + 2:
                 break   # 不完整帧，等待更多数据
 
@@ -472,7 +507,8 @@ class IEC104Client:
         asdu = IEC104ASDU.build_command(type_id, ioa, value, common_addr=self.common_addr)
         if not asdu:
             return False
-        self._send_i_frame(asdu)
+        if not self._send_i_frame(asdu):
+            return False
         self.logger.info(f"发送命令: IOA={ioa}, 值={value}, TypeID={type_id}")
         return True
 
@@ -481,7 +517,8 @@ class IEC104Client:
         asdu = IEC104ASDU.build_command(TypeID.C_IC_NA_1, 0, 0, common_addr=self.common_addr)
         if not asdu:
             return False
-        self._send_i_frame(asdu)
+        if not self._send_i_frame(asdu):
+            return False
         self.logger.info(f"发送总召唤: common_addr={self.common_addr}")
         return True
 

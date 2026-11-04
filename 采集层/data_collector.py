@@ -521,13 +521,33 @@ class DiskBackedQueue:
         改成「截断 + 重写」后：文件本体保留、内容与待恢复清单一致，
         恢复语义等价，且不会触发删除保护。
         """
-        with open(self._persist_file, 'w', encoding='utf-8') as f:
-            for item in self._pending:
-                # `_db_retry` 是本次进程内的重试标记，不该持久化：
-                # 否则崩溃恢复出来的数据带着它，第一次写库失败就被直接丢弃
-                # （等于把「还能再试一次」的机会提前用掉）。
-                payload = {k: v for k, v in item.items() if k != '_db_retry'}
-                f.write(json.dumps(payload, default=str, ensure_ascii=False) + '\n')
+        # round 369：**原子重写**（同目录临时文件 + fsync + os.replace）。
+        # 原来直接 `open(..., 'w')` —— 它先把磁盘上的队列文件截断为 0 字节
+        # 再逐行重写。如果重写中途进程崩溃/断电/磁盘满，待恢复队列直接
+        # 变成半截或空文件，与注释里的「崩溃零丢失」正好相反。
+        persist_path = Path(self._persist_file)
+        tmp_path = persist_path.with_name(persist_path.name + '.tmp')
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                for item in self._pending:
+                    # `_db_retry` 是本次进程内的重试标记，不该持久化：
+                    # 否则崩溃恢复出来的数据带着它，第一次写库失败就被直接丢弃
+                    # （等于把「还能再试一次」的机会提前用掉）。
+                    payload = {k: v for k, v in item.items() if k != '_db_retry'}
+                    f.write(json.dumps(payload, default=str, ensure_ascii=False) + '\n')
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, persist_path)
+        except Exception as e:      # noqa: BLE001
+            # 不删临时文件（删文件会触发运行环境的批量删除保护），
+            # 只截断成 0 字节：既不留半截脏数据，也不误伤队列持久化文件。
+            try:
+                with open(tmp_path, 'w', encoding='utf-8'):
+                    pass
+            except OSError as cleanup_err:
+                logger.debug("清理临时队列文件失败 %s: %s", tmp_path, cleanup_err)
+            logger.error("队列持久化文件重写失败（原文件未被破坏）: %s", e)
+            raise
 
     def clear_persistence(self, flushed_items: Optional[list] = None) -> None:
         """确认已入库：把这些记录从持久化文件里移除。
@@ -1041,6 +1061,13 @@ class DataCollector:
         这里只做状态清理；取消定时器由 `remove_device_task()` 负责（删除路径
         会先调它，再调本方法），两者职责不重叠。
         """
+        # round 369：**协议标签缓存也要清**。
+        # 同名设备删掉后以另一种协议重建（modbus_tcp → opcua）时，
+        # 旧缓存会让 Prometheus 指标永久打上旧协议标签，
+        # 排障时按 protocol 过滤得到的结论是错的。
+        cache = getattr(self, '_protocol_cache', None)
+        if cache is not None:
+            cache.pop(device_id, None)
         return self._forget_device_state(device_id)
 
     def sync_device_tasks(self) -> dict[str, Any]:
@@ -1088,6 +1115,13 @@ class DataCollector:
         to_start = sorted(desired - running)
         to_stop = sorted(running - desired)
         unchanged = sorted(desired & running)
+
+        # round 369：配置热重载后协议可能已经变了（同一设备 id 改了 protocol），
+        # 而 `_protocol_of()` 的缓存是「第一次见到就永久记住」。
+        # 整表清空代价可忽略（只是指标标签），换来标签永远与配置一致。
+        cache = getattr(self, '_protocol_cache', None)
+        if cache is not None and (to_start or to_stop):
+            cache.clear()
 
         for device_id in to_stop:
             self.remove_device_task(device_id)

@@ -104,7 +104,8 @@ class TestOfflineUsernames:
         _logout('sid1')
 
         # 把最后连接时间推到 TTL 之外
-        ws._known_users['ghost'] = time.time() - ws.OFFLINE_TARGET_TTL - 1
+        # round 369：`_known_users` 用单调时钟登记/比较
+        ws._known_users['ghost'] = time.monotonic() - ws.OFFLINE_TARGET_TTL - 1
 
         assert ws._offline_usernames() == []
         assert ws._queue_for_offline_users('alarm', {'alarm_id': 'A1'}) == 0

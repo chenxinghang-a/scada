@@ -60,7 +60,7 @@ class FaultSeverity(Enum):
 class FaultInjection:
     """单个故障注入实例"""
     __slots__ = ('target', 'fault_type', 'severity', 'params',
-                 'start_time', 'end_time', 'triggered_count',
+                 'start_time', 'end_time', 'end_time_mono', 'triggered_count',
                  'affected_calls', '_active', '_lock')
 
     def __init__(
@@ -75,8 +75,12 @@ class FaultInjection:
         self.fault_type = fault_type
         self.severity = severity
         self.params = params
-        self.start_time = time.time()
+        self.start_time = time.time()          # 墙钟，仅供展示
         self.end_time = self.start_time + duration
+        #: round 369：到期判定用单调时钟。NTP 回拨会让 `time.time()` 变小，
+        #: 故障注入（网络分区/超时）就**永远不会按期自动解除**，
+        #: 现场表现为"网络一直不通，重启才恢复"。
+        self.end_time_mono = time.monotonic() + duration
         self.triggered_count = 0
         self.affected_calls = 0
         self._active = True
@@ -86,7 +90,7 @@ class FaultInjection:
     def is_active(self) -> bool:
         if not self._active:
             return False
-        if time.time() > self.end_time:
+        if time.monotonic() > self.end_time_mono:
             self._active = False
             return False
         return True
@@ -155,7 +159,7 @@ class FaultInjection:
             'affected_calls': self.affected_calls,
             'start_time': self.start_time,
             'end_time': self.end_time,
-            'remaining_seconds': max(0, self.end_time - time.time()),
+            'remaining_seconds': max(0, self.end_time_mono - time.monotonic()),
             'params': {k: str(v) for k, v in self.params.items()},
         }
 

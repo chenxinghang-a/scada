@@ -29,6 +29,31 @@ def _escape_value(val: str) -> str:
     return str(val).replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
 
 
+# round 369：**标识符白名单**。
+# 表名/列名/聚合函数/排序方向是**无法参数化**的部分（SQL 参数只能绑值），
+# 原来全部直接拼进 SQL：只要上层把 device_id、列名之类从请求里透传进来，
+# 就能构造 `... FROM x; DROP TABLE y` 或子查询。
+_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+_AGG_FUNCS = {
+    'AVG', 'MAX', 'MIN', 'SUM', 'COUNT', 'FIRST', 'LAST', 'TOP', 'BOTTOM',
+    'SPREAD', 'STDDEV', 'PERCENTILE', 'APERCENTILE', 'LEASTSQUARES',
+    'HISTOGRAM', 'ELAPSED', 'DIFF', 'DERIVATIVE', 'IRATE', 'MAVG',
+}
+_DIRECTIONS = {'ASC', 'DESC'}
+_FILL_MODES = {'NULL', 'PREV', 'LINEAR', 'NONE', 'VALUE'}
+_INTERVAL_RE = re.compile(r'^\d{1,6}[smhdwn]$', re.IGNORECASE)
+
+
+def _require_identifier(value: str, field: str = '标识符') -> str:
+    """校验并返回安全标识符；非法直接抛 ValueError（fail-closed）。"""
+    text = str(value or '').strip()
+    if text == '*':
+        return text
+    if not _IDENT_RE.match(text):
+        raise ValueError(f'{field}非法: {value!r}（只允许字母/数字/下划线）')
+    return text
+
+
 class QueryBuilder:
     """
     SQL查询构建器
@@ -43,7 +68,7 @@ class QueryBuilder:
         Args:
             table: 表名（可以是超级表或子表）
         """
-        self._table = table
+        self._table = _require_identifier(table, '表名')
         self._select_columns: list[str] = []
         self._where_clauses: list[str] = []
         self._group_by: list[str] = []
@@ -61,7 +86,8 @@ class QueryBuilder:
         Args:
             columns: 列名列表
         """
-        self._select_columns.extend(columns)
+        self._select_columns.extend(
+            _require_identifier(c, '列名') for c in columns)
         return self
 
     def select_agg(self, func: str, column: str, alias: str | None = None) -> 'QueryBuilder':
@@ -73,8 +99,13 @@ class QueryBuilder:
             column: 列名
             alias: 别名
         """
-        alias = alias or f"{func.lower()}_{column}"
-        self._aggregate_funcs[alias] = f"{func}({column})"
+        func_name = str(func or '').strip().upper()
+        if func_name not in _AGG_FUNCS:
+            raise ValueError(f'不支持的聚合函数: {func!r}')
+        col = _require_identifier(column, '聚合列名')
+        alias = alias or f"{func_name.lower()}_{col}"
+        self._aggregate_funcs[_require_identifier(alias, '别名')] = (
+            f"{func_name}({col})")
         return self
 
     def where(self, condition: str) -> 'QueryBuilder':
@@ -84,7 +115,13 @@ class QueryBuilder:
         Args:
             condition: SQL条件表达式
         """
-        self._where_clauses.append(condition)
+        # `where()` 接受的是**表达式**（无法参数化），至少挡住
+        # 语句分隔符与注释符：这两样一出现就说明不是一条条件，而是注入。
+        text = str(condition or '')
+        for marker in (';', '--', '/*', '*/'):
+            if marker in text:
+                raise ValueError(f'WHERE 条件包含非法片段 {marker!r}: {condition!r}')
+        self._where_clauses.append(text)
         return self
 
     def where_device(self, device_id: str) -> 'QueryBuilder':
@@ -133,7 +170,8 @@ class QueryBuilder:
         Args:
             columns: 分组列
         """
-        self._group_by.extend(columns)
+        self._group_by.extend(
+            _require_identifier(c, '分组列名') for c in columns)
         return self
 
     def order_by(self, column: str, direction: str = "ASC") -> 'QueryBuilder':
@@ -144,17 +182,25 @@ class QueryBuilder:
             column: 排序列
             direction: 排序方向 (ASC, DESC)
         """
-        self._order_by = f"{column} {direction}"
+        col = _require_identifier(column, '排序列名')
+        order = str(direction or '').strip().upper()
+        if order not in _DIRECTIONS:
+            raise ValueError(f'非法排序方向: {direction!r}（只允许 ASC/DESC）')
+        self._order_by = f"{col} {order}"
         return self
 
     def limit(self, count: int) -> 'QueryBuilder':
         """设置返回记录数限制"""
-        self._limit = count
+        self._limit = int(count)
+        if self._limit < 0:
+            raise ValueError(f'LIMIT 不能为负: {count!r}')
         return self
 
     def offset(self, count: int) -> 'QueryBuilder':
         """设置偏移量"""
-        self._offset = count
+        self._offset = int(count)
+        if self._offset < 0:
+            raise ValueError(f'OFFSET 不能为负: {count!r}')
         return self
 
     def interval(self, interval: str, fill: str | None = None) -> 'QueryBuilder':
@@ -165,9 +211,16 @@ class QueryBuilder:
             interval: 时间间隔，如 "1m", "5m", "1h", "1d"
             fill: 填充方式 (NULL, PREV, LINEAR, NONE)
         """
-        self._interval = interval
+        text = str(interval or '').strip()
+        if not _INTERVAL_RE.match(text):
+            raise ValueError(
+                f'非法降采样间隔: {interval!r}（形如 1m/5m/1h/1d/1w）')
+        self._interval = text
         if fill:
-            self._fill = fill
+            mode = str(fill).strip().upper()
+            if mode not in _FILL_MODES:
+                raise ValueError(f'非法填充方式: {fill!r}')
+            self._fill = mode
         return self
 
     def build(self) -> str:

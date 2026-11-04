@@ -196,11 +196,13 @@ class TestBackoff:
         import time
         m = _mgr(tmp_path, [{'id': 'd1', 'protocol': 'modbus_tcp'}])
 
-        m._connection_failures['d1'] = {'retry_count': 100, 'last_retry': time.time() - 301}
+        # round 369：退避基准是单调时钟
+        m._connection_failures['d1'] = {'retry_count': 100,
+                                        'last_retry': time.monotonic() - 301}
         assert m._should_skip_connect('d1') is False, \
             '等待时间没被限幅 —— 指数退避会无限增长，设备永不重连'
 
-        m._connection_failures['d1']['last_retry'] = time.time() - 299
+        m._connection_failures['d1']['last_retry'] = time.monotonic() - 299
         assert m._should_skip_connect('d1') is True
 
     def test_success_resets_counter(self, tmp_path):

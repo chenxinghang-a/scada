@@ -4,6 +4,7 @@
 """
 
 import logging
+import time
 from typing import Optional
 from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
@@ -33,6 +34,46 @@ RECENT_WRITES_MAX = 1000  # 幂等性记录最大条数
 # 请求 B 命中幂等分支直接回 `写入成功(幂等)` —— 而 A 可能还没写、甚至写失败，
 # B 却已经拿到"成功"。更糟的是 A 失败会撤销登记，B 的成功也就成了假账。
 _IN_FLIGHT = object()
+
+
+def _idempotency_begin(write_key: str):
+    """登记幂等键。
+
+    Returns:
+        ``None`` —— 已登记占位，调用方可以继续下发；
+        否则返回**应当直接回给客户端的响应**（重复提交 409 / 命中窗口 200）。
+    """
+    with _write_lock:
+        last_write = _recent_writes.get(write_key)
+        # ⚠️ 必须用单调时钟：墙钟被 NTP 回拨后 `now - last_write` 变负，
+        # 会永远 `< IDEMPOTENCY_WINDOW_S` —— 此后所有重试都被判成"已写入"，
+        # 实际一次都没下发。
+        now = time.monotonic()
+        if last_write is _IN_FLIGHT:
+            return jsonify({
+                'success': False,
+                'message': '相同的写入正在执行中，请勿重复提交',
+            }), 409
+        if isinstance(last_write, float) and now - last_write < IDEMPOTENCY_WINDOW_S:
+            return jsonify({'success': True, 'message': '写入成功(幂等)'})
+        _recent_writes[write_key] = _IN_FLIGHT
+        if len(_recent_writes) > RECENT_WRITES_MAX:
+            for k in [k for k, v in _recent_writes.items()
+                      if isinstance(v, float) and now - v >= IDEMPOTENCY_WINDOW_S]:
+                _recent_writes.pop(k, None)
+            if len(_recent_writes) > RECENT_WRITES_MAX:
+                _recent_writes.clear()
+    return None
+
+
+def _idempotency_end(write_key: str, success: bool):
+    """按真实结果落实幂等键：成功 → 时间戳；失败 → 撤销占位。"""
+    with _write_lock:
+        if success:
+            _recent_writes[write_key] = time.monotonic()
+        elif _recent_writes.get(write_key) is _IN_FLIGHT:
+            _recent_writes.pop(write_key, None)
+
 
 # 寄存器地址/值范围常量
 REGISTER_ADDRESS_MIN = 0
@@ -91,27 +132,10 @@ def write_register(device_id):
     # 连续两次改变状态（例如"启动→停止"被点了两下）。原来这段保护只写在
     # "无安全模块"的降级分支里 —— 也就是说**保护只存在于那条不可达的路径**，
     # 真正在跑的这条完全没有防重复。
-    import time
     write_key = f"{device_id}:{address}:{value}"
-    with _write_lock:
-        last_write = _recent_writes.get(write_key)
-        now = time.time()
-        if last_write is _IN_FLIGHT:
-            # 同一写入正在下发中。**不能**回"成功(幂等)" —— 上一次的结果还没出来。
-            return jsonify({
-                'success': False,
-                'message': f'相同的写入正在执行中，请勿重复提交: 地址={address}, 值={value}',
-            }), 409
-        if isinstance(last_write, float) and now - last_write < IDEMPOTENCY_WINDOW_S:
-            return jsonify({'success': True, 'message': f'写入成功(幂等): 地址={address}, 值={value}'})
-        # 先占位（挡住并发重复提交），写入结束后再落实为时间戳
-        _recent_writes[write_key] = _IN_FLIGHT
-        if len(_recent_writes) > RECENT_WRITES_MAX:
-            for k in [k for k, v in _recent_writes.items()
-                      if isinstance(v, float) and now - v >= IDEMPOTENCY_WINDOW_S]:
-                _recent_writes.pop(k, None)
-            if len(_recent_writes) > RECENT_WRITES_MAX:
-                _recent_writes.clear()
+    early = _idempotency_begin(write_key)
+    if early is not None:
+        return early
 
     # 工厂级安全校验
     device_control = getattr(current_app, 'device_control', None)
@@ -123,8 +147,7 @@ def write_register(device_id):
         # 二次确认、回读验证全部消失，写入照样成功** ——
         # 而调用方看到的是同一个 200，没有任何区别。
         # 安全层的正确降级方向是"拒绝"，不是"用弱校验继续干"。
-        with _write_lock:
-            _recent_writes.pop(write_key, None)
+        _idempotency_end(write_key, success=False)
         logger.error(
             "拒绝写入：安全模块(device_control)不可用 —— 无法做急停/联锁/量程/回读校验。"
             " device=%s address=%s value=%s operator=%s",
@@ -143,14 +166,8 @@ def write_register(device_id):
             return jsonify(result), 403
         return jsonify(result)
     finally:
-        # 按真实结果落实幂等键：成功 → 时间戳（2 秒内重试判为已写入）；
-        # 失败/异常 → 撤销占位，让重试能真正下发（否则重试会命中窗口被判成
-        # "写入成功(幂等)"，而寄存器**从未写入**）。
-        with _write_lock:
-            if success:
-                _recent_writes[write_key] = time.time()
-            elif _recent_writes.get(write_key) is _IN_FLIGHT:
-                _recent_writes.pop(write_key, None)
+        # 按真实结果落实幂等键：失败/异常一律撤销占位，让重试能真正下发。
+        _idempotency_end(write_key, success)
 
 
 @control_bp.route('/devices/<device_id>/write-coil', methods=['POST'])
@@ -179,6 +196,13 @@ def write_coil(device_id):
     else:
         bool_val = bool(value)
 
+    # 幂等性检查（round 369）：线圈同样是**非幂等**的物理动作，
+    # 重复下发会让启停位、阀门位抖动。原来只有 write-register 做了防重。
+    write_key = f"{device_id}:coil:{address}:{bool_val}"
+    early = _idempotency_begin(write_key)
+    if early is not None:
+        return early
+
     # 工厂级安全校验
     device_control = getattr(current_app, 'device_control', None)
     if device_control:
@@ -186,11 +210,16 @@ def write_coil(device_id):
         # 不传时 `write_with_verification` 默认按寄存器走，而 Modbus 客户端
         # 同时具备 write_single_register / write_single_coil —— 于是「写线圈」
         # 实际写进了**同一地址的保持寄存器**（数据字 vs 开关位，现场是两个对象）。
-        result = device_control.write_with_verification(
-            device_id, address, 1 if bool_val else 0, operator, kind='coil')
-        if not result['success']:
-            return jsonify(result), 403
-        return jsonify(result)
+        success = False
+        try:
+            result = device_control.write_with_verification(
+                device_id, address, 1 if bool_val else 0, operator, kind='coil')
+            success = bool(result.get('success'))
+            if not success:
+                return jsonify(result), 403
+            return jsonify(result)
+        finally:
+            _idempotency_end(write_key, success)
 
     # round 338：**无安全模块 → 拒绝写入**，与 write-register 的口径对齐。
     #
@@ -204,6 +233,7 @@ def write_coil(device_id):
         "拒绝线圈写入：安全模块(device_control)不可用 —— 无法做急停/联锁/回读校验。"
         " device=%s address=%s value=%s operator=%s",
         device_id, address, value, operator)
+    _idempotency_end(write_key, success=False)
     return jsonify({
         'success': False,
         'message': '安全模块不可用，已拒绝写入（无法执行急停/联锁/回读校验）',
@@ -251,19 +281,36 @@ def adjust_device(device_id):
                        f'（地址未知就无法做量程与联锁校验）',
         }), 400
 
-    result = device_control.write_with_verification(
-        device_id, address, value, operator, kind='register') or {}
+    # 幂等性检查（round 369）：调节也是物理写入，重复提交会连续改设定值。
+    write_key = f"{device_id}:adjust:{register_name}:{value}"
+    early = _idempotency_begin(write_key)
+    if early is not None:
+        return early
 
-    return jsonify({
-        'success': bool(result.get('success')),
-        'message': result.get('message') or (
-            '调节成功' if result.get('success') else '调节失败'),
-        # 把回读结论透传出去：前端要能区分「写成功且回读一致」
-        # 与「写成功但没读到回读值」（通信断时 verified=None）
-        'verified': result.get('verified'),
-        'value': value,
-        'address': address,
-    })
+    success = False
+    try:
+        result = device_control.write_with_verification(
+            device_id, address, value, operator, kind='register') or {}
+        success = bool(result.get('success'))
+        payload = {
+            'success': success,
+            'message': result.get('message') or (
+                '调节成功' if success else '调节失败'),
+            # 把回读结论透传出去：前端要能区分「写成功且回读一致」
+            # 与「写成功但没读到回读值」（通信断时 verified=None）
+            'verified': result.get('verified'),
+            'value': value,
+            'address': address,
+        }
+        # ⚠️ round 369：失败必须回 4xx，不能回 200。
+        # 原来无论 result.success 真假都 return jsonify(...) ——
+        # 急停中/联锁拦截/回读不一致/超量程时前端收到的是 HTTP 200，
+        # 只看状态码的调用方会把"没写进去"当成"已经调好了"。
+        if not success:
+            return jsonify(payload), 403
+        return jsonify(payload)
+    finally:
+        _idempotency_end(write_key, success)
 
 
 @control_bp.route('/devices/<device_id>/write-endpoint', methods=['POST'])
@@ -517,7 +564,16 @@ def reset_estop():
     if not device_control:
         return api_error('设备控制安全模块未启用', 503)
     result = device_control.reset_emergency_stop(operator)
-    get_auth_manager().log_operation(operator, 'estop_reset', '解除紧急停机')
+    # round 369：解除失败不能记成"已解除"，也不能回 200。
+    # 原来这里无条件 `log_operation(..., '解除紧急停机')` + `jsonify(result)`：
+    # 底层明明有设备没起来（success=False），运维日志里却是一条成功的解除记录，
+    # 前端只看 HTTP 状态也当成功。
+    ok = bool(result.get('success'))
+    get_auth_manager().log_operation(
+        operator, 'estop_reset',
+        '解除紧急停机' if ok else f'解除紧急停机未完全成功: {result.get("message", "")}')
+    if not ok:
+        return jsonify(result), 403
     return jsonify(result)
 
 

@@ -536,7 +536,9 @@ class DeviceManager:
     def get_device_status(self, device_id: str) -> dict[str, Any]:
         """获取设备状态（带5秒缓存）"""
         import time
-        now = time.time()
+        # round 369：缓存 TTL 是**时长** —— 墙钟回拨会把 5 秒缓存判成
+        # 永久有效（或永久失效），状态看板随之失真。
+        now = time.monotonic()
 
         # 检查缓存
         if device_id in self._status_cache:

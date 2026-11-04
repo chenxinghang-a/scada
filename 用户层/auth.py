@@ -15,6 +15,18 @@ from flask import request, jsonify, current_app
 
 logger = logging.getLogger(__name__)
 
+
+def _is_inactive_value(value: Any) -> bool:
+    """把 ``is_active`` 的各种「假值」写法统一判定出来。
+
+    HTTP JSON 里既可能是 ``0`` / ``false``，也可能是字符串 ``"0"`` / ``"false"``，
+    只写 `not value` 会漏掉后者（`not "0"` 为 False）。
+    """
+    if isinstance(value, str):
+        return value.strip().lower() in ('0', 'false', 'no', 'off', '')
+    return not bool(value)
+
+
 # 角色权限定义
 ROLES = {
     'admin': {
@@ -81,8 +93,8 @@ class AuthManager:
                     last_login DATETIME,
                     login_attempts INTEGER DEFAULT 0,
                     locked_until DATETIME,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     is_active BOOLEAN DEFAULT 1,
                     must_change_password BOOLEAN DEFAULT 0
                 )
@@ -111,7 +123,7 @@ class AuthManager:
                     target TEXT,
                     detail TEXT,
                     ip_address TEXT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    timestamp DATETIME DEFAULT (datetime('now','localtime'))
                 )
             ''')
 
@@ -130,7 +142,7 @@ class AuthManager:
                 CREATE TABLE IF NOT EXISTS jwt_blacklist (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     token_jti TEXT UNIQUE NOT NULL,
-                    blacklisted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    blacklisted_at DATETIME DEFAULT (datetime('now','localtime')),
                     reason TEXT
                 )
             ''')
@@ -152,10 +164,17 @@ class AuthManager:
             cursor.execute('SELECT COUNT(*) FROM users WHERE username = ?', ('admin',))
             if cursor.fetchone()[0] == 0:
                 password_hash = bcrypt.hashpw(DEFAULT_ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt())
+                # round 369（BUG-33）：**显式写本地时间**。
+                # 原来吃 DDL 的 `DEFAULT CURRENT_TIMESTAMP`（UTC），而全库其它时间
+                # 字段都是 `datetime.now()`（本地）—— 同一行里 created_at 与
+                # updated_at/login 差一个时区，按天统计会把凌晨的数据算到前一天。
+                _now = datetime.now()
                 cursor.execute('''
-                    INSERT INTO users (username, password_hash, role, display_name, must_change_password)
-                    VALUES (?, ?, ?, ?, 1)
-                ''', ('admin', password_hash.decode('utf-8'), 'admin', '系统管理员'))
+                    INSERT INTO users (username, password_hash, role, display_name,
+                                       must_change_password, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                ''', ('admin', password_hash.decode('utf-8'), 'admin', '系统管理员',
+                      _now, _now.isoformat(sep=' ')))
                 logger.info("已创建默认管理员账户 (密码通过 SCADA_ADMIN_PASSWORD 环境变量配置)")
 
     def _validate_password_strength(self, password: str) -> tuple[bool, str]:
@@ -497,9 +516,13 @@ class AuthManager:
 
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
+                # round 369（BUG-33）：显式写本地时间，与 cleanup_expired_blacklist
+                # 的 `datetime.now() - 7d` 同口径。原来靠 DDL 的 UTC 默认值，
+                # 东八区下黑名单记录一开始就"老了 8 小时"，7 天保留期实际只有 6 天 16 小时。
                 cursor.execute(
-                    'INSERT OR IGNORE INTO jwt_blacklist (token_jti, reason) VALUES (?, ?)',
-                    (key, reason)
+                    'INSERT OR IGNORE INTO jwt_blacklist '
+                    '(token_jti, reason, blacklisted_at) VALUES (?, ?, ?)',
+                    (key, reason, datetime.now().isoformat(sep=' '))
                 )
             logger.info(f"JWT令牌已加入黑名单: key={key}, reason={reason}")
             return True
@@ -531,20 +554,32 @@ class AuthManager:
                   False = **取到了令牌但落库失败**，令牌实际仍然有效。
         """
         # 第一步：取当前请求令牌。非 HTTP 上下文（定时任务 / 脚本 / 测试）属正常情况。
+        token = ''
         try:
             from flask import request as flask_request
             auth_header = flask_request.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                token = auth_header[7:]
+            # round 369：**强制改密允许从 JSON body 传 token**
+            # （展示层/api/api_auth.py 的强制改密支持 data['token']），
+            # 但这里原来只读 header ——
+            # 通过 body 令牌改密时旧令牌根本没进黑名单，改密后依然可用。
+            if not token:
+                body = flask_request.get_json(silent=True) or {}
+                candidate = body.get('token') or body.get('refresh_token') or ''
+                if isinstance(candidate, str):
+                    token = candidate
         except Exception as e:
             logger.debug("非 HTTP 上下文，无当前请求令牌可撤销 user=%s: %s", username, e)
             return True
 
-        if not auth_header.startswith('Bearer '):
-            logger.debug("当前请求未携带 Bearer 令牌，无可撤销 user=%s", username)
+        if not token:
+            logger.debug("当前请求未携带令牌，无可撤销 user=%s", username)
             return True
 
         # 第二步：落库。**刻意不包在同一个 try 里** —— 落库失败必须能被调用方感知，
         # 否则撤销"看起来成功了"，而已撤销令牌仍可继续使用（静默放行）。
-        if not self.blacklist_token(auth_header[7:], reason):
+        if not self.blacklist_token(token, reason):
             logger.error(
                 "撤销令牌失败：令牌未被加入黑名单，仍可继续使用 user=%s reason=%s",
                 username, reason)
@@ -584,13 +619,18 @@ class AuthManager:
                 return None
 
             # 检查黑名单 (GB/T 35718)
-            jti = payload.get('jti')
-            if jti:
+            #
+            # round 369：**与 verify_token 同口径**。原来这里只写 `if jti:`，
+            # 而无 jti 的令牌在 verify_token 里是用 SHA-256 兜底撤销的 ——
+            # 于是在 refresh_token 里"撤销了"的无 jti 令牌仍然可以续期，
+            # 登出等于没登出。
+            bl_key = self._token_blacklist_key(refresh_token, payload)
+            if bl_key:
                 with self.database.get_connection() as conn:
                     cursor = conn.cursor()
-                    cursor.execute('SELECT 1 FROM jwt_blacklist WHERE token_jti = ?', (jti,))
+                    cursor.execute('SELECT 1 FROM jwt_blacklist WHERE token_jti = ?', (bl_key,))
                     if cursor.fetchone():
-                        logger.warning(f"刷新令牌已被撤销: jti={jti}")
+                        logger.warning(f"刷新令牌已被撤销: key={bl_key}")
                         return None
 
             with self.database.get_connection() as conn:
@@ -688,6 +728,12 @@ class AuthManager:
         if not bcrypt.checkpw(old_password.encode('utf-8'), user['password_hash'].encode('utf-8')):
             return {'success': False, 'message': '旧密码错误'}
 
+        # round 369：**新旧密码不能相同**。
+        # 只校验强度不校验"是否等于原口令"时，"改密"可以原地踏步 —— 用户
+        # 把旧口令再输一遍就算完成整改，等保要求的定期换密变成形式。
+        if bcrypt.checkpw(new_password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+            return {'success': False, 'message': '新密码不能与当前密码相同'}
+
         new_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
 
         now = datetime.now()
@@ -733,7 +779,9 @@ class AuthManager:
 
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT must_change_password FROM users WHERE username = ?', (username,))
+            cursor.execute(
+                'SELECT must_change_password, password_hash FROM users WHERE username = ?',
+                (username,))
             user = cursor.fetchone()
 
         if not user:
@@ -748,6 +796,14 @@ class AuthManager:
                 'success': False,
                 'message': '当前账号无需强制改密，请使用常规改密接口（需验证原密码）'
             }
+
+        # round 369：**新旧密码不能相同**。
+        # 初始管理员口令通常已满足复杂度要求，原来只要把原口令再输一遍就能
+        # 把 must_change_password 清零 —— 强制改密完全失效。
+        stored_hash = user['password_hash']
+        if stored_hash and bcrypt.checkpw(new_password.encode('utf-8'),
+                                          str(stored_hash).encode('utf-8')):
+            return {'success': False, 'message': '新密码不能与当前密码相同'}
 
         new_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
 
@@ -827,8 +883,27 @@ class AuthManager:
         if 'role' in updates and updates['role'] not in ROLES:
             return {'success': False, 'message': f'无效角色: {updates["role"]}'}
 
-        set_clause = ', '.join(f'{k} = ?' for k in updates.keys())
-        values = list(updates.values()) + [datetime.now(), username]
+        # round 369：**内置 admin 不能被禁用或降权**。
+        #
+        # `delete_user()` 早就拦了 `username == 'admin'`，但 update_user 没有：
+        # `PUT /api/auth/users/admin {"is_active": 0}` 或 `{"role": "viewer"}`
+        # 会把唯一的内置管理员直接废掉，系统永久失去管理权限（只能改库恢复）。
+        if username == 'admin':
+            if 'is_active' in updates and _is_inactive_value(updates['is_active']):
+                return {'success': False,
+                        'message': '不能禁用内置管理员账户 admin'}
+            if 'role' in updates and updates['role'] != 'admin':
+                return {'success': False,
+                        'message': '不能修改内置管理员账户 admin 的角色'}
+
+        # round 369：**set 子句只从闭集白名单里取列名**，不再用 `updates` 的 key。
+        # 现在的 key 已由 `allowed_fields` + `isidentifier()` 过滤，但那是 4 行之前的
+        # 约定；一旦将来有人放宽过滤，`f'{k} = ?'` 就是直接拼 SQL。
+        # 从字面量元组取列名，注入在结构上不可能发生，也顺带保证占位符与值同序。
+        columns = [c for c in ('role', 'display_name', 'email', 'phone', 'is_active')
+                   if c in updates]
+        set_clause = ', '.join(f'{c} = ?' for c in columns)
+        values = [updates[c] for c in columns] + [datetime.now(), username]
 
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
@@ -912,10 +987,13 @@ class AuthManager:
         try:
             with self.database.get_connection() as conn:
                 cursor = conn.cursor()
+                # round 369（BUG-33）：显式写本地时间，不再依赖 DDL 的 UTC 默认值
                 cursor.execute('''
-                    INSERT INTO operation_logs (username, action, target, detail, ip_address)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (username, action, target, detail, ip_address))
+                    INSERT INTO operation_logs
+                        (username, action, target, detail, ip_address, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (username, action, target, detail, ip_address,
+                      datetime.now().isoformat(sep=' ')))
         except Exception as e:
             logger.error(f"记录操作日志失败: {e}")
 

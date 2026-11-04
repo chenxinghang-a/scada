@@ -21,6 +21,7 @@
 
 import os
 import sys
+import ast
 import json
 import re
 import logging
@@ -35,6 +36,99 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 logger = logging.getLogger(__name__)
+
+#: 不参与扫描的目录（第三方依赖 / 构建产物 / 缓存）。
+#: round 369（BUG-35 修复）：原来所有检查都用 `rglob('*.py')` 扫全仓，
+#: 把 `.venv` 与 `dist/_internal` 里的第三方库也当成本项目代码 ——
+#: 一次 quick 扫描 12 条发现里 8 条来自 site-packages（werkzeug/pip/dateutil），
+#: 真正的项目问题被淹没，报告失去可操作性。
+_EXCLUDED_DIR_PARTS = {
+    '.git', '.venv', 'venv', 'env', 'dist', 'build', 'node_modules',
+    '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
+    'site-packages', '.pytest_tmp',
+}
+
+#: 形如错误码/常量的短值：`E2003`、`TOKEN_EXPIRED`、`ERR_01`。
+#: 这些不是凭证，但会被 `token = '...'` 这样的正则误报。
+_CODE_LIKE_RE = re.compile(r'^[A-Z0-9_\-\.]{1,15}$')
+
+#: 凭证名里出现这些后缀，说明它描述的是**状态/代码**而非密钥值。
+_CODE_NAME_SUFFIXES = (
+    '_EXPIRED', '_INVALID', '_ERROR', '_CODE', '_TYPE', '_STATUS',
+    '_NAME', '_PREFIX', '_HEADER', '_FIELD', '_KEY_NAME', '_TTL',
+)
+
+
+def _is_excluded(path: Path) -> bool:
+    """路径是否位于第三方依赖/构建产物/缓存目录内。"""
+    return any(part in _EXCLUDED_DIR_PARTS for part in path.parts)
+
+
+def _looks_like_credential(name: str, value: str) -> bool:
+    """判断 `name = 'value'` 是否**真的**像一条硬编码凭证。
+
+    误报来源（round 369 实测）：
+      * `TOKEN_EXPIRED = 'E2003'` —— 错误码常量；
+      * `CSRF_SECRET = line.split('=', 1)[1].strip()` —— 正则跨到了表达式里的引号；
+      * `SECRET_KEY = _get_secret('SECRET_KEY', ...)` 之类。
+    判据：值太短、纯大写短码、含表达式符号、变量名是状态量 → 都不算凭证。
+    """
+    if len(value) < 12:
+        return False
+    if _CODE_LIKE_RE.match(value):
+        return False
+    if any(token in value for token in ('(', ')', '[', ']', '+', '%', '\\n', 'line.split')):
+        return False
+    upper_name = name.upper()
+    if upper_name.endswith(_CODE_NAME_SUFFIXES):
+        return False
+    return True
+
+
+def _leaked_secret_log_lines(content: str,
+                             secret_names: set[str]) -> list[tuple[int, str]]:
+    """找出**日志参数里真的传入了密码/令牌变量**的调用。
+
+    只认 `logger.xxx(...)` 调用参数中的 Name/Attribute：
+      * `logger.info(f"token={token}")`     → 命中（真的记录了令牌）
+      * `logger.warning("token 不匹配")`    → 不命中（只是提示文案）
+    语法解析失败时返回空列表（该文件不计入日志检查，调用方会记录扫描错误）。
+    """
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return []
+
+    hits: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id == 'logger'):
+            continue
+        values = list(node.args) + [kw.value for kw in node.keywords]
+        found: set[str] = set()
+        for value in values:
+            for sub in ast.walk(value):
+                if isinstance(sub, ast.Name):
+                    found.add(sub.id.lower())
+                elif isinstance(sub, ast.Attribute):
+                    found.add(sub.attr.lower())
+        hit = found & secret_names
+        if hit:
+            hits.append((node.lineno,
+                         f'日志中记录敏感信息: {", ".join(sorted(hit))}'))
+    return hits
+
+
+def _strip_comments(text: str) -> str:
+    """去掉 Python/YAML 行内注释，避免"注释里提到弱口令"被当成真的弱口令。"""
+    out = []
+    for line in text.splitlines():
+        out.append(line.split('#', 1)[0])
+    return '\n'.join(out)
 
 
 class SecurityScanner:
@@ -122,7 +216,9 @@ class SecurityScanner:
 
         for pattern in sensitive_patterns:
             for file in self.project_root.rglob(pattern):
-                if file.is_file() and '.git' not in str(file):
+                # round 369：跳过 .venv/dist 里的第三方 cacert.pem，
+                # 那既不是本项目的文件，也不该由本项目的 .gitignore 负责。
+                if file.is_file() and not _is_excluded(file):
                     # 检查是否在.gitignore中
                     if not self._is_gitignored(file):
                         self.findings.append({
@@ -135,16 +231,21 @@ class SecurityScanner:
 
     def _check_hardcoded_credentials(self):
         """检查硬编码凭证"""
+        # round 369：带命名捕获，先判断"这个值像不像凭证"再报。
+        # 原来只匹配 `token\s*=\s*'...'`，把 `TOKEN_EXPIRED = 'E2003'`
+        # 这类错误码常量全报成"硬编码token"，扫描器失去可信度。
         credential_patterns = [
-            (r'password\s*=\s*["\'][^"\']+["\']', '硬编码密码'),
-            (r'secret\s*=\s*["\'][^"\']+["\']', '硬编码密钥'),
-            (r'api_key\s*=\s*["\'][^"\']+["\']', '硬编码API密钥'),
-            (r'token\s*=\s*["\'][^"\']+["\']', '硬编码token'),
+            (r'(?P<name>\b(?:password|passwd|pwd))\s*=\s*["\'](?P<value>[^"\']+)["\']',
+             '硬编码密码'),
+            (r'(?P<name>\b(?:secret|api_key|apikey|access_key|secret_key))\s*=\s*["\'](?P<value>[^"\']+)["\']',
+             '硬编码密钥'),
+            (r'(?P<name>\b(?:token|auth_token))\s*=\s*["\'](?P<value>[^"\']+)["\']',
+             '硬编码token'),
         ]
 
         # 检查Python文件
         for py_file in self.project_root.rglob('*.py'):
-            if '.git' in str(py_file) or 'test' in str(py_file).lower():
+            if _is_excluded(py_file) or 'test' in str(py_file).lower():
                 continue
 
             try:
@@ -152,15 +253,21 @@ class SecurityScanner:
                 for pattern, message in credential_patterns:
                     matches = re.finditer(pattern, content, re.IGNORECASE)
                     for match in matches:
+                        name = match.group('name')
+                        value = match.group('value')
                         # 排除明显的占位符
-                        value = match.group()
-                        if 'your_' in value or 'xxx' in value or 'example' in value:
+                        if ('your_' in value or 'xxx' in value
+                                or 'example' in value):
+                            continue
+                        # 错误码/常量/表达式不是凭证
+                        if not _looks_like_credential(name, value):
                             continue
 
                         self.findings.append({
                             'severity': 'critical',
                             'type': 'hardcoded_credential',
                             'file': str(py_file.relative_to(self.project_root)),
+                            'line': content[:match.start()].count('\n') + 1,
                             'message': message,
                             'recommendation': '使用环境变量或配置文件存储凭证',
                         })
@@ -176,7 +283,7 @@ class SecurityScanner:
         ]
 
         for py_file in self.project_root.rglob('*.py'):
-            if '.git' in str(py_file) or 'test' in str(py_file).lower():
+            if _is_excluded(py_file) or 'test' in str(py_file).lower():
                 continue
 
             try:
@@ -204,7 +311,7 @@ class SecurityScanner:
         ]
 
         for vue_file in self.project_root.rglob('*.vue'):
-            if '.git' in str(vue_file):
+            if _is_excluded(vue_file):
                 continue
 
             try:
@@ -229,14 +336,18 @@ class SecurityScanner:
         config_files = list(self.project_root.rglob('*.yaml')) + list(self.project_root.rglob('*.yml'))
 
         for config_file in config_files:
-            if '.git' in str(config_file):
+            if _is_excluded(config_file):
                 continue
 
             try:
                 content = config_file.read_text(encoding='utf-8', errors='ignore')
+                # round 369：只看**真实配置值**，不看注释。
+                # 原来 `'admin123' in content` 会把「说明：不要使用 admin123」
+                # 这类注释也报成"使用默认密码"（docker-compose.yml 就是这么中的）。
+                effective = _strip_comments(content)
 
                 # 检查默认密码
-                if 'admin123' in content or 'password123' in content:
+                if 'admin123' in effective or 'password123' in effective:
                     self.findings.append({
                         'severity': 'critical',
                         'type': 'default_password',
@@ -246,8 +357,8 @@ class SecurityScanner:
                     })
 
                 # 检查通配符权限
-                if 'host: "' in content or "host: '" in content:
-                    if '0.0.0.0' in content:
+                if 'host: "' in effective or "host: '" in effective:
+                    if '0.0.0.0' in effective:
                         self.findings.append({
                             'severity': 'medium',
                             'type': 'open_access',
@@ -287,49 +398,62 @@ class SecurityScanner:
     def _check_config_security(self):
         """检查配置安全"""
         # 检查debug模式
+        # round 369：只认**代码**里的 `debug = True`。
+        # 原来用子串匹配，扫描器自己源码里的 `if 'debug=True' in content`
+        # 也会命中 —— 自己报自己，是典型误报。
+        debug_re = re.compile(r'\bdebug\s*=\s*True\b', re.IGNORECASE)
         for py_file in self.project_root.rglob('*.py'):
-            if '.git' in str(py_file) or 'test' in str(py_file).lower():
+            if _is_excluded(py_file) or 'test' in str(py_file).lower():
                 continue
 
             try:
                 content = py_file.read_text(encoding='utf-8', errors='ignore')
-
-                if 'debug=True' in content or 'DEBUG = True' in content:
+                for match in debug_re.finditer(content):
+                    line_start = content.rfind('\n', 0, match.start()) + 1
+                    line_end = content.find('\n', match.start())
+                    line = content[line_start:line_end if line_end != -1 else None]
+                    stripped = line.lstrip()
+                    # 注释 / 含引号的字面量（含扫描器自身的检测语句）都不算启用
+                    if stripped.startswith('#') or '"' in line or "'" in line:
+                        continue
                     self.findings.append({
                         'severity': 'medium',
                         'type': 'debug_mode',
                         'file': str(py_file.relative_to(self.project_root)),
+                        'line': content[:match.start()].count('\n') + 1,
                         'message': '生产代码中启用debug模式',
                         'recommendation': '生产环境禁用debug模式',
                     })
+                    break
             except Exception as e:
                 self._note_scan_error('config_security', py_file, e)
 
     def _check_logging_security(self):
-        """检查日志安全"""
+        """检查日志安全。
+
+        round 369：改成 **AST 判定**，只报「日志参数里真的传了密码/令牌变量」。
+        原来的正则 `logger\\.\\w+\\(.*token` 会把
+        「拒绝 /metrics 抓取：scrape token 不匹配」这类**提示文案**也报成
+        「日志中记录 token」—— 实测 8 条全是这种，全是误报。
+        """
+        secret_names = {'password', 'passwd', 'pwd', 'token', 'secret',
+                        'api_key', 'apikey', 'jwt_secret', 'access_token'}
         for py_file in self.project_root.rglob('*.py'):
-            if '.git' in str(py_file) or 'test' in str(py_file).lower():
+            if _is_excluded(py_file) or 'test' in str(py_file).lower():
                 continue
 
             try:
                 content = py_file.read_text(encoding='utf-8', errors='ignore')
-
-                # 检查是否记录敏感信息
-                sensitive_log_patterns = [
-                    (r'logger\.\w+\(.*password', '日志中记录密码'),
-                    (r'logger\.\w+\(.*token', '日志中记录token'),
-                    (r'logger\.\w+\(.*secret', '日志中记录密钥'),
-                ]
-
-                for pattern, message in sensitive_log_patterns:
-                    if re.search(pattern, content, re.IGNORECASE):
-                        self.findings.append({
-                            'severity': 'medium',
-                            'type': 'sensitive_logging',
-                            'file': str(py_file.relative_to(self.project_root)),
-                            'message': message,
-                            'recommendation': '避免在日志中记录敏感信息',
-                        })
+                leaked = _leaked_secret_log_lines(content, secret_names)
+                for lineno, message in leaked:
+                    self.findings.append({
+                        'severity': 'medium',
+                        'type': 'sensitive_logging',
+                        'file': str(py_file.relative_to(self.project_root)),
+                        'line': lineno,
+                        'message': message,
+                        'recommendation': '避免在日志中记录敏感信息',
+                    })
             except Exception as e:
                 self._note_scan_error('logging_security', py_file, e)
 

@@ -14,6 +14,8 @@ from enum import Enum
 from typing import Optional, Callable, Dict, Any
 from dataclasses import dataclass, field
 
+from core.safe_numeric import try_finite_float
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,6 +117,8 @@ class HAManager:
         #: `now - last` 变负：对端明明已经宕机，`peer_alive` 却一直为真，
         #: 备机永远不接管（或者反过来，健康对端被误判超时而**双主**）。
         self._last_peer_heartbeat = 0.0
+        #: 每个对端已确认的**最大**心跳时间戳（round 369：防重放/乱序窗口）。
+        self._peer_last_timestamps: dict[str, float] = {}
         #: 是否**曾经**收到过对端心跳。原来用 `_last_peer_heartbeat > 0` 当哨兵，
         #: 换成单调时钟后这个判据不可靠（开机第一刻的 monotonic 可能极小），
         #: 改用显式布尔。
@@ -254,7 +258,12 @@ class HAManager:
                 'state': self.state.value,
             }
             # 签名：对核心字段计算 HMAC
-            sign_data = f"{heartbeat['node_id']}:{heartbeat['role']}:{heartbeat['priority']}:{heartbeat['timestamp']}"
+            # round 369：**state 也必须在签名载荷里**。原来只签
+            # node_id/role/priority/timestamp，接收端却直接采信未签名的
+            # state —— 中间人可以只改 state 不改签名。
+            sign_data = (f"{heartbeat['node_id']}:{heartbeat['role']}:"
+                         f"{heartbeat['priority']}:{heartbeat['timestamp']}:"
+                         f"{heartbeat['state']}")
             heartbeat['signature'] = self._compute_hmac(sign_data)
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -303,15 +312,43 @@ class HAManager:
                 logger.debug(f"关闭心跳监听套接字失败(套接字将废弃): {e}")
 
     def _handle_heartbeat(self, msg: dict, addr: tuple):
-        """处理收到的心跳（验证 HMAC 签名）"""
-        # 验证签名
+        """处理收到的心跳（验证 HMAC 签名 + 新鲜度 + 防重放）"""
+        # 验证签名（state 参与签名，见 _send_heartbeat）
         signature = msg.get('signature', '')
-        sign_data = f"{msg.get('node_id', '')}:{msg.get('role', '')}:{msg.get('priority', 0)}:{msg.get('timestamp', 0)}"
+        sign_data = (f"{msg.get('node_id', '')}:{msg.get('role', '')}:"
+                     f"{msg.get('priority', 0)}:{msg.get('timestamp', 0)}:"
+                     f"{msg.get('state', '')}")
         if not signature or not self._verify_hmac(sign_data, signature):
             logger.warning(f"心跳签名验证失败，丢弃: {addr}")
             return
 
+        # round 369：**校验时间戳新鲜度**。
+        #
+        # 原来只验 HMAC、不看到达时间：攻击者（或接错线的网络设备）抓一帧
+        # 历史 PRIMARY 心跳重放，当前主节点就会立刻让位降级 —— 主备脑裂、
+        # 全厂监控中断。这里要求心跳时间戳与本地时间相差不超过一个超时窗口。
+        ts = try_finite_float(msg.get('timestamp', 0) or 0)
+        if ts is None:
+            logger.warning("心跳时间戳非法（非有限数值），丢弃: %s", addr)
+            return
+        if abs(time.time() - ts) > self.heartbeat_timeout:
+            logger.warning(
+                "心跳时间戳不新鲜（偏差 %.1fs > %.1fs），丢弃: %s",
+                time.time() - ts, self.heartbeat_timeout, addr)
+            return
+
         peer_id = msg.get('node_id', 'unknown')
+
+        # round 369：**单调递增的时间戳**，拒绝重放与乱序包。
+        with self._lock:
+            last_ts = self._peer_last_timestamps.get(peer_id, 0.0)
+            if ts <= last_ts:
+                logger.warning(
+                    "心跳时间戳未推进（%.3f <= %.3f），判定为重放/乱序，丢弃: %s",
+                    ts, last_ts, addr)
+                return
+            self._peer_last_timestamps[peer_id] = ts
+
         peer_priority = msg.get('priority', 0)
         peer_role = _parse_role(msg.get('role'))
 

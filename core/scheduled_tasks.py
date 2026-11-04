@@ -257,25 +257,35 @@ class TaskManager:
         而永远不再启动它）。
         """
         with self._lock:
+            # round 369：**拒绝重叠执行**。
+            # 原来 run_now() 与周期触发撞在一起时，第二个线程读到的
+            # prev_status 是第一个线程刚设的 'running'，结束时又把它还原成
+            # 'running' —— pending 任务永远无法被 start_all() 启动，
+            # 界面永久显示"运行中"。
+            if task.executing:
+                logger.warning("任务 %s 正在执行中，跳过本次重复触发", task.name)
+                return False
             prev_status = task.status
             task.executing = True
-        start = time.time()
-        task.status = 'running'
-        task.last_run = start
+            task.status = 'running'
+        # 时长用单调时钟：NTP 校时会让墙钟差值为负，统计出"负耗时"
+        start_mono = time.monotonic()
+        task.last_run = time.time()      # 对外展示仍用可读的墙钟时间戳
 
         try:
             task.func()
             task.run_count += 1
             task.last_error = None
             task.last_exec_status = 'success'
-            logger.debug("任务执行完成: %s (%.1fs)", task.name, time.time() - start)
+            logger.debug("任务执行完成: %s (%.1fs)", task.name,
+                         time.monotonic() - start_mono)
         except Exception as e:
             task.error_count += 1
             task.last_error = str(e)
             task.last_exec_status = 'failed'
             logger.error("任务执行失败: %s - %s", task.name, e)
         finally:
-            task.last_duration = time.time() - start
+            task.last_duration = time.monotonic() - start_mono
             with self._lock:
                 task.executing = False
                 # 执行期间被 stop()/pause() 时以新状态为准；否则回到执行前的调度状态

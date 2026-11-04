@@ -14,6 +14,8 @@ from pathlib import Path
 import paths
 
 from .interfaces import IDeviceManager, IDeviceClient
+from .base_client import encode_float32_registers
+from core.safe_numeric import try_finite_float, try_int
 from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
 from .simulated_client import set_estop_state, set_device_stopped
 from .enhanced_simulated_client import (
@@ -196,6 +198,29 @@ class SimulatedDeviceManager(IDeviceManager):
         kept = sorted(new_ids & old_ids)
         if added or removed:
             logger.info("[重载] 设备变更: +%s -%s", added, removed)
+
+        # round 369：**被删设备必须真正断开并通知全链路**（同 RealDeviceManager）。
+        # 原来 removed 只用于打日志：模拟客户端实例留在 self.clients、
+        # 停机标志留在 _DEVICE_STOPPED、下游 8 个模块保留幽灵状态。
+        for did in removed:
+            try:
+                self.disconnect_device(did)
+            except Exception as e:      # noqa: BLE001
+                logger.error("[重载] 断开已删除设备 %s 失败: %s", did, e)
+            with self._lock:
+                self.clients.pop(did, None)
+            try:
+                # 顺手把「单台停止」标志也清掉：重加同名设备时不继承旧状态
+                set_device_stopped(did, False)
+            except Exception as e:      # noqa: BLE001
+                logger.debug("[重载] 清理设备 %s 的停机标志失败: %s", did, e)
+            try:
+                notify_device_removed(did)
+            except Exception as e:      # noqa: BLE001
+                logger.error("[重载] 通知设备移除失败 %s: %s", did, e)
+        if removed:
+            logger.info("[重载] 已移除设备并清理资源: %s", removed)
+
         return {'added': added, 'removed': removed, 'kept': kept,
                 'rejected': None}
 
@@ -309,8 +334,13 @@ class SimulatedDeviceManager(IDeviceManager):
         set_estop_state(active)
         logger.info(f"[模拟] E-STOP override: {'激活' if active else '已解除'}")
 
-    def stop_device(self, device_id: str) -> bool:
-        """停止指定设备（仅限机械类）"""
+    def stop_device(self, device_id: str, write: bool = True) -> bool:
+        """停止指定设备（仅限机械类）。
+
+        ``write`` 仅为与 ``RealDeviceManager`` 保持同一签名：模拟侧没有
+        真实下发通道，状态标志就是唯一状态源，因此无论是否已由安全通道
+        写过点位，都必须同步 ``set_device_stopped(True)``。
+        """
         config = self.devices.get(device_id)
         if not config:
             return False
@@ -322,8 +352,8 @@ class SimulatedDeviceManager(IDeviceManager):
         logger.info(f"[模拟] 设备 {device_id} 已停止")
         return True
 
-    def start_device(self, device_id: str) -> bool:
-        """启动指定设备（仅限机械类）"""
+    def start_device(self, device_id: str, write: bool = True) -> bool:
+        """启动指定设备（仅限机械类）。``write`` 语义同 ``stop_device``。"""
         config = self.devices.get(device_id)
         if not config:
             return False
@@ -336,7 +366,12 @@ class SimulatedDeviceManager(IDeviceManager):
         return True
 
     def adjust_device(self, device_id: str, register_name: str, value: float) -> dict:
-        """调节设备参数（模拟模式：记录值但不实际写入）"""
+        """调节设备参数（**真的写进模拟客户端**，而不是只打一行日志）。
+
+        round 369：原实现校验完寄存器存在后只 `logger.info` 一句就返回
+        ``{'success': True}`` —— 接口报成功、下一次采集读回来的数值纹丝不动，
+        演练时"调好的参数"根本没生效（典型假成功）。
+        """
         config = self.devices.get(device_id)
         if not config:
             return {'success': False, 'message': f'设备 {device_id} 不存在'}
@@ -351,8 +386,71 @@ class SimulatedDeviceManager(IDeviceManager):
 
         if not target:
             return {'success': False, 'message': f'寄存器 {register_name} 不存在'}
+        if target.get('access') == 'ro':
+            return {'success': False, 'message': f'寄存器 {register_name} 只读'}
 
-        logger.info(f"[模拟] 设备 {device_id} 调节 {register_name} = {value}")
+        client = self.get_client(device_id)
+        if not client:
+            return {'success': False, 'message': f'设备 {device_id} 未连接'}
+
+        # 模拟客户端按需懒创建，未必已 connect()；写接口在未连接时会直接
+        # 返回 False（增强模拟客户端），这里先补一次连接再写。
+        if not getattr(client, 'connected', False):
+            try:
+                client.connect()
+            except Exception as e:      # noqa: BLE001
+                logger.warning("[模拟] 调节前连接设备 %s 失败: %s", device_id, e)
+
+        address = try_int(target.get('address', 0))
+        if address is None:
+            return {'success': False, 'message': f'寄存器 {register_name} 地址非法'}
+
+        # 工程值 → 原始寄存器值
+        scale = try_finite_float(target.get('scale', 1.0))
+        if scale is None:
+            scale = 1.0
+        offset = try_finite_float(target.get('offset', 0.0))
+        if offset is None:
+            offset = 0.0
+        raw_value = (float(value) - offset) / scale if scale else float(value)
+        data_type = str(target.get('data_type', 'uint16')).lower()
+
+        try:
+            if data_type in ('float32', 'float', 'real'):
+                regs = encode_float32_registers(
+                    float(raw_value), config.get('byte_order', 'ABCD'))
+                if not hasattr(client, 'write_multiple_registers'):
+                    return {'success': False,
+                            'message': '模拟客户端不支持批量寄存器写入'}
+                ok = client.write_multiple_registers(address, regs)
+            elif data_type in ('bool', 'boolean', 'coil'):
+                if not hasattr(client, 'write_single_coil'):
+                    return {'success': False, 'message': '模拟客户端不支持线圈写入'}
+                ok = client.write_single_coil(address, bool(value))
+            else:
+                if not hasattr(client, 'write_single_register'):
+                    return {'success': False,
+                            'message': '模拟客户端不支持寄存器写入'}
+                ok = client.write_single_register(address, int(round(raw_value)))
+        except Exception as e:          # noqa: BLE001
+            logger.error("[模拟] 设备 %s 调节 %s 失败: %s", device_id, register_name, e)
+            return {'success': False, 'message': str(e)}
+
+        if not ok:
+            return {'success': False,
+                    'message': f'{register_name} 写入模拟设备失败'}
+
+        # 同步设定点覆盖值，确保后续采集读回的就是这个值
+        sim = getattr(client, 'behavior_simulator', None)
+        if sim is not None and hasattr(sim, 'set_point_override'):
+            try:
+                sim.set_point_override(register_name, float(value))
+            except Exception as e:      # noqa: BLE001
+                logger.warning("[模拟] 设定点覆盖失败 %s/%s: %s",
+                               device_id, register_name, e)
+
+        logger.info(f"[模拟] 设备 {device_id} 调节 {register_name} = {value}"
+                    f"（原始值 {raw_value}）")
         return {'success': True, 'message': f'{register_name} 设置为 {value}（模拟）'}
 
     def disconnect_device(self, device_id: str) -> None:
@@ -577,8 +675,11 @@ class SimulatedDeviceManager(IDeviceManager):
                 config = {'devices': list(self.devices.values())}
             config_file = paths.resolve(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+            # round 369：原子写（同 RealDeviceManager，理由见那边）
+            from core.config_io import dump_yaml
+            if not dump_yaml(config_file, config):
+                logger.error("[模拟] 设备配置落盘失败（原文件未被破坏）: %s", config_file)
+                return False
             logger.info("[模拟] 设备配置已保存")
             return True
         except Exception as e:

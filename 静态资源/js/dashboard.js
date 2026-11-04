@@ -1131,6 +1131,32 @@ function updateTrendChart(data) {
 }
 
 // ========== 数据导出 ==========
+
+/**
+ * CSV 单元格转义（round 369）
+ *
+ * 两层防护，缺一不可：
+ *  1. **公式注入（CWE-1236）**：以 = + - @ 开头的单元格在 Excel/WPS 里会被
+ *     当公式执行（`=cmd|'/c calc'!A0` 之类）。前端原来直接 join(',')，
+ *     后端 `存储层/data_export.py` 早已做过这层加固，前端是缺口。
+ *  2. **RFC 4180**：含逗号/双引号/换行的值必须用双引号包裹，内部引号翻倍 ——
+ *     否则设备名里一个逗号就会把整行拆错列。
+ */
+function csvCell(value) {
+    let s = (value === null || value === undefined) ? '' : String(value);
+    if (/^[=+\-@\t\r]/.test(s)) {
+        s = "'" + s;          // 前缀单引号，让表格软件当纯文本
+    }
+    if (/[",\r\n]/.test(s)) {
+        s = '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+}
+
+function rowsToCsv(header, rows) {
+    return [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
+}
+
 function exportChartData() {
     const keys = Object.keys(dataBuffers);
     if (keys.length === 0) { alert('暂无数据可导出'); return; }
@@ -1149,7 +1175,7 @@ function exportChartData() {
         })];
     });
 
-    const csv = '﻿' + [header, ...rows].map(r => r.join(',')).join('\n');
+    const csv = '﻿' + rowsToCsv(header, rows);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1173,7 +1199,7 @@ function exportAllDeviceData() {
                 d.device_id, d.register_name, d.value, d.unit || '', d.timestamp
             ]);
 
-            const csv = '﻿' + [header, ...rows].map(r => r.join(',')).join('\n');
+            const csv = '﻿' + rowsToCsv(header, rows);
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');

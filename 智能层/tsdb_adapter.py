@@ -19,6 +19,8 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
+
+from core.safe_numeric import try_finite_float
 from typing import Any
 
 try:
@@ -351,18 +353,46 @@ class TSDBAdapter:
         try:
             health_scores = self.predictive_maintenance.get_health_scores()
 
-            for key, score_data in health_scores.items():
+            # round 369：**一台设备一个子表，同一轮只能写一条**。
+            # health_scores 的键是 f"{device_id}:{register_name}"，
+            # 而 TDengine 侧只按 device_id 写 pred_{device_id} —— 同一毫秒内
+            # 同一设备的多个寄存器记录时间戳相同，会**互相覆盖**，
+            # 最后只剩一条（且不确定是哪一条）。
+            # 取健康分最低（最危险）的那条作为该设备本轮的代表值。
+            worst_by_device: dict[str, dict] = {}
+            for _key, score_data in health_scores.items():
                 device_id = score_data.get('device_id')
                 if not device_id:
                     continue
+                prev = worst_by_device.get(device_id)
+                score = try_finite_float(score_data.get('health_score', 100))
+                if score is None:
+                    score = 100.0
+                if prev is None:
+                    worst_by_device[device_id] = score_data
+                    continue
+                prev_score = try_finite_float(prev.get('health_score', 100))
+                if prev_score is None:
+                    prev_score = 100.0
+                if score < prev_score:
+                    worst_by_device[device_id] = score_data
 
+            for device_id, score_data in worst_by_device.items():
                 failure_pred = score_data.get('failure_prediction')
-                remaining_life = 0
+                remaining_life = -1.0     # -1 = 未知（趋势平稳/远离阈值）
                 failure_probability = 0
 
-                if failure_pred:
-                    remaining_life = failure_pred.get('days_to_limit', 0) * 24  # 转换为小时
-                    failure_probability = failure_pred.get('confidence', 0)
+                if isinstance(failure_pred, dict):
+                    # round 369：`days_to_limit` 可能是**键存在但值为 None**
+                    # （参数趋势平稳时），`.get(k, 0)` 拿到的是 None ——
+                    # `None * 24` 直接 TypeError，整个同步循环在第一个
+                    # 平稳点位处崩掉。
+                    days = try_finite_float(failure_pred.get('days_to_limit'))
+                    remaining_life = (days * 24) if days is not None else -1.0
+                    probability = try_finite_float(
+                        failure_pred.get('confidence', 0) or 0)
+                    failure_probability = (probability
+                                           if probability is not None else 0.0)
 
                 record = PredictiveRecord(
                     device_id=device_id,
@@ -371,7 +401,7 @@ class TSDBAdapter:
                     failure_probability=failure_probability,
                     remaining_life=remaining_life,
                     anomaly_score=score_data.get('anomaly_count', 0),
-                    trend=score_data.get('trend', {}).get('direction', 'stable')
+                    trend=(score_data.get('trend') or {}).get('direction', 'stable')
                 )
 
                 if self.tdengine.write_predictive(record):

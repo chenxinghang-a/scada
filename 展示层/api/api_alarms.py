@@ -328,9 +328,20 @@ def broadcast_speak():
         level=data.get('level', 'info'),
         area=data.get('area'),
         source='manual'
-    )
+    ) or {}
+    username = request.current_user['username']
+    # round 369：**MQTT 发布失败不能回 200 并记"成功"**。
+    # 原来无论 result.success 真假都记成功日志 + 返回 200：
+    # Broker 断线时操作员以为喊话已经播出去了，现场其实一片安静。
+    if not result.get('success'):
+        logger.warning("广播喊话失败 operator=%s: %s", username, result.get('message'))
+        get_auth_manager().log_operation(
+            username, 'broadcast_speak',
+            f'广播喊话失败: {data["text"][:50]} — {result.get("message", "")}')
+        return jsonify(result), 500
+
     get_auth_manager().log_operation(
-        request.current_user['username'], 'broadcast_speak',
+        username, 'broadcast_speak',
         f'广播喊话: {data["text"][:50]}')
     return jsonify(result)
 
@@ -395,8 +406,14 @@ def add_alarm_rule():
     if not save_yaml_config('配置/alarms.yaml', config):
         return api_error('保存报警配置失败', 500)
 
-    current_app.alarm_manager.rules[data['id']] = data
-    current_app.alarm_manager._rebuild_rules_index()
+    # round 369：**改规则必须在 `_state_lock` 内**。
+    # 采集线程正在遍历 `rules` / `rules_by_point` 做判定，API 线程裸改字典
+    # + 重建索引会撞上 `dictionary changed size during iteration`，
+    # 或让索引与 rules 短暂不一致（某些点位被漏检）。
+    manager = current_app.alarm_manager
+    with manager._state_lock:
+        manager.rules[data['id']] = data
+        manager._rebuild_rules_index()
     get_auth_manager().log_operation(
         request.current_user['username'], 'add_alarm_rule', f"添加报警规则: {data['id']}")
     return jsonify({'success': True, 'message': f"规则 {data['id']} 已添加"})
@@ -434,24 +451,43 @@ def update_alarm_rule(rule_id):
         return api_error('保存报警配置失败', 500)
 
     manager = current_app.alarm_manager
-    manager.rules[rule_id] = rules[[r['id'] for r in rules].index(rule_id)]
-    manager._rebuild_rules_index()
+    old_rule = dict(manager.rules.get(rule_id) or {})
+    new_rule = rules[[r['id'] for r in rules].index(rule_id)]
+
+    with manager._state_lock:
+        manager.rules[rule_id] = new_rule
+        manager._rebuild_rules_index()
 
     # round 358：**改成 `enabled: false` 与「删规则」是同一件事** ——
     # `_rebuild_rules_index()` 只索引 enabled 的规则，所以被禁用的规则
     # 同样「后续采样永远不会再检查」，它留下的活跃报警会永久残留。
     # 与上面 DELETE 的处理保持一致。
+    #
+    # round 369：**改绑点位也是同一件事**。规则保持 enabled，但
+    # device_id / register_name / condition 被改到另一个点位时，旧点位
+    # 已经不在索引里，它先前触发的活跃报警永远不会走 CLEAR 分支 ——
+    # 变成永久幽灵报警。判据：绑定字段有任何变化就收尾旧的 alarm_states。
+    def _binding(rule: dict) -> tuple:
+        cond = rule.get('condition') or {}
+        return (rule.get('device_id'), rule.get('register_name'),
+                cond.get('device_id') if isinstance(cond, dict) else None,
+                cond.get('register_name') if isinstance(cond, dict) else None)
+
     retired = 0
-    if not manager.rules[rule_id].get('enabled', True):
+    rebind = _binding(old_rule) != _binding(new_rule)
+    if not new_rule.get('enabled', True) or rebind:
+        # ⚠️ 必须在锁外调用：`_retire_inactive_rules` 内部自己拿 `_state_lock`
         retired = manager._retire_inactive_rules({rule_id})
 
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_alarm_rule',
-        f"更新报警规则: {rule_id}" + (f"（连带收尾 {retired} 条活跃报警）" if retired else ""))
+        f"更新报警规则: {rule_id}" + ("（改绑点位/禁用，已收尾旧活跃报警）" if rebind else "")
+        + (f"（连带收尾 {retired} 条活跃报警）" if retired else ""))
     return jsonify({
         'success': True,
         'message': f'规则 {rule_id} 已更新' + (f'，已收尾 {retired} 条活跃报警' if retired else ''),
         'retired_alarms': retired,
+        'rebound': rebind,
     })
 
 
@@ -530,9 +566,25 @@ def update_notification():
     if not save_yaml_config('配置/alarms.yaml', config):
         return api_error('保存报警配置失败', 500)
 
+    # round 369：**改完必须重建内存里的通知器**。
+    # 原来只写 YAML 文件，`alarm_manager.notification`（构造时按旧配置建好）
+    # 完全不变 —— 改了邮件接收人/开关，不重启进程就永远不生效，
+    # 而界面显示"已保存"。
+    manager = getattr(current_app, 'alarm_manager', None)
+    if manager is not None and hasattr(manager, '_setup_notification'):
+        try:
+            manager._setup_notification(config.get('notification', {}) or {})
+        except Exception as e:      # noqa: BLE001
+            logger.error("通知配置已落盘，但重建通知器失败（重启后生效）: %s", e)
+            return jsonify({
+                'success': True,
+                'message': '通知设置已保存，但运行时通知器重建失败，请重启后确认',
+                'runtime_applied': False,
+            })
+
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_notification', '更新通知设置')
-    return jsonify({'success': True, 'message': '通知设置已保存'})
+    return jsonify({'success': True, 'message': '通知设置已保存', 'runtime_applied': True})
 
 
 # ==================== 报警输出配置API ====================

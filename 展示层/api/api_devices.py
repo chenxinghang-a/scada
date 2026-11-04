@@ -1731,7 +1731,14 @@ def add_preset_device():
             result['message'] = (
                 f"{result.get('message', '设备已添加')}"
                 '（**采集任务未启动**：设备已写入配置，但不会产生数据，请检查采集器状态）')
-    return jsonify(result)
+            # round 369：配置写进去了但采集没起来，不能回 200「已添加」
+            result['success'] = False
+            return jsonify(result), 500
+        return jsonify(result)
+
+    # round 369：**失败不能回 200**。预设不存在 / 落盘失败时原来直接
+    # `jsonify(result)`，调用方只看状态码会以为设备加上了。
+    return jsonify(result), 400
 
 
 @devices_bp.route('/devices/presets/batch-add', methods=['POST'])
@@ -1751,7 +1758,7 @@ def batch_add_presets():
         return jsonify({'success': False, 'message': '模拟初始化器未加载'}), 500
 
     result = initializer.add_preset_batch(preset_ids)
-    if result['success']:
+    if result.get('success'):
         get_auth_manager().log_operation(
             request.current_user['username'], 'batch_add_presets',
             f"批量添加预设: {preset_ids}")
@@ -1767,7 +1774,9 @@ def batch_add_presets():
             result['message'] = (
                 f"{result.get('message', '')}；其中 {len(failed)} 台**采集任务未启动**"
                 f"（{', '.join(failed)}）：配置已写入，但不会产生数据")
-    return jsonify(result)
+        return jsonify(result)
+    # round 369：整体失败（预设不存在 / 落盘失败）必须回 4xx/5xx
+    return jsonify(result), 400
 
 
 @devices_bp.route('/devices/presets/add-all', methods=['POST'])
@@ -1784,7 +1793,7 @@ def add_all_presets():
 
     all_preset_ids = [p['id'] for p in presets]
     result = initializer.add_preset_batch(all_preset_ids)
-    if result['success']:
+    if result.get('success'):
         get_auth_manager().log_operation(
             request.current_user['username'], 'add_all_presets',
             f"添加全部预设: {result['message']}")
@@ -1798,4 +1807,6 @@ def add_all_presets():
             result['message'] = (
                 f"{result.get('message', '')}；其中 {len(failed)} 台**采集任务未启动**"
                 f"（{', '.join(failed)}）：配置已写入，但不会产生数据")
-    return jsonify(result)
+        return jsonify(result)
+    # round 369：整体失败必须回 4xx/5xx
+    return jsonify(result), 400

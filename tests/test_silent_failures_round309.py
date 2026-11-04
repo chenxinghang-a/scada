@@ -50,7 +50,9 @@ def test_add_preset_reports_collection_failure(presets_app, client, auth_headers
                        json={'preset_id': 'p1'}, headers=auth_headers)
     body = resp.get_json()
 
-    assert resp.status_code == 200
+    # round 369：配置写进去了但采集没起来，HTTP 状态也必须是非 200
+    # （原来只改 message，调用方看状态码仍会以为设备可用）
+    assert resp.status_code == 500
     assert body['collection_started'] is False
     assert '未启动' in body['message'], (
         '采集没起来，接口却只说「已添加」—— 界面上这台设备永远没有数据')

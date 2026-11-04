@@ -104,7 +104,11 @@ def _offline_usernames() -> list[str]:
     只要还有一个连着，就不算离线、不入队 —— 另一个端断线期间的消息不会补发。
     按用户归档是刻意的：sid 每次连接都变，按 sid 归档等于永远补不到。
     """
-    now = time.time()
+    # round 369：与登记时刻同基准（单调时钟）。原来登记用 time.time()、
+    # 这里也用 time.time()，但**只在 connect 时写一次**：连续在线超过
+    # OFFLINE_TARGET_TTL 的用户一旦闪断，就被判成「过期用户」—— 断线期间
+    # 的紧急报警全部不入队（handle_disconnect 现在会刷新 last_seen）。
+    now = time.monotonic()
     with _clients_lock:
         online = set(_sid_user.values())
         return [
@@ -296,6 +300,15 @@ def init_socketio(app, database, data_collector):
             logger.warning(f"WebSocket连接被拒绝: token无效, sid={request.sid}")
             return False  # 拒绝连接
 
+        # round 369：**强制改密未完成不允许建立实时数据通道**。
+        # HTTP 侧 `jwt_required` 会把除改密白名单外的一切请求打成 403，
+        # 但 WebSocket 握手只验了 token —— 初始账户还没改密就能订阅全厂
+        # 实时数据与报警流。
+        if user.get('must_change_password'):
+            logger.warning(f"WebSocket连接被拒绝: 用户 {user.get('username')} 未完成强制改密, "
+                           f"sid={request.sid}")
+            return False
+
         # 认证通过后才占名额：容量检查与登记放在同一临界区内，
         # 保证「检查 → 写入」原子，不会超卖连接数。
         username = user['username']
@@ -308,7 +321,8 @@ def init_socketio(app, database, data_collector):
             # 客户端握手时显式声明才登记（默认不压缩，见 _compression_clients 注释）
             if str(request.args.get('compress', '')).strip().lower() in ('1', 'true', 'yes'):
                 _compression_clients.add(request.sid)
-            _known_users[username] = time.time()
+            # 单调时钟：墙钟被 NTP 回拨会让 TTL 判定失效
+            _known_users[username] = time.monotonic()
             current = len(_connected_clients)
 
         logger.info(f"客户端连接: {request.sid}, 用户: {username}, 当前连接数: {current}")
@@ -337,9 +351,16 @@ def init_socketio(app, database, data_collector):
     def handle_disconnect():
         """客户端断开"""
         with _clients_lock:
+            username = _sid_user.get(request.sid)
             _connected_clients.discard(request.sid)
             _sid_user.pop(request.sid, None)
             _compression_clients.discard(request.sid)
+            # round 369：**断开时刷新 last_seen**。
+            # 原来只在 connect 时写一次：在线超过 OFFLINE_TARGET_TTL 的用户
+            # 闪断后会被 `_offline_usernames()` 当成过期用户丢弃，
+            # 断线期间产生的紧急报警一条都不会补发。
+            if username and username not in _sid_user.values():
+                _known_users[username] = time.monotonic()
             current = len(_connected_clients)
         logger.info(f"客户端断开: {request.sid}, 当前连接数: {current}")
         try:

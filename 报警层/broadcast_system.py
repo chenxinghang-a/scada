@@ -229,10 +229,16 @@ class BroadcastSystem:
             return list(reversed(self._history[-limit:]))
 
     def get_status(self) -> dict[str, Any]:
-        circuit_open = self._circuit_open_until is not None
-        remaining = 0.0
-        if circuit_open:
-            remaining = max(0.0, self._circuit_open_until - time.monotonic())
+        with self._lock:
+            # round 369：**必须走 `_circuit_is_open()`**（它会处理冷却到期）。
+            # 原来只判 `_circuit_open_until is not None`：60 秒熔断期过后，
+            # 只要没有新的广播触发重置，这个字段永远不为 None ——
+            # /api/alarm-output/status 永久返回 circuit_open=True、剩余 0.0 秒，
+            # 看板一直挂着"广播熔断故障"，运维以为通道坏了。
+            circuit_open = self._circuit_is_open()
+            remaining = (max(0.0, self._circuit_open_until - time.monotonic())
+                         if circuit_open and self._circuit_open_until else 0.0)
+            fail_streak = self._fail_streak
         return {
             'enabled': self.enabled,
             'simulation': self.simulation,
@@ -242,7 +248,7 @@ class BroadcastSystem:
             #: MQTT 通道健康度（round 287）—— 此前只有 `mqtt_connected`，
             #: 而"连上了但发布一直失败"完全看不出来。
             'mqtt': {
-                'fail_streak': self._fail_streak,
+                'fail_streak': fail_streak,
                 'circuit_open': circuit_open,
                 'circuit_remaining_seconds': round(remaining, 1),
                 'fail_threshold': BROADCAST_CIRCUIT_FAIL_THRESHOLD,
@@ -271,20 +277,25 @@ class BroadcastSystem:
         return True
 
     def _record_publish_failure(self, detail: str) -> None:
-        self._fail_streak += 1
-        if (self._fail_streak >= BROADCAST_CIRCUIT_FAIL_THRESHOLD
-                and self._circuit_open_until is None):
-            self._circuit_open_until = time.monotonic() + BROADCAST_CIRCUIT_OPEN_SECONDS
-            logger.error(
-                "广播通道连续失败 %d 次（%s）—— 熔断 %.0f 秒，期间不再尝试连接 Broker；"
-                "**现场音柱不会有声音**，请检查 MQTT Broker 与网络",
-                self._fail_streak, detail, BROADCAST_CIRCUIT_OPEN_SECONDS)
+        # round 369：计数与熔断窗口是共享状态，读写都要在锁内
+        # （`get_status()` 也会并发读它们）。
+        with self._lock:
+            self._fail_streak += 1
+            if (self._fail_streak >= BROADCAST_CIRCUIT_FAIL_THRESHOLD
+                    and self._circuit_open_until is None):
+                self._circuit_open_until = (
+                    time.monotonic() + BROADCAST_CIRCUIT_OPEN_SECONDS)
+                logger.error(
+                    "广播通道连续失败 %d 次（%s）—— 熔断 %.0f 秒，期间不再尝试连接 Broker；"
+                    "**现场音柱不会有声音**，请检查 MQTT Broker 与网络",
+                    self._fail_streak, detail, BROADCAST_CIRCUIT_OPEN_SECONDS)
 
     def _record_publish_success(self) -> None:
-        if self._fail_streak or self._circuit_open_until is not None:
-            logger.warning("广播通道恢复（此前连续失败 %d 次）", self._fail_streak)
-        self._fail_streak = 0
-        self._circuit_open_until = None
+        with self._lock:
+            if self._fail_streak or self._circuit_open_until is not None:
+                logger.warning("广播通道恢复（此前连续失败 %d 次）", self._fail_streak)
+            self._fail_streak = 0
+            self._circuit_open_until = None
 
     def _mqtt_publish(self, msg: BroadcastMessage) -> bool:
         """通过MQTT发布到广播主题（对接IP广播/PA系统）。

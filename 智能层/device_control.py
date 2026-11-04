@@ -160,7 +160,10 @@ class DeviceControlSafety:
         # 会以为"没触发"—— 这个计数让「触发过但没执行」在状态接口里可见。
         self._interlock_action_failures: dict[str, int] = {}
         self._interlock_bypass: Set[str] = set()  # 被旁路的联锁ID
-        self._lock = threading.Lock()
+        # RLock：`acquire_device_lock` 需要在持锁状态下惰性创建设备锁，
+        # 而调用链上（validate/审计/旁路）已有 `with self._lock` 的路径，
+        # 用普通 Lock 会自死锁。
+        self._lock = threading.RLock()
 
         # ===== 联锁旁路审批（IEC 61511） =====
         #: 旁路请求表（按 request_id）。**必须有上限**（round 311）：
@@ -171,6 +174,13 @@ class DeviceControlSafety:
         #: 上限见 `_trim_bypass_requests()`：只淘汰**已结束**的，pending 永不丢。
         self._bypass_requests: dict[str, BypassRequest] = {}
         self._active_bypasses: Set[str] = set()  # 已批准且激活的旁路
+        #: round 369：`interlock_id -> (request_id, Timer)`。
+        #: 原来的 Timer 句柄**从未保存**，于是：
+        #:   · `restore_interlock()` 手动恢复时无法取消旧定时器；
+        #:   · 同一联锁再次申请旁路后，上一轮的孤儿定时器到期会无条件撤销
+        #:     新旁路（它不知道自己已经过期）；
+        #:   · `remove_interlock()` 删规则后定时器仍会触发并写审计。
+        self._bypass_timers: dict[str, tuple[str, Any]] = {}
         self._bypass_lock = threading.Lock()
 
         # ===== 写操作安全配置 =====
@@ -720,37 +730,53 @@ class DeviceControlSafety:
                 'results': {}
             }
 
-        # 启动操作前检查联锁阻止条件
+        # 启动/复位前检查联锁阻止条件
         #
         # round 330：**不只看 block_start**。原来只拦 action.type == 'block_start'
         # 的联锁，于是某设备因超温触发了 write_register（写停机值）或
         # emergency_stop 联锁、`_interlock_states[rule_id]` 已经是 True 时，
         # batch_control('start') 会**无视正在触发的联锁强行启动**。
-        # 现在：已触发且未旁路的联锁，只要与本次要启动的设备相关就拦。
-        if action == 'start':
-            blocked: list[tuple[str, Any, str]] = []
+        #
+        # round 369：再修两处——
+        #   ① 原来只对 `action == 'start'` 检查。`batch_control('reset')` 是向
+        #      PLC 下发**硬件复位脉冲**，对正处于联锁锁死状态的设备复位，
+        #      等于把保护条件直接清掉。reset 必须同口径拦截。
+        #   ② `device_ids=None`（全厂）时，`device_ids is not None` 恒为假，
+        #      任何一台设备的局部联锁都会在进入循环前把**整个工厂**一刀切拒绝。
+        #      现在把联锁归属到具体设备：只跳过被该联锁覆盖的设备，其余设备
+        #      照常执行；只有当规则确实没有绑定任何设备（全厂级）时才整体拦。
+        device_blocks: dict[str, tuple[str, Any, str]] = {}
+        if action in ('start', 'reset'):
+            scope = set(device_ids) if device_ids else None
+            global_blocks: list[tuple[str, Any, str]] = []
             for rule_id, rule in self._interlock_rules.items():
                 if rule_id in self._interlock_bypass:
                     continue
                 if not self._interlock_states.get(rule_id, False):
                     continue
                 act = rule.get('action', {}) or {}
+                cond = rule.get('condition', {}) or {}
                 act_type = act.get('type')
-                target = act.get('device_id')
-                # block_start 是「禁止启动」语义，无条件拦；
-                # 其它类型只在目标设备落在本次启动范围内时拦（避免无关联锁挡住整批）。
-                if act_type != 'block_start':
-                    if device_ids is not None and target is not None and target not in device_ids:
-                        continue
-                blocked.append((rule_id, rule.get('name'), act_type))
-            if blocked:
-                names = '、'.join(f'{rid}({name}/{t})' for rid, name, t in blocked)
-                logger.error("批量启动被已触发的联锁阻止: %s", names)
+                # 与 api_control 的判定口径一致：动作目标**和**条件设备
+                # 都算这条联锁的相关设备。
+                targets = {t for t in (act.get('device_id'), cond.get('device_id'))
+                           if t}
+                if not targets:
+                    global_blocks.append((rule_id, rule.get('name'), act_type))
+                    continue
+                relevant = targets if scope is None else (targets & scope)
+                for did in relevant:
+                    device_blocks.setdefault(
+                        did, (rule_id, rule.get('name'), act_type))
+            if global_blocks:
+                names = '、'.join(f'{rid}({name}/{t})'
+                                  for rid, name, t in global_blocks)
+                logger.error("批量%s被全厂级联锁阻止: %s", action, names)
                 return {
                     'success': False,
-                    'message': f'联锁正在触发，禁止启动：{names}',
+                    'message': f'联锁正在触发，禁止{action}：{names}',
                     'results': {},
-                    'blocked_by': [rid for rid, _, _ in blocked],
+                    'blocked_by': [rid for rid, _, _ in global_blocks],
                 }
 
         results = {}
@@ -776,6 +802,19 @@ class DeviceControlSafety:
 
         for device_id in controllable:
             try:
+                # 该设备被已触发的联锁覆盖 → 只跳过它，不连坐整批
+                if device_id in device_blocks:
+                    rule_id, rule_name, act_type = device_blocks[device_id]
+                    results[device_id] = {
+                        'success': False,
+                        'message': f'联锁正在触发，禁止{action}：'
+                                   f'{rule_id}({rule_name}/{act_type})',
+                        'blocked_by': rule_id,
+                    }
+                    self._audit(f'batch_{action}', operator,
+                                f'批量{action}设备 {device_id}: 被已触发联锁 {rule_id} 阻止')
+                    continue
+
                 client = self.device_manager.get_client(device_id) if self.device_manager else None
                 if not client:
                     results[device_id] = {'success': False, 'message': '设备客户端不存在'}
@@ -828,16 +867,19 @@ class DeviceControlSafety:
                 # 按点位类型走对应写法，**不允许跨类型退回**：
                 # 线圈和寄存器在现场是两个对象，退回写等于写错地方，
                 # 而调用方只会看到「成功」。不支持就明确失败。
+                #
+                # round 369：**批量写也必须走安全通道**。
+                # 原来这里直接 `client.write_single_coil/register(...)` ——
+                # 绕过了 `acquire_device_lock`（与单点写并发时互斥失效）、
+                # `validate_write`（急停/联锁/量程/旁路）与回读验证：
+                # 同一台设备，单点写要过三道闸门，批量写一路绿灯。
+                # 而批量恰恰是"一次动一片"的动作，风险只高不低。
                 unsupported = None
                 if point['type'] == 'coil':
-                    if hasattr(client, 'write_single_coil'):
-                        success = client.write_single_coil(point['address'], bool(point['value']))
-                    else:
+                    if not hasattr(client, 'write_single_coil'):
                         unsupported = '客户端不支持线圈写入'
                 else:  # register
-                    if hasattr(client, 'write_single_register'):
-                        success = client.write_single_register(point['address'], int(point['value']))
-                    else:
+                    if not hasattr(client, 'write_single_register'):
                         unsupported = '客户端不支持寄存器写入'
 
                 if unsupported:
@@ -846,15 +888,72 @@ class DeviceControlSafety:
                                 f'批量{action}设备 {device_id}: {unsupported}')
                     continue
 
-                if success and self.device_manager:
-                    if action == 'start':
-                        self.device_manager.start_device(device_id)
-                    elif action == 'stop':
-                        self.device_manager.stop_device(device_id)
+                write_res = self.write_with_verification(
+                    device_id,
+                    int(point['address']),
+                    bool(point['value']) if point['type'] == 'coil' else int(point['value']),
+                    operator,
+                    kind='coil' if point['type'] == 'coil' else 'register',
+                    # 控制点位来自 devices 配置白名单，不套 write_limits
+                    control_point=True,
+                )
+                success = bool(write_res.get('success'))
+                if not success:
+                    msg = write_res.get('message') or f'{action}写入失败'
+                    results[device_id] = {
+                        'success': False,
+                        'message': msg,
+                        'verified': write_res.get('verified'),
+                    }
+                    self._audit(f'batch_{action}', operator,
+                                f'批量{action}设备 {device_id}: 安全通道拒绝/失败 — {msg}')
+                    continue
+
+                # round 369：**不要再让管理器重复下发一次**。
+                #
+                # 上面 `write_with_verification` 已经把 control.start / control.stop
+                # 点位写进 PLC 了；而 RealDeviceManager.start_device/stop_device
+                # 内部会**再调一次 `_write_control`** —— 同一根点位一次批量
+                # 操作连写两遍（继电器/启停位抖动），且这里原来完全丢弃了
+                # 布尔返回值，同步失败也照样报成功。
+                # `write=False` 只同步本地状态（_stopped_devices / 模拟标志），
+                # 不再碰硬件；返回值仍然必须检查。
+                if success and self.device_manager and action in ('start', 'stop'):
+                    fn = getattr(self.device_manager,
+                                 'start_device' if action == 'start' else 'stop_device',
+                                 None)
+                    if fn is not None:
+                        import inspect
+                        accepts_write = 'write' in inspect.signature(fn).parameters
+                        state_ok = None
+                        if accepts_write:
+                            try:
+                                state_ok = fn(device_id, write=False)
+                            except Exception as e:
+                                logger.error("批量%s 状态同步异常 device=%s: %s",
+                                             action, device_id, e)
+                                state_ok = False
+                        else:
+                            # 不支持 write 参数的管理器：宁可不同步状态，
+                            # 也不能向同一根点位重复下发。
+                            logger.warning(
+                                "管理器 %s 不支持 write=False，跳过状态同步以避免"
+                                "重复下发（device=%s, action=%s）",
+                                type(self.device_manager).__name__, device_id, action)
+                        if state_ok is False:
+                            results[device_id] = {
+                                'success': False,
+                                'message': f'点位已写入，但设备状态同步失败（{action}）',
+                                'verified': write_res.get('verified'),
+                            }
+                            self._audit(f'batch_{action}', operator,
+                                        f'批量{action}设备 {device_id}: 点位已写但状态同步失败')
+                            continue
 
                 results[device_id] = {
                     'success': success,
-                    'message': f'{action}操作{"成功" if success else "失败"}'
+                    'message': f'{action}操作{"成功" if success else "失败"}',
+                    'verified': write_res.get('verified'),
                 }
 
                 self._audit(f'batch_{action}', operator,
@@ -877,7 +976,7 @@ class DeviceControlSafety:
         if partial:
             failed = [d for d, r in results.items() if not r.get('success')]
             msg += f'；**{len(failed)} 台失败**：{"、".join(failed[:5])}'
-        return {
+        payload = {
             'success': all_ok,
             'partial_success': partial,
             'message': msg,
@@ -885,6 +984,11 @@ class DeviceControlSafety:
             'success_count': success_count,
             'total': total,
         }
+        blocked_by = sorted({r['blocked_by'] for r in results.values()
+                             if r.get('blocked_by')})
+        if blocked_by:
+            payload['blocked_by'] = blocked_by
+        return payload
 
     #: 跨重启保持的安全状态键（`system_state` 表）。
     STATE_KEY_ESTOP = 'estop'
@@ -1002,10 +1106,15 @@ class DeviceControlSafety:
                 # 重建定时器：用"还剩多久"换算成单调时钟
                 remaining = expires_at - now_wall
                 try:
+                    req_id = info.get('request_id', '')
                     timer = threading.Timer(
                         remaining, self._auto_restore_bypass,
-                        args=[interlock_id, info.get('request_id', '')])
+                        args=[interlock_id, req_id])
                     timer.daemon = True
+                    # round 369：句柄必须登记，否则重启恢复出来的旁路
+                    # 既撤不掉、也无法识别孤儿定时器。
+                    with self._bypass_lock:
+                        self._bypass_timers[interlock_id] = (req_id, timer)
                     timer.start()
                 except Exception as e:      # noqa: BLE001
                     logger.error("恢复旁路定时器失败 %s: %s", interlock_id, e)
@@ -1066,6 +1175,8 @@ class DeviceControlSafety:
             # `restore_interlock` 早就是正确的对称实现，这里跟着对齐。
             self._interlock_bypass.discard(rule_id)
             self._active_bypasses.discard(rule_id)
+        # round 369：规则都没了，自动恢复定时器不能留着继续触发
+        self._cancel_bypass_timer(rule_id)
         logger.info(f"移除联锁规则: {rule_id}")
         # 落盘放在锁外（与 `restore_interlock` 一致，避免持锁做文件 I/O）
         self._persist_bypasses()
@@ -1093,6 +1204,10 @@ class DeviceControlSafety:
 
     def restore_interlock(self, rule_id: str, operator: str) -> bool:
         """恢复联锁（手动解除旁路）"""
+        # round 369：手动恢复必须**取消自动恢复定时器**。
+        # 原来只清内存集合，旧 Timer 到期后照样执行，且会把「同一联锁的
+        # 下一次旁路」一起撤销（`_auto_restore_bypass` 不看 request_id）。
+        self._cancel_bypass_timer(rule_id)
         with self._lock:
             self._interlock_bypass.discard(rule_id)
             self._active_bypasses.discard(rule_id)
@@ -1210,8 +1325,37 @@ class DeviceControlSafety:
 
         return True, f"已审批（{progress}）"
 
+    def _cancel_bypass_timer(self, interlock_id: str) -> None:
+        """取消某条联锁的自动恢复定时器（如存在）。"""
+        with self._bypass_lock:
+            entry = self._bypass_timers.pop(interlock_id, None)
+        if entry is not None:
+            try:
+                entry[1].cancel()
+            except Exception:  # noqa: BLE001
+                logger.debug("取消旁路定时器失败: %s", interlock_id)
+
     def _activate_bypass(self, request: BypassRequest):
         """激活旁路（带自动超时恢复）"""
+        # round 369：**有效期从审批通过时刻起算**。
+        # 原来 `expires_at_mono` 在申请时就固定了：审批人拖 25 分钟才批，
+        # 旁路实际只剩 5 分钟；更糟的是审批完成瞬间若 delay <= 0，
+        # 旧代码照样把联锁加入 `_interlock_bypass` 却**不启动 Timer** ——
+        # 该联锁就永久处于旁路状态（保护彻底失效，且界面看不出来）。
+        from core.safe_numeric import try_finite_float
+        expires = try_finite_float(request.expires_at)
+        requested = try_finite_float(request.requested_at)
+        window = max(0.0, (expires or 0.0) - (requested or 0.0))
+        request.expires_at = time.time() + window
+        request.expires_at_mono = time.monotonic() + window
+        if window <= 0:
+            request.status = 'expired'
+            self._audit('bypass_expired', 'system',
+                        f'旁路请求 {request.request_id} 有效期已耗尽，拒绝激活')
+            logger.error("旁路请求 %s 有效期已耗尽（window=%.0fs），拒绝激活",
+                         request.request_id, window)
+            return
+
         with self._lock:
             self._interlock_bypass.add(request.interlock_id)
         with self._bypass_lock:
@@ -1220,20 +1364,32 @@ class DeviceControlSafety:
         # round 315：落库 —— 维护窗口内重启不能让旁路失效
         self._persist_bypasses()
 
-        # 设置超时自动恢复
-        # round 311：`threading.Timer` 要的是**相对时长**，必须用单调时钟算。
-        # 用墙钟算的话，审批通过到启动 Timer 之间只要发生一次校时，
-        # 旁路的自动恢复就会提前或推迟（极端情况下 delay 变负数 → 永不恢复）。
-        delay = (request.expires_at_mono - time.monotonic()
-                 if request.expires_at_mono else request.expires_at - time.time())
-        if delay > 0:
-            timer = threading.Timer(delay, self._auto_restore_bypass, args=[request.interlock_id, request.request_id])
-            timer.daemon = True
-            timer.start()
-            logger.info(f"旁路已激活: {request.interlock_id}, {delay / 60:.0f}分钟后自动恢复")
+        # round 369：先取消同一条联锁上的旧定时器，再挂新的。
+        # 否则上一轮遗留的孤儿定时器到期后会**无条件**撤销这条新旁路。
+        self._cancel_bypass_timer(request.interlock_id)
+        timer = threading.Timer(window, self._auto_restore_bypass,
+                                args=[request.interlock_id, request.request_id])
+        timer.daemon = True
+        with self._bypass_lock:
+            self._bypass_timers[request.interlock_id] = (request.request_id, timer)
+        timer.start()
+        logger.info(f"旁路已激活: {request.interlock_id}, {window / 60:.0f}分钟后自动恢复")
 
     def _auto_restore_bypass(self, interlock_id: str, request_id: str):
-        """超时自动恢复旁路"""
+        """超时自动恢复旁路。
+
+        round 369：只恢复**自己那一次**旁路。同一联锁被重新申请旁路后，
+        上一轮的定时器到期时必须放行（否则会把新旁路误撤销）。
+        """
+        with self._bypass_lock:
+            current = self._bypass_timers.get(interlock_id)
+            if current is not None and current[0] != request_id:
+                logger.info(
+                    "忽略已失效的旁路定时器: %s (req=%s, 当前=%s)",
+                    interlock_id, request_id, current[0])
+                return
+            self._bypass_timers.pop(interlock_id, None)
+
         with self._lock:
             self._interlock_bypass.discard(interlock_id)
         with self._bypass_lock:
@@ -1651,12 +1807,16 @@ class DeviceControlSafety:
         `_device_health` 同理（`status: disconnected` 会被继承）。
         """
         removed = False
-        for container in (self._device_health, self._comm_failures,
-                          self._device_locks, self._safe_state_handlers,
-                          self._device_lock_owners):
-            if device_id in container:
-                container.pop(device_id, None)
-                removed = True
+        # round 369：持锁清理。采集线程正在 update_device_health /
+        # acquire_device_lock 里读写同一批字典，无锁 pop 会撞上
+        # "dictionary changed size during iteration"。
+        with self._lock:
+            for container in (self._device_health, self._comm_failures,
+                              self._device_locks, self._safe_state_handlers,
+                              self._device_lock_owners):
+                if device_id in container:
+                    container.pop(device_id, None)
+                    removed = True
 
         # round 355：`_degraded_devices` 是 **set**（上面循环都是 dict.pop），
         # 所以它从来没被清过。后果：删掉再重加的设备如果之前处于故障降级态，
@@ -1664,9 +1824,10 @@ class DeviceControlSafety:
         # `if device_id not in self._degraded_devices:`，
         # 于是新设备**再次掉线时不会触发安全降级**（关阀/切手动），
         # 而界面上它看起来是台正常设备。
-        if device_id in self._degraded_devices:
-            self._degraded_devices.discard(device_id)
-            removed = True
+        with self._lock:
+            if device_id in self._degraded_devices:
+                self._degraded_devices.discard(device_id)
+                removed = True
 
         if removed:
             logger.info("设备控制安全模块已清理已删除设备的状态: %s", device_id)
@@ -1695,9 +1856,17 @@ class DeviceControlSafety:
     # ==================== 写操作安全校验 ====================
 
     def validate_write(self, device_id: str, address: int, value: int,
-                       operator: str) -> dict[str, Any]:
+                       operator: str, control_point: bool = False) -> dict[str, Any]:
         """
         写操作安全校验
+
+        Args:
+            control_point: ``True`` 表示这次写的是设备配置里显式声明的
+                **控制点位**（``control.start/stop/reset``）。这类点位的地址与
+                取值都来自 ``配置/devices*.yaml`` 的白名单，不是操作员输入的
+                工艺设定值，因此不套用 ``write_limits``（那张表按寄存器名索引，
+                控制点位不在 ``registers`` 里，硬套只会把批量启停全部拒掉）。
+                其余闸门（急停/联锁/健康/互斥/回读）一样不少。
 
         Returns:
             {'allowed': bool, 'reason': str, 'warnings': list}
@@ -1723,12 +1892,20 @@ class DeviceControlSafety:
         #    warning，写操作照放 —— 等于无保护地操作现场设备。真实设备模式下
         #    必须拒绝；模拟模式没有物理风险，保持可演示。
         if not self._interlock_rules and not self._is_simulation():
-            result['allowed'] = False
-            result['reason'] = (
-                '未加载到任何安全联锁规则，真实设备模式下拒绝所有写操作'
-                f'（请配置 {INTERLOCK_CONFIG_PATH} 或设备的 interlocks 段）'
-            )
-            return result
+            if control_point:
+                # 控制点位：批量控制入口已经按 `_interlock_rules` 逐台做过
+                # 「已触发联锁 → 跳过该设备」的拦截；「没有任何规则」在这里
+                # 只影响**任意寄存器设定值**的写（那些点位没有其它闸门）。
+                # 若此处也拒绝，等于开箱状态下启停/复位全部不可用。
+                result['warnings'].append(
+                    '未加载到安全联锁规则：控制点位写入仅按急停/健康/互斥校验放行')
+            else:
+                result['allowed'] = False
+                result['reason'] = (
+                    '未加载到任何安全联锁规则，真实设备模式下拒绝所有写操作'
+                    f'（请配置 {INTERLOCK_CONFIG_PATH} 或设备的 interlocks 段）'
+                )
+                return result
 
         # 1. 紧急停机检查
         if self._estop_active:
@@ -1745,6 +1922,11 @@ class DeviceControlSafety:
 
         # 3. 值范围校验（白名单按寄存器名索引，需先把地址反查为寄存器名）
         limits = self._write_limits.get(device_id, {})
+        if control_point:
+            # 控制点位走配置白名单，不适用 write_limits
+            result['warnings'].append(
+                f'{device_id} 控制点位写入：按 devices 配置白名单执行，跳过 write_limits 量程校验'
+            )
 
         # 3.0 该设备**完全没配量程**时怎么办 —— 与联锁保持同一套口径。
         #
@@ -1756,7 +1938,7 @@ class DeviceControlSafety:
         # 联锁那边的口径是「真实设备模式没配规则 → fail-closed 拒绝一切写」，
         # 理由同样适用：**没有量程 = 一条永不触发的保护**。
         # 模拟模式没有物理风险，放行但留痕（演示要能跑）。
-        if not limits:
+        if not limits and not control_point:
             if self._is_simulation():
                 result['warnings'].append(
                     f'设备 {device_id} 未配置写入量程(write_limits)，本次写入未做范围校验'
@@ -1770,7 +1952,7 @@ class DeviceControlSafety:
                 )
                 return result
 
-        if limits:
+        if limits and not control_point:
             limit_key = self._resolve_register_name(device_id, address)
             if limit_key is None:
                 # 查不到寄存器名 → 无法校验量程 → 拒绝（fail-closed，不放行危险写入）
@@ -1827,21 +2009,31 @@ class DeviceControlSafety:
         return result
 
     def acquire_device_lock(self, device_id: str, operator: str, timeout: float = DEVICE_LOCK_TIMEOUT_S) -> bool:
-        """获取设备操作锁（防止并发操作）"""
-        if device_id not in self._device_locks:
-            self._device_locks[device_id] = threading.Lock()
+        """获取设备操作锁（防止并发操作）。
 
-        acquired = self._device_locks[device_id].acquire(timeout=timeout)
+        ⚠️ round 369：锁对象必须在 ``self._lock`` 内**原子**创建。
+        原来的 `if device_id not in self._device_locks: self._device_locks[...] = Lock()`
+        是典型的 TOCTOU：两个线程同时首次操作同一台设备时，A 创建 Lock_1 并
+        获取成功，B 紧接着覆盖成 Lock_2 再获取 Lock_2 也成功 —— 两个线程
+        同时进入同一台设备的写临界区，设备锁形同虚设。
+        """
+        with self._lock:
+            lock = self._device_locks.setdefault(device_id, threading.Lock())
+
+        acquired = lock.acquire(timeout=timeout)
         if acquired:
-            self._device_lock_owners[device_id] = operator
+            with self._lock:
+                self._device_lock_owners[device_id] = operator
         return acquired
 
     def release_device_lock(self, device_id: str):
         """释放设备操作锁"""
-        self._device_lock_owners.pop(device_id, None)
-        if device_id in self._device_locks:
+        with self._lock:
+            self._device_lock_owners.pop(device_id, None)
+            lock = self._device_locks.get(device_id)
+        if lock is not None:
             try:
-                self._device_locks[device_id].release()
+                lock.release()
             except RuntimeError:
                 pass
 
@@ -1952,6 +2144,18 @@ class DeviceControlSafety:
                 'active_interlocks': active_interlocks
             }
 
+        # round 369：**审计先行 + fail-closed**。
+        # 解除急停是"恢复生产"的动作，是整个系统里风险最高的一次状态切换：
+        # 它把写闸门重新打开。原来审计写在所有状态变更**之后**，且不看返回值 ——
+        # 磁盘满/目录只读时会出现「闸门已开、日志里查不到是谁开的」。
+        if not self._audit('estop_reset_attempt', operator,
+                           '请求解除紧急停机（联锁检查已通过）'):
+            return {
+                'success': False,
+                'message': '审计写入失败，拒绝解除急停（无法自证的操作不允许执行）',
+                'operator': operator,
+            }
+
         self._estop_active = False
         self._estop_time = None
         self._estop_reason = ''
@@ -1960,28 +2164,90 @@ class DeviceControlSafety:
         self._persist_estop()
 
         # 通知设备管理器恢复
+        #
+        # round 369：**start_device 的返回值必须看**。
+        # 原来 `self.device_manager.start_device(device_id)` 直接把 bool 丢掉，
+        # 异常也只打日志，然后 `self._estop_devices = []` 一把清空 ——
+        # 结果：10 台里 3 台没起来，接口照样回 `success: True`
+        # "系统恢复正常"，而那 3 台**再也不会被重试**（名单已被抹掉）。
+        restarted_devices: list[str] = []
+        failed_devices: list[str] = []
         if self.device_manager:
             self.device_manager.set_estop_override(False)
-            # 启动所有之前被停止的设备
-            for device_id in getattr(self, '_estop_devices', []):
+            for device_id in list(getattr(self, '_estop_devices', []) or []):
                 try:
-                    self.device_manager.start_device(device_id)
+                    if self.device_manager.start_device(device_id):
+                        restarted_devices.append(device_id)
+                    else:
+                        failed_devices.append(device_id)
+                        logger.error("解除停机失败 %s：start_device 返回 False"
+                                     "（现场设备未恢复运行）", device_id)
                 except Exception as e:
-                    logger.error(f"解除停机失败 {device_id}: {e}")
-            self._estop_devices = []
+                    failed_devices.append(device_id)
+                    logger.error(f"解除停机异常 {device_id}: {type(e).__name__}: {e}")
+            # 只把**已成功恢复**的移出名单；失败的留着，下次还能重试
+            self._estop_devices = failed_devices
 
         # 复位声光报警
+        #
+        # round 369：**复位灯之前必须先看还有没有别的活跃报警**。
+        # 原来无条件 `alarm_output.reset()` —— 急停解除的同时把红灯/蜂鸣器
+        # 一并清零成绿灯常亮，哪怕此刻还有超温、超压这类 Critical 工艺报警在响。
+        # 现场看到的是"绿灯正常"，而实际仍在报警态，这是最危险的一种误指示。
+        warnings: list[str] = []
+        remaining_alarms: list[dict[str, Any]] | None = []
+        tower_reset: bool | None = None
         if self.alarm_manager:
-            if self.alarm_manager.alarm_output:
-                self.alarm_manager.alarm_output.reset()
+            out = getattr(self.alarm_manager, 'alarm_output', None)
+            try:
+                remaining_alarms = self.alarm_manager.get_active_alarms()
+            except Exception as e:
+                # 拿不到活跃报警 = 状态未知 → **保守：不灭灯**
+                remaining_alarms = None
+                logger.error("读取活跃报警失败，保守处理：不复位声光塔 — %s", e)
+            if out:
+                if remaining_alarms:
+                    # 按最高活跃级别重新驱动，而不是清零
+                    _rank = {'critical': 3, 'warning': 2, 'info': 1}
+                    top = max(
+                        remaining_alarms,
+                        key=lambda a: _rank.get(str(a.get('alarm_level', '')).lower(), 0))
+                    level = str(top.get('alarm_level', 'warning')).lower()
+                    try:
+                        out.activate_alarm(
+                            level,
+                            f'急停已解除，但仍存在 {len(remaining_alarms)} 条活跃报警')
+                    except Exception as e:
+                        logger.error("按存活报警重新驱动声光塔失败: %s", e)
+                    warnings.append(
+                        f'仍有 {len(remaining_alarms)} 条活跃报警，声光塔保持 {level} 态未复位')
+                elif remaining_alarms is not None:
+                    try:
+                        tower_reset = bool(out.reset())
+                    except Exception as e:
+                        tower_reset = False
+                        logger.error("声光塔复位异常: %s", e)
+                    if tower_reset is False:
+                        warnings.append('声光塔 DO 复位失败，现场红灯/蜂鸣器可能仍在动作')
 
-        self._audit('estop_reset', operator, '紧急停机已解除')
-        logger.info(f"紧急停机已解除 by {operator}")
+        detail = (f'紧急停机已解除：恢复 {len(restarted_devices)} 台'
+                  + (f'，**启动失败 {len(failed_devices)} 台: {failed_devices}**'
+                     if failed_devices else ''))
+        if not self._audit('estop_reset', operator, detail):
+            warnings.append('解除结果审计写入失败（操作已执行，但日志缺失）')
+        logger.info("紧急停机已解除 by %s（恢复 %d 台，失败 %d 台）",
+                    operator, len(restarted_devices), len(failed_devices))
 
         return {
-            'success': True,
-            'message': '紧急停机已解除，系统恢复正常',
-            'operator': operator
+            # 有设备没起来就不能叫"系统恢复正常"
+            'success': not failed_devices,
+            'message': ('紧急停机已解除，系统恢复正常' if not failed_devices
+                        else f'紧急停机已解除，但 {len(failed_devices)} 台设备未能恢复启动，'
+                             f'请现场确认：{"、".join(failed_devices)}'),
+            'operator': operator,
+            'restarted_devices': restarted_devices,
+            'failed_devices': failed_devices,
+            'warnings': warnings,
         }
 
     def get_estop_status(self) -> dict[str, Any]:
@@ -2300,6 +2566,10 @@ class DeviceControlSafety:
             'total': len(self._device_health),
             'connected': 0,
             'disconnected': 0,
+            # round 343 把连续采集失败的状态改成了 'degraded'，
+            # 但这里漏了这个固定键：看板读 summary['degraded'] 会 KeyError，
+            # 前端只能显示 undefined。键必须与状态机一一对应。
+            'degraded': 0,
             'unknown': 0,
             'devices': {}
         }
@@ -2313,7 +2583,8 @@ class DeviceControlSafety:
 
     def write_with_verification(self, device_id: str, address: int, value: int,
                                 operator: str, max_retries: int = 2,
-                                kind: str = 'register') -> dict[str, Any]:
+                                kind: str = 'register',
+                                control_point: bool = False) -> dict[str, Any]:
         """
         带回读验证的写操作
 
@@ -2336,7 +2607,8 @@ class DeviceControlSafety:
                 启动位、实际往数据寄存器里写了个数。
         """
         # 安全校验
-        validation = self.validate_write(device_id, address, value, operator)
+        validation = self.validate_write(device_id, address, value, operator,
+                                         control_point=control_point)
         if not validation['allowed']:
             self._audit('write_blocked', operator,
                         f'写入被阻止: {device_id}/{address}={value}, 原因: {validation["reason"]}')
@@ -2365,7 +2637,8 @@ class DeviceControlSafety:
             #
             # 复核只读内存（急停标志 / 设备健康 / 联锁状态 / 量程），
             # 没有任何 I/O，代价可以忽略。
-            recheck = self.validate_write(device_id, address, value, operator)
+            recheck = self.validate_write(device_id, address, value, operator,
+                                          control_point=control_point)
             if not recheck['allowed']:
                 self._audit('write_blocked', operator,
                             f'写入被复核阻止（拿锁后状态已变）: '
@@ -2530,10 +2803,27 @@ class DeviceControlSafety:
                 verified = None
 
             # 审计
+            #
+            # ⚠️ 审计动作必须与**真实结论**一致。原来无论回读结果如何一律记
+            # `write_success` —— 回读明确证明「设备没接受该值」时，审计流里
+            # 仍是一条成功的写入记录。事故复盘时这条记录会把责任指向操作员
+            # （"他写成功了"），而现场实际没动。分类：
+            #   · 验证通过   → write_success
+            #   · 无法验证   → write_unverified（指令下发成功，但没拿到新鲜回读）
+            #   · 验证失败   → write_verify_failed（下面 success 会被置 False）
             verify_text = ('未验证' if verified is None
                            else ('验证通过' if verified else '验证失败'))
-            self._audit('write_success', operator,
-                        f'写入成功({kind}): {device_id}/{address}={value}'
+            if verified is False:
+                audit_action = 'write_verify_failed'
+                audit_head = '写入回读验证失败'
+            elif verified is None:
+                audit_action = 'write_unverified'
+                audit_head = '写入成功但未验证'
+            else:
+                audit_action = 'write_success'
+                audit_head = '写入成功'
+            self._audit(audit_action, operator,
+                        f'{audit_head}({kind}): {device_id}/{address}={value}'
                         f'{f", 回读={readback_value}" if readback_value is not None else ""}'
                         f', {verify_text}')
 

@@ -458,25 +458,64 @@ class MQTTClient:
 
         # 格式2: 简单键值对
         else:
-            device_id = topic.split('/')[-1] if '/' in topic else topic
+            # round 369：**设备 ID 必须取本客户端绑定的设备**。
+            # 原来写 `topic.split('/')[-1]` —— 对 `factory/motor_01/vibration_x`
+            # 这种多级主题，取出来的是**点位名**而不是设备 ID，采集器按
+            # device_id 查不到设备，数据被静默丢弃或写到错误设备上。
+            device_id = self._topic_device_id(topic)
+            unit = self._topic_unit(topic)
             for register_name, value in data.items():
                 if isinstance(value, (int, float)):
-                    self._notify_callbacks(device_id, register_name, float(value), '', retain=retain)
+                    self._notify_callbacks(device_id, register_name, float(value),
+                                           unit, retain=retain)
+
+    def _topic_meta(self, topic: str) -> dict:
+        """按 `topics_config` 取该主题的点位元数据（name/unit/json_path）。
+
+        `topics_config` 是**列表**（元素为 dict 或裸字符串，见
+        `parse_topic_entry` 的说明），不是 topic → meta 的字典。
+        """
+        entries = getattr(self, 'topics_config', None) or []
+        if isinstance(entries, dict):       # 兼容旧式写法
+            meta = entries.get(topic)
+            return meta if isinstance(meta, dict) else {}
+        for entry in entries:
+            if isinstance(entry, dict) and str(entry.get('topic') or '').strip() == topic:
+                return entry
+        return {}
+
+    def _topic_device_id(self, topic: str) -> str:
+        """设备 ID：优先用客户端绑定的设备，取不到才退回主题末段。"""
+        device_id = getattr(self, 'device_id', '') or ''
+        if device_id:
+            return device_id
+        return topic.split('/')[-1] if '/' in topic else topic
+
+    def _topic_unit(self, topic: str) -> str:
+        return self._topic_meta(topic).get('unit', '') or ''
 
     def _process_raw_message(self, topic: str, payload: str, retain: bool = False):
         """处理非JSON格式消息"""
         try:
+            meta = self._topic_meta(topic)
+            device_id = self._topic_device_id(topic)
+            unit = meta.get('unit', '') or ''
             if '=' in payload:
                 parts = payload.split('=')
                 if len(parts) == 2:
-                    device_id = topic.split('/')[-1] if '/' in topic else topic
-                    register_name = parts[0].strip()
+                    # 配置里给了点位名就用配置的（主题末段常常是通道名，
+                    # 不是点位名）；否则用报文里的键
+                    register_name = meta.get('name') or parts[0].strip()
                     value = to_finite_float(parts[1].strip(), 'mqtt_value')
-                    self._notify_callbacks(device_id, register_name, value, '', retain=retain)
+                    self._notify_callbacks(device_id, register_name, value,
+                                           unit, retain=retain)
             else:
                 value = to_finite_float(payload.strip(), 'mqtt_value')
-                device_id = topic.split('/')[-1] if '/' in topic else topic
-                self._notify_callbacks(device_id, 'value', value, '')
+                register_name = meta.get('name') or 'value'
+                # round 369：**单值分支也必须带 retain**。
+                # 漏传会让 Broker 缓存的陈旧 retained 值被当成新鲜实时值。
+                self._notify_callbacks(device_id, register_name, value,
+                                       unit, retain=retain)
         except (ValueError, IndexError):
             logger.debug(f"无法解析原始消息: {topic} = {payload}")
 

@@ -607,14 +607,26 @@ class DNP3Client:
                 self.logger.error(f"读请求失败: {e}")
 
     def send_control(self, index: int, value: int) -> bool:
-        """发送控制命令（直接操作）"""
+        """发送控制命令（直接操作）。
+
+        round 369：**没连上时必须返回 False**。
+        原来 `if self.socket:` 才发，socket 为 None / 已断开时什么都不发，
+        却照样打日志并 `return True` —— 上层认为命令已下发，
+        现场设备根本没收到（假成功）。
+        """
         with self._lock:
+            if not self.connected or not self.socket:
+                self.logger.error(
+                    "控制命令未发送：DNP3 连接未建立（index=%s, value=%s）",
+                    index, value)
+                return False
             try:
                 frame = DNP3Parser.build_direct_operate(
                     self.local_addr, self.remote_addr,
                     index, value)
-                if self.socket:
-                    self.socket.send(frame)
+                # sendall：send 在发送缓冲区满时会只写一部分（半包截断），
+                # 对端解析会直接错帧。
+                self.socket.sendall(frame)
                 self.logger.info(f"发送控制命令: index={index}, value={value}")
                 return True
             except Exception as e:

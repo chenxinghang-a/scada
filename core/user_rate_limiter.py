@@ -127,7 +127,11 @@ def user_rate_limit(calls: int = 0, period: int = 60, role_overrides: Optional[d
                     remaining = limit_calls - len(_user_limits.get(username, {}).get(path, []))
                 resp.headers['X-RateLimit-Limit'] = str(limit_calls)
                 resp.headers['X-RateLimit-Remaining'] = str(max(0, remaining))
-                resp.headers['X-RateLimit-Reset'] = str(int(now + limit_period))
+                # round 369：**这里也必须是绝对时刻**。
+                # `now` 是 time.monotonic()（开机以来的秒数），直接 + period
+                # 得到的是"开机后第 N 秒"，不是 Unix 时间戳 —— 客户端按它
+                # 做倒计时会得到 1970 年附近的荒谬时间。与上面 429 分支同口径。
+                resp.headers['X-RateLimit-Reset'] = str(int(time.time() + limit_period))
 
             return resp
 

@@ -205,8 +205,20 @@ class SQLiteToTDengineMigrator:
                     batch.append(record)
 
                     if len(batch) >= batch_size:
-                        self.tdengine.write_telemetry_batch(batch)
-                        self.stats['telemetry_migrated'] += len(batch)
+                        # round 369：**必须核验写入返回值**。
+                        # TDengine 拒写（未启动/认证失败/SQL 失败）时
+                        # write_telemetry_batch 返回 0 而不抛异常，原实现照样
+                        # 累加 len(batch) —— 迁移脚本打印"100% 成功"，实际
+                        # 一条都没进库。
+                        written = self.tdengine.write_telemetry_batch(batch)
+                        written = int(written or 0)
+                        self.stats['telemetry_migrated'] += written
+                        if written < len(batch):
+                            lost = len(batch) - written
+                            self.stats['errors'] += lost
+                            self.logger.error(
+                                "遥测批次写入不完整: 成功 %d / %d（%d 条丢失）",
+                                written, len(batch), lost)
                         self.logger.info(f"已迁移 {self.stats['telemetry_migrated']} 条遥测数据")
                         batch = []
 
@@ -216,8 +228,14 @@ class SQLiteToTDengineMigrator:
 
             # 写入剩余数据
             if batch:
-                self.tdengine.write_telemetry_batch(batch)
-                self.stats['telemetry_migrated'] += len(batch)
+                written = int(self.tdengine.write_telemetry_batch(batch) or 0)
+                self.stats['telemetry_migrated'] += written
+                if written < len(batch):
+                    lost = len(batch) - written
+                    self.stats['errors'] += lost
+                    self.logger.error(
+                        "遥测尾批写入不完整: 成功 %d / %d（%d 条丢失）",
+                        written, len(batch), lost)
 
             self.logger.info(f"遥测数据迁移完成: {self.stats['telemetry_migrated']} 条")
 
@@ -259,8 +277,10 @@ class SQLiteToTDengineMigrator:
                         value=row['actual_value'] if row['actual_value'] else 0,
                         threshold=row['threshold'] if row['threshold'] else 0
                     )
-                    self.tdengine.write_alarm(record)
-                    count += 1
+                    if self.tdengine.write_alarm(record):
+                        count += 1
+                    else:
+                        self.stats['errors'] += 1
 
                     if count % batch_size == 0:
                         self.stats['alarms_migrated'] = count
@@ -314,8 +334,10 @@ class SQLiteToTDengineMigrator:
                         total_count=row['total_count'] if row['total_count'] else 0,
                         good_count=row['good_count'] if row['good_count'] else 0
                     )
-                    self.tdengine.write_oee(record)
-                    count += 1
+                    if self.tdengine.write_oee(record):
+                        count += 1
+                    else:
+                        self.stats['errors'] += 1
 
                     if count % batch_size == 0:
                         self.stats['oee_migrated'] = count
@@ -366,8 +388,10 @@ class SQLiteToTDengineMigrator:
                         voltage=row['voltage'] if row['voltage'] else 0,
                         current=row['current'] if row['current'] else 0
                     )
-                    self.tdengine.write_energy(record)
-                    count += 1
+                    if self.tdengine.write_energy(record):
+                        count += 1
+                    else:
+                        self.stats['errors'] += 1
 
                     if count % batch_size == 0:
                         self.stats['energy_migrated'] = count

@@ -2,6 +2,29 @@
 
 All notable changes to the Industrial SCADA System are documented in this file.
 
+> 排序说明：本文件按**发布时间倒序**，不是按语义化版本号大小排序。
+> `[3.0.0]` 是版本口径统一（2026-09）之前的历史编号，实际早于 `[1.3.1028]`。
+
+## [1.3.1091] - 2026-11-04
+
+Round 369 二次源码审计（43 项活跃缺陷）修复：
+
+- **控制安全**：`write_with_verification` 回读明确失败（`verified=False`）不再返回 `success=True`；
+  `/write-register`、`/write-coil`、`/adjust` 失败返回 4xx/5xx 且不污染幂等缓存；
+  `batch_control` 的 reset 与单台同口径联锁拦截，`device_ids=None` 按设备粒度阻断，取消 start/stop 二次下发。
+- **采集层**：FINS/MC 补 `write_single_register`/`write_single_coil` 与补码解码；
+  真实/模拟管理器 `reload_config` 断开并通知已删设备；模拟器 32 位值按 `byte_order` 编解码；
+  MQTT 用客户端绑定设备 ID、按 `topics_config` 取点位名/单位；设备配置保存改原子写。
+- **协议网关**：DNP3/IEC104 未连接返回失败；IEC104 ASDU 支持 SQ=1、24 位 IOA；Modbus/OPC UA/S7 编解码修正；
+  模拟 REST 网关实现 POST/PUT 写入。
+- **安全**：HA 心跳 `state` 入 HMAC 并做防重放；签名装饰器先验签后登记 nonce、生产缺密钥 fail-closed；
+  `auth` 禁止管理员自我禁用/降权，改密撤销旧令牌，WebSocket 拦截未完成强制改密；生产 `CSRF_SECRET` 弱值拒绝启动。
+- **存储/导出**：历史清理分块删除并失效统计缓存；CSV 导出汇总全列、RFC4180 转义、公式注入防护；
+  QueryBuilder 表名/列名/聚合/排序白名单校验。
+- **时间基准**：剩余时长比较统一 `time.monotonic()`；SQLite 时间戳统一本地时间（存量库用 `tools/migrate_created_at_to_local.py` 迁移）。
+- **运维工具**：`start.bat` 改纯 ASCII；诊断包临时目录无条件清理；安全扫描器跳过 `.venv`/`dist` 并消除错误码与自身正则误报。
+- **测试**：全量 4527+ 用例通过、11 跳过；新增/更新设备生命周期通知、写审计三态、队列持久化、MQTT、升级键等守卫用例。
+
 ## [1.3.1028] - 2026-09-18
 
 版本口径统一（消除 1.3.1028 / 1.3.1010 / 3.1.0 / v3.0 / 1.0.0 五套漂移）：

@@ -32,8 +32,8 @@ from .thing_model import (
 try:
     import snap7
     from snap7.util import (
-        get_real, get_int, get_dint, get_word, get_byte,
-        set_real, set_int, set_dint, set_word, set_byte
+        get_real, get_int, get_dint, get_word, get_byte, get_bool,
+        set_real, set_int, set_dint, set_word, set_byte, set_bool
     )
     SNAP7_AVAILABLE = True
 except ImportError:
@@ -314,6 +314,11 @@ class S7Gateway(BaseGateway):
             elif data_type == 'byte':
                 data = bytearray(1)
                 set_byte(data, 0, int(value))
+            elif data_type in ('bool', 'boolean'):
+                # round 369：`_read_register` 支持 bool，`write_register` 却漏了
+                # 这个分支 —— S7 DB 块的布尔量（启动位/阀门位）根本写不进去。
+                data = bytearray(1)
+                set_bool(data, 0, 0, bool(value))
             else:
                 self.logger.error(f"不支持的S7写入类型: {data_type}")
                 return False

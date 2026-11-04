@@ -324,7 +324,7 @@ class Database:
                     value REAL,
                     unit TEXT,
                     timestamp DATETIME NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
                     quality INTEGER DEFAULT 192,
                     UNIQUE(device_id, register_name)
                 )
@@ -339,7 +339,7 @@ class Database:
                     value REAL,
                     unit TEXT,
                     timestamp DATETIME NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             ''')
 
@@ -365,7 +365,7 @@ class Database:
                     -- 一条报警可以没被任何人确认、自己恢复了）
                     cleared BOOLEAN DEFAULT 0,
                     cleared_at DATETIME,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             ''')
 
@@ -377,7 +377,7 @@ class Database:
                     status TEXT NOT NULL,
                     message TEXT,
                     timestamp DATETIME NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             ''')
 
@@ -446,7 +446,7 @@ class Database:
                     max_value REAL,
                     sample_count INTEGER,
                     archive_date DATE NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             ''')
 
@@ -633,8 +633,9 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # round 326：**显式写 created_at**，不再依赖 DDL 里的
-            # `DEFAULT CURRENT_TIMESTAMP` —— 那个默认值是 **UTC**，
+            # round 326：**显式写 created_at**，不再依赖 DDL 里的默认值。
+            # round 369 起新建库的默认值已是 `datetime('now','localtime')`，
+            # 但**存量库**的表结构仍是老的 `CURRENT_TIMESTAMP`（UTC），
             # 而 `timestamp` 来自 `datetime.now()`（本地时间）。
             # 两者混用会让同一行数据差 8 小时（实测 scada.db 5000 行恒差 8h），
             # 任何 `WHERE timestamp > created_at` 或按 created_at 分天的报表都会错。
@@ -713,7 +714,7 @@ class Database:
         valid_rows = []
         skipped_invalid = 0
         # round 326：批量用同一个入库时刻，与 timestamp 同为**本地时间**尺度。
-        # 不再依赖 DDL 的 `DEFAULT CURRENT_TIMESTAMP`（那是 UTC）—— 否则同一行
+        # 不再依赖 DDL 默认值（存量库仍是 UTC 的 CURRENT_TIMESTAMP）—— 否则同一行
         # 的 timestamp 与 created_at 会差 8 小时。
         created_at = datetime.now()
         for d in batch:
@@ -1115,7 +1116,7 @@ class Database:
             else:
                 # 无未确认记录 → 新建
                 # round 326：显式写 created_at（本地时间），不再吃 DDL 的
-                # `DEFAULT CURRENT_TIMESTAMP`（UTC）—— 否则同一行的
+                # DDL 默认值（存量库为 UTC 的 CURRENT_TIMESTAMP）—— 否则同一行的
                 # timestamp（本地）与 created_at（UTC）差 8 小时。
                 cursor.execute('''
                     INSERT INTO alarm_records
@@ -1393,12 +1394,19 @@ class Database:
             # 清理历史数据。cutoff 必须用 isoformat(sep=' ') —— 与 adapt_datetime
             # 的写入格式一致，否则 'T' 分隔会让文本比较多删近一天数据。
             history_cutoff = datetime.now() - timedelta(days=retention_days)
-            cursor.execute('''
-                DELETE FROM history_data 
-                WHERE timestamp < ?
-            ''', (history_cutoff.isoformat(sep=' '),))
+            # round 369：**走分块删除**（同文件第 26 行的 `_delete_older_than_chunked`）。
+            # 原来是一条全表 `DELETE ... WHERE timestamp < ?`：在大表上整个事务
+            # 持写锁，采集写入被饿死（database is locked，等满 30s busy_timeout
+            # 后丢数据）。这个函数本来就是为这个场景写的，这里却没复用它。
+            history_deleted = _delete_older_than_chunked(
+                conn, 'history_data', 'timestamp',
+                history_cutoff.isoformat(sep=' '))
 
-            history_deleted = cursor.rowcount
+            # 统计缓存必须失效：否则数据库状态接口最多 30 秒内
+            # 仍报删除前的行数（看板显示"清完了但行数没变"）。
+            with self._dbstats_lock:
+                self._dbstats_cache = None
+                self._dbstats_cache_at = 0.0
 
             logger.info(f"清理旧数据: 实时数据 {realtime_deleted} 条, 历史数据 {history_deleted} 条")
 

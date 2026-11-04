@@ -170,10 +170,15 @@ class _FakeTDengine:
         pass
 
     def write_telemetry_batch(self, records):
+        # 与真实 TDengineClient 契约一致：返回**实际写入条数**。
+        # 迁移器现在按返回值核账（round 369），返回 None 会被判为全部丢弃。
         self.telemetry.extend(records)
+        return len(records)
 
     def write_alarm(self, record):
+        # 真实契约：bool
         self.alarms.append(record)
+        return True
 
     def _execute_sql(self, sql):
         if not self.queriable:

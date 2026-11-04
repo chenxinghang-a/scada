@@ -467,8 +467,24 @@ class EdgeDecisionEngine:
             # 而且 `target` 格式非法（没有冒号）也算这次动作失败。
             try:
                 device_id, register_name = target.split(':', 1)
-                self._action_callbacks['write_register'](device_id, register_name, value)
-                log_entry['result'] = f'写入 {target} = {value}'
+                # round 369：**必须看返回值**。SCADA 内所有写路径
+                # （DeviceManager.write_register / ModbusClient /
+                # DeviceControlSafety）失败时都是**返回 False 或
+                # {'success': False}**，不抛异常 —— 只看异常会把
+                # "PLC 拒写"记成 ok=True，触发计数照涨，看板上像是闭环生效了。
+                res = self._action_callbacks['write_register'](
+                    device_id, register_name, value)
+                if res is False or (isinstance(res, dict)
+                                    and res.get('success') is False):
+                    log_entry['ok'] = False
+                    log_entry['result'] = (
+                        f'写入未生效: {target} = {value}（底层返回 {res!r}）')
+                    with self._lock:
+                        self._action_failures += 1
+                    logger.error("动作写入未生效: %s = %s（底层返回 %r）",
+                                 target, value, res)
+                else:
+                    log_entry['result'] = f'写入 {target} = {value}'
             except Exception as e:      # noqa: BLE001
                 log_entry['result'] = f'写入失败: {e}'
                 log_entry['ok'] = False
@@ -505,13 +521,16 @@ class EdgeDecisionEngine:
                 logger.error("回调 %s 异常: %s", callback_name, e)
 
         # 更新规则统计
+        #
+        # round 369：**动作没生效就不算"触发成功"**。
+        # 原来即使 log_entry['ok'] 为 False 也照常刷新 last_triggered 并累加
+        # trigger_count —— 看板上显示"已触发 N 次、最近一次刚刚"，
+        # 而现场一次都没动过。
         with self._lock:
-            if rule_id in self.rules:
-                self.rules[rule_id]['last_triggered'] = datetime.now().isoformat()
-                self.rules[rule_id]['trigger_count'] += 1
-            elif rule_id in self.interlocks:
-                self.interlocks[rule_id]['last_triggered'] = datetime.now().isoformat()
-                self.interlocks[rule_id]['trigger_count'] += 1
+            target_rule = self.rules.get(rule_id) or self.interlocks.get(rule_id)
+            if target_rule is not None and log_entry.get('ok', True):
+                target_rule['last_triggered'] = datetime.now().isoformat()
+                target_rule['trigger_count'] = target_rule.get('trigger_count', 0) + 1
 
         self.decision_log.append(log_entry)
 
@@ -585,7 +604,13 @@ class EdgeDecisionEngine:
             return
         device_id, register_name = output_key.split(':', 1)
         try:
-            callback(device_id, register_name, output)
+            res = callback(device_id, register_name, output)
+            # round 369：同 `_execute_action` —— 写失败是返回 False，不是抛异常
+            if res is False or (isinstance(res, dict) and res.get('success') is False):
+                with self._lock:
+                    self._action_failures += 1
+                logger.error("PID 输出写入未生效: %s = %s（底层返回 %r）",
+                             output_key, output, res)
         except Exception as e:
             with self._lock:
                 self._action_failures += 1

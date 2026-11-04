@@ -22,6 +22,7 @@ import hmac
 import time
 import logging
 import secrets
+from collections import OrderedDict
 from functools import wraps
 from typing import Any, Dict, Optional
 from flask import request, jsonify, current_app
@@ -35,9 +36,53 @@ TIMESTAMP_HEADER = 'X-Timestamp'
 NONCE_HEADER = 'X-Nonce'
 MAX_TIMESTAMP_AGE = 300  # 5分钟
 
-# nonce缓存（防重放）
-_nonce_cache: Dict[str, float] = {}
+#: nonce 缓存**硬上限**（round 369）。
+#: 原来这个字典无界，且验签**之前**就写入：未授权攻击者不需要知道密钥，
+#: 只要伪造合法时间戳 + 随机 Nonce 高频请求，就能在几秒内把进程内存撑爆
+#: （OOM DoS），或者抢注合法客户端马上要用的 Nonce。
+MAX_NONCE_CACHE = 50000
+_nonce_cache: "OrderedDict[str, float]" = OrderedDict()
 _nonce_lock = __import__('threading').Lock()
+
+
+def _is_production() -> bool:
+    """是否生产环境（无法判定时按生产处理，fail-closed）。"""
+    try:
+        from config import IS_PRODUCTION
+        return bool(IS_PRODUCTION)
+    except Exception:      # noqa: BLE001
+        return True
+
+
+def _signature_secret() -> str:
+    """读取签名密钥（应用配置优先，其次环境变量）。"""
+    secret = current_app.config.get('API_SIGNATURE_SECRET', '') or ''
+    if not secret:
+        import os
+        secret = os.environ.get('API_SIGNATURE_SECRET', '') or ''
+    return secret
+
+
+def _register_nonce(nonce: str) -> bool:
+    """登记 nonce（**验签通过后**才调用）。返回 False 表示重放。"""
+    now = time.monotonic()
+    with _nonce_lock:
+        if nonce in _nonce_cache:
+            return False
+        _nonce_cache[nonce] = now
+        _nonce_cache.move_to_end(nonce)
+
+        # 插入顺序即时间顺序：从头清理过期的
+        while _nonce_cache:
+            oldest, ts = next(iter(_nonce_cache.items()))
+            if now - ts > MAX_TIMESTAMP_AGE:
+                _nonce_cache.popitem(last=False)
+            else:
+                break
+        # 硬上限：极端流量下宁可淘汰最旧的，也不能让内存无界增长
+        while len(_nonce_cache) > MAX_NONCE_CACHE:
+            _nonce_cache.popitem(last=False)
+    return True
 
 
 def generate_signature(
@@ -138,36 +183,40 @@ def signature_required(f):
                 'error_code': 'INVALID_TIMESTAMP',
             }), 401
 
-        # 验证nonce（防重放）
-        with _nonce_lock:
-            if nonce in _nonce_cache:
-                return jsonify({
-                    'success': False,
-                    'error': '重复的请求',
-                    'error_code': 'DUPLICATE_NONCE',
-                }), 401
-            _nonce_cache[nonce] = time.time()
-
-            # 清理过期nonce
-            expired = [k for k, v in _nonce_cache.items() if time.time() - v > MAX_TIMESTAMP_AGE]
-            for k in expired:
-                del _nonce_cache[k]
-
         # 获取请求体
         body = request.get_data(as_text=True) if request.method in ('POST', 'PUT', 'PATCH') else ''
 
-        # 获取签名密钥
-        secret = current_app.config.get('API_SIGNATURE_SECRET', '')
+        # 获取签名密钥 —— **必须先拿到密钥再谈验证**。
+        # 原来缺密钥时直接 `return f(...)` 放行：全库从未向 app.config 注入过
+        # API_SIGNATURE_SECRET，于是这个"安全机制"在生产环境下 100% 是旁路。
+        secret = _signature_secret()
         if not secret:
-            logger.warning("API_SIGNATURE_SECRET未配置，跳过签名验证")
+            if _is_production():
+                logger.error(
+                    "API_SIGNATURE_SECRET 未配置，签名保护不可用 —— 生产环境拒绝请求（fail-closed）")
+                return jsonify({
+                    'success': False,
+                    'error': '服务端未配置请求签名密钥，已拒绝请求',
+                    'error_code': 'SIGNATURE_NOT_CONFIGURED',
+                }), 503
+            logger.warning("API_SIGNATURE_SECRET未配置（非生产环境），跳过签名验证")
             return f(*args, **kwargs)
 
-        # 验证签名
+        # 先验签
         if not verify_signature(secret, request.method, request.path, body, timestamp, nonce, signature):
             return jsonify({
                 'success': False,
                 'error': '签名验证失败',
                 'error_code': 'INVALID_SIGNATURE',
+            }), 401
+
+        # 验签通过后才登记 nonce（防重放）。
+        # 顺序反了等于"未授权请求也能写缓存"：攻击者不知道密钥也能撑爆内存。
+        if not _register_nonce(nonce):
+            return jsonify({
+                'success': False,
+                'error': '重复的请求',
+                'error_code': 'DUPLICATE_NONCE',
             }), 401
 
         return f(*args, **kwargs)
@@ -238,9 +287,17 @@ def signature_light(f):
                 'error_code': 'INVALID_TIMESTAMP',
             }), 401
 
-        # 获取签名密钥
-        secret = current_app.config.get('API_SIGNATURE_SECRET', '')
+        # 获取签名密钥（缺失时生产环境 fail-closed，见 signature_required）
+        secret = _signature_secret()
         if not secret:
+            if _is_production():
+                logger.error(
+                    "API_SIGNATURE_SECRET 未配置，签名保护不可用 —— 生产环境拒绝请求（fail-closed）")
+                return jsonify({
+                    'success': False,
+                    'error': '服务端未配置请求签名密钥，已拒绝请求',
+                    'error_code': 'SIGNATURE_NOT_CONFIGURED',
+                }), 503
             return f(*args, **kwargs)
 
         # 轻量签名：method + path + timestamp
@@ -257,11 +314,13 @@ def signature_light(f):
 
 
 def cleanup_nonce_cache():
-    """清理过期的nonce缓存"""
+    """清理过期的nonce缓存（时间基准与登记时一致：单调时钟）"""
+    now = time.monotonic()
     with _nonce_lock:
-        expired = [k for k, v in _nonce_cache.items() if time.time() - v > MAX_TIMESTAMP_AGE]
+        expired = [k for k, v in _nonce_cache.items()
+                   if now - v > MAX_TIMESTAMP_AGE]
         for k in expired:
-            del _nonce_cache[k]
+            _nonce_cache.pop(k, None)
 
 
 def get_signature_stats() -> Dict[str, Any]:
@@ -269,5 +328,6 @@ def get_signature_stats() -> Dict[str, Any]:
     with _nonce_lock:
         return {
             'nonce_cache_size': len(_nonce_cache),
+            'nonce_cache_max': MAX_NONCE_CACHE,
             'max_timestamp_age': MAX_TIMESTAMP_AGE,
         }

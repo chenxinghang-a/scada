@@ -845,21 +845,34 @@ class DeviceBehaviorSimulator:
         # ===== 按寄存器名影响物理参数 =====
         if reg_name:
             name_lower = reg_name.lower()
+
+            # round 369：保持寄存器里存的是**缩放后的原始整数**。
+            # 例如 scale=0.1 时，工程值 50.0°C 对应寄存器整数 500；
+            # 原来直接把 `float(value)` 赋给物理模型 → 目标温度变成 500°C，
+            # 一个正常的设定值写入就能触发全厂超温联锁急停。
+            from core.safe_numeric import try_finite_float
+            scale = try_finite_float(reg_info.get('scale', 1.0))
+            if scale is None:
+                scale = 1.0
+            offset = try_finite_float(reg_info.get('offset', 0.0))
+            if offset is None:
+                offset = 0.0
+            eng_value = float(value) * scale + offset
             
             # 温度设定点
             if 'setpoint' in name_lower and 'temp' in name_lower:
-                self.process_model.base_temperature = float(value)
-                logger.info(f"[行为模拟] 设备 {self.device_name} 温度设定→{value}°C")
+                self.process_model.base_temperature = eng_value
+                logger.info(f"[行为模拟] 设备 {self.device_name} 温度设定→{eng_value}°C")
             
             # 压力设定点
             elif 'setpoint' in name_lower and 'pressure' in name_lower:
-                self.process_model.base_pressure = float(value)
-                logger.info(f"[行为模拟] 设备 {self.device_name} 压力设定→{value}")
+                self.process_model.base_pressure = eng_value
+                logger.info(f"[行为模拟] 设备 {self.device_name} 压力设定→{eng_value}")
             
             # 流量设定点
             elif 'setpoint' in name_lower and 'flow' in name_lower:
-                self.process_model.base_flow = float(value)
-                logger.info(f"[行为模拟] 设备 {self.device_name} 流量设定→{value}")
+                self.process_model.base_flow = eng_value
+                logger.info(f"[行为模拟] 设备 {self.device_name} 流量设定→{eng_value}")
             
             # 加热器开关
             elif 'heater' in name_lower and ('enable' in name_lower or 'switch' in name_lower):
@@ -1622,7 +1635,8 @@ class DeviceBehaviorSimulator:
                 'painted_count': round(self._shot_count, 0),
                 # 水处理（schneider_m340_01）
                 'ph_value': round(7.0 + random.gauss(0, 0.1), 2),
-                'pump_speed': 0.0,
+                # 注：pump_speed 已在上面的通用键里定义过，重复的字典字面量键
+                # 会被后者覆盖（round 369 清理）
                 'inlet_flow': 0.0, 'outlet_flow': 0.0,
                 'water_level': round(0.5 + random.gauss(0, 0.1), 2),
                 # 电力分析仪（abb_m4m_01）

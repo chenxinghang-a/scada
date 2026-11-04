@@ -457,11 +457,13 @@ class EnergyManager:
         # 而且 round 320 起会被落库、重启后照样恢复回来。
         # （round 310 清的是 realtime_power / _last_energy_reading / energy_baseline，
         #   漏了这一个；当时的判据是"按 device_id 存储的容器"，这里正是。）
-        for container in (self.realtime_power, self._last_energy_reading,
-                          self.energy_baseline, self.energy_accumulated):
-            if device_id in container:
-                container.pop(device_id, None)
-                removed = True
+        # round 369：持锁清理（采集/统计线程同时在读写这几个容器）
+        with self._lock:
+            for container in (self.realtime_power, self._last_energy_reading,
+                              self.energy_baseline, self.energy_accumulated):
+                if device_id in container:
+                    container.pop(device_id, None)
+                    removed = True
         if removed:
             logger.info("能耗管理器已清理已删除设备的状态: %s", device_id)
             # round 320：同步落库，否则重启后已删设备的累计又被恢复回来

@@ -11,6 +11,7 @@ from typing import Any
 from pathlib import Path
 
 from .interfaces import IDeviceManager, IDeviceClient
+from .base_client import encode_float32_registers
 from .modbus_client import ModbusClient
 from .opcua_client import OPCUAClient
 from .mqtt_client import MQTTClient
@@ -263,6 +264,30 @@ class RealDeviceManager(IDeviceManager):
         kept = sorted(new_ids & old_ids)
         if added or removed:
             logger.info("[重载] 设备变更: +%s -%s", added, removed)
+
+        # round 369：**被删设备必须真正断开并通知全链路**。
+        #
+        # 原来的 removed 只用来打了一行日志：底层 TCP/串口连接不断、
+        # 客户端实例永久留在 self.clients 里，`notify_device_removed` 也从不
+        # 触发 —— 报警、OEE、能耗、振动、预测维护、SPC、安全控制、时序库
+        # 全部保留已删设备的幽灵状态（重新加同名设备会继承旧的失败计数）。
+        # 与 `DeviceManager.reload_config()`（device_manager.py:309-317）对齐。
+        for did in removed:
+            try:
+                self.disconnect_device(did)
+            except Exception as e:      # noqa: BLE001
+                logger.error("[重载] 断开已删除设备 %s 失败: %s", did, e)
+            with self._lock:
+                self.clients.pop(did, None)
+            self._connection_failures.pop(did, None)
+            self._stopped_devices.discard(did)
+            try:
+                notify_device_removed(did)
+            except Exception as e:      # noqa: BLE001
+                logger.error("[重载] 通知设备移除失败 %s: %s", did, e)
+        if removed:
+            logger.info("[重载] 已移除设备并清理资源: %s", removed)
+
         return {'added': added, 'removed': removed, 'kept': kept,
                 'rejected': None}
 
@@ -304,14 +329,15 @@ class RealDeviceManager(IDeviceManager):
             self.RETRY_BACKOFF_BASE * (2 ** (retry_count - self.MAX_RETRY_COUNT)),
             self.MAX_RETRY_INTERVAL
         )
-        elapsed = time.time() - failure.get('last_retry', 0)
+        # round 369：退避时长用单调时钟（墙钟回拨会让断线设备永久跳过重连）
+        elapsed = time.monotonic() - failure.get('last_retry', 0)
         return elapsed < wait
 
     def _record_connection_failure(self, device_id: str):
         """记录连接失败（计数+1）"""
         failure = self._connection_failures.setdefault(device_id, {'retry_count': 0, 'last_retry': 0})
         failure['retry_count'] += 1
-        failure['last_retry'] = time.time()
+        failure['last_retry'] = time.monotonic()
         cnt = failure['retry_count']
         if cnt >= self.MAX_RETRY_COUNT:
             wait = min(self.RETRY_BACKOFF_BASE * (2 ** (cnt - self.MAX_RETRY_COUNT)), self.MAX_RETRY_INTERVAL)
@@ -422,13 +448,19 @@ class RealDeviceManager(IDeviceManager):
             return False
         return bool(client.write_single_register(address, int(value)))
 
-    def stop_device(self, device_id: str) -> bool:
+    def stop_device(self, device_id: str, write: bool = True) -> bool:
         """停止指定设备（仅限机械类设备）。
 
         ⚠️ 返回 False 的**每一种**情形都必须明确（历史实现有两处会静默返回 True，
         调用方（`/api/devices/{id}/stop`）会把"什么都没做"报成"停止成功"）：
         ① 设备不存在；② 非机械类设备；③ 未配置启停点位（真实模式不猜点位）；
         ④ 客户端不存在；⑤ 写入失败。
+
+        Args:
+            write: 是否真的向 PLC 下发停止点位。``False`` 表示调用方
+                （如 ``device_control.batch_control``）**已经**通过安全通道
+                写过同一根点位，这里只同步本地状态 —— 否则每次批量停止都会
+                对同一地址**重复下发一次**。
         """
         config = self.devices.get(device_id)
         if not config:
@@ -449,7 +481,7 @@ class RealDeviceManager(IDeviceManager):
             logger.error("[真实] 停止失败：设备 %s 客户端不存在（配置或协议不支持）", device_id)
             return False
 
-        if not self._write_control(client, *resolved):
+        if write and not self._write_control(client, *resolved):
             logger.error(f"[真实] 设备 {device_id} 停止命令发送失败")
             return False
 
@@ -458,7 +490,7 @@ class RealDeviceManager(IDeviceManager):
         logger.info(f"[真实] 设备 {device_id} 已停止")
         return True
 
-    def start_device(self, device_id: str) -> bool:
+    def start_device(self, device_id: str, write: bool = True) -> bool:
         """启动指定设备（仅限机械类设备）。失败情形同 `stop_device`。"""
         config = self.devices.get(device_id)
         if not config:
@@ -479,7 +511,7 @@ class RealDeviceManager(IDeviceManager):
             logger.error("[真实] 启动失败：设备 %s 客户端不存在（配置或协议不支持）", device_id)
             return False
 
-        if not self._write_control(client, *resolved):
+        if write and not self._write_control(client, *resolved):
             logger.error(f"[真实] 设备 {device_id} 启动命令发送失败")
             return False
 
@@ -532,12 +564,16 @@ class RealDeviceManager(IDeviceManager):
 
         try:
             if data_type in ('float32', 'float', 'real'):
-                # float32 写入需要编码为两个寄存器
-                import struct
-                raw_bytes = struct.pack('>f', float(raw_value))
-                reg0 = struct.unpack('>H', raw_bytes[0:2])[0]
-                reg1 = struct.unpack('>H', raw_bytes[2:4])[0]
-                success = client.write_multiple_registers(address, [reg0, reg1])
+                # round 369：**必须按设备 byte_order 编码**。
+                # 原来硬编码 `struct.pack('>f', ...)`（等价 ABCD），
+                # 对 CDAB/BADC/DCBA 的 PLC（如施耐德 M340）等于把高低字
+                # 写反 —— 设定温度 50.0 会被设备解释成完全不同的数。
+                if hasattr(client, 'write_float32'):
+                    success = client.write_float32(address, float(raw_value))
+                else:
+                    regs = encode_float32_registers(
+                        float(raw_value), config.get('byte_order', 'ABCD'))
+                    success = client.write_multiple_registers(address, regs)
             elif data_type in ('uint16', 'int16'):
                 success = client.write_single_register(address, int(raw_value))
             else:
@@ -585,13 +621,14 @@ class RealDeviceManager(IDeviceManager):
             timeout: 总超时（秒），避免阻塞启动太久，默认20秒
         """
         results = {}
-        start = time.time()
+        # round 369：总超时是**时长**，用单调时钟（墙钟回拨会让超时永不成立）
+        start = time.monotonic()
         for device_id in list(self.devices):     # 快照：连接期间可能有增删
             if not self.devices.get(device_id, {}).get('enabled', True):
                 results[device_id] = None
                 continue
 
-            if time.time() - start > timeout:
+            if time.monotonic() - start > timeout:
                 logger.warning(f"[真实] connect_all 已达超时 {timeout}s，剩余 {len(self.devices) - len(results)} 个设备跳过")
                 for rid in list(self.devices.keys())[len(results):]:
                     if self.devices[rid].get('enabled', True):
@@ -864,8 +901,14 @@ class RealDeviceManager(IDeviceManager):
                 config = {'devices': list(self.devices.values())}
             config_file = paths.resolve(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+            # round 369：**原子写**（同目录临时文件 + fsync + os.replace）。
+            # 原来 `open(..., 'w')` 先把 devices_real.yaml 截断为 0 字节再序列化：
+            # 中途异常/磁盘满 → 现场设备清单直接变空文件（重启后全厂设备消失）。
+            # 同时这条路径会绕过 conftest 的写盘隔离守卫。
+            from core.config_io import dump_yaml
+            if not dump_yaml(config_file, config):
+                logger.error("[真实] 设备配置落盘失败（原文件未被破坏）: %s", config_file)
+                return False
             logger.info("[真实] 设备配置已保存")
             return True
         except Exception as e:

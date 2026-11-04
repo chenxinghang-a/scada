@@ -61,6 +61,7 @@ _DISCONNECT = 14
 _RC_ACCEPTED = 0
 _RC_BAD_PROTOCOL = 1
 _RC_BAD_CLIENT_ID = 2
+_RC_BAD_CREDENTIALS = 4
 
 
 def topic_matches(topic_filter: str, topic: str) -> bool:
@@ -229,31 +230,61 @@ class _BrokerTCPHandler(socketserver.BaseRequestHandler):
 
     def _on_connect(self, broker: MqttSimBroker, session: _ClientSession,
                     body: bytes) -> bool:
-        pos = 0
-        proto, pos = _read_utf8(body, pos)
-        level = body[pos]
-        pos += 1
-        flags = body[pos]
-        pos += 1
-        pos += 2  # keepalive：本 broker 不做空闲踢线
+        # round 369：**先校验报文完整性**。原来的 `body[pos]` 是无保护下标，
+        # 半包/恶意帧（例如只有协议名的残缺 CONNECT）直接抛 IndexError，
+        # 由上层 `except Exception` 吞掉 —— broker 看起来"没反应"，
+        # 而现场以为是网络问题。
+        try:
+            pos = 0
+            proto, pos = _read_utf8(body, pos)
+            if pos + 4 > len(body):
+                raise ValueError('CONNECT 报文过短')
+            level = body[pos]
+            pos += 1
+            flags = body[pos]
+            pos += 1
+            pos += 2  # keepalive：本 broker 不做空闲踢线
+
+            client_id, pos = _read_utf8(body, pos)
+            session.clean_session = bool(flags & 0x02)
+
+            username = None
+            password = None
+            if flags & 0x04:
+                will_topic, pos = _read_utf8(body, pos)
+                will_payload, pos = _read_binary(body, pos)
+                session.will = (will_topic, will_payload, (flags >> 3) & 0x03,
+                                bool(flags & 0x20))
+            if flags & 0x80:
+                username, pos = _read_utf8(body, pos)
+            if flags & 0x40:
+                password, pos = _read_binary(body, pos)
+        except (ValueError, IndexError, struct.error) as exc:
+            logger.warning("MQTT CONNECT 报文非法（%s），断开: %s",
+                           exc, self.client_address)
+            return False
 
         if proto not in ('MQTT', 'MQIsdp') or level not in (3, 4):
             session.send(bytes([_CONNACK << 4, 2, 0, _RC_BAD_PROTOCOL]))
             logger.warning("MQTT 协议版本不支持: %s level=%d", proto, level)
             return False
 
-        client_id, pos = _read_utf8(body, pos)
-        session.clean_session = bool(flags & 0x02)
-
-        if flags & 0x04:
-            will_topic, pos = _read_utf8(body, pos)
-            will_payload, pos = _read_binary(body, pos)
-            session.will = (will_topic, will_payload, (flags >> 3) & 0x03,
-                            bool(flags & 0x20))
-        if flags & 0x80:
-            _username, pos = _read_utf8(body, pos)
-        if flags & 0x40:
-            _password, pos = _read_binary(body, pos)
+        # round 369：**配置了凭据就校验**。
+        # 原来解析出 username/password 后直接丢掉、无条件回 ACCEPTED ——
+        # 采集端把 MQTT 密码配错也能连上，"凭据配置是否正确"在模拟环境里
+        # 根本验证不了。默认 (None, None) = 不鉴权，保持既有部署行为。
+        expected_user = getattr(broker, 'username', None)
+        expected_pass = getattr(broker, 'password', None)
+        if expected_user is not None or expected_pass is not None:
+            ok_user = (expected_user is None) or (username == expected_user)
+            ok_pass = (expected_pass is None) or (
+                (password.decode('utf-8', 'replace') if isinstance(password, bytes)
+                 else password) == expected_pass)
+            if not (ok_user and ok_pass):
+                session.send(bytes([_CONNACK << 4, 2, 0, _RC_BAD_CREDENTIALS]))
+                logger.warning("MQTT 凭据校验失败: client=%s user=%r",
+                               client_id, username)
+                return False
 
         if not client_id:
             if not session.clean_session:
@@ -271,20 +302,31 @@ class _BrokerTCPHandler(socketserver.BaseRequestHandler):
 
     def _on_subscribe(self, broker: MqttSimBroker, session: _ClientSession,
                       body: bytes) -> None:
+        # round 369：长度与越界保护（同 CONNECT）
+        if len(body) < 2:
+            logger.warning("MQTT SUBSCRIBE 报文过短，忽略: %s", self.client_address)
+            return
         pid = struct.unpack('>H', body[:2])[0]
         pos = 2
         granted: list[int] = []
         new_filters: list[tuple[str, int]] = []
-        while pos < len(body):
-            topic_filter, pos = _read_utf8(body, pos)
-            requested = body[pos] & 0x03
-            pos += 1
-            qos = min(requested, 1)  # 本 broker 最高 QoS 1
-            if requested > 1:
-                logger.debug("订阅 %s 请求 QoS%d，按 QoS%d 授权", topic_filter, requested, qos)
-            session.subscriptions[topic_filter] = qos
-            granted.append(qos)
-            new_filters.append((topic_filter, qos))
+        try:
+            while pos < len(body):
+                topic_filter, pos = _read_utf8(body, pos)
+                if pos >= len(body):
+                    raise ValueError('SUBSCRIBE 缺少 QoS 字节')
+                requested = body[pos] & 0x03
+                pos += 1
+                qos = min(requested, 1)  # 本 broker 最高 QoS 1
+                if requested > 1:
+                    logger.debug("订阅 %s 请求 QoS%d，按 QoS%d 授权", topic_filter, requested, qos)
+                session.subscriptions[topic_filter] = qos
+                granted.append(qos)
+                new_filters.append((topic_filter, qos))
+        except (ValueError, IndexError, struct.error) as exc:
+            logger.warning("MQTT SUBSCRIBE 报文非法（%s），已丢弃: %s",
+                           exc, self.client_address)
+            return
 
         session.send(bytes([_SUBACK << 4, 2 + len(granted)])
                      + struct.pack('>H', pid) + bytes(granted))
@@ -296,11 +338,19 @@ class _BrokerTCPHandler(socketserver.BaseRequestHandler):
 
     def _on_unsubscribe(self, broker: MqttSimBroker, session: _ClientSession,
                         body: bytes) -> None:
+        if len(body) < 2:
+            logger.warning("MQTT UNSUBSCRIBE 报文过短，忽略: %s", self.client_address)
+            return
         pid = struct.unpack('>H', body[:2])[0]
         pos = 2
-        while pos < len(body):
-            topic_filter, pos = _read_utf8(body, pos)
-            session.subscriptions.pop(topic_filter, None)
+        try:
+            while pos < len(body):
+                topic_filter, pos = _read_utf8(body, pos)
+                session.subscriptions.pop(topic_filter, None)
+        except (ValueError, IndexError, struct.error) as exc:
+            logger.warning("MQTT UNSUBSCRIBE 报文非法（%s），已丢弃: %s",
+                           exc, self.client_address)
+            return
         session.send(bytes([_UNSUBACK << 4, 2]) + struct.pack('>H', pid))
 
     def _on_publish(self, broker: MqttSimBroker, session: _ClientSession,
@@ -342,11 +392,16 @@ class MqttSimBroker:
     """一个 broker 承载所有 `protocol: mqtt` 设备。"""
 
     def __init__(self, hub: Any, port: int = 18830, host: str = '127.0.0.1',
-                 publish_interval: float = 1.0):
+                 publish_interval: float = 1.0,
+                 username: str | None = None, password: str | None = None):
         self.hub = hub
         self.port = port
         self.host = host
         self.publish_interval = publish_interval
+        #: round 369：可选的接入凭据。None = 不鉴权（保持既有部署行为）；
+        #: 配了值就强制校验 —— 这样才能验证采集端的 MQTT 凭据配置是否正确。
+        self.username = username
+        self.password = password
 
         self._server: _BrokerTCPServer | None = None
         self._server_thread: threading.Thread | None = None

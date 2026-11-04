@@ -1094,6 +1094,15 @@ UNUSED_BACKEND_PREFIX_RULES: dict[str, str] = {
         "本契约测试只扫 scada-app 的 .ts，看不到 Jinja 侧的 fetch。"
         "「前端不调用」在这里是假象，不是漏接。"
     ),
+    "/api/export/files": (
+        "导出文件清单与删除（round 369 / BUG-36）：把 `DataExport.list_exports()` /"
+        "`delete_export()` 接到运维侧，供清理磁盘的脚本使用，**不面向浏览器 UI**"
+    ),
+    "/api/system/interlocks/reload": (
+        "联锁规则热重载（round 369 / BUG-36）：`reload_interlocks()` 早已实现差集"
+        "重载与回滚保护，之前无任何生产调用点，改 `配置/interlocks.yaml` 必须重启。"
+        "现在供运维脚本/自动化发布调用，UI 不直接点"
+    ),
 }
 
 

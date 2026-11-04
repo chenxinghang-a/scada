@@ -36,7 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
 
-from core.safe_numeric import try_finite_float
+from core.safe_numeric import try_finite_float, try_int
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +142,105 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         self._send_json(200, body)
 
     def do_POST(self) -> None:  # noqa: N802
-        self._method_not_allowed()
+        self._handle_write()
 
     def do_PUT(self) -> None:  # noqa: N802
-        self._method_not_allowed()
+        self._handle_write()
+
+    def _handle_write(self) -> None:
+        """处理 REST 设备的控制写入（round 369）。
+
+        原来 `do_POST` / `do_PUT` 硬编码返回 405：`--simulator` 模式下
+        `RESTDeviceClient.write_endpoint()` 向模拟网关发 POST/PUT 必然收到
+        `405 Method Not Allowed`，前端"写端点"功能 100% 失败 —— 模拟环境
+        根本验证不了这条控制链路。
+        """
+        path = urlsplit(self.path).path
+        if len(path) > 1:
+            path = path.rstrip('/')
+
+        length = try_int(self.headers.get('Content-Length')) or 0
+        raw = self.rfile.read(length) if length > 0 else b''
+        try:
+            payload: Any = json.loads(raw.decode('utf-8')) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            self._send_json(400, {
+                'error': 'invalid_json',
+                'device_id': self.server.device_id,
+            })
+            return
+
+        endpoints = self.server.routes.get(path)
+        if not endpoints:
+            self._send_json(404, {
+                'error': 'not_found',
+                'path': path,
+                'device_id': self.server.device_id,
+            })
+            return
+
+        written: dict[str, Any] = {}
+        failed: dict[str, str] = {}
+        for endpoint in endpoints:
+            name = endpoint.get('name') or path
+            value = self._extract_write_value(payload, endpoint, name)
+            if value is None:
+                failed[name] = '未在请求体中提供该点位的值'
+                continue
+            try:
+                ok = bool(self.server.hub.write_point(
+                    self.server.device_id, name, value))
+            except Exception as exc:      # noqa: BLE001
+                logger.warning("[rest-sim %s] 写入 %s 失败: %s",
+                               self.server.device_id, name, exc)
+                ok = False
+            if ok:
+                written[name] = value
+            else:
+                failed[name] = '点位不存在或不可写'
+
+        if not written:
+            self._send_json(400, {
+                'error': 'write_rejected',
+                'device_id': self.server.device_id,
+                'failed': failed,
+            })
+            return
+
+        self._send_json(200, {
+            'success': True,
+            'device_id': self.server.device_id,
+            'written': written,
+            **({'failed': failed} if failed else {}),
+        })
+
+    @staticmethod
+    def _extract_write_value(payload: Any, endpoint: dict, name: str) -> Any:
+        """从请求体里取该端点的目标值。
+
+        兼容三种现场写法：
+          1. ``{"value": 42}``              —— RESTDeviceClient 的默认形状
+          2. ``{"data": {"value": 42}}``    —— 按 json_path 嵌套
+          3. ``{"<point_name>": 42}``       —— 批量/点位字典
+        """
+        if isinstance(payload, dict):
+            if 'value' in payload:
+                return payload['value']
+            json_path = str(endpoint.get('json_path') or '')
+            if json_path:
+                cur: Any = payload
+                for part in json_path.split('.'):
+                    if not isinstance(cur, dict) or part not in cur:
+                        cur = None
+                        break
+                    cur = cur[part]
+                if cur is not None:
+                    return cur
+            if name in payload:
+                return payload[name]
+            if len(payload) == 1:
+                return next(iter(payload.values()))
+        return payload if not isinstance(payload, (dict, list)) else None
 
     def _method_not_allowed(self) -> None:
         self._send_json(405, {

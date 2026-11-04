@@ -365,16 +365,28 @@ class OPCUAGateway(BaseGateway):
             node = client.get_node(node_id)
 
             # 根据类型准备数据值
-            if data_type in ('double', 'float'):
+            #
+            # round 369：**类型必须匹配节点声明**。
+            # 原来 float 与 double 混用 64 位 Double，且漏了 uint16/uint32，
+            # 它们会落进 else 被强转 Double —— 严格校验类型的 OPC UA 服务端
+            # 直接返回 BadTypeMismatch，写入失败（而调用方只看到 False）。
+            if data_type == 'double':
                 dv = ua.DataValue(ua.Variant(float(value), ua.VariantType.Double))
+            elif data_type in ('float', 'real', 'float32'):
+                dv = ua.DataValue(ua.Variant(float(value), ua.VariantType.Float))
             elif data_type == 'int32':
                 dv = ua.DataValue(ua.Variant(int(value), ua.VariantType.Int32))
             elif data_type == 'int16':
                 dv = ua.DataValue(ua.Variant(int(value), ua.VariantType.Int16))
+            elif data_type == 'uint32':
+                dv = ua.DataValue(ua.Variant(int(value), ua.VariantType.UInt32))
+            elif data_type in ('uint16', 'word'):
+                dv = ua.DataValue(ua.Variant(int(value), ua.VariantType.UInt16))
             elif data_type == 'bool':
                 dv = ua.DataValue(ua.Variant(bool(value), ua.VariantType.Boolean))
             else:
-                dv = ua.DataValue(ua.Variant(float(value), ua.VariantType.Double))
+                self.logger.error(f"不支持的OPC UA写入类型: {data_type}")
+                return False
 
             await node.write_value(dv)
             return True

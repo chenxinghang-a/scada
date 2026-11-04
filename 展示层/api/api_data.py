@@ -74,6 +74,24 @@ def _parse_time(time_str, default):
     return dt
 
 
+def _parse_time_strict(time_str, default):
+    """同 `_parse_time`，但**显式传入却解析失败时抛 ValueError**。
+
+    round 369：原来吞掉 ValueError 换成默认窗口 —— 用户在导出页选了
+    "2026-13-45"（或前端拼错格式），导出的是**最近 24 小时**，而界面
+    显示的是用户选的时间段，事后对账根本对不上。参数错误必须回 400。
+    """
+    if not time_str:
+        return default
+    try:
+        dt = datetime.fromisoformat(time_str)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f'时间格式非法: {time_str!r}（应为 ISO 8601）') from exc
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
 # ==================== 数据查询API ====================
 
 @data_bp.route('/data/realtime', methods=['GET'])
@@ -124,8 +142,11 @@ def get_history_data(device_id, register_name):
     # 而不是默认值。空串本身是合法语义（前端「原始」= 不聚合），交给 DB 层处理。
     interval = (request.args.get('interval') or '').strip().lower()
 
-    start_time = _parse_time(start_raw, datetime.now() - timedelta(hours=1))
-    end_time = _parse_time(end_raw, datetime.now())
+    try:
+        start_time = _parse_time_strict(start_raw, datetime.now() - timedelta(hours=1))
+        end_time = _parse_time_strict(end_raw, datetime.now())
+    except ValueError as exc:
+        return api_error(str(exc), 400, error_code='INVALID_TIME_RANGE')
 
     if end_time < start_time:
         return api_error(
@@ -183,8 +204,9 @@ def export_device_data(device_id):
         filepath = exporter.export_device_data(
             database=current_app.database,
             device_id=device_id,
-            start_time=_parse_time(start_time_str, datetime.now() - timedelta(hours=24)),
-            end_time=_parse_time(end_time_str, datetime.now()),
+            start_time=_parse_time_strict(start_time_str,
+                                          datetime.now() - timedelta(hours=24)),
+            end_time=_parse_time_strict(end_time_str, datetime.now()),
             format=data.get('format', 'csv'),
             # 默认 raw：导出应当是**原始明细**，不是每分钟均值。
             # 需要聚合时由调用方显式传 interval（与查询接口同一套取值）。
@@ -199,7 +221,54 @@ def export_device_data(device_id):
         from pathlib import Path
         from flask import send_file
         return send_file(filepath, as_attachment=True, download_name=Path(filepath).name)
-    return jsonify({'success': False, 'message': '导出失败'}), 500
+    # round 369：与报警导出同口径 —— 空串 = 写盘失败（500），None = 无数据（404）
+    if filepath == '':
+        return jsonify({
+            'success': False,
+            'message': '导出文件写盘失败（请检查导出目录权限与磁盘空间）',
+        }), 500
+    return jsonify({'success': False, 'message': '所选时间段没有数据可导出'}), 404
+
+
+@data_bp.route('/export/files', methods=['GET'])
+@_require_auth
+@_require_export
+@_require_feature_export
+def list_export_files():
+    """列出已生成的导出文件（按修改时间倒序）。
+
+    round 369（BUG-36）：`DataExport.list_exports()` / `delete_export()` 早就实现了
+    文件名解析与路径穿越防护，但两个方法都**没有任何调用方** —— 导出目录只增不减，
+    运维只能上服务器手动 `rm`。这里把它们接到接口上。
+    """
+    from 存储层.data_export import DataExport
+
+    try:
+        files = DataExport().list_exports()
+    except OSError as exc:
+        logger.error("读取导出目录失败: %s", exc)
+        return jsonify({'success': False, 'message': f'读取导出目录失败: {exc}'}), 500
+    return jsonify({'success': True, 'files': files, 'total': len(files)})
+
+
+@data_bp.route('/export/files/<path:filename>', methods=['DELETE'])
+@_require_auth
+@_require_export
+@_require_feature_export
+def delete_export_file(filename):
+    """删除一个导出文件。
+
+    文件名非法（含路径分隔符/`..`）或文件不存在 → 404；
+    `delete_export` 内部已做 `_resolve_target` 校验，这里不重复拼路径。
+    """
+    from 存储层.data_export import DataExport
+
+    if not DataExport().delete_export(filename):
+        return jsonify({
+            'success': False,
+            'message': '文件不存在或文件名非法',
+        }), 404
+    return jsonify({'success': True, 'message': '导出文件已删除'})
 
 
 @data_bp.route('/export/alarms', methods=['POST'])
@@ -216,8 +285,8 @@ def export_alarms():
     try:
         filepath = exporter.export_alarm_records(
             database=current_app.database,
-            start_time=_parse_time(data.get('start_time'), None),
-            end_time=_parse_time(data.get('end_time'), None),
+            start_time=_parse_time_strict(data.get('start_time'), None),
+            end_time=_parse_time_strict(data.get('end_time'), None),
             format=data.get('format', 'csv')
         )
     except ValueError as exc:
@@ -227,4 +296,13 @@ def export_alarms():
         from pathlib import Path
         from flask import send_file
         return send_file(filepath, as_attachment=True, download_name=Path(filepath).name)
+    # round 369：区分「没有数据」与「写文件失败」。
+    # `export_csv` 成功返回路径、无数据返回 None、**写盘失败返回空串**。
+    # 原来一律回 404「没有报警记录可导出」—— 磁盘满/目录只读时运维会以为
+    # 是查询条件问题，反复换时间段，真实原因（磁盘故障）被掩盖。
+    if filepath == '':
+        return jsonify({
+            'success': False,
+            'message': '报警记录查询成功，但导出文件写盘失败（请检查导出目录权限与磁盘空间）',
+        }), 500
     return jsonify({'success': False, 'message': '没有报警记录可导出'}), 404

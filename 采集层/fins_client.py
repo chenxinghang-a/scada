@@ -392,23 +392,68 @@ class FINSClient(ByteOrderCapableDecoder):
         bit_area = self.config.get('bit_area', 'CIO')
         return self.read_bits(bit_area, address, 0, count)
 
+    # ---- 写兼容面（round 369）----
+    #
+    # `智能层/device_control` 的写入口全部按
+    # `hasattr(client, 'write_single_register')` / `write_single_coil` 判断
+    # 设备是否可写。FINS 原来只有私有的 `write_single_word` / `write_bits`，
+    # 于是所有欧姆龙 PLC 在联锁动作与远程控制时 100% 报
+    # 「该设备的客户端不支持寄存器/线圈写入」—— 安全联锁等于失效。
+    def write_single_register(self, address: int, value: int,
+                              slave_id: int | None = None,
+                              verify: bool = False) -> bool:
+        """写入单个保持寄存器（映射到字区域，默认 D）。"""
+        if not self.connected:
+            return False
+        word_area = self.config.get('word_area', 'D')
+        ok = self.write_single_word(word_area, address, int(value))
+        if ok and verify:
+            read_back = self.read_holding_registers(address, 1, slave_id=slave_id)
+            if not read_back or int(read_back[0]) != (int(value) & 0xFFFF):
+                logger.warning("FINS 寄存器回读验证失败: D%d 写=%s 回读=%s",
+                               address, value, read_back)
+                return False
+        return ok
+
+    def write_single_coil(self, address: int, value: bool,
+                          slave_id: int | None = None,
+                          verify: bool = False) -> bool:
+        """写入单个线圈（映射到位区域，默认 CIO）。"""
+        if not self.connected:
+            return False
+        bit_area = self.config.get('bit_area', 'CIO')
+        ok = self.write_bits(bit_area, address, 0, [bool(value)])
+        if ok and verify:
+            read_back = self.read_coils(address, 1, slave_id=slave_id)
+            if not read_back or bool(read_back[0]) != bool(value):
+                logger.warning("FINS 线圈回读验证失败: CIO%d 写=%s 回读=%s",
+                               address, value, read_back)
+                return False
+        return ok
+
     # decode_float32/uint16/int16/uint32/int32/float64 来自 ByteOrderCapableDecoder，
     # 已按 self.config['byte_order'] 正确解码四种字节序。
 
     def read_float32(self, area: str, address: int) -> float | None:
-        """读取32位浮点数（2个字）"""
+        """读取32位浮点数（2个字）。
+
+        round 369：按设备配置的 ``byte_order`` 解码。原来硬编码 `>HH` +
+        `>f`（等价 ABCD），CDAB/BADC/DCBA 设备读出来全是乱码。
+        """
         result = self.read_words(area, address, 2)
         if result and len(result) >= 2:
-            # 欧姆龙字序：高地址在前（Big-Endian word order）
-            raw = struct.pack('>HH', result[0], result[1])
-            return struct.unpack('>f', raw)[0]
+            return self.decode_float32(result)
         return None
 
     def read_int32(self, area: str, address: int) -> int | None:
-        """读取32位整数"""
+        """读取32位有符号整数（支持补码与四种字节序）。
+
+        round 369：原来 `(result[0] << 16) | result[1]` 既不做符号扩展
+        （-1 读成 +4294967295）也忽略 byte_order。
+        """
         result = self.read_words(area, address, 2)
         if result and len(result) >= 2:
-            return (result[0] << 16) | result[1]
+            return self.decode_int32(result)
         return None
 
     def write_float32(self, area: str, address: int, value: float) -> bool:

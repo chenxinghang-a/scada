@@ -212,8 +212,9 @@ def test_reload_config_no_change_does_not_notify(tmp_path):
 #: 新增删除路径（比如将来支持"批量删除"）时，这条闸门会提醒你补上通知。
 _REQUIRED_CALL_SITES = {
     '采集层/device_manager.py': 2,          # remove_device + reload_config
-    '采集层/real_device_manager.py': 1,     # remove_device
-    '采集层/simulated_device_manager.py': 1,  # remove_device
+    # round 369：生产实际实例化的两个管理器，reload_config 也补上了通知
+    '采集层/real_device_manager.py': 2,     # remove_device + reload_config
+    '采集层/simulated_device_manager.py': 2,  # remove_device + reload_config
 }
 
 
@@ -244,6 +245,7 @@ def test_guard_detects_missing_notification(tmp_path):
     repo = Path(__file__).resolve().parents[1]
     src = (repo / '采集层/simulated_device_manager.py').read_text(encoding='utf-8')
     actual = src.count('notify_device_removed(')
-    assert actual == 1
-    # 人为"删掉"那一次调用后应为 0，与期望的 1 不符 → 闸门会红
-    assert (actual - 1) != _REQUIRED_CALL_SITES['采集层/simulated_device_manager.py']
+    expected = _REQUIRED_CALL_SITES['采集层/simulated_device_manager.py']
+    assert actual == expected, f'实际 {actual} 处调用，闸门期望 {expected} 处'
+    # 人为"删掉"一次调用后计数应与期望不符 → 闸门会红
+    assert (actual - 1) != expected

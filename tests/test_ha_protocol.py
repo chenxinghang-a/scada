@@ -64,10 +64,12 @@ def _sign(payload: str, secret: str) -> str:
 def _heartbeat_bytes(node_id: str, role: str, priority: int, secret: str,
                      *, with_signature: bool = True) -> bytes:
     ts = time.time()
-    payload = f'{node_id}:{role}:{priority}:{ts}'
+    # round 369：state 参与 HMAC 签名（防中间人只改 state 不改签名）
+    state = 'active'
+    payload = f'{node_id}:{role}:{priority}:{ts}:{state}'
     hb = {
         'type': 'heartbeat', 'node_id': node_id, 'role': role,
-        'priority': priority, 'timestamp': ts, 'state': 'active',
+        'priority': priority, 'timestamp': ts, 'state': state,
     }
     if with_signature:
         hb['signature'] = _sign(payload, secret)

@@ -7,6 +7,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Blueprint, jsonify, request, current_app
@@ -17,6 +18,10 @@ import paths
 logger = logging.getLogger(__name__)
 
 performance_bp = Blueprint('performance', __name__, url_prefix='/api/performance')
+
+#: 指标文件重写/裁剪的进程内互斥（round 369）：多请求并发触发采样时，
+#: 两个线程同时重写 metrics.jsonl 会互相截断。
+_metrics_file_lock = threading.Lock()
 
 
 class PerformanceCollector:
@@ -112,7 +117,11 @@ class PerformanceCollector:
             'size_mb': round(db_path.stat().st_size / (1024 * 1024), 2),
         }
 
+        conn = None
         try:
+            # round 369：连接必须在 finally 里关。原来 `conn.close()` 写在
+            # try 末尾 —— 中间任何一条查询抛异常，句柄就永久泄漏，
+            # 每采集一次漏一个（5 秒一次 = 一天 1.7 万个句柄）。
             conn = sqlite3.connect(str(db_path), timeout=5)
             cursor = conn.cursor()
 
@@ -138,10 +147,15 @@ class PerformanceCollector:
             if wal_path.exists():
                 metrics['wal_size_mb'] = round(wal_path.stat().st_size / (1024 * 1024), 2)
 
-            conn.close()
         except Exception as e:  # noqa: BLE001 —— 采集失败要把原因带回前端
             logger.warning("采集数据库指标失败: %s", e)
             metrics['error'] = str(e)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception as e:      # noqa: BLE001
+                    logger.debug("关闭指标数据库连接失败: %s", e)
 
         return metrics
 
@@ -168,7 +182,8 @@ class PerformanceCollector:
 
     def collect_all(self, use_cache: bool = True) -> dict:
         """采集所有指标（带缓存）"""
-        now = time.time()
+        # round 369：缓存 TTL 是时长 → 单调时钟（墙钟回拨会让缓存永不过期）
+        now = time.monotonic()
 
         with self._lock:
             if use_cache and self._metrics_cache and (now - self._cache_time) < self._cache_ttl:
@@ -234,8 +249,16 @@ class PerformanceCollector:
 
             if len(all_lines) > max_lines:
                 kept = all_lines[-max_lines:]
-                with open(metrics_file, 'w', encoding='utf-8') as f:
-                    f.writelines(kept)
+                # round 369：**原子裁剪**。原来 `open(..., 'w')` 先截断再重写：
+                # 多请求并发或写到一半进程退出，metrics.jsonl 直接变成 0 字节/
+                # 半截文件（历史指标全丢）。改为临时文件 + os.replace。
+                with _metrics_file_lock:
+                    tmp_path = metrics_file.with_name(metrics_file.name + '.tmp')
+                    with open(tmp_path, 'w', encoding='utf-8') as f:
+                        f.writelines(kept)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp_path, metrics_file)
                 logger.info(
                     "指标文件超行数上限（%d > %d），已裁剪到 %d 行",
                     len(all_lines), max_lines, len(kept))
