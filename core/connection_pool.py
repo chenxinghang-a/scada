@@ -314,38 +314,52 @@ class ConnectionPool:
         logger.debug(f"连接池 {self._name}: 销毁连接 {key}")
 
     def _cleanup_loop(self) -> None:
-        """后台清理过期和不健康连接（缩小锁粒度：快照+检查在锁外，删除在锁内）"""
+        """后台清理过期和不健康连接（缩小锁粒度：快照+检查在锁外，删除在锁内）。
+
+        round 374：**单轮异常不许杀线程**。`self._health_check` 是外部注入的
+        回调（真实实现会做 TCP/协议探测），它抛一次异常，整个清理线程就
+        静默退出 —— 此后连接永不回收：空闲连接堆积、`max_size` 被占满，
+        新请求只能等超时。异常必须在循环内兜住，下一轮照常。
+        """
         while self._running:
             time.sleep(60)
-            # 快照：在锁内获取空闲连接列表
+            try:
+                self._cleanup_once()
+            except Exception as e:      # noqa: BLE001 —— 一轮失败不能停掉回收
+                logger.exception("连接池 %s: 清理轮次异常，跳过本轮: %s",
+                                 self._name, e)
+
+    def _cleanup_once(self) -> None:
+        """执行一轮清理：快照 → 健康检查（锁外）→ 删除（锁内）→ 扩缩容。"""
+        # 快照：在锁内获取空闲连接列表
+        with self._lock:
+            now = time.monotonic()
+            snapshot = [(key, conn) for key, conn in self._pool.items()
+                       if not conn.in_use]
+
+        # 检查：在锁外执行健康检查（可能涉及网络IO）
+        expired = []
+        for key, conn in snapshot:
+            if now - conn.last_used > self._max_idle_time:
+                expired.append(key)
+            elif now - conn.created_at > self._max_lifetime:
+                expired.append(key)
+            elif not conn.healthy:
+                expired.append(key)
+            elif self._health_check and not self._health_check(conn.client):
+                conn.healthy = False
+                expired.append(key)
+
+        # 删除：在锁内执行
+        if expired:
             with self._lock:
-                now = time.monotonic()
-                snapshot = [(key, conn) for key, conn in self._pool.items()
-                           if not conn.in_use]
+                for key in expired:
+                    if key in self._pool and not self._pool[key].in_use:
+                        self._destroy_connection(key, self._pool[key])
 
-            # 检查：在锁外执行健康检查（可能涉及网络IO）
-            expired = []
-            for key, conn in snapshot:
-                if now - conn.last_used > self._max_idle_time:
-                    expired.append(key)
-                elif now - conn.created_at > self._max_lifetime:
-                    expired.append(key)
-                elif not conn.healthy:
-                    expired.append(key)
-                elif self._health_check and not self._health_check(conn.client):
-                    conn.healthy = False
-                    expired.append(key)
-
-            # 删除：在锁内执行
-            if expired:
-                with self._lock:
-                    for key in expired:
-                        if key in self._pool and not self._pool[key].in_use:
-                            self._destroy_connection(key, self._pool[key])
-
-            # 自动扩缩容检查
-            if self._auto_scale:
-                self._check_auto_scale()
+        # 自动扩缩容检查
+        if self._auto_scale:
+            self._check_auto_scale()
 
     def _check_auto_scale(self):
         """检查是否需要扩缩容"""

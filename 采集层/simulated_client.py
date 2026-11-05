@@ -882,8 +882,13 @@ class SimulatedOPCUAClient(PushClientInterface):
         logger.info(f"[模拟] OPC UA设备 {self.device_name} 连接成功")
 
         self._generate_data()
-        self._push_thread = threading.Thread(target=self._push_loop, daemon=True)
-        self._push_thread.start()
+        # round 374：**已在跑就不要重复起线程**。`DeviceManager` 的重连循环
+        # 会对未连接设备反复调 `connect()`；每次无条件新建线程会让旧线程
+        # （`_running` 仍为 True）继续跑 —— 两条线程交替写同一份
+        # `latest_data`，上报值出现无规律的跳变。
+        if self._push_thread is None or not self._push_thread.is_alive():
+            self._push_thread = threading.Thread(target=self._push_loop, daemon=True)
+            self._push_thread.start()
         return True
 
     def disconnect(self):
@@ -895,7 +900,12 @@ class SimulatedOPCUAClient(PushClientInterface):
         while self._running and self.connected:
             time.sleep(2)
             if self._running and self.connected:
-                self._generate_data()
+                # round 374：一次生成异常不许杀死推送线程 —— 否则仿真数据
+                # 永久冻住，而 `connected` 仍是 True，看板显示"在线无数据"。
+                try:
+                    self._generate_data()
+                except Exception as e:      # noqa: BLE001
+                    logger.error("[模拟] OPC UA 数据生成异常，本次跳过: %s", e)
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
         if self.connected:
@@ -979,8 +989,13 @@ class SimulatedMQTTClient(PushClientInterface):
                 self._subscriptions[topic] = topic_cfg.get('qos', 1)
 
         self._generate_data()
-        self._push_thread = threading.Thread(target=self._push_loop, daemon=True)
-        self._push_thread.start()
+        # round 374：**已在跑就不要重复起线程**。`DeviceManager` 的重连循环
+        # 会对未连接设备反复调 `connect()`；每次无条件新建线程会让旧线程
+        # （`_running` 仍为 True）继续跑 —— 两条线程交替写同一份
+        # `latest_data`，上报值出现无规律的跳变。
+        if self._push_thread is None or not self._push_thread.is_alive():
+            self._push_thread = threading.Thread(target=self._push_loop, daemon=True)
+            self._push_thread.start()
         return True
 
     def disconnect(self):
@@ -1014,7 +1029,11 @@ class SimulatedMQTTClient(PushClientInterface):
         while self._running and self.connected:
             time.sleep(3)
             if self._running and self.connected:
-                self._generate_data()
+                # round 374：同 OPC UA 分支，单次生成失败不能停掉推送线程。
+                try:
+                    self._generate_data()
+                except Exception as e:      # noqa: BLE001
+                    logger.error("[模拟] MQTT 数据生成异常，本次跳过: %s", e)
 
     def _generate_data(self):
         now = datetime.now().isoformat()

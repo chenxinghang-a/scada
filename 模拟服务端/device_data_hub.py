@@ -696,7 +696,14 @@ class DeviceDataHub:
         next_at = time.monotonic()
         while not self._stop_event.is_set():
             began = time.perf_counter()
-            self._tick_once()
+            # round 374：**单拍异常不许杀整个仿真线程**。`_tick_once` 只把
+            # `sim.update()` 包在 try 里，之后的快照整理/寄存器映射如果抛异常，
+            # 循环直接退出 —— 所有设备的数据同时"冻住"，而 HTTP/REST 仍可用，
+            # 排查时极难判断是仿真停了还是采集停了。
+            try:
+                self._tick_once()
+            except Exception:       # noqa: BLE001
+                logger.exception('[数据中枢] 推进拍异常，跳过本拍并继续')
             self._last_tick_ms = (time.perf_counter() - began) * 1000.0
 
             next_at += self._tick

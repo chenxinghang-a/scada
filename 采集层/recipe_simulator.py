@@ -116,6 +116,11 @@ class RecipeSimulator:
         'fermentation': FERMENTATION_RECIPE,
     }
 
+    #: 阶段历史上限（round 374）。原实现只 append 不裁剪：一条 24/7 产线
+    #: 每 30s 换一个阶段 → 每天 2880 条 dict，一个季度就是几十万条，
+    #: 而且这些历史只用于展示最近几十条，留着纯占内存。
+    HISTORY_LIMIT = 2000
+
     def __init__(self, recipe: Recipe, behavior_simulator=None):
         self.recipe = recipe
         self.behavior_simulator = behavior_simulator
@@ -174,6 +179,9 @@ class RecipeSimulator:
             'duration': time.monotonic() - self.phase_start_time,
             'time': time.time()
         })
+        # round 374：只保留最近 HISTORY_LIMIT 条（见类属性说明）。
+        if len(self._history) > self.HISTORY_LIMIT:
+            del self._history[:-self.HISTORY_LIMIT]
 
         self.current_phase_index += 1
         self.phase_start_time = time.monotonic()

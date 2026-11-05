@@ -171,11 +171,22 @@ class FaultInjector:
     集中管理所有故障注入点，提供注入/恢复/查询接口。
     """
 
+    #: 历史记录上限。故障注入是运维/演练入口，可以被反复调用；不封顶时
+    #: 每次 inject/remove/clear 都留一条 dict，长期运行（演练脚本轮询）
+    #: 会把内存慢慢吃光。（round 374）
+    HISTORY_LIMIT = 500
+
     def __init__(self):
         self._injections: Dict[str, FaultInjection] = {}
         self._history: List[Dict[str, Any]] = []
         self._lock = threading.RLock()
         self._global_enabled = True
+
+    def _record_history(self, entry: Dict[str, Any]) -> None:
+        """追加一条历史并裁剪到上限。**调用方必须已持有 `self._lock`。**"""
+        self._history.append(entry)
+        if len(self._history) > self.HISTORY_LIMIT:
+            del self._history[:-self.HISTORY_LIMIT]
 
     @property
     def enabled(self) -> bool:
@@ -218,7 +229,7 @@ class FaultInjector:
             if target in self._injections:
                 self._injections[target].deactivate()
             self._injections[target] = injection
-            self._history.append({
+            self._record_history({
                 'action': 'inject',
                 'target': target,
                 'fault_type': fault_type.value,
@@ -239,7 +250,7 @@ class FaultInjector:
             injection = self._injections.pop(target, None)
             if injection:
                 injection.deactivate()
-                self._history.append({
+                self._record_history({
                     'action': 'remove',
                     'target': target,
                     'time': datetime.now().isoformat(),
@@ -301,7 +312,7 @@ class FaultInjector:
             for injection in self._injections.values():
                 injection.deactivate()
             self._injections.clear()
-            self._history.append({
+            self._record_history({
                 'action': 'clear_all',
                 'time': datetime.now().isoformat(),
             })

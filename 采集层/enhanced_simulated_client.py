@@ -190,8 +190,12 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         self.behavior_simulator.start()
 
         # 启动数据更新线程
-        self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
-        self._update_thread.start()
+        # round 374：重连循环会反复调 connect()，已在跑就别再起一条 ——
+        # 两条线程同时写 latest_data 会让上报值出现无规律跳变。
+        if getattr(self, '_update_thread', None) is None \
+                or not self._update_thread.is_alive():
+            self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
+            self._update_thread.start()
 
         logger.info(f"[增强模拟] 设备 {self.device_name} 连接成功")
         return True
@@ -544,10 +548,12 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
         # 启动行为模拟器
         self.behavior_simulator.start()
         
-        # 启动数据推送线程
-        self._push_thread = threading.Thread(target=self._push_loop, daemon=True)
-        self._push_thread.start()
-        
+        # 启动数据推送线程（round 374：同 Modbus 分支，不重复起线程）
+        if getattr(self, '_push_thread', None) is None \
+                or not self._push_thread.is_alive():
+            self._push_thread = threading.Thread(target=self._push_loop, daemon=True)
+            self._push_thread.start()
+
         logger.info(f"[增强模拟] OPC UA设备 {self.device_name} 连接成功")
         return True
     
@@ -671,10 +677,12 @@ class EnhancedSimulatedMQTTClient(PushClientInterface):
             if topic:
                 self._subscriptions[topic] = topic_cfg.get('qos', 1)
         
-        # 启动数据推送线程
-        self._push_thread = threading.Thread(target=self._push_loop, daemon=True)
-        self._push_thread.start()
-        
+        # 启动数据推送线程（round 374：同 OPC UA 分支，不重复起线程）
+        if getattr(self, '_push_thread', None) is None \
+                or not self._push_thread.is_alive():
+            self._push_thread = threading.Thread(target=self._push_loop, daemon=True)
+            self._push_thread.start()
+
         logger.info(f"[增强模拟] MQTT设备 {self.device_name} 连接成功")
         return True
     
