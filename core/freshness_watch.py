@@ -83,7 +83,8 @@ def stale_threshold_seconds(default_interval: float,
 
 
 def scan(database, *, now: datetime | None = None,
-         threshold_seconds: float | None = None) -> dict[str, dict]:
+         threshold_seconds: float | None = None,
+         device_intervals: dict[str, float] | None = None) -> dict[str, dict]:
     """扫描每台设备的最新数据时刻。
 
     Args:
@@ -116,10 +117,15 @@ def scan(database, *, now: datetime | None = None,
         if last_dt is None:
             continue
         age = (now - last_dt).total_seconds()
+        # BUG-068：慢速设备（collection_interval=60s）按全局 30s 判会**周期性
+        # 误报**失联 —— 人家本来就一分钟才上报一次。逐设备阈值优先。
+        limit = threshold_seconds
+        if device_intervals and device_id in device_intervals:
+            limit = stale_threshold_seconds(device_intervals[device_id])
         result[device_id] = {
             'age': age,
             'last': str(last_raw),
-            'stale': age > threshold_seconds,
+            'stale': age > limit,
         }
     return result
 

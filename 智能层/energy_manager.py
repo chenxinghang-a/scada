@@ -30,6 +30,8 @@ from collections import defaultdict
 import yaml
 import paths
 
+from core.safe_numeric import to_finite_float
+
 logger = logging.getLogger(__name__)
 
 # 默认配置（当YAML文件不存在时使用）
@@ -263,16 +265,33 @@ class EnergyManager:
         with self._lock:
             changes = []
 
+            # BUG-048：先备份。原来「先改内存、再存盘」，`_save_config()` 失败
+            # 也不回滚，还照样回 `success: True` —— 接口说「已更新」，
+            # 内存按新电价计费、磁盘还是旧价，重启后同一批账单口径翻转。
+            original = (dict(self.tariff), dict(self.tariff_periods), self.carbon_factor)
+
             if tariff is not None:
-                # 验证电价
+                # BUG-048：原来 `isinstance(val, (int, float)) and val >= 0`：
+                # `isinstance(True, int)` 为真、`float('nan') < 0` 为假 ——
+                # 布尔与 NaN 都能写进电价，NaN 一路传成「电费 NaN」写进 JSON。
                 for key in ('peak', 'flat', 'valley'):
                     if key in tariff:
                         val = tariff[key]
-                        if not isinstance(val, (int, float)) or val < 0:
+                        if isinstance(val, bool):
+                            return {
+                                'success': False,
+                                'message': f'电价 {key} 必须为数值，收到布尔值: {val}'
+                            }
+                        try:
+                            num = to_finite_float(val, f'电价 {key}')
+                        except ValueError as e:
+                            return {'success': False, 'message': str(e)}
+                        if num < 0:
                             return {
                                 'success': False,
                                 'message': f'电价 {key} 必须为非负数，收到: {val}'
                             }
+                        tariff = {**tariff, key: num}
                 self.tariff.update(tariff)
                 changes.append(f"电价: {self.tariff}")
 
@@ -291,6 +310,13 @@ class EnergyManager:
                                 'message': f'时段格式错误: {period}，应为 [start_hour, end_hour]'
                             }
                         start, end = period
+                        # bool 必须单独挡：`True` 是 1 点，`False` 是 0 点，
+                        # 落盘后配置里就多出一个"看起来合法"的时段。
+                        if isinstance(start, bool) or isinstance(end, bool):
+                            return {
+                                'success': False,
+                                'message': f'时段小时必须为数值，收到布尔值: {period}'
+                            }
                         if not (0 <= start < 24 and 0 < end <= 24 and start < end):
                             return {
                                 'success': False,
@@ -300,21 +326,41 @@ class EnergyManager:
                 changes.append(f"时段: {self.tariff_periods}")
 
             if carbon_factor is not None:
-                if not isinstance(carbon_factor, (int, float)) or carbon_factor < 0:
+                if isinstance(carbon_factor, bool):
+                    return {
+                        'success': False,
+                        'message': f'碳排放因子必须为数值，收到布尔值: {carbon_factor}'
+                    }
+                try:
+                    factor = to_finite_float(carbon_factor, '碳排放因子')
+                except ValueError as e:
+                    return {'success': False, 'message': str(e)}
+                if factor < 0:
                     return {
                         'success': False,
                         'message': f'碳排放因子必须为非负数，收到: {carbon_factor}'
                     }
-                self.carbon_factor = carbon_factor
-                changes.append(f"碳排放因子: {carbon_factor}")
+                self.carbon_factor = factor
+                changes.append(f"碳排放因子: {factor}")
 
-            # 持久化
-            saved = self._save_config()
+            # 持久化：失败即回滚内存，与 update_anomaly_config 同口径
+            if not self._save_config():
+                self.tariff.clear()
+                self.tariff.update(original[0])
+                self.tariff_periods.clear()
+                self.tariff_periods.update(original[1])
+                self.carbon_factor = original[2]
+                logger.error("电价配置更新失败：配置落盘失败，已回滚")
+                return {
+                    'success': False,
+                    'message': '配置未保存（落盘失败），修改已回滚',
+                    'config': self.get_tariff_config(),
+                }
 
             logger.info(f"电价配置已更新: {'; '.join(changes)}")
             return {
                 'success': True,
-                'message': f'配置已更新并{"已" if saved else "未"}持久化',
+                'message': '配置已更新并已持久化',
                 'config': self.get_tariff_config(),
             }
 
@@ -328,17 +374,27 @@ class EnergyManager:
         with self._lock:
             # round 308：备份，落盘失败时回滚（与同文件 `update_tariff_config` 同口径）
             original = dict(self.anomaly_config)
+            # BUG-048 同源：`isinstance(True, int)` 为真、`nan <= 0` 为假，
+            # 布尔与 NaN 都能混进阈值倍数（True → 1.0 就再也不报异常）。
             if 'threshold_multiplier' in config:
                 val = config['threshold_multiplier']
-                if not isinstance(val, (int, float)) or val <= 0:
+                try:
+                    num = to_finite_float(val, '阈值倍数')
+                except ValueError as e:
+                    return {'success': False, 'message': str(e)}
+                if num <= 0:
                     return {'success': False, 'message': f'阈值倍数必须为正数: {val}'}
-                self.anomaly_config['threshold_multiplier'] = val
+                self.anomaly_config['threshold_multiplier'] = num
 
             if 'warning_multiplier' in config:
                 val = config['warning_multiplier']
-                if not isinstance(val, (int, float)) or val <= 0:
+                try:
+                    num = to_finite_float(val, '警告倍数')
+                except ValueError as e:
+                    return {'success': False, 'message': str(e)}
+                if num <= 0:
                     return {'success': False, 'message': f'警告倍数必须为正数: {val}'}
-                self.anomaly_config['warning_multiplier'] = val
+                self.anomaly_config['warning_multiplier'] = num
 
             # round 308：**返回值不能丢**。同文件的 `update_tariff_config` 早就
             # `saved = self._save_config()` 并在 message 里说明「已/未持久化」，
@@ -807,6 +863,10 @@ class EnergyManager:
 
     def get_energy_cost_breakdown(self) -> dict[str, Any]:
         """获取电费分时明细"""
+        # BUG-048：读之前必须先切日。原来只有 `feed_*` 与 `get_energy_summary`
+        # 会 rollover，这里直接读 → 采集中断/停线跨日后，本接口返回**昨天**的
+        # 分时合计，与「能耗汇总（今日）」两个接口的数字互相矛盾。
+        self._rollover_if_new_day()
         with self._lock:
             peak_total = sum(d.get('peak_kwh', 0) for d in self.energy_accumulated.values())
             flat_total = sum(d.get('flat_kwh', 0) for d in self.energy_accumulated.values())
@@ -890,6 +950,11 @@ class EnergyManager:
 
     def _check_anomalies(self):
         """能耗异常检测"""
+        # BUG-048：先切日再判异常。否则跨日后第一轮拿「昨日累计」去比
+        # 「日基线」，ratio 必然 ≈2 → 每个设备刷一条"能耗异常"。
+        # 采集降级（energy_optimizer 被关）时没人喂数触发 rollover，
+        # 这里就是唯一的兜底点。
+        self._rollover_if_new_day()
         threshold = self.anomaly_config.get('threshold_multiplier', 2.0)
         with self._lock:
             for device_id, data in self.energy_accumulated.items():
@@ -904,6 +969,8 @@ class EnergyManager:
 
     def get_anomalies(self) -> list[dict[str, Any]]:
         """获取能耗异常列表"""
+        # BUG-048：与 _check_anomalies 同口径 —— 查询接口也不能读昨日窗口。
+        self._rollover_if_new_day()
         warning_threshold = self.anomaly_config.get('warning_multiplier', 1.5)
         anomalies = []
         with self._lock:

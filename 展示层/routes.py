@@ -355,9 +355,13 @@ def create_app(database, device_manager, alarm_manager, data_collector,
                            request.remote_addr)
             return jsonify({'error': 'forbidden'}), 403
 
-        # 跳过favicon等非页面请求
+        # 跳过favicon等**静态资源**请求。
+        # BUG-063：原来判据是 `'.' in last_segment` —— 任何含点的路径都放行，
+        # `/users.` / `/config.x` 之类可绕过整个页面鉴权。改成只看扩展名白名单。
         last_segment = path.split('/')[-1]
-        if '.' in last_segment:
+        if last_segment.rsplit('.', 1)[-1].lower() in {
+                'ico', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp',
+                'css', 'js', 'map', 'woff', 'woff2', 'ttf', 'eot'}:
             return None
 
         # 检查JWT token（从cookie或Authorization header获取）
@@ -377,6 +381,21 @@ def create_app(database, device_manager, alarm_manager, data_collector,
             if not payload:
                 return redirect('/login')
             g.current_user = payload
+
+            # BUG-063：页面路由也必须做**角色**校验。API 侧有 `role_required`，
+            # 页面此前只验证 token 有效 —— viewer（只读）可以直接打开
+            # 用户管理 / 系统配置 / 设备控制页，前端按钮藏了但 URL 没藏。
+            _PAGE_ROLES = {
+                '/users': {'admin'},
+                '/config': {'admin', 'engineer'},
+                '/control': {'admin', 'engineer', 'operator'},
+                '/alarm-output': {'admin', 'engineer', 'operator'},
+            }
+            _need = _PAGE_ROLES.get(path.rstrip('/') or '/')
+            if _need and payload.get('role') not in _need:
+                logger.warning("页面越权访问被拒: user=%s role=%s path=%s",
+                               payload.get('username'), payload.get('role'), path)
+                return jsonify({'error': '权限不足'}), 403
         except Exception:
             return redirect('/login')
 

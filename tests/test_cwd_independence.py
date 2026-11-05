@@ -161,7 +161,8 @@ class TestCallSitesRouteThroughResolve:
         cleaner = mod.DataCleaner()
         cleaner.clean_old_backups()
         cleaner.clean_log_files()
-        assert 'data' in resolve_spy and 'logs' in resolve_spy
+        # BUG-072：备份实际在 `data/backups/`，默认路径必须指向那里
+        assert 'data/backups' in resolve_spy and 'logs' in resolve_spy
 
 
 # --------------------------------------------------------------------------

@@ -210,15 +210,17 @@ class SQLiteToTDengineMigrator:
                         # write_telemetry_batch 返回 0 而不抛异常，原实现照样
                         # 累加 len(batch) —— 迁移脚本打印"100% 成功"，实际
                         # 一条都没进库。
-                        written = self.tdengine.write_telemetry_batch(batch)
-                        written = int(written or 0)
-                        self.stats['telemetry_migrated'] += written
-                        if written < len(batch):
-                            lost = len(batch) - written
-                            self.stats['errors'] += lost
+                        # round 370（BUG-085）：**返回的是 bool，不是条数**。
+                        # `int(True or 0)` == 1 —— 迁移 5000 条会被记成
+                        # "成功 1 / 5000（4999 条丢失）"，99.9% 的数据被误判为失败，
+                        # 运维据此回滚一次其实完全成功的迁移。
+                        ok = bool(self.tdengine.write_telemetry_batch(batch))
+                        if ok:
+                            self.stats['telemetry_migrated'] += len(batch)
+                        else:
+                            self.stats['errors'] += len(batch)
                             self.logger.error(
-                                "遥测批次写入不完整: 成功 %d / %d（%d 条丢失）",
-                                written, len(batch), lost)
+                                "遥测批次写入失败: 整批 %d 条丢失", len(batch))
                         self.logger.info(f"已迁移 {self.stats['telemetry_migrated']} 条遥测数据")
                         batch = []
 
@@ -228,14 +230,13 @@ class SQLiteToTDengineMigrator:
 
             # 写入剩余数据
             if batch:
-                written = int(self.tdengine.write_telemetry_batch(batch) or 0)
-                self.stats['telemetry_migrated'] += written
-                if written < len(batch):
-                    lost = len(batch) - written
-                    self.stats['errors'] += lost
-                    self.logger.error(
-                        "遥测尾批写入不完整: 成功 %d / %d（%d 条丢失）",
-                        written, len(batch), lost)
+                # round 370（BUG-085）：同批次分支，bool 不是条数
+                ok = bool(self.tdengine.write_telemetry_batch(batch))
+                if ok:
+                    self.stats['telemetry_migrated'] += len(batch)
+                else:
+                    self.stats['errors'] += len(batch)
+                    self.logger.error("遥测尾批写入失败: 整批 %d 条丢失", len(batch))
 
             self.logger.info(f"遥测数据迁移完成: {self.stats['telemetry_migrated']} 条")
 

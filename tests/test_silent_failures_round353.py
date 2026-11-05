@@ -112,7 +112,9 @@ def test_remove_interlock_clears_both_bypass_sets():
     dc.add_interlock({
         'id': 'r1',
         'condition': {'type': 'threshold', 'key': 'd:r', 'operator': 'gt', 'value': 1},
-        'action': {'type': 'set_alarm', 'message': 'x'},
+        # round 370：`set_alarm` 不是 `_execute_interlock_action` 支持的动作，
+        # `add_interlock` 现在与配置加载同口径校验，会被拒绝；改用真实动作类型。
+        'action': {'type': 'emergency_stop', 'device_id': 'd'},
         'name': '测试联锁',
     })
     dc._interlock_bypass.add('r1')

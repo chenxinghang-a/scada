@@ -11,7 +11,7 @@ from typing import Any, List, Dict, Tuple
 from collections import defaultdict
 
 from .database import ARCHIVE_TABLE
-from core.safe_numeric import to_finite_float, try_int
+from core.safe_numeric import to_finite_float, try_finite_float, try_int
 
 logger = logging.getLogger(__name__)
 
@@ -225,12 +225,19 @@ class DataArchive:
             if count is None:
                 count = 1
 
+            # round 370（BUG-036）：**必须保留桶内真实极值**。
+            # `get_history_data(interval='1min')` 返回的是 avg_value + 真实
+            # max_value/min_value；原实现只留 avg_value，后面 `_max_keep`
+            # 再对"每分钟均值"求 max —— 峰值被平滑掉，归档曲线与告警复盘
+            # 都会低估实际冲击（温度瞬间冲到 120℃可能被记成 95℃）。
             normalized.append({
                 'timestamp': raw_ts,
                 'value': value,
                 # 单位不在聚合结果里（get_history_data 未聚合 unit），留空
                 'unit': item.get('unit', '') or '',
                 'count': max(count, 1),
+                'max_value': try_finite_float(item.get('max_value')),
+                'min_value': try_finite_float(item.get('min_value')),
             })
 
         return normalized
@@ -299,16 +306,18 @@ class DataArchive:
         
         for bucket_key, items in sorted(buckets.items()):
             values = [item['value'] for item in items if item.get('value') is not None]
-            
+
             if values:
                 avg_value = sum(values) / len(values)
                 timestamp = datetime.fromtimestamp(bucket_key)
-                
+
                 result.append({
                     'timestamp': timestamp.isoformat(),
                     'value': round(avg_value, 4),
                     'unit': items[0].get('unit', ''),
-                    'count': len(values)
+                    # round 370（BUG-036）：样本数应是各 1 分钟桶真实采样数之和，
+                    # 不是"有几个 1 分钟桶"（1 小时归档会把 60 条采样记成 1）。
+                    'count': sum(int(item.get('count') or 1) for item in items),
                 })
         
         return result
@@ -331,14 +340,17 @@ class DataArchive:
             values = [item['value'] for item in items if item.get('value') is not None]
             
             if values:
-                max_value = max(values)
+                # round 370（BUG-036）：优先用桶内**真实极值**，没有才退回均值
+                max_value = max(
+                    [v for v in (item.get('max_value') for item in items)
+                     if v is not None] or values)
                 timestamp = datetime.fromtimestamp(bucket_key)
-                
+
                 result.append({
                     'timestamp': timestamp.isoformat(),
                     'value': round(max_value, 4),
                     'unit': items[0].get('unit', ''),
-                    'count': len(values)
+                    'count': sum(int(item.get('count') or 1) for item in items),
                 })
         
         return result
@@ -361,14 +373,17 @@ class DataArchive:
             values = [item['value'] for item in items if item.get('value') is not None]
             
             if values:
-                min_value = min(values)
+                # round 370（BUG-036）：同上，用真实 min_value
+                min_value = min(
+                    [v for v in (item.get('min_value') for item in items)
+                     if v is not None] or values)
                 timestamp = datetime.fromtimestamp(bucket_key)
-                
+
                 result.append({
                     'timestamp': timestamp.isoformat(),
                     'value': round(min_value, 4),
                     'unit': items[0].get('unit', ''),
-                    'count': len(values)
+                    'count': sum(int(item.get('count') or 1) for item in items),
                 })
         
         return result
@@ -404,7 +419,8 @@ class DataArchive:
                     'timestamp': timestamp,
                     'value': avg_value,
                     'unit': items[0].get('unit', ''),
-                    'count': len(values)
+                    # BUG-036：同样不能把桶数当样本数（LTTB 路径）。
+                    'count': sum(int(i.get('count') or 1) for i in items)
                 })
         
         if len(points) <= threshold:
@@ -482,8 +498,13 @@ class DataArchive:
             
             if values:
                 avg_value = sum(values) / len(values)
-                max_value = max(values)
-                min_value = min(values)
+                # BUG-036：桶里装的是 **1 分钟预聚合一**，`item['value']` 本身
+                # 已经是均值。对均值求 max/min 会把尖峰削平（桶内 100℃、
+                # 均值 95℃ → 归档 max 记成 95℃）。必须优先取桶内真实极值。
+                max_value = max([v for v in (i.get('max_value') for i in items)
+                                 if v is not None] or values)
+                min_value = min([v for v in (i.get('min_value') for i in items)
+                                 if v is not None] or values)
                 
                 # 计算标准差
                 if len(values) > 1:
@@ -500,7 +521,10 @@ class DataArchive:
                     'max': round(max_value, 4),
                     'min': round(min_value, 4),
                     'std': round(std_dev, 4),
-                    'count': len(values),
+                    # BUG-036：`len(values)` 是**桶数**，不是样本数。
+                    # 一个 1 分钟桶代表几十个采样点，归档后 sample_count
+                    # 会缩水到 1/N，下游按样本量算的统计全部失真。
+                    'count': sum(int(i.get('count') or 1) for i in items),
                     'unit': items[0].get('unit', '')
                 })
         

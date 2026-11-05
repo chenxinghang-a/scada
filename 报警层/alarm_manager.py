@@ -1290,9 +1290,34 @@ class AlarmManager:
             if self.broadcast_system and self.broadcast_system.enabled:
                 level = escalation_info.get('level', 1)
                 rule = escalation_info.get('rule')
-                message = rule.message_template.format(
-                    alarm_message=escalation_info.get('alarm_id', '未知')
-                ) if rule else f"告警升级: {escalation_info.get('alarm_id')}"
+                # round 370（BUG-035）：① 原来把**规则 ID** 当成报警消息塞进
+                # `alarm_message` 占位符，播报出来是 "报警升级: temp_rule_01"；
+                # ② 自定义模板里含 `{device_id}` / `{level}` 时 `format` 直接
+                # KeyError，整条广播被外层吞掉，现场没有任何播报。
+                # BUG-035：升级回调的 payload 里**没有** alarm_message，
+                # 原来直接回落成 `alarm_id` → 现场播报是 "temp_rule_01"。
+                # 这里优先取规则显示名，最后才用 ID 兜底。
+                _rid = escalation_info.get('alarm_id') or ''
+                fields = {
+                    'alarm_message': (escalation_info.get('alarm_message')
+                                      or (self.rules.get(_rid) or {}).get('name')
+                                      or _rid or '未知报警'),
+                    'alarm_id': escalation_info.get('alarm_id', ''),
+                    'device_id': escalation_info.get('device_id', ''),
+                    'register_name': escalation_info.get('register_name', ''),
+                    'level': level,
+                    'elapsed_seconds': escalation_info.get('elapsed_seconds', ''),
+                    'escalation_reason': escalation_info.get('escalation_reason', ''),
+                }
+                template = getattr(rule, 'message_template', '') if rule else ''
+                if template:
+                    try:
+                        message = template.format(**fields)
+                    except (KeyError, IndexError, ValueError) as e:
+                        logger.warning("升级广播模板格式化失败（%s），回退默认文案", e)
+                        message = f"告警升级: {fields['alarm_message']}"
+                else:
+                    message = f"告警升级: {fields['alarm_message']}"
 
                 self._invoke_broadcast(
                     'critical' if level >= 3 else 'warning',
@@ -1537,8 +1562,13 @@ class AlarmManager:
         """
         deadband = self._deadbands.get(rule_id, 0) if rule_id else 0
         is_active = bool(alarm_state) and alarm_state.get('alarm_id') is not None
+        # round 370（BUG-029 续）：区间条件必须把 threshold_min/max 一起传下去，
+        # 否则 `evaluate_condition` 拿到的是 None，区间判断被直接跳过。
+        rule = self.rules.get(rule_id) or {} if rule_id else {}
         return evaluate_condition(
-            {'condition': condition, 'threshold': threshold},
+            {'condition': condition, 'threshold': threshold,
+             'threshold_min': rule.get('threshold_min'),
+             'threshold_max': rule.get('threshold_max')},
             value, active=is_active, deadband=deadband)
 
     @staticmethod
@@ -2610,9 +2640,18 @@ class AlarmManager:
                 logger.warning(f"报警规则 {rule_id} 已存在，将被覆盖")
 
             # 添加到内存 (线程安全)
+            # round 370（BUG-030）：**死区表必须同步**。原来只写 `self.rules`，
+            # `_check_condition` 读的是 `_deadbands` → 新规则设了 deadband 也不生效，
+            # 报温度在阈值附近反复抖动触发。
             with self._state_lock:
                 previous = self.rules.get(rule_id)
+                previous_deadband = self._deadbands.get(rule_id)
                 self.rules[rule_id] = rule_config
+                deadband = rule_config.get('deadband', 0)
+                if deadband:
+                    self._deadbands[rule_id] = float(deadband)
+                else:
+                    self._deadbands.pop(rule_id, None)
             self._rebuild_rules_index()
 
             # 保存到配置文件。round 256：落盘失败必须回滚 —— 否则接口回
@@ -2623,6 +2662,10 @@ class AlarmManager:
                         self.rules.pop(rule_id, None)
                     else:
                         self.rules[rule_id] = previous
+                    if previous_deadband is None:
+                        self._deadbands.pop(rule_id, None)
+                    else:
+                        self._deadbands[rule_id] = previous_deadband
                 self._rebuild_rules_index()
                 logger.error("添加报警规则失败（配置落盘失败，已回滚）: %s", rule_id)
                 return False
@@ -2656,8 +2699,19 @@ class AlarmManager:
         """
         removed = False
         with self._state_lock:
-            for container in (self.alarm_states, self._shelved_alarms,
-                              self._emit_history, self._acknowledge_history):
+            for container in (self.alarm_states, self._shelved_alarms):
+                for key in [k for k in list(container)
+                            if isinstance(k, tuple) and len(k) >= 2
+                            and k[1] == device_id]:
+                    container.pop(key, None)
+                    removed = True
+
+        # round 370（BUG-032）：`_emit_history` / `_acknowledge_history` 的**所有**
+        # 其它读写都在 `_dedup_lock` 下（见 _check_dedup / acknowledge），
+        # 这里却拿 `_state_lock` —— 两把锁互不相干，并发时一边遍历一边被删，
+        # 直接抛 "dictionary changed size during iteration"。
+        with self._dedup_lock:
+            for container in (self._emit_history, self._acknowledge_history):
                 for key in [k for k in list(container)
                             if isinstance(k, tuple) and len(k) >= 2
                             and k[1] == device_id]:
@@ -2690,6 +2744,9 @@ class AlarmManager:
             if rule_id in self.rules:
                 with self._state_lock:
                     removed = self.rules.pop(rule_id)
+                    # round 370（BUG-030）：死区表也要清，否则同名规则重新
+                    # 添加时会继承旧死区（且 `_deadbands` 只增不减）。
+                    removed_deadband = self._deadbands.pop(rule_id, None)
                 self._rebuild_rules_index()
 
                 # 保存到配置文件。round 256：落盘失败回滚，避免「内存删了、
@@ -2697,9 +2754,20 @@ class AlarmManager:
                 if not self._save_config():
                     with self._state_lock:
                         self.rules[rule_id] = removed
+                        if removed_deadband is not None:
+                            self._deadbands[rule_id] = removed_deadband
                     self._rebuild_rules_index()
                     logger.error("移除报警规则失败（配置落盘失败，已回滚）: %s", rule_id)
                     return False
+
+                # round 370（BUG-030）：规则删了，它留下的**活跃报警**必须收尾。
+                # 原来只从 `rules` 里删一条，`alarm_states` 里的活跃报警、
+                # 数据库 `cleared=0` 的记录、升级管理器里的计时器全都还在 ——
+                # 界面上一条"已删除规则"的报警永远挂着，还会继续升级通知。
+                retired = self._retire_inactive_rules({rule_id})
+                if retired:
+                    logger.warning("规则 %s 已删除，收尾其活跃报警 %d 条",
+                                   rule_id, retired)
 
                 logger.info(f"移除报警规则: {rule_id}")
                 return True
@@ -2869,6 +2937,11 @@ class AlarmManager:
         if not removed:
             return False
 
+        # round 370（BUG-031）：解除搁置后必须**恢复升级计时**。
+        # `shelve_alarm` 里把报警从升级管理器移除了，这里原来只清内存标记，
+        # 于是"解除搁置"的报警永远不会再升级通知（维护窗口结束后没人跟进）。
+        self._resume_escalation(alarm_key)
+
         logger.info(f"报警旁路已解除: {alarm_id} ({device_id}/{register_name})")
         # round 316：解除要同步清库，否则重启后屏蔽又"复活"。
         #
@@ -2885,8 +2958,27 @@ class AlarmManager:
         with self._state_lock:
             return [state.to_dict() for state in self._shelved_alarms.values()]
 
+    def _resume_escalation(self, alarm_key: tuple) -> None:
+        """把「仍然活跃且未确认」的报警重新登记进升级管理器（round 370 / BUG-031）。"""
+        if not self._escalation_manager:
+            return
+        state = self.alarm_states.get(alarm_key)
+        if not state or state.get('acknowledged'):
+            return
+        alarm_id, device_id, register_name = alarm_key
+        first = state.get('first_trigger_time')
+        first_ts = first.timestamp() if hasattr(first, 'timestamp') else None
+        try:
+            self._escalation_manager.record_alarm(
+                alarm_id, device_id, register_name,
+                first_trigger_time=first_ts)
+        except Exception as e:      # noqa: BLE001 —— 升级恢复失败不该影响解除搁置
+            logger.error("恢复升级跟踪失败 %s/%s/%s: %s",
+                         alarm_id, device_id, register_name, e)
+
     def _cleanup_expired_shelves(self):
         """清理过期的旁路"""
+        expired = []
         with self._state_lock:
             expired = [k for k, v in self._shelved_alarms.items() if v.is_expired()]
             for key in expired:
@@ -2895,7 +2987,18 @@ class AlarmManager:
                 state = self.alarm_states.get(key)
                 if state is not None:
                     state['shelved'] = False
-                logger.info(f"报警旁路已过期自动解除: {':'.join(key)}")
+
+        if not expired:
+            return
+
+        # round 370（BUG-031）：① 到期记录必须**落库**，否则重启后
+        # SQLite 里的旧搁置记录又被加载回来（"已到期的搁置死灰复燃"）；
+        # ② 仍活跃的报警要恢复升级计时（理由同 unshelve_alarm）。
+        # 落库放在锁外：`_persist_shelves()` 自己也要拿 `_state_lock`。
+        for key in expired:
+            logger.info(f"报警旁路已过期自动解除: {':'.join(key)}")
+            self._resume_escalation(key)
+        self._persist_shelves()
 
     def set_deadband(self, rule_id: str, deadband_value: float) -> bool:
         """

@@ -289,8 +289,12 @@ def adjust_device(device_id):
 
     success = False
     try:
+        # round 370（BUG-052）：`/adjust` 传的是**工程值**（50.0°C），
+        # 必须让安全层按 scale/offset 换算并按 data_type 决定单/双寄存器。
+        # 原来按原始整数写：小数直接被拒（403），整数则写了未缩放的值。
         result = device_control.write_with_verification(
-            device_id, address, value, operator, kind='register') or {}
+            device_id, address, value, operator, kind='register',
+            engineering=True) or {}
         success = bool(result.get('success'))
         payload = {
             'success': success,
@@ -707,17 +711,29 @@ def create_bypass_request():
     data = request.get_json() or {}
     interlock_id = data.get('interlock_id')
     reason = data.get('reason', '')
-    timeout_minutes = data.get('timeout_minutes', 30)
 
     if not interlock_id:
         return api_error('缺少 interlock_id 参数')
+
+    # BUG-053：老接口 `bypass_interlock` 有三道校验，这个新接口一道都没有 ——
+    # 负数/NaN 超时会让旁路窗口瞬间过期或永不过期；
+    # 不存在的 interlock_id 会在审批通过后才暴露（更糟：审批白做）。
+    timeout_minutes = try_finite_float(data.get('timeout_minutes', 30))
+    if timeout_minutes is None:
+        return api_error('timeout_minutes 必须是有限数值', 400)
+    if not (1 <= timeout_minutes <= 480):
+        return api_error('timeout_minutes 必须在 1~480 分钟之间', 400)
 
     operator = request.current_user['username']
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
         return api_error('设备控制安全模块未启用', 503)
 
-    request_id = device_control.request_bypass(interlock_id, operator, reason, timeout_minutes)
+    if interlock_id not in device_control.get_interlock_status():
+        return api_error(f'联锁 {interlock_id} 不存在', 404)
+
+    request_id = device_control.request_bypass(
+        interlock_id, operator, reason, int(timeout_minutes))
     return jsonify({
         'success': True,
         'request_id': request_id,

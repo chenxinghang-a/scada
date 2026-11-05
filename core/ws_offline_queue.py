@@ -39,6 +39,10 @@ class OfflineMessage:
             'data': self.data,
             'timestamp': self.timestamp,
             'attempts': self.attempts,
+            # BUG-064：重放时要按原优先级重新入队。少了这个字段，
+            # 高优先级紧急报警（priority=10）重入队后一律变成 0，
+            # 队列一满就先被丢掉。
+            'priority': self.priority,
         }
 
 

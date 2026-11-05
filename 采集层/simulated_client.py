@@ -16,10 +16,14 @@ import threading
 from datetime import datetime
 from typing import Any, Callable, Dict
 
+from core.safe_numeric import try_finite_float
 from .base_client import (
     ModbusClientInterface,
     PushClientInterface,
+    decode_float64_registers,
     encode_float32_registers as _encode_float32_registers,
+    encode_int32_registers,
+    reorder_32_words,
 )
 
 logger = logging.getLogger(__name__)
@@ -647,25 +651,44 @@ class SimulatedModbusClient(ModbusClientInterface):
         estop_active = _ESTOP_ACTIVE
 
         if device_stopped or estop_active:
+            # round 370（BUG-014/015）：停机分支三处修正 ——
+            # ① 时间参数必须是**运行时长**（原来传 self.start_time 绝对时间戳，
+            #    正弦曲线相位完全随机，传感器读数毫无意义）；
+            # ② 按点位宽度步进（float32/int32/uint32 占 2 个寄存器），
+            #    原来每个地址 +1，双字点位会被拆成两半读；
+            # ③ 按 data_type 编码（原来一律截断成 16 位单寄存器），
+            #    且反向换算补上 offset，与正常分支同口径。
+            elapsed = time.time() - self.start_time
             results = []
-            for i in range(count):
+            i = 0
+            while i < count:
                 addr = address + i
+                rt = self._register_types.get(addr, {})
+                data_type = str(rt.get('data_type', 'uint16')).lower()
+                width = 2 if data_type in ('float32', 'int32', 'uint32') else 1
                 is_mach = addr in self._machinery_addresses
                 if device_stopped or (estop_active and is_mach):
-                    # 机械寄存器归零
-                    results.append(0)
+                    results.extend([0] * width)
                 else:
-                    # 传感器寄存器：正常模拟（温度/压力/液位等保持环境值）
-                    rt = self._register_types.get(addr, {})
                     rule = self._rules_cache.get(addr)
                     if rule:
-                        value = _generate_value(rule, self.start_time, addr)
-                        scale = rt.get('scale', 1.0)
-                        raw_value = value / scale if scale != 0 else value
-                        results.append(int(round(raw_value)) & 0xFFFF)
+                        value = _generate_value(rule, elapsed, addr)
+                        scale = try_finite_float(rt.get('scale', 1.0)) or 1.0
+                        offset = try_finite_float(rt.get('offset', 0.0)) or 0.0
+                        raw_value = (value - offset) / scale
+                        if data_type == 'float32':
+                            results.extend(encode_float32_registers(
+                                float(raw_value), self.byte_order))
+                        elif data_type in ('int32', 'uint32'):
+                            results.extend(encode_int32_registers(
+                                int(round(raw_value)), self.byte_order,
+                                signed=data_type == 'int32'))
+                        else:
+                            results.append(int(round(raw_value)) & 0xFFFF)
                     else:
-                        results.append(0)
-            return results
+                        results.extend([0] * width)
+                i += width
+            return results[:count]
 
         # 检查是否有写入的值（用于回读验证）
         written_value = self._written_values.get(address)
@@ -694,17 +717,19 @@ class SimulatedModbusClient(ModbusClientInterface):
         # 根据data_type决定编码方式
         reg_type = self._register_types.get(address, {})
         data_type = reg_type.get('data_type', 'uint16')
-        scale = reg_type.get('scale', 1.0)
+        scale = try_finite_float(reg_type.get('scale', 1.0)) or 1.0
+        offset = try_finite_float(reg_type.get('offset', 0.0)) or 0.0
 
         # 模拟值是实际值，需要反算为原始寄存器值再编码
-        raw_value = value / scale if scale != 0 else value
+        # round 370（BUG-015）：补 offset 与字节序
+        raw_value = (value - offset) / scale
 
         if data_type == 'float32':
             return encode_float32_registers(raw_value, self.byte_order)
         elif data_type in ('int32', 'uint32'):
-            int_val = int(round(raw_value))
-            raw = struct.pack('>i' if data_type == 'int32' else '>I', int_val)
-            return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
+            return encode_int32_registers(
+                int(round(raw_value)), self.byte_order,
+                signed=data_type == 'int32')
         elif count >= 2:
             # 兜底：未知类型但count>=2，按float32处理（按配置字节序）
             return encode_float32_registers(raw_value, self.byte_order)
@@ -732,8 +757,8 @@ class SimulatedModbusClient(ModbusClientInterface):
         return struct.unpack('>f', struct.pack('>I', raw))[0]
 
     def decode_float64(self, registers: list[int]) -> float:
-        raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
-        return struct.unpack('>d', raw)[0]
+        """round 370（BUG-015）：按配置字节序解码（原先硬编码 ABCD）"""
+        return decode_float64_registers(registers, self.byte_order)
 
     def decode_uint16(self, register: int) -> int:
         return register & 0xFFFF
@@ -744,13 +769,14 @@ class SimulatedModbusClient(ModbusClientInterface):
         return register
 
     def decode_int32(self, registers: list[int]) -> int:
-        raw = (registers[0] << 16) | registers[1]
+        """round 370（BUG-015）：按配置字节序解码（原先硬编码 ABCD）"""
+        raw = reorder_32_words(registers[0], registers[1], self.byte_order)
         if raw & 0x80000000:
             raw -= 0x100000000
         return raw
 
     def decode_uint32(self, registers: list[int]) -> int:
-        return (registers[0] << 16) | registers[1]
+        return reorder_32_words(registers[0], registers[1], self.byte_order) & 0xFFFFFFFF
 
     def write_single_register(self, address: int, value: int, slave_id: int | None = None) -> bool:
         if not self.connected:

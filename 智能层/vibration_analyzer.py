@@ -208,6 +208,15 @@ class VibrationAnalyzer:
                 if device_id in container:
                     container.pop(device_id, None)
                     removed = True
+
+            # BUG-051：`_alerted` 是 **set**，`pop(key, None)` 不适用，所以它
+            # 一直没被这个元组覆盖。漏清的后果很隐蔽：设备在「振动超标」期间
+            # 被删 → 同名设备重建后 `device_id not in self._alerted` 恒为 False
+            # → **再也不会输出振动超标告警**，且只有振动先回落到 <1.8 才自愈
+            # （坏设备永远回不去）。看板上没有任何缺口提示。
+            if device_id in self._alerted:
+                self._alerted.discard(device_id)
+                removed = True
         if removed:
             logger.info("振动分析器已清理已删除设备的状态: %s", device_id)
         return removed
@@ -310,6 +319,15 @@ class VibrationAnalyzer:
         if 'vibration' not in register_name.lower():
             return
 
+        # round 046：NaN/±Inf 必须在入口挡住。
+        # `value` 会进 RMS/峰值/_detect_trend 的回归，一个 NaN 就让整窗指标
+        # 变 NaN；而 `NaN <= zone_max` 恒为 False，ISO 10816 会直接判成
+        # D 级「危险」或算出 falsy 的健康分，看板给出自相矛盾的结论。
+        num = try_finite_float(value)
+        if num is None:
+            logger.warning("振动分析拒绝非有限测量值: %s/%s=%r", device_id, register_name, value)
+            return
+
         if timestamp is None:
             timestamp = datetime.now()
 
@@ -317,7 +335,7 @@ class VibrationAnalyzer:
 
         rate = self._validate_sample_rate(sample_rate)
 
-        record = VibrationRecord(ts, value)
+        record = VibrationRecord(ts, num)
 
         with self._lock:
             if rate is not None:

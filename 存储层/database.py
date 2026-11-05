@@ -184,13 +184,17 @@ class Database:
 
     def close(self):
         """关闭当前线程的数据库连接"""
-        if hasattr(self._local, 'connection') and self._local.connection:
+        # BUG-038：`Database.__new__` 构造的测试替身只有 db_path，没有
+        # `_local`；恢复流程里的 close() 会抛 AttributeError 并被外层吞成
+        # "恢复失败" —— 用 getattr 兜底，语义上"没有连接"就是已关闭。
+        local = getattr(self, '_local', None)
+        if local is not None and getattr(local, 'connection', None):
             try:
-                self._local.connection.close()
+                local.connection.close()
             except Exception as e:
                 # 关闭失败只影响本线程连接的回收，连接对象随后会被丢弃，无数据风险
                 logger.debug(f"关闭数据库连接失败（连接将被丢弃）: {e}")
-            self._local.connection = None
+            local.connection = None
 
     # 向后兼容别名
     close_thread_connection = close
@@ -813,6 +817,8 @@ class Database:
                 (datetime.now(), device_id))
 
             logger.info(f"已清除设备 {device_id} 的数据库数据（含未恢复报警）")
+        # round 370（BUG-038）：行数变了，30 秒 TTL 的统计缓存必须失效
+        self.invalidate_stats_cache()
 
     def get_realtime_data(self, device_id: str | None = None,
                           limit: int = 100) -> list[dict[str, Any]]:
@@ -1000,9 +1006,16 @@ class Database:
             # 前端「原始」传的是空字符串；此前它落到下面的 else 分支被
             # `GROUP BY 秒` 聚合了 —— 10Hz 采样变成 1Hz 平均值，界面上却标着
             # 「原始明细（不做聚合）」，且 `sample_count` 把同秒多条压成 1 条。
+            # round 370（BUG-037）：`register_name=None` = 整机查询（前端传 `*`），
+            # 这时必须**带上 register_name 列**，否则调用方拿到的记录无法区分
+            # 是哪个点位的值（温度/压力/电压混在一个列表里）。
+            wildcard = register_name is None
+            _rn_col = ', register_name' if wildcard else ''
+            _group_extra = ', register_name' if wildcard else ''
+
             if interval in RAW_INTERVALS:
                 cursor.execute(f'''
-                    SELECT timestamp, value, unit
+                    SELECT timestamp, value, unit{_rn_col}
                     FROM history_data
                     {base_where}
                     ORDER BY timestamp
@@ -1022,11 +1035,11 @@ class Database:
                         AVG(value) as avg_value,
                         MIN(value) as min_value,
                         MAX(value) as max_value,
-                        COUNT(*) as sample_count
+                        COUNT(*) as sample_count{_rn_col}
                     FROM history_data
                     {base_where}
-                    GROUP BY time_bucket
-                    ORDER BY time_bucket
+                    GROUP BY time_bucket{_group_extra}
+                    ORDER BY time_bucket{_group_extra}
                     LIMIT ? OFFSET ?
                 ''', params + [limit, offset])
                 return [dict(row) for row in cursor.fetchall()]
@@ -1044,11 +1057,13 @@ class Database:
                     AVG(value) as avg_value,
                     MIN(value) as min_value,
                     MAX(value) as max_value,
-                    COUNT(*) as sample_count
+                    COUNT(*) as sample_count{_rn_col}
                 FROM history_data
                 {base_where}
-                GROUP BY time_bucket
-                ORDER BY time_bucket
+                -- round 370（BUG-037）：整机查询必须按点位分组，
+                -- 否则温度、压力、电压、转速被混在一起求算术平均
+                GROUP BY time_bucket{_group_extra}
+                ORDER BY time_bucket{_group_extra}
                 LIMIT ? OFFSET ?
             ''', params + [limit, offset])
 
@@ -1753,6 +1768,8 @@ class Database:
 
             logger.info(f"数据归档完成: 归档 {archived_rows} 条, 删除历史 {deleted_rows} 条")
 
+            # round 370（BUG-038）：归档会同时增/删行数，统计缓存必须失效
+            self.invalidate_stats_cache()
             return {
                 'archived': archived_rows,
                 'deleted_history': deleted_rows,
@@ -1861,6 +1878,9 @@ class Database:
         if total_deleted > 0:
             logger.info(f"数据保留策略执行完成: {results}")
 
+        # round 370（BUG-038）：删除后统计缓存必须失效，否则 /system/database
+        # 最长 30 秒仍显示删除前的行数（运维以为清理没生效）。
+        self.invalidate_stats_cache()
         return results
 
     def enforce_archive_retention(self, days: int = 365) -> int:
@@ -1895,6 +1915,7 @@ class Database:
                 conn, ARCHIVE_TABLE, 'archive_date', cutoff)
         if deleted > 0:
             logger.info(f"归档表保留策略执行完成: {ARCHIVE_TABLE} 删除 {deleted} 行（保留 {days} 天）")
+            self.invalidate_stats_cache()
         return deleted
 
     def backup_database(self, backup_dir: str = 'data/backups') -> str | None:
@@ -1940,6 +1961,16 @@ class Database:
 
     #: 恢复时必须存在的表（缺任何一个说明备份不是本系统的库）
     _REQUIRED_TABLES = ('realtime_data', 'history_data', 'alarm_records')
+
+    def invalidate_stats_cache(self) -> None:
+        """行数变化后让 `get_database_stats` 的 TTL 缓存立即失效（round 370 / BUG-038）。"""
+        # BUG-038：同上，`__new__` 构造的替身没有 `_dbstats_lock`。
+        lock = getattr(self, '_dbstats_lock', None)
+        if lock is None:
+            return
+        with lock:
+            self._dbstats_cache = None
+            self._dbstats_cache_at = 0.0
 
     def restore_database(self, backup_file: str, *,
                          safety_copy: bool = True) -> tuple[bool, str]:
@@ -1995,6 +2026,14 @@ class Database:
 
         target = Path(self.db_path)
         try:
+            # round 370（BUG-038）：**替换文件前必须关掉当前线程的 sqlite 连接**。
+            # 原实现直接覆盖磁盘文件，而本线程（可能还有工作线程）的连接仍指向
+            # 旧文件句柄：Windows 上 os.replace 会因句柄占用报 WinError 5；
+            # 即使替换成功，后续查询也会读到旧文件 / 报 "database disk image
+            # is malformed"（WAL 与主库对不上）。
+            self.close()
+            self.invalidate_stats_cache()
+
             # 2) 先把当前库另存一份（万一新备份是"更早但更糟"的状态）
             if safety_copy and target.exists():
                 stamp = datetime.now().strftime('%Y%m%d_%H%M%S')

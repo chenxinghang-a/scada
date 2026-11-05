@@ -18,6 +18,8 @@ import math
 import time
 import threading
 from datetime import datetime, timedelta
+
+from core.safe_numeric import try_finite_float
 from typing import Any
 from collections import defaultdict, deque
 
@@ -137,7 +139,6 @@ class PredictiveMaintenance:
         # 原来只挡 None：一个 NaN 混进滑动窗口后，后续 100 次回归计算
         # 全部变成 NaN（健康分恒为 NaN，看板显示"--"且永不恢复）。
         # 与 SPCAnalyzer / VibrationAnalyzer 的入口守卫保持同一口径。
-        from core.safe_numeric import try_finite_float
         value = try_finite_float(value)
         if value is None:
             return
@@ -226,14 +227,18 @@ class PredictiveMaintenance:
                     }
 
                     # 5. 生成维护建议
-                    if health < 60 or (failure_pred and failure_pred.get('days_to_limit', 999) < 7):
+                    # round 370（BUG-045）：`_predict_time_to_limit` 可能返回
+                    # `{'days_to_limit': None}`，`dict.get(k, 999)` 在"键存在但值为
+                    # None"时返回的是 None —— `None < 7` 直接 TypeError，
+                    # 整个设备的分析被打断（后面所有点位都不再计算）。
+                    _pred = failure_pred or {}
+                    _days = try_finite_float(_pred.get('days_to_limit'))
+                    near_limit = _days is not None and _days < 7
+                    if health < 60 or near_limit:
                         alert = self._generate_maintenance_alert(
                             device_id, register_name, health, trend, failure_pred
                         )
-                        self.maintenance_alerts.append(alert)
-                        # 保留最近100条
-                        if len(self.maintenance_alerts) > 100:
-                            self.maintenance_alerts = self.maintenance_alerts[-100:]
+                        self._append_maintenance_alert(alert)
 
             except Exception as e:
                 logger.warning(f"分析 {key} 时出错: {e}")
@@ -501,6 +506,34 @@ class PredictiveMaintenance:
                 })
 
         return results[0] if results else None
+
+    #: 同一设备+点位的维护告警去重窗口（秒）
+    ALERT_DEDUP_SECONDS = 1800
+
+    def _append_maintenance_alert(self, alert: dict[str, Any]) -> None:
+        """追加维护告警，同一设备+点位在窗口内只保留一条（round 370 / BUG-045）。
+
+        原实现每 60 秒分析一次、每次都 append，一条"7 天内预计超限"的告警
+        一天能堆 1440 条，把列表里其它设备的告警全挤掉（只保留最近 100 条）。
+        """
+        key = (alert.get('device_id'), alert.get('register_name'))
+        now = datetime.now()
+        for existing in reversed(self.maintenance_alerts):
+            if (existing.get('device_id'), existing.get('register_name')) != key:
+                continue
+            try:
+                created = datetime.fromisoformat(existing.get('created_at', ''))
+            except (TypeError, ValueError):
+                created = None
+            if created is not None and (now - created).total_seconds() < self.ALERT_DEDUP_SECONDS:
+                # 窗口内已有一条：更新内容但不追加
+                existing.update({k: v for k, v in alert.items() if k != 'created_at'})
+                return
+            break
+
+        self.maintenance_alerts.append(alert)
+        if len(self.maintenance_alerts) > 100:
+            self.maintenance_alerts = self.maintenance_alerts[-100:]
 
     def _generate_maintenance_alert(self, device_id: str, register_name: str,
                                       health: float, trend: dict[str, Any],

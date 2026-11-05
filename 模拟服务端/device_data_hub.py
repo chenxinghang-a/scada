@@ -393,9 +393,10 @@ class DeviceDataHub:
                 logger.warning('[数据中枢] %s 没有行为模拟器，写入只落在覆盖层', device_id)
                 return True
             try:
-                # handle_write_register 的入参是"原始值"，但模拟器内部按
-                # 工程值理解设定点（如温度设定 120），所以这里给工程值。
-                sim.handle_write_register(start, engineering)
+                # round 370（BUG-088）：这里已经是 `_decode_point()` 解码后的
+                # **工程值**，必须显式告诉模拟器"不要再乘一次 scale" ——
+                # 原来按原始值处理，带 scale=0.1 的设定写 50 会被算成 500。
+                sim.handle_write_register(start, engineering, engineering=True)
             except Exception:
                 logger.exception('[数据中枢] %s 写寄存器 %s 时行为模拟器抛异常',
                                  device_id, start)
@@ -720,13 +721,19 @@ class DeviceDataHub:
                                  device_id, type(data).__name__)
                     continue
 
-                clean: dict[str, float] = {}
+                clean: dict[str, object] = {}
                 for key, raw_value in data.items():
                     if not isinstance(key, str) or key.startswith('_'):
                         # `_device_state` / `_active_faults` 这类是元数据，不是点位
                         continue
                     numeric = try_finite_float(raw_value)
                     if numeric is None:
+                        # BUG-089：**字符串/布尔状态点位不能丢**。
+                        # `agv_system_status`、`machine_mode` 这类本来就不是数值，
+                        # 原来在这里被整条过滤 → REST 仿真网关永远读不到它们，
+                        # OPC UA 侧也只剩 float，Boolean 节点被建成 Double。
+                        if isinstance(raw_value, (str, bool)):
+                            clean[key] = raw_value
                         continue
                     clean[key] = numeric
                 self._snapshot[device_id] = clean

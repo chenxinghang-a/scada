@@ -476,6 +476,28 @@ class MCClient(ByteOrderCapableDecoder):
                 return False
         return ok
 
+    def write_multiple_registers(self, address: int, values: list[int],
+                                 slave_id: int | None = None,
+                                 verify: bool = False) -> bool:
+        """Modbus 兼容面：连续写多个保持寄存器（round 370）。
+
+        与 FINS 同因：缺这个方法时 `hasattr` 恒为 True（基类抽象实现），
+        调用即抛 NotImplementedError，32 位/浮点设定值全部写不进去。
+        """
+        if not self.connected or not values:
+            return False
+        word_area = self.config.get('word_area', 'D')
+        words = [int(v) & 0xFFFF for v in values]
+        ok = self.write_words(word_area, address, words)
+        if ok and verify:
+            read_back = self.read_holding_registers(
+                address, len(words), slave_id=slave_id)
+            if not read_back or [int(v) & 0xFFFF for v in read_back] != words:
+                logger.warning("MC 多寄存器回读验证失败: D%d 写=%s 回读=%s",
+                               address, words, read_back)
+                return False
+        return ok
+
     def write_single_coil(self, address: int, value: bool,
                           slave_id: int | None = None,
                           verify: bool = False) -> bool:

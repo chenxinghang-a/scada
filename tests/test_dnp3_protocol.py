@@ -526,8 +526,9 @@ class TestHandleResponse:
         c = _SendingClient()
         c._handle_response(_response_frame(DNP3ObjectGroup.AI, 1, _ai_values((11, 0), (22, 0))))
         snap = c.read_data()
+        # round 370（BUG-079）：键改为 (group, index) —— 遥信/遥测同索引不能互相覆盖
         assert [snap[i]['value'] for i in sorted(snap)] == [11, 22]
-        assert snap[0]['group'] == DNP3ObjectGroup.AI
+        assert snap[(DNP3ObjectGroup.AI, 0)]['group'] == DNP3ObjectGroup.AI
 
     def test_non_response_function_is_ignored(self):
         """outstation 只发 RESPONSE(0x81)；其他功能码不得污染数据"""
@@ -545,14 +546,14 @@ class TestHandleResponse:
         c = _SendingClient()
         c._handle_response(_response_frame(DNP3ObjectGroup.AI, 1, _ai_values((1, 0))))
         c._handle_response(_response_frame(DNP3ObjectGroup.AI, 1, _ai_values((2, 0))))
-        assert c.read_data()[0]['value'] == 2
+        assert c.read_data()[(DNP3ObjectGroup.AI, 0)]['value'] == 2
 
     def test_read_data_returns_copy(self):
         c = _SendingClient()
         c._handle_response(_response_frame(DNP3ObjectGroup.AI, 1, _ai_values((1, 0))))
         snap = c.read_data()
-        snap[999] = {'value': 0}
-        assert 999 not in c.read_data()
+        snap[('sentinel', 999)] = {'value': 0}
+        assert ('sentinel', 999) not in c.read_data()
 
 
 # ---------------------------------------------------------------------------

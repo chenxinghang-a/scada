@@ -253,14 +253,20 @@ class ConnectionPool:
                     return conn.client
                 # 销毁不健康连接再创建新的
                 self._destroy_connection(key, conn)
-            return self._create_connection(key)
+            # round 370（BUG-065）：契约"不改变使用状态" → 新建也不占用
+            return self._create_connection(key, mark_in_use=False)
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _create_connection(self, key: str) -> Optional[Any]:
-        """创建新连接"""
+    def _create_connection(self, key: str, mark_in_use: bool = True) -> Optional[Any]:
+        """创建新连接。
+
+        Args:
+            mark_in_use: 是否把新连接标记为"使用中"。`acquire()` 走默认 True；
+                `get_or_create()` 传 False（只读查看，不应占用连接槽）。
+        """
         try:
             # 防御：绝不覆盖已有槽位。直接 self._pool[key] = conn 会让旧连接
             # 失去引用却从不 close/disconnect（连接泄漏），必须先把旧连接销毁。
@@ -277,12 +283,13 @@ class ConnectionPool:
                 logger.error(f"连接池 {self._name}: 工厂函数返回 None (key={key})")
                 return None
             conn = PooledConnection(client)
-            conn.in_use = True
+            conn.in_use = mark_in_use
             conn.use_count = 1
             self._pool[key] = conn
             self._stats['created'] += 1
-            self._stats['active'] += 1
-            logger.debug(f"连接池 {self._name}: 创建连接 {key}")
+            self._stats['active' if mark_in_use else 'idle'] += 1
+            logger.debug(f"连接池 {self._name}: 创建连接 {key}"
+                         f"（{'占用' if mark_in_use else '空闲'}）")
             return client
         except Exception as e:
             logger.error(f"连接池 {self._name}: 创建连接失败 {key}: {e}")

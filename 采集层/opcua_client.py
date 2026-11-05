@@ -67,7 +67,9 @@ class OPCUAClient:
         self.connected = False
 
         # 最新数据缓存: {node_name: {"value": x, "timestamp": t, "quality": q}}
+        # round 370（BUG-024）：回调线程写、采集线程读，必须加锁
         self.latest_data: dict[str, dict[str, Any]] = {}
+        self._data_lock = threading.Lock()
 
         # 数据回调
         self._data_callbacks: list[Callable[..., Any]] = []
@@ -129,8 +131,9 @@ class OPCUAClient:
         logger.info("OPC UA客户端已断开")
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
-        """获取所有节点的最新数据"""
-        return dict(self.latest_data)
+        """获取所有节点的最新数据（round 370：持锁快照）"""
+        with self._data_lock:
+            return dict(self.latest_data)
 
     def _run_loop(self):
         """在独立线程中运行asyncio事件循环"""
@@ -159,9 +162,25 @@ class OPCUAClient:
                     self.client.set_password(self.password)
 
                 # 设置安全策略
-                if self.security_mode == 'SignAndEncrypt':
+                # round 370（BUG-024）：① 支持 `Sign`（只签名不加密）；
+                # ② 证书/密钥路径从配置读，不再硬编码相对路径 "cert.pem,key.pem"
+                # —— 那个路径是相对**进程工作目录**的，冻结产物里工作目录一变
+                # 就找不到证书，而且报错信息只有一句 "file not found"。
+                sec_mode = str(self.security_mode or '').strip()
+                if sec_mode in ('Sign', 'SignAndEncrypt'):
+                    policy = str(self.config.get('security_policy')
+                                 or 'Basic256Sha256')
+                    cert = str(self.config.get('cert_file')
+                               or self.config.get('cert_path') or 'cert.pem')
+                    key = str(self.config.get('key_file')
+                              or self.config.get('key_path') or 'key.pem')
+                    import os
+                    if not os.path.isfile(cert) or not os.path.isfile(key):
+                        raise FileNotFoundError(
+                            f'OPC UA 安全模式 {sec_mode} 需要证书，但文件不存在: '
+                            f'cert={cert} key={key}')
                     await self.client.set_security_string(
-                        "Basic256Sha256,SignAndEncrypt,cert.pem,key.pem"
+                        f"{policy},{sec_mode},{cert},{key}"
                     )
 
                 # 连接
@@ -237,14 +256,26 @@ class OPCUAClient:
         await self._cleanup()
 
     async def _cleanup(self):
-        """清理资源"""
-        try:
-            if self.subscription:
+        """清理资源。
+
+        round 370（BUG-024）：**两步必须各自 try**。原来订阅删除一抛异常，
+        后面的 `client.disconnect()` 就被跳过 —— 服务端会话一直挂着，
+        直到 keepalive 超时；反复重连会耗尽服务端的会话配额。
+        """
+        if self.subscription:
+            try:
                 await self.subscription.delete()
-            if self.client:
+            except Exception as e:      # noqa: BLE001
+                logger.warning("OPC UA 删除订阅失败（继续断开连接）: %s", e)
+            finally:
+                self.subscription = None
+        if self.client:
+            try:
                 await self.client.disconnect()
-        except Exception as e:
-            logger.error(f"OPC UA清理异常: {e}")
+            except Exception as e:      # noqa: BLE001
+                logger.warning("OPC UA 断开连接失败: %s", e)
+            finally:
+                self.client = None
         self.connected = False
 
     # ---- Subscription Handler（asyncua回调接口）----
@@ -270,14 +301,16 @@ class OPCUAClient:
                     node_unit = cfg.get('unit', '')
                     break
 
-            # 更新缓存
-            self.latest_data[node_name] = {
+            # 更新缓存（round 370 / BUG-024：持锁写）
+            entry = {
                 'value': val,
                 'unit': node_unit,
                 'timestamp': datetime.now().isoformat(),
                 'quality': 'good',
                 'node_id': node_id_str
             }
+            with self._data_lock:
+                self.latest_data[node_name] = entry
 
             self.stats['data_updates'] += 1
 

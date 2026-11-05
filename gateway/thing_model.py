@@ -143,6 +143,33 @@ class DeviceStatus:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DeviceStatus":
+        """从 MQTT JSON 载荷还原（round 370 / BUG-082）。
+
+        `MQTTSubscriber._handle_status()` 一直在调 `DeviceStatus.from_dict()`，
+        但本类只有 `to_dict()` —— 每条状态消息都抛 AttributeError 被外层吞掉，
+        `_status_cache` 永远是空的（网关侧设备状态永远"unknown"）。
+        兼容物模型的大驼峰字段与内部的下划线字段。
+        """
+        if not isinstance(data, dict):
+            raise TypeError(f'DeviceStatus.from_dict 需要 dict，收到 {type(data).__name__}')
+
+        def pick(camel: str, snake: str, default: Any) -> Any:
+            if camel in data:
+                return data[camel]
+            return data.get(snake, default)
+
+        return cls(
+            DeviceID=str(pick('DeviceID', 'device_id', '') or ''),
+            Timestamp=float(pick('Timestamp', 'timestamp', 0) or 0),
+            Online=bool(pick('Online', 'online', False)),
+            Status=str(pick('Status', 'status', 'unknown') or 'unknown'),
+            ErrorCode=int(pick('ErrorCode', 'error_code', 0) or 0),
+            ErrorMessage=str(pick('ErrorMessage', 'error_message', '') or ''),
+            Uptime=float(pick('Uptime', 'uptime', 0) or 0),
+        )
+
 
 @dataclass
 class AlarmMessage:
@@ -166,6 +193,29 @@ class AlarmMessage:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AlarmMessage":
+        """从 MQTT JSON 载荷还原（round 370 / BUG-082），字段口径同 DeviceStatus。"""
+        if not isinstance(data, dict):
+            raise TypeError(f'AlarmMessage.from_dict 需要 dict，收到 {type(data).__name__}')
+
+        def pick(camel: str, snake: str, default: Any) -> Any:
+            if camel in data:
+                return data[camel]
+            return data.get(snake, default)
+
+        return cls(
+            AlarmID=str(pick('AlarmID', 'alarm_id', '') or ''),
+            DeviceID=str(pick('DeviceID', 'device_id', '') or ''),
+            Timestamp=float(pick('Timestamp', 'timestamp', 0) or 0),
+            Level=str(pick('Level', 'level', 'info') or 'info'),
+            Type=str(pick('Type', 'type', 'device') or 'device'),
+            Message=str(pick('Message', 'message', '') or ''),
+            Value=float(pick('Value', 'value', 0) or 0),
+            Threshold=float(pick('Threshold', 'threshold', 0) or 0),
+            Acknowledged=bool(pick('Acknowledged', 'acknowledged', False)),
+        )
 
 
 class ThingModelValidator:

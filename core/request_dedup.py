@@ -24,10 +24,18 @@ _STATE_KEY = 'request_dedup'
 
 def _make_fingerprint() -> str:
     """生成请求指纹：方法+路径+用户+body哈希"""
+    # round 370（BUG-073）：**不能截取 Authorization 前 50 字符**。
+    # `"Bearer "`(7) + HS256 JWT 头（`{"alg":"HS256","typ":"JWT"}` 的 base64
+    # 固定为 `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9`）已经占掉 43 个字符 ——
+    # 前 50 字符里**一个 payload 字节都没有**，所有用户的指纹完全相同：
+    # A 用户 POST 之后，2 秒内 B 用户的同名请求会被当成重复请求**直接丢弃**
+    # （写入操作被静默吞掉，且返回的是 A 的结果）。
+    # 这里用完整 token 的哈希，长度固定、不泄露原文。
+    auth = request.headers.get('Authorization', '') or ''
     parts = [
         request.method,
         request.path,
-        request.headers.get('Authorization', '')[:50],
+        hashlib.sha256(auth.encode('utf-8', 'replace')).hexdigest(),
     ]
     if request.is_json:
         import json

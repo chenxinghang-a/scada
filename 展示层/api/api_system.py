@@ -253,15 +253,22 @@ def update_config():
 
     config = load_yaml_config('配置/system.yaml')
 
+    # BUG-061：白名单原来只在 `else`（不带 section）分支生效 ——
+    # 传 `{"section": "database", ...}` 就直接改数据库配置，绕过全部限制。
+    # 白名单必须在**分支之前**统一判定；`data` 不是对象也不能走到 `.update()`。
+    _WRITABLE = {'system', 'web', 'security'}
     section = data.get('section')
+    if section and section not in _WRITABLE:
+        return jsonify({'success': False, 'message': f'配置段 {section} 不允许修改'}), 400
+    if section and not isinstance(data.get('data', {}), dict):
+        return jsonify({'success': False, 'message': 'data 必须是对象'}), 400
     if section and section in config and isinstance(config[section], dict):
         config[section].update(data.get('data', {}))
     elif section:
         return jsonify({'success': False, 'message': f'配置段 {section} 不存在或不是字典'}), 400
     else:
         # 安全限制：只允许更新白名单中的顶层字段
-        allowed_keys = {'system', 'web', 'security'}
-        filtered = {k: v for k, v in data.items() if k in allowed_keys}
+        filtered = {k: v for k, v in data.items() if k in _WRITABLE}
         if not filtered:
             return jsonify({'success': False, 'message': '无有效的配置段'}), 400
         config.update(filtered)

@@ -9,7 +9,7 @@ import logging
 import threading
 from typing import Any, Callable
 from datetime import datetime
-from core.safe_numeric import to_finite_float
+from core.safe_numeric import to_finite_float, try_finite_float
 from config import MQTTConfig
 
 logger = logging.getLogger(__name__)
@@ -271,9 +271,10 @@ class MQTTClient:
             topic, qos = parse_topic_entry(topic_config)
             if not topic:
                 continue
-            if topic not in self._subscriptions:
-                added += 1
-            self._subscriptions[topic] = qos
+            with self._lock:
+                if topic not in self._subscriptions:
+                    added += 1
+                self._subscriptions[topic] = qos
 
         if added:
             logger.info(
@@ -302,7 +303,8 @@ class MQTTClient:
 
     def subscribe(self, topic: str, qos: int = 1) -> bool:
         """订阅主题"""
-        self._subscriptions[topic] = qos
+        with self._lock:
+            self._subscriptions[topic] = qos
 
         if self.connected:
             result, mid = self.client.subscribe(topic, qos)
@@ -340,8 +342,9 @@ class MQTTClient:
             return False
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
-        """获取最新数据缓存"""
-        return dict(self.latest_data)
+        """获取最新数据缓存（round 370：持锁快照）"""
+        with self._lock:
+            return dict(self.latest_data)
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息（与其他协议客户端接口统一）"""
@@ -441,20 +444,54 @@ class MQTTClient:
         2. {"temperature": 25.5, "pressure": 0.101}  (自动从topic提取device_id)
         3. {"device_id": "xxx", "data": {"temperature": 25.5, "pressure": 0.101}}
         """
+        # round 370（BUG-025）：**先看主题配置的 json_path / name**。
+        # `topics` 里常写成 `json_path: value` + `name: vibration_x`，
+        # 而载荷是 `{"value": 0.12, "ts": ...}` —— 原实现完全不看这两个字段，
+        # 把整个 JSON 的每个数值键都当成点位，点位名变成 "value"/"ts"，
+        # 与设备配置里的寄存器名对不上，数据被采集器丢弃。
+        meta = self._topic_meta(topic)
+        json_path = str(meta.get('json_path') or '').strip()
+        if json_path:
+            cur: Any = data
+            for part in json_path.split('.'):
+                if isinstance(cur, dict) and part in cur:
+                    cur = cur[part]
+                else:
+                    cur = None
+                    break
+            numeric = try_finite_float(cur)
+            if numeric is not None:
+                self._notify_callbacks(
+                    self._topic_device_id(topic),
+                    meta.get('name') or topic,
+                    numeric,
+                    meta.get('unit', '') or '',
+                    retain=retain)
+                return
+            logger.debug("MQTT %s 的 json_path=%r 取不到有限数值，回退按整包解析",
+                         topic, json_path)
+
         # 格式1: 完整格式
         if 'device_id' in data and 'register' in data:
             device_id = data['device_id']
             register_name = data['register']
-            value = float(data.get('value', 0))
+            # round 370（BUG-025）：`{"value": null}` 时 `float(None)` 抛 TypeError，
+            # 整条消息被外层吞掉 —— 一个空值让同一包里的其它点位全部丢失。
+            value = try_finite_float(data.get('value'))
+            if value is None:
+                logger.debug("MQTT 消息 value 非有限数值，已跳过: %s", topic)
+                return
             unit = data.get('unit', '')
             self._notify_callbacks(device_id, register_name, value, unit, retain=retain)
 
         # 格式3: 嵌套数据格式
         elif 'device_id' in data and 'data' in data:
             device_id = data['device_id']
-            for register_name, value in data['data'].items():
-                if isinstance(value, (int, float)):
-                    self._notify_callbacks(device_id, register_name, float(value), '', retain=retain)
+            for register_name, raw in data['data'].items():
+                value = try_finite_float(raw)
+                if value is not None:
+                    self._notify_callbacks(device_id, register_name, value, '',
+                                           retain=retain)
 
         # 格式2: 简单键值对
         else:
@@ -528,12 +565,22 @@ class MQTTClient:
         """
         # 更新数据缓存。`retained` 必须带上：消费方据此判断
         # 「这是 Broker 缓存的旧状态，不是刚采集的实时值」。
-        self.latest_data[register_name] = {
+        # round 370（BUG-025）：paho 回调线程写、采集线程读，必须加锁。
+        # 原来 `self._lock` 建了却从没用过 —— 并发下 `dict` 迭代/写入
+        # 可能抛 "dictionary changed size during iteration"，
+        # 表现是偶发丢数据，现场极难复现。
+        payload = {
             'value': value,
             'unit': unit,
             'timestamp': datetime.now().isoformat(),
             'retained': bool(retain),
         }
+        lock = getattr(self, '_lock', None)
+        if lock is None:            # 兼容 `__new__` 构造的测试替身
+            self.latest_data[register_name] = payload
+        else:
+            with lock:
+                self.latest_data[register_name] = payload
 
         for callback in self._data_callbacks:
             try:

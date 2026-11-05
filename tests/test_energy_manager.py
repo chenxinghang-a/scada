@@ -3,7 +3,7 @@ Tests for 智能层.energy_manager: EnergyManager tariff, power data, carbon, an
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 from pathlib import Path
 
@@ -114,6 +114,85 @@ class TestTariffConfig:
         """update_tariff rejects negative carbon factor"""
         result = em.update_tariff(carbon_factor=-1.0)
         assert result['success'] is False
+
+
+# ============================================================
+# BUG-048：Bool/NaN 电价 + 落盘失败回滚 + 读接口切日
+# ============================================================
+
+class TestBug048TariffGuards:
+    """电价/碳排因子原来只做 `isinstance(val, (int, float)) and val >= 0`。
+
+    `isinstance(True, int)` 为真、`nan < 0` 为假 → 布尔与 NaN 都能写进去；
+    落盘后 `energy.yaml` 里就是 `peak: .nan`，费用/碳排全变 NaN 写进 JSON，
+    前端 `JSON.parse` 直接炸。
+    """
+
+    @pytest.mark.parametrize('bad', [True, False, float('nan'), float('inf'), 'x'])
+    def test_tariff_rejects_non_finite_and_bool(self, em, bad):
+        before = em.tariff['peak']
+        result = em.update_tariff(tariff={'peak': bad})
+        assert result['success'] is False
+        assert em.tariff['peak'] == before
+
+    @pytest.mark.parametrize('bad', [True, float('nan'), float('inf'), 'x'])
+    def test_carbon_factor_rejects_non_finite_and_bool(self, em, bad):
+        before = em.carbon_factor
+        assert em.update_tariff(carbon_factor=bad)['success'] is False
+        assert em.carbon_factor == before
+
+    def test_periods_reject_bool_hours(self, em):
+        """`True` 会被当成 1 点，配置里多出一个谁也不认识的时段。"""
+        result = em.update_tariff(tariff_periods={'peak': [[True, 12]]})
+        assert result['success'] is False
+
+    def test_save_failure_rolls_back_memory(self, em, monkeypatch):
+        """落盘失败必须回滚内存，且不能回 success=True。
+
+        原来先改内存再存盘、失败也不回滚，还照样回「已更新」：
+        接口说更新成功、内存按新价计费、磁盘还是旧价，重启后账单口径翻转。
+        """
+        before = dict(em.tariff)
+        before_factor = em.carbon_factor
+        monkeypatch.setattr(em, '_save_config', lambda: False)
+
+        result = em.update_tariff(tariff={'peak': 9.9}, carbon_factor=9.9)
+
+        assert result['success'] is False
+        assert '回滚' in result['message']
+        assert em.tariff == before
+        assert em.carbon_factor == before_factor
+
+
+class TestBug048RolloverOnRead:
+    """三个读接口原来不切日：采集中断/停线跨日后返回**昨天**的数据。"""
+
+    def _seed_yesterday(self, em):
+        em.energy_accumulated['d1'] = {
+            'energy_kwh': 100.0, 'peak_kwh': 60.0,
+            'flat_kwh': 30.0, 'valley_kwh': 10.0,
+        }
+        em.energy_baseline['d1'] = 10.0
+        em._window_date = em._today() - timedelta(days=1)
+
+    def test_cost_breakdown_rolls_over(self, em):
+        self._seed_yesterday(em)
+        result = em.get_energy_cost_breakdown()
+        assert result['peak']['kwh'] == 0
+        assert result['total_cost'] == 0
+        assert em._window_date == em._today()
+
+    def test_check_anomalies_rolls_over(self, em, caplog):
+        """跨日后不许拿「昨日累计」比「日基线」→ 否则 ratio≈2 必然误报。"""
+        self._seed_yesterday(em)
+        with caplog.at_level('WARNING'):
+            em._check_anomalies()
+        assert em.energy_accumulated == {}
+        assert '能耗异常' not in caplog.text
+
+    def test_get_anomalies_rolls_over(self, em):
+        self._seed_yesterday(em)
+        assert em.get_anomalies() == []
 
 
 # ============================================================

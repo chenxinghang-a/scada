@@ -200,13 +200,18 @@ def export_device_data(device_id):
         return jsonify({'success': False, 'message': '缺少start_time或end_time参数'}), 400
 
     exporter = DataExport()
+    # BUG-055：起止时间必须校验顺序。原来颠倒时直接查库，落到「没有数据可导出」
+    # （404）—— 用户看到的是"这段时间没数据"，而不是"你的参数填反了"。
+    start_time = _parse_time_strict(start_time_str, datetime.now() - timedelta(hours=24))
+    end_time = _parse_time_strict(end_time_str, datetime.now())
+    if end_time < start_time:
+        return jsonify({'success': False, 'message': '结束时间必须晚于开始时间'}), 400
     try:
         filepath = exporter.export_device_data(
             database=current_app.database,
             device_id=device_id,
-            start_time=_parse_time_strict(start_time_str,
-                                          datetime.now() - timedelta(hours=24)),
-            end_time=_parse_time_strict(end_time_str, datetime.now()),
+            start_time=start_time,
+            end_time=end_time,
             format=data.get('format', 'csv'),
             # 默认 raw：导出应当是**原始明细**，不是每分钟均值。
             # 需要聚合时由调用方显式传 interval（与查询接口同一套取值）。
@@ -282,11 +287,16 @@ def export_alarms():
 
     data = request.get_json() or {}
     exporter = DataExport()
+    # BUG-055：与 export_device_data 同口径 —— 先解析、再校验顺序。
+    start_time = _parse_time_strict(data.get('start_time'), None)
+    end_time = _parse_time_strict(data.get('end_time'), None)
+    if start_time and end_time and end_time < start_time:
+        return jsonify({'success': False, 'message': '结束时间必须晚于开始时间'}), 400
     try:
         filepath = exporter.export_alarm_records(
             database=current_app.database,
-            start_time=_parse_time_strict(data.get('start_time'), None),
-            end_time=_parse_time_strict(data.get('end_time'), None),
+            start_time=start_time,
+            end_time=end_time,
             format=data.get('format', 'csv')
         )
     except ValueError as exc:

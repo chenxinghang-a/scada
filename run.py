@@ -116,6 +116,11 @@ def main():
         if sim_live_mode:
             simulation_mode = True
             config_path = paths.get_config_path('devices_simulated.yaml')
+            # round 370（BUG-001）：**漏了这一行就启动即崩**。
+            # 第 192 行 `database = Database(db_path)` 用的是这个局部变量，
+            # 其它分支都赋了值、只有 --sim-live 没有 → UnboundLocalError，
+            # 而它偏偏是「跑真协议线」最需要用的模式。
+            db_path = paths.get_db_path('simulated')
             logger.info("模拟-真实协议线模式：起模拟服务端，采集层用真实客户端连接")
         elif '--simulator' in sys.argv:
             simulation_mode = False
@@ -413,7 +418,11 @@ def main():
             digest = hashlib.sha1(str(message).encode('utf-8'),
                                    usedforsecurity=False).hexdigest()[:10]
             try:
-                alarm_manager.raise_external_alarm(
+                # BUG-050：**返回值必须透传**。`raise_external_alarm` 失败时
+                # 返回 False（不抛异常），原来这里丢掉返回值 → 决策引擎看不到
+                # 失败，照样记「联锁已触发」。回调返回 None 时引擎按"无结论"
+                # 处理，只有明确的 False 才算失败。
+                return alarm_manager.raise_external_alarm(
                     alarm_id=f'edge_{digest}',
                     message=str(message),
                     level=level,
@@ -423,6 +432,7 @@ def main():
                 )
             except Exception as e:
                 logger.error(f"边缘决策报警登记失败: {e}")
+                return False
 
         edge_decision.register_action('set_alarm', edge_set_alarm)
 
@@ -653,9 +663,14 @@ def main():
                        日志干净、PID 以为调了、现场没动。
                     """
                     try:
+                        # round 370（BUG-002）：PID 输出是**工程值浮点**，
+                        # 必须走 engineering=True —— 安全层内部按点位
+                        # scale/offset 换算、按 data_type 决定单/双寄存器，
+                        # 否则非整数输出会被"寄存器只接受整数"整条拒绝。
                         result = device_control.write_with_verification(
                             device_id, int(address), value,
-                            operator='edge_decision', kind='register') or {}
+                            operator='edge_decision', kind='register',
+                            engineering=True) or {}
                     except Exception as e:      # noqa: BLE001
                         logger.error("边缘决策写入异常: %s/%s=%s — %s",
                                      device_id, address, value, e)

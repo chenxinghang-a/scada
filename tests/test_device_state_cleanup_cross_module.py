@@ -82,12 +82,16 @@ def test_vibration_forget_device_clears_buffers():
     va._scores['d1'] = {'score': 80}
     va._device_sample_rates['d1'] = 1000.0
     va._feed_sample_rates['d1'] = 1000.0
+    # BUG-051：`_alerted` 是 set，`pop(key, None)` 不适用，曾整条漏清 ——
+    # 设备在报警状态下被删，同名设备重建后**永不告警**。
+    va._alerted.add('d1')
 
     assert va.forget_device('d1') is True
     assert 'd1' not in va._buffers
     assert 'd1' not in va._scores
     assert 'd1' not in va._device_sample_rates
     assert 'd1' not in va._feed_sample_rates
+    assert 'd1' not in va._alerted
 
 
 def test_device_control_forget_device_clears_comm_failures():

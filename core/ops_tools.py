@@ -26,6 +26,31 @@ from core.safe_numeric import require_positive_int as _require_positive_int
 
 logger = logging.getLogger(__name__)
 
+#: 诊断导出时必须脱敏的键（配置里存着明文的数据库/MQTT/JWT 凭据）。
+_SENSITIVE_KEYS = {
+    'password', 'passwd', 'secret', 'secret_key', 'jwt_secret',
+    'api_key', 'access_key', 'token', 'auth_token', 'auth_password',
+    'mqtt_password',
+}
+
+
+def _redact(obj):
+    """递归脱敏：诊断包是用来**发给外部/厂商**的，配置原文不能带凭据出去。
+
+    BUG-072：`_collect_config` 直接把 `配置/*.yaml` 的 `safe_load` 结果塞进
+    zip —— `alarms.yaml` 的 SMTP password / 云平台 access_key+secret_key、
+    `devices*.yaml` 的 PLC password 全是明文。
+    """
+    if isinstance(obj, dict):
+        return {
+            k: ('***' if str(k).lower() in _SENSITIVE_KEYS and v not in (None, '')
+                else _redact(v))
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_redact(v) for v in obj]
+    return obj
+
 
 
 #: ⚠️ 这里**不要**再写一份 `_require_positive_int` 的本地实现。
@@ -611,7 +636,8 @@ class DataCleaner:
         except Exception as e:
             return {'operation': 'clean_audit_logs', 'status': 'error', 'error': str(e), 'duration_sec': time.time() - start}
 
-    def clean_old_backups(self, backup_dir: str = "data", keep_count: int = 5) -> Dict[str, Any]:
+    def clean_old_backups(self, backup_dir: str = "data/backups",
+                          keep_count: int = 5) -> Dict[str, Any]:
         """清理旧备份文件，只保留最近 N 个
 
         ``backup_dir`` 经 :func:`paths.resolve` 解析。相对路径会让 glob 打在
@@ -626,8 +652,17 @@ class DataCleaner:
         start = time.time()
         try:
             backup_path = paths.resolve(backup_dir)
+            # BUG-072：目录与通配符都得对上真实备份。备份有两套命名：
+            # `core/backup_drill.py` 的 `*_backup_*.db`，以及
+            # `Database.backup_database()` 的 `{db_name}_{时间戳}.db`
+            # （scada_20260101_120000.db）。原来默认目录是 `data`、
+            # 通配符只认 `scada_backup_*.db` —— 双重不匹配，清理恒为 0 个，
+            # 还照样回 `status: success`。
+            candidates = set()
+            for pattern in ("*_backup_*.db", "scada_*.db"):
+                candidates.update(backup_path.glob(pattern))
             backups = sorted(
-                backup_path.glob("scada_backup_*.db"),
+                candidates,
                 key=lambda f: f.stat().st_mtime,
                 reverse=True,
             )
@@ -819,7 +854,7 @@ class DiagnosticExporter:
                 try:
                     import yaml
                     with open(f, 'r', encoding='utf-8') as fh:
-                        config[f.name] = yaml.safe_load(fh)
+                        config[f.name] = _redact(yaml.safe_load(fh))
                 except Exception as e:
                     # 带上原因。诊断包是排障用的，「读取失败」四个字等于没信息 ——
                     # 是权限问题、编码问题，还是 YAML 语法错？只能靠猜。
@@ -830,7 +865,7 @@ class DiagnosticExporter:
         # 运行时配置
         try:
             from core.ops_tools import runtime_config_manager
-            config['runtime'] = runtime_config_manager.get_all()
+            config['runtime'] = _redact(runtime_config_manager.get_all())
         except Exception as e:
             # 该段失败会使诊断包缺少运行时配置，导出结果不完整
             logger.warning(f"诊断导出: 收集运行时配置失败(诊断包将缺少 runtime 配置): {e}")

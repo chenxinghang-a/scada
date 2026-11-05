@@ -16,7 +16,11 @@ import logging
 import threading
 from functools import wraps
 from typing import Optional
-from flask import request, jsonify, g
+from flask import request, jsonify, g, make_response
+
+#: 清理过期计数的时间地平线（秒）。必须 ≥ 装饰器允许的最长 period，
+#: 否则长窗口计数会被清理线程提前删掉（BUG-076）。
+_CLEANUP_HORIZON_S = 3600
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +126,12 @@ def user_rate_limit(calls: int = 0, period: int = 60, role_overrides: Optional[d
             resp = f(*args, **kwargs)
 
             # 添加限流头
+            # BUG-076：全站走 `success_response()`，返回的是
+            # `(Response, status_code)` **元组** —— 元组没有 `.headers`，
+            # 原来 `hasattr(tuple, 'headers')` 恒 False，正常响应永远不带
+            # X-RateLimit-*（前端/网关拿不到剩余额度）。
+            if isinstance(resp, tuple):
+                resp = make_response(resp[0], resp[1])
             if hasattr(resp, 'headers'):
                 with _user_limits_lock:
                     remaining = limit_calls - len(_user_limits.get(username, {}).get(path, []))
@@ -170,7 +180,10 @@ def cleanup_expired_entries():
         for username in list(_user_limits.keys()):
             for path in list(_user_limits[username].keys()):
                 timestamps = _user_limits[username][path]
-                while timestamps and timestamps[0] < now - 120:  # 清理2分钟前的
+                # BUG-076：清理窗口不能硬编码 120s。装饰器允许 period=3600，
+                # 按 2 分钟清会把**仍在窗口内**的计数删掉 —— 长周期限流被绕过。
+                # 统一用 ≥ 任何 period 的地平线，短窗口的过期由判定处的 pop(0) 处理。
+                while timestamps and timestamps[0] < now - _CLEANUP_HORIZON_S:
                     timestamps.pop(0)
                 if not timestamps:
                     del _user_limits[username][path]

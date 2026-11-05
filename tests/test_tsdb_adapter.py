@@ -255,6 +255,22 @@ class TestFeedToModules:
 
         mock_oee.record_production.assert_called_once()
 
+    def test_feed_oee_total_count(self, mock_tdengine, mock_oee):
+        """BUG-049：白名单里有 total_count，内层必须真的消费它。
+
+        原来只有 product_count / good_count 两支 —— 只上报总产量的设备
+        OEE 产量恒为 0（口径见 data_collector：total_count 就是 `count`）。
+        """
+        from 智能层.tsdb_adapter import TSDBAdapter
+
+        adapter = TSDBAdapter(mock_tdengine, oee_calculator=mock_oee)
+
+        data = [{'value': 100, 'timestamp': '2024-01-01T00:00:00'}]
+        adapter._feed_to_modules('dev1', 'total_count', data)
+
+        mock_oee.record_production.assert_called_once()
+        assert mock_oee.record_production.call_args.kwargs.get('count') == 100
+
     def test_feed_skip_none_values(self, mock_tdengine, mock_predictive):
         from 智能层.tsdb_adapter import TSDBAdapter
 

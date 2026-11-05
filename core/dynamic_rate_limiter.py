@@ -161,41 +161,44 @@ class SystemLoadMonitor:
         # 按最高等级确定（木桶原理）
         level = LoadLevel.LOW
 
+        # BUG-066：**回差必须对每一档生效**，不能只给 HIGH 用。
+        # 原来 cpu_critical / cpu_medium / mem_* / queue_* 全是裸阈值：
+        # 利用率在阈值附近 ±1% 抖动时，限流等级每轮翻一次，
+        # 前端曲线和实际限流阈值一起抖。判据统一成：只有「当前等级已经
+        # 高于该档」时才把阈值下调 hysteresis（降档要跌破回差才发生）。
+        _rank = {LoadLevel.LOW: 0, LoadLevel.MEDIUM: 1,
+                 LoadLevel.HIGH: 2, LoadLevel.CRITICAL: 3}
+        last_rank = _rank.get(self._last_level, 0)
+        hyst = t["hysteresis"]
+
+        def _th(base: float, floor_level: LoadLevel) -> float:
+            return base - hyst if last_rank >= _rank[floor_level] else base
+
         # CPU评估（带降档滞后）
         if cpu is not None:
-            if self._last_level in (LoadLevel.HIGH, LoadLevel.CRITICAL):
-                cpu_high_threshold = t["cpu_high"] - t["hysteresis"]
-            else:
-                cpu_high_threshold = t["cpu_high"]
-
-            if cpu >= t["cpu_critical"]:
+            if cpu >= _th(t["cpu_critical"], LoadLevel.CRITICAL):
                 level = LoadLevel.CRITICAL
-            elif cpu >= cpu_high_threshold:
+            elif cpu >= _th(t["cpu_high"], LoadLevel.HIGH):
                 level = max_level(level, LoadLevel.HIGH)
-            elif cpu >= t["cpu_medium"]:
+            elif cpu >= _th(t["cpu_medium"], LoadLevel.MEDIUM):
                 level = max_level(level, LoadLevel.MEDIUM)
 
         # 内存评估
         if mem is not None:
-            if self._last_level in (LoadLevel.HIGH, LoadLevel.CRITICAL):
-                mem_high_threshold = t["mem_high"] - t["hysteresis"]
-            else:
-                mem_high_threshold = t["mem_high"]
-
-            if mem >= t["mem_critical"]:
+            if mem >= _th(t["mem_critical"], LoadLevel.CRITICAL):
                 level = LoadLevel.CRITICAL
-            elif mem >= mem_high_threshold:
+            elif mem >= _th(t["mem_high"], LoadLevel.HIGH):
                 level = max_level(level, LoadLevel.HIGH)
-            elif mem >= t["mem_medium"]:
+            elif mem >= _th(t["mem_medium"], LoadLevel.MEDIUM):
                 level = max_level(level, LoadLevel.MEDIUM)
 
         # 队列评估
         if queue is not None:
-            if queue >= t["queue_critical"]:
+            if queue >= _th(t["queue_critical"], LoadLevel.CRITICAL):
                 level = LoadLevel.CRITICAL
-            elif queue >= t["queue_high"]:
+            elif queue >= _th(t["queue_high"], LoadLevel.HIGH):
                 level = max_level(level, LoadLevel.HIGH)
-            elif queue >= t["queue_medium"]:
+            elif queue >= _th(t["queue_medium"], LoadLevel.MEDIUM):
                 level = max_level(level, LoadLevel.MEDIUM)
 
         # 记录指标

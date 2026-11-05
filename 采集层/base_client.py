@@ -23,6 +23,51 @@ class ByteOrder(Enum):
     DCBA = 'DCBA'   # Little-endian（部分三菱）
 
 
+def _swap16(word: int) -> int:
+    """交换一个 16 位字内的高/低字节。"""
+    return ((word & 0xFF) << 8) | ((word >> 8) & 0xFF)
+
+
+def reorder_32_words(w1: int, w2: int, byte_order: str = 'ABCD') -> int:
+    """把两个 16 位字按字节序还原成 32 位整数（ABCD 等价 ``(w1<<16)|w2``）。"""
+    order = str(getattr(byte_order, 'value', byte_order) or 'ABCD').upper()
+    if order == 'CDAB':
+        return (w2 << 16) | w1
+    if order == 'BADC':
+        return (_swap16(w1) << 16) | _swap16(w2)
+    if order == 'DCBA':
+        b0 = (w1 >> 8) & 0xFF
+        b1 = w1 & 0xFF
+        b2 = (w2 >> 8) & 0xFF
+        b3 = w2 & 0xFF
+        return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0
+    return (w1 << 16) | w2
+
+
+def decode_float64_registers(registers: list[int],
+                             byte_order: str = 'ABCD') -> float:
+    """按字节序解码 float64（4 个寄存器）。
+
+    口径说明（round 370 复核 BUG-013）：64 位 BADC 在本项目里定义为
+    **字交换**（``[w1, w0, w3, w2]``），与 32 位 BADC 的「字内字节交换」
+    不同 —— 这是既有编解码约定，`tests/test_mc_fins_collector_adapter.py`
+    的 `_encode_float64` 按此实现。审计报告按"字内字节交换"推断，
+    与项目约定不符；改它会破坏与现网 BADC 设备的往返一致性，故保持原样。
+    """
+    order = str(getattr(byte_order, 'value', byte_order) or 'ABCD').upper()
+    if order == 'BADC':
+        words = [registers[1], registers[0], registers[3], registers[2]]
+    elif order == 'CDAB':
+        words = [registers[2], registers[3], registers[0], registers[1]]
+    elif order == 'DCBA':
+        words = [_swap16(registers[3]), _swap16(registers[2]),
+                 _swap16(registers[1]), _swap16(registers[0])]
+    else:
+        words = list(registers[:4])
+    raw = struct.pack('>HHHH', *words)
+    return struct.unpack('>d', raw)[0]
+
+
 class ByteOrderCapableDecoder:
     """为寄存器型客户端提供「按设备配置 byte_order 解码」的 mixin。
 
@@ -42,23 +87,7 @@ class ByteOrderCapableDecoder:
 
     def _reorder_32(self, w1: int, w2: int) -> int:
         """把两个 16-bit 寄存器按字节序重排为 32-bit 整数（ABCD 等价 (w1<<16)|w2）。"""
-        bo = self._resolve_byte_order()
-        if bo == ByteOrder.BADC:
-            # 字内字节交换，再拼接
-            w1 = ((w1 & 0xFF) << 8) | ((w1 >> 8) & 0xFF)
-            w2 = ((w2 & 0xFF) << 8) | ((w2 >> 8) & 0xFF)
-            return (w1 << 16) | w2
-        if bo == ByteOrder.CDAB:
-            # 仅字交换
-            return (w2 << 16) | w1
-        if bo == ByteOrder.DCBA:
-            # 完全小端：字序反转 + 字内字节交换
-            b0 = (w1 >> 8) & 0xFF
-            b1 = w1 & 0xFF
-            b2 = (w2 >> 8) & 0xFF
-            b3 = w2 & 0xFF
-            return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0
-        return (w1 << 16) | w2
+        return reorder_32_words(w1, w2, self._resolve_byte_order())
 
     def decode_float32(self, registers: list[int]) -> float | None:
         """解码 32 位浮点数，支持四种字节序；NaN/Inf 返回 None。"""
@@ -74,23 +103,9 @@ class ByteOrderCapableDecoder:
         """解码 64 位浮点数（四个寄存器），支持四种字节序；NaN/Inf 返回 None。"""
         if len(registers) < 4:
             raise ValueError("需要至少4个寄存器")
-        bo = self._resolve_byte_order()
-        if bo == ByteOrder.BADC:
-            raw = struct.pack('>HHHH', registers[1], registers[0], registers[3], registers[2])
-        elif bo == ByteOrder.CDAB:
-            raw = struct.pack('>HHHH', registers[2], registers[3], registers[0], registers[1])
-        elif bo == ByteOrder.DCBA:
-            # 每个寄存器内字节交换，且寄存器顺序也反转（完全小端）
-            def _swap16(w: int) -> int:
-                return ((w & 0xFF) << 8) | ((w >> 8) & 0xFF)
-            b0 = _swap16(registers[0])
-            b1 = _swap16(registers[1])
-            b2 = _swap16(registers[2])
-            b3 = _swap16(registers[3])
-            raw = struct.pack('>HHHH', b3, b2, b1, b0)
-        else:  # ABCD
-            raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
-        value = struct.unpack('>d', raw)[0]
+        # round 370：四种字节序统一由 `decode_float64_registers` 处理
+        # （BADC 是字内字节交换，不是字交换）
+        value = decode_float64_registers(registers, self._resolve_byte_order())
         if math.isnan(value) or math.isinf(value):
             return None
         return value

@@ -27,13 +27,17 @@ control_ns = Namespace('control', description='设备控制')
 industry_ns = Namespace('industry40', description='工业4.0')
 metrics_ns = Namespace('metrics', description='Prometheus指标')
 
-api.add_namespace(auth_ns, path='/api/auth')
-api.add_namespace(device_ns, path='/api/devices')
-api.add_namespace(alarm_ns, path='/api/alarms')
-api.add_namespace(data_ns, path='/api/data')
-api.add_namespace(system_ns, path='/api/system')
-api.add_namespace(control_ns, path='/api/control')
-api.add_namespace(industry_ns, path='/api/industry40')
+# BUG-062：`Api(prefix='/api/v1')` 已经带了前缀，这里再写 `/api/xxx`
+# 会拼成 `/api/v1/api/xxx`；而 APIVersionMiddleware 又把 `/api/v1/*`
+# 重写成 `/api/*` → 调试请求变成 `/api/api/xxx`，必 404。
+# namespace 只写资源段，最终 `/api/v1/auth/login` 正好落到 `/api/auth/login`。
+api.add_namespace(auth_ns, path='/auth')
+api.add_namespace(device_ns, path='/devices')
+api.add_namespace(alarm_ns, path='/alarms')
+api.add_namespace(data_ns, path='/data')
+api.add_namespace(system_ns, path='/system')
+api.add_namespace(control_ns, path='/control')
+api.add_namespace(industry_ns, path='/industry40')
 api.add_namespace(metrics_ns, path='/api')
 
 # 定义数据模型

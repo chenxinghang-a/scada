@@ -156,6 +156,10 @@ class ModbusGateway(BaseGateway):
         client = self._clients.get(device_id)
         if not client:
             self.logger.error(f"设备 {device_id} 未连接")
+            # BUG-081：**必须记账**。原来这里直接 return None，而重连机制
+            # 只统计 `_note_read_failure` 的失败次数 —— 设备断线后计数永远
+            # 不涨，重连永不触发，网关就一直拿着 None 客户端空转。
+            self._note_read_failure(device_id, "*", "设备未连接")
             return None
 
         register_configs = self._register_configs.get(device_id, [])
@@ -183,7 +187,12 @@ class ModbusGateway(BaseGateway):
                 value = self._read_register(client, slave_id, address, count, data_type,
                                             byte_order=byte_order)
                 if value is not None:
-                    result[name] = value
+                    # BUG-081：**必须按点位配置换算工程量**。原来直接上报
+                    # 原始寄存器值 —— scale=0.1 的温度 500 被报成 500℃
+                    # （应为 50.0），看板/报警/历史库全错一个量级。
+                    scale = reg_config.get('scale', 1.0)
+                    offset = reg_config.get('offset', 0.0)
+                    result[name] = value * (scale if scale else 1.0) + (offset or 0.0)
                 else:
                     self.logger.warning(f"设备 {device_id} 寄存器 {name} 读取失败")
                     self._note_read_failure(device_id, name, "读取返回空/错误响应")

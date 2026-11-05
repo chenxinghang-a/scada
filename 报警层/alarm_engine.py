@@ -89,6 +89,22 @@ def evaluate_condition(rule_config: dict, value: float, *,
     """
     condition = rule_config.get('condition')
     threshold = rule_config.get('threshold')
+
+    # round 370（BUG-029）：**区间条件不吃 `threshold`**。
+    # 它们用的是 `threshold_min` / `threshold_max`，而原来的
+    # `if threshold is None: return False` 写在最前面 —— 所有
+    # in_range / out_of_range 规则（配方温度区间、压力带）永远不报警，
+    # 界面上还显示"规则已启用"。必须先把区间分支处理掉。
+    if condition in ('in_range', 'out_of_range'):
+        low = rule_config.get('threshold_min')
+        high = rule_config.get('threshold_max')
+        if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
+            return False
+        low, high = float(low), float(high)
+        if condition == 'in_range':
+            return low <= value <= high
+        return value < low or value > high
+
     if threshold is None or not isinstance(threshold, (int, float)):
         return False
     threshold = float(threshold)

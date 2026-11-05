@@ -269,7 +269,8 @@ class TestExecuteRest:
 
         c = _client(host='h', port=6041)
         c._execute_rest("SELECT '中文'")
-        assert seen['url'] == 'http://h:6041/rest/sql'
+        # BUG-086：库名必须在 URL 路径里（REST 无会话，`USE db` 不跨请求生效）
+        assert seen['url'] == 'http://h:6041/rest/sql/scada'
         assert seen['data'] == "SELECT '中文'".encode('utf-8')
         assert seen['auth'] == ('root', 'taosdata')
 

@@ -18,6 +18,8 @@ from datetime import datetime
 from typing import Any
 from collections import defaultdict, deque
 
+from core.safe_numeric import try_finite_float
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +71,9 @@ class SPCAnalyzer:
         self._violation_seen: dict[str, set[tuple]] = defaultdict(set)
         self._violation_fingerprint_cap = 4096  # 指纹集合上限（超出后清空重置）
 
+        # 非有限值告警节流（清单 046）：key -> 上次告警时间戳
+        self._nonfinite_warn_at: dict[str, float] = {}
+
         # 锁
         self._lock = threading.Lock()
 
@@ -99,7 +104,8 @@ class SPCAnalyzer:
             # 不清 → 删掉的设备的样本继续占内存，且重新添加同名设备时
             # **首轮判异直接继承旧样本**（控制图一上来就报警或一上来就"样本充足"）；
             # `_violation_seen`（已报过的判异指纹）不清 → 同一违规在新设备上不再报。
-            for container in (self.data_buffers, self._total_fed, self._violation_seen):
+            for container in (self.data_buffers, self._total_fed, self._violation_seen,
+                              self._nonfinite_warn_at):
                 for key in [k for k in list(container) if k.startswith(prefix)]:
                     container.pop(key, None)
                     removed = True
@@ -108,7 +114,7 @@ class SPCAnalyzer:
             logger.info("SPC 已清理已删除设备的控制限与缓冲: %s", device_id)
         return removed
 
-    def feed_data(self, device_id: str, register_name: str, value: float):
+    def feed_data(self, device_id: str, register_name: str, value: float) -> bool:
         """
         喂入质量数据
 
@@ -116,14 +122,38 @@ class SPCAnalyzer:
             device_id: 设备ID
             register_name: 寄存器名称
             value: 测量值
+
+        Returns:
+            是否被接受（非有限值 / 非数值一律拒绝，不入缓冲区）
         """
         key = f"{device_id}:{register_name}"
+
+        # 清单 046：bool / NaN / ±Inf 必须在入口挡住。
+        # 缓冲区是**滑动窗口**，一个 NaN 进来后要等 maxlen 个正常点才被挤出去；
+        # 期间 sum()/σ/控制限全变 NaN，而判异规则里全是 `x > cl` 这类比较 ——
+        # NaN 与任何数比较都是 False，于是控制图会**静默显示"过程受控"**，
+        # 比直接报错危险得多（Cpk 也会变成 NaN 写进看板）。
+        # bool 单独挡：`float(True) == 1.0`，一个开关量混进温度序列会直接把
+        # 均值拉到 0 附近（`try_finite_float` 本身不排斥 bool，与 `try_int` 同口径）。
+        num = None if isinstance(value, bool) else try_finite_float(value)
+        if num is None:
+            now = time.time()
+            last = self._nonfinite_warn_at.get(key, 0.0)
+            if now - last >= 60.0:  # 同一 key 每分钟只记一条，避免污染源刷爆日志
+                self._nonfinite_warn_at[key] = now
+                logger.warning(
+                    "SPC 拒绝非有限测量值 %s=%r（register=%s），本次不入缓冲",
+                    device_id, value, register_name,
+                )
+            return False
+
         with self._lock:
-            self.data_buffers[key].append(value)
+            self.data_buffers[key].append(num)
             self._total_fed[key] += 1
             # 自动设置默认规格限（如果未配置）
             if key not in self.spec_limits:
                 self._auto_set_spec_limits(key, register_name)
+        return True
 
     def set_spec_limits(self, key: str, usl: float | None = None, lsl: float | None = None,
                          target: float | None = None):
@@ -135,13 +165,41 @@ class SPCAnalyzer:
             usl: 上规格限 (Upper Specification Limit)
             lsl: 下规格限 (Lower Specification Limit)
             target: 目标值
+
+        Raises:
+            ValueError: 传入的限值不是有限数值（NaN/Inf 会污染 Cpk 与 PPM）
         """
+        # 清单 046：这里原来直接落库，且用 `target or ...` / `usl and lsl` 做
+        # 真值判断 —— 两个独立问题：
+        # 1) `lsl=0.0`（电压下限、振动下限这类**最常见**的配置）是 falsy，
+        #    目标值算不出来、`usl and lsl` 也判成"没配全"，target 变 None；
+        # 2) usl/lsl/target 若为 NaN/Inf（YAML 的 `.nan`/`.inf` 是规范内字面量），
+        #    `usl - lsl` 直接是 NaN，Cpk/PPM 全部静默变 NaN。
+        usl_v = self._spec_value(usl, 'usl')
+        lsl_v = self._spec_value(lsl, 'lsl')
+        target_v = self._spec_value(target, 'target')
+
+        if target_v is None and usl_v is not None and lsl_v is not None:
+            target_v = (usl_v + lsl_v) / 2
+        if usl_v is not None and lsl_v is not None and usl_v <= lsl_v:
+            raise ValueError(f'Invalid spec limits: usl({usl_v}) 必须大于 lsl({lsl_v})')
+
         self.spec_limits[key] = {
-            'usl': usl,
-            'lsl': lsl,
-            'target': target or ((usl + lsl) / 2 if usl and lsl else None),
+            'usl': usl_v,
+            'lsl': lsl_v,
+            'target': target_v,
         }
-        logger.info(f"SPC规格限设置 {key}: USL={usl}, LSL={lsl}, Target={target}")
+        logger.info(f"SPC规格限设置 {key}: USL={usl_v}, LSL={lsl_v}, Target={target_v}")
+
+    @staticmethod
+    def _spec_value(value: float | None, name: str) -> float | None:
+        """规格限入参归一化：None 原样返回，非有限值抛 ValueError。"""
+        if value is None:
+            return None
+        num = try_finite_float(value)
+        if num is None:
+            raise ValueError(f'Invalid {name}: must be a finite number (收到 {value!r})')
+        return num
 
     # ==================== 控制图计算 ====================
 
@@ -210,6 +268,26 @@ class SPCAnalyzer:
         base = (dropped + pad) // subgroup_size     # 首个子组的绝对序号
         return aligned, base
 
+    def _snapshot(self, key: str) -> tuple[list[float], int]:
+        """取缓冲区快照，并在读侧再剔除一次非有限值（清单 046）。
+
+        `feed_data` 已经挡了 NaN/Inf，但缓冲区还有别的写入路径：历史数据
+        回填、`tsdb_adapter` 的批量导入、测试/运维脚本直接 append。读侧不设防
+        的话，一个 NaN 就能让整窗控制限变成 NaN，判异规则因 `NaN > x == False`
+        静默失效（显示"受控"），Cpk 也变成 NaN 写进看板。
+        """
+        with self._lock:
+            raw = list(self.data_buffers.get(key, []))
+            fed = self._total_fed.get(key, 0)
+        clean = []
+        for x in raw:
+            if isinstance(x, bool):  # True/1 会被当成 1.0 混进均值
+                continue
+            v = try_finite_float(x)
+            if v is not None:
+                clean.append(v)
+        return clean, fed
+
     def _record_violations(self, key: str, violations: list[dict[str, Any]],
                             device_id: str, register_name: str,
                             base_index: int) -> list[dict[str, Any]]:
@@ -266,9 +344,15 @@ class SPCAnalyzer:
         key = f"{device_id}:{register_name}"
         n = self.subgroup_size
 
-        with self._lock:
-            raw_data = list(self.data_buffers.get(key, []))
-            fed = self._total_fed.get(key, 0)
+        # 清单 046：R 图的 A2/D3/D4 系数只到 n=10。超过时不能靠
+        # `a2_table.get(n, 0.577)` 静默套用 n=5 的系数（控制限过窄 → 正常波动
+        # 被成批判成异常），直接走 X̄-S 图（A3/B3/B4 覆盖 n=2~25）。
+        # 返回结构里的 chart_type 会如实写成 'X̄-S'。
+        if n > 10:
+            logger.info("子组大小 %d > 10，X̄-R 图系数无定义，改用 X̄-S 图: %s", n, key)
+            return self.calculate_xbar_s_chart(device_id, register_name)
+
+        raw_data, fed = self._snapshot(key)
 
         if len(raw_data) < n * 2:
             return None
@@ -353,9 +437,7 @@ class SPCAnalyzer:
         key = f"{device_id}:{register_name}"
         n = self.subgroup_size
 
-        with self._lock:
-            raw_data = list(self.data_buffers.get(key, []))
-            fed = self._total_fed.get(key, 0)
+        raw_data, fed = self._snapshot(key)
 
         if len(raw_data) < n * 2:
             return None
@@ -410,12 +492,7 @@ class SPCAnalyzer:
 
         violations = self._check_violations(xbar_values, xbar_bar, xbar_ucl, xbar_lcl)
 
-        # 判异结果去重 + 锁内写入（与 X̄-R 图保持一致）
-        with self._lock:
-            self._record_violations(key, violations, device_id, register_name,
-                                    base_subgroup)
-
-        return {
+        result = {
             'chart_type': 'X̄-S',
             'subgroup_size': n,
             'num_subgroups': k,
@@ -434,6 +511,17 @@ class SPCAnalyzer:
             'violations': violations,
             'is_in_control': len(violations) == 0,
         }
+
+        # 清单 046：判异去重 + 控制限缓存，与 X̄-R 图在同一把锁内原子完成。
+        # 原来只记录判异、**不写 control_limits** → `calculate_capability`
+        # 取不到 's_chart'，组内标准差只能退化成总体 σ，
+        # 于是 n>10（只能走 S 图）时 Cp/Cpk 与 Pp/Ppk 完全同值，能力被高估。
+        with self._lock:
+            self._record_violations(key, violations, device_id, register_name,
+                                    base_subgroup)
+            self.control_limits[key] = result
+
+        return result
 
     # ==================== 过程能力分析 ====================
 
@@ -458,12 +546,22 @@ class SPCAnalyzer:
         if not spec or spec.get('usl') is None or spec.get('lsl') is None:
             return None
 
-        usl = spec['usl']
-        lsl = spec['lsl']
-        target = spec.get('target', (usl + lsl) / 2)
+        # 清单 046：`config['spec_limits']` 是**配置直读**的（YAML 的 `.nan`/`.inf`
+        # 是规范内字面量），不经过 set_spec_limits 的校验。这里再收一次口，
+        # 否则 usl-lsl 为 NaN → Cp/Cpk/PPM 全部 NaN 并原样写进看板。
+        usl = try_finite_float(spec['usl'])
+        lsl = try_finite_float(spec['lsl'])
+        if usl is None or lsl is None or usl <= lsl:
+            logger.warning("SPC 规格限非法，跳过过程能力计算: %s (USL=%r, LSL=%r)",
+                           key, spec.get('usl'), spec.get('lsl'))
+            return None
 
-        with self._lock:
-            raw_data = list(self.data_buffers.get(key, []))
+        # `target` 允许缺省；缺省（或旧版本写入的 None）时按 (USL+LSL)/2 兜底。
+        target = try_finite_float(spec.get('target'))
+        if target is None:
+            target = (usl + lsl) / 2
+
+        raw_data, _fed = self._snapshot(key)
 
         if len(raw_data) < 20:
             return None
@@ -476,13 +574,20 @@ class SPCAnalyzer:
         sigma_total = math.sqrt(variance) if variance > 0 else 0
 
         # 组内标准差（从控制图获取）
+        # 清单 046：X̄-S 图现在会写入 control_limits，这里必须一并识别 ——
+        # 否则 n>10 只能走 S 图时永远命中不到 'r_chart'，σ_within 退化成
+        # σ_total，Cp/Cpk 与 Pp/Ppk 变成同一组数（能力被系统性高估）。
         cl_data = self.control_limits.get(key, {})
         if 'r_chart' in cl_data:
-            r_bar = cl_data['r_chart']['cl']
+            r_bar = try_finite_float(cl_data['r_chart'].get('cl'))
             d2_table = {2: 1.128, 3: 1.693, 4: 2.059, 5: 2.326,
                         6: 2.534, 7: 2.704, 8: 2.847, 9: 2.970, 10: 3.078}
             d2 = d2_table.get(self.subgroup_size, 2.326)
-            sigma_within = r_bar / d2 if d2 > 0 else sigma_total
+            sigma_within = r_bar / d2 if (r_bar is not None and d2 > 0) else sigma_total
+        elif 's_chart' in cl_data:
+            s_bar = try_finite_float(cl_data['s_chart'].get('cl'))
+            c4 = self._c4(self.subgroup_size)
+            sigma_within = s_bar / c4 if (s_bar is not None and c4 > 0) else sigma_total
         else:
             sigma_within = sigma_total
 
@@ -721,10 +826,39 @@ class SPCAnalyzer:
         variance = sum((x - mean) ** 2 for x in data) / (n - 1)
         return math.sqrt(variance)
 
+    @staticmethod
+    def _c4(n: int) -> float:
+        """c4 系数：把子组标准差 s̄ 换算成组内 σ（σ̂ = s̄ / c4）。
+
+        n=2~25 用标准表；超范围时按 Γ 函数精确式计算
+        `c4 = sqrt(2/(n-1)) · Γ(n/2) / Γ((n-1)/2)`。
+        """
+        table = {
+            2: 0.7979, 3: 0.8862, 4: 0.9213, 5: 0.9400, 6: 0.9515,
+            7: 0.9594, 8: 0.9650, 9: 0.9693, 10: 0.9727, 11: 0.9754,
+            12: 0.9776, 13: 0.9794, 14: 0.9810, 15: 0.9823, 16: 0.9835,
+            17: 0.9845, 18: 0.9854, 19: 0.9862, 20: 0.9869, 21: 0.9876,
+            22: 0.9882, 23: 0.9887, 24: 0.9892, 25: 0.9896,
+        }
+        if n in table:
+            return table[n]
+        if n < 2:
+            return 0.0
+        return math.sqrt(2.0 / (n - 1)) * math.exp(
+            math.lgamma(n / 2) - math.lgamma((n - 1) / 2))
+
     # ==================== 查询接口 ====================
 
     def get_control_chart(self, device_id: str, register_name: str) -> dict[str, Any] | None:
-        """获取控制图数据"""
+        """获取控制图数据（按子组大小自动选图）。
+
+        清单 046：原来**无条件**调 `calculate_xbar_r_chart`，而 R 图的
+        A2/D3/D4 系数只定义到 n=10。子组 >10 时 `a2_table.get(n, 0.577)`
+        会静默套用 n=5 的系数 —— 控制限偏窄，正常波动被成批判成异常。
+        X̄-S 图的 A3/B3/B4 覆盖到 n=25，是这一区间的标准选择。
+        """
+        if self.subgroup_size > 10:
+            return self.calculate_xbar_s_chart(device_id, register_name)
         return self.calculate_xbar_r_chart(device_id, register_name)
 
     def get_capability(self, device_id: str, register_name: str) -> dict[str, Any] | None:

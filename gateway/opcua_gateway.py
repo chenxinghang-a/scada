@@ -252,7 +252,7 @@ class OPCUAGateway(BaseGateway):
 
     async def _read_device_data_async(self, client: Any,
                                        node_configs: List[Dict[str, Any]],
-                                       device_id: str = "") -> dict[str, float]:
+                                       device_id: str = "") -> dict[str, float] | None:
         """异步读取OPC UA节点数据"""
         result = {}
 
@@ -280,7 +280,11 @@ class OPCUAGateway(BaseGateway):
                 # round 295：逐点失败此前只打一行日志就从结果里消失
                 self._note_read_failure(device_id, name or node_id, str(e))
 
-        return result
+        # BUG-083：**全部节点都失败时必须返回 None**，不能返回 `{}`。
+        # `BaseGateway._poll_loop` 只判 `data is not None` —— `{}` 会被当成
+        # "读取成功"，断连设备的每轮都发布 `status="running"`，
+        # 看板上明明掉线的设备一直显示运行中。
+        return result or None
 
     def convert_to_telemetry(self, device_id: str, raw_data: dict[str, float]) -> DeviceTelemetry:
         """将原始OPC UA数据转换为统一物模型"""

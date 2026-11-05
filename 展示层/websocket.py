@@ -111,6 +111,11 @@ def _offline_usernames() -> list[str]:
     now = time.monotonic()
     with _clients_lock:
         online = set(_sid_user.values())
+        # BUG-064：这里原来只**过滤**不删除 —— `_known_users` 只增不减，
+        # 长期运行时每个登录过的账号都永久占一个槽，且每条报警都要遍历一遍。
+        for u in [u for u, ts in _known_users.items()
+                  if u not in online and now - ts > OFFLINE_TARGET_TTL]:
+            _known_users.pop(u, None)
         return [
             u for u, last_seen in _known_users.items()
             if u not in online and now - last_seen <= OFFLINE_TARGET_TTL
@@ -172,7 +177,10 @@ def _replay_offline_messages(username: str, send=None) -> dict:
             requeue_failed = 0
             for m in rest:
                 try:
-                    offline_queue.enqueue(username, m.get('event'), m.get('data'))
+                    # BUG-064：priority 必须原样带回（to_dict 已补该字段），
+                    # 否则紧急报警重入队后被降级成 0，队列满时先被丢弃。
+                    offline_queue.enqueue(username, m.get('event'), m.get('data'),
+                                          priority=m.get('priority', 0))
                 except Exception as re_err:
                     # 重新入队失败 = 这条消息真的没了（多半是报警），必须留痕
                     requeue_failed += 1
@@ -595,7 +603,10 @@ def start_data_push_thread(database, data_collector):
                 if client_count == 0:
                     push_interval = MAX_INTERVAL  # 无客户端时降低频率
                 elif client_count > 20:
-                    push_interval = min(BASE_INTERVAL * 2, 5.0)  # 多客户端时适当降频
+                    # BUG-064：上限必须用 MAX_INTERVAL（10s）。原来写死 5.0，
+                    # 若运行时把 BASE_INTERVAL 配成 8s，"降频"反而变成 16→5s，
+                    # 客户端越多推得越快。
+                    push_interval = min(BASE_INTERVAL * 2, MAX_INTERVAL)
                 else:
                     push_interval = BASE_INTERVAL
 

@@ -404,7 +404,14 @@ function updateAlarmBanner(alarm) {
 function playAlarmSound() {
     try {
         // 使用Web Audio API播放简单提示音
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // BUG-093：**必须复用 AudioContext**。原来每次报警都 new 一个，
+        // 且从不 close —— Chromium 单页上限约 6 个，第 7 次报警起
+        // 构造直接抛异常并被 catch 吞掉 → 报警**永久静音**。
+        const audioContext = playAlarmSound._ctx
+            || (playAlarmSound._ctx = new (window.AudioContext || window.webkitAudioContext)());
+        if (audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
         const oscillator = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
         
@@ -580,7 +587,14 @@ async function apiRequest(url, options = {}) {
 
     let response;
     try {
-        response = await fetch(`${API_BASE}${url}`, { ...defaultOptions, ...options });
+        // BUG-094：浅合并会让调用方传的 `headers` **整块覆盖**默认头，
+        // Content-Type / Authorization 一起丢失 → 401 跳登录。
+        // headers 必须单独再合并一层。
+        response = await fetch(`${API_BASE}${url}`, {
+            ...defaultOptions,
+            ...options,
+            headers: { ...defaultOptions.headers, ...(options.headers || {}) },
+        });
     } catch (e) {
         // 网络错误/超时 → 不清token，不跳转
         console.error(`Network error for ${url}:`, e);
@@ -716,12 +730,14 @@ async function loadInitialData() {
         updateSystemStats(status);
         
         // 加载设备列表
+        // BUG-095：apiRequest 在接口异常时统一返回 null，
+        // 直接解构 `null.devices` 会抛 TypeError 并中断后续全部初始化。
         const devices = await apiRequest('/devices');
-        updateDeviceStatusList(devices.devices);
-        
+        updateDeviceStatusList(devices && devices.devices);
+
         // 加载最新报警
         const alarms = await apiRequest('/alarms/active');
-        updateLatestAlarms(alarms.alarms);
+        updateLatestAlarms(alarms && alarms.alarms);
         
     } catch (error) {
         console.error('加载初始数据失败:', error);

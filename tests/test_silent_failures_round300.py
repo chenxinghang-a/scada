@@ -159,6 +159,46 @@ def test_registered_action_still_succeeds():
     assert eng.get_status()['action_failures'] == 0
 
 
+def test_set_alarm_false_result_marked_failed():
+    """BUG-050：回调**明确返回 False** 时必须记失败。
+
+    项目内执行路径失败时都是「返回 False / {'success': False}」而不抛异常；
+    原来 set_alarm / callback 分支完全不看返回值，音柱没响也记 ok=True、
+    trigger_count 照涨、action_failures 不涨。
+    """
+    eng = _engine()
+    eng.register_action('set_alarm', lambda msg, level: False)
+    eng._execute_action({'type': 'set_alarm', 'message': '超温'}, 'rule1', 'rule', {})
+    entry = _last(eng)
+    assert entry['ok'] is False
+    assert '未生效' in entry['result']
+    assert eng.get_status()['action_failures'] == 1
+
+
+def test_callback_false_result_marked_failed():
+    """同上的 callback 分支。"""
+    eng = _engine()
+    eng.register_action('do_thing', lambda snapshot: {'success': False})
+    eng._execute_action({'type': 'callback', 'callback_name': 'do_thing'},
+                        'rule1', 'rule', {})
+    entry = _last(eng)
+    assert entry['ok'] is False
+    assert '未生效' in entry['result']
+    assert eng.get_status()['action_failures'] == 1
+
+
+def test_set_alarm_none_result_still_success():
+    """反向约束：通知类回调返回 None 表示"无结论"，不能当失败。
+
+    否则生产环境每个报警都被记失败、trigger_count 永不增长。
+    """
+    eng = _engine()
+    eng.register_action('set_alarm', lambda msg, level: None)
+    eng._execute_action({'type': 'set_alarm', 'message': '超温'}, 'rule1', 'rule', {})
+    assert _last(eng)['ok'] is True
+    assert eng.get_status()['action_failures'] == 0
+
+
 def test_callback_exception_marked_failed():
     """回调自己抛异常时，日志必须记失败（287 那一族：现场没响、日志说报了警）。"""
     eng = _engine()

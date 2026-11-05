@@ -218,6 +218,16 @@ class DegradationManager:
           - None: 不要求变更
         """
         with self._lock:
+            # BUG-063：`create_app()` 每次调用都会注册一个**新的闭包对象**，
+            # 无条件 append 会让全局单例的触发器列表随测试/重载不断变长，
+            # 每轮监控重复执行同一个健康判定。按限定名去重（闭包对象的
+            # `__qualname__` 相同，`is` 比较则永远不相等）。
+            name = getattr(trigger, '__qualname__', None)
+            if name and any(
+                    getattr(t, '__qualname__', None) == name
+                    for t in self._triggers):
+                logger.debug("降级触发器 %s 已注册，跳过重复注册", name)
+                return
             self._triggers.append(trigger)
         logger.info("注册降级触发器，当前共 %d 个", len(self._triggers))
 

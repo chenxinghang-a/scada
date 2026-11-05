@@ -295,6 +295,9 @@ class AlarmOutput:
             str | bool: 正常路径返回本次输出的日志文案（供调用方记录/测试断言）；
             **DO 写入失败时返回 False**。
 
+        round 370（BUG-034）：真实报警进来时先取消手动测试计时器 ——
+        否则测试时间一到就会 `reset()` 把这条真实报警的声光关掉。
+
             为什么成功返回文案、失败返回 False：`AlarmManager._call_output_method`
             的契约是「显式 False / {'success': False} 才算失败」，返回 None 或任意
             字符串都当成功。此前本方法无论写没写成功都返回文案，于是
@@ -303,6 +306,9 @@ class AlarmOutput:
         """
         if not self.enabled:
             return
+
+        # round 370（BUG-034）：真实报警接管输出，手动测试计时器必须作废
+        self._cancel_manual_timer()
 
         # 同级别报警不重复触发灯控（避免抢灯）；但已确认(消音)后必须放行
         with self._lock:
@@ -442,6 +448,8 @@ class AlarmOutput:
             bool: DO 是否**真的**全部写成功。False 表示软件状态已清零，
             但硬件可能没收到（红灯/蜂鸣器仍在），调用方必须据此告知操作员。
         """
+        # round 370（BUG-034）：复位时顺手取消手动测试计时器
+        self._cancel_manual_timer()
         self._stop_flash()
         self._stop_buzzer()
 
@@ -510,14 +518,43 @@ class AlarmOutput:
         })
 
         if duration > 0:
-            timer = threading.Timer(duration, self.reset)
+            # round 370（BUG-034）：**定时器必须纳管**。
+            # 原来 `threading.Timer(duration, self.reset)` 是个匿名线程，
+            # 谁也拿不到它的句柄 —— 手动测试期间真的来了 CRITICAL 报警，
+            # 测试计时器到点照样调 `self.reset()`，把**真实紧急声光关掉**；
+            # 而且连续两次手动控制会留下两个计时器。
+            self._cancel_manual_timer()
+            timer = threading.Timer(duration, self._on_manual_timeout)
             timer.daemon = True
+            self._manual_timer = timer
             timer.start()
 
         if not ok:
             logger.error("手动输出：DO 写入失败 —— 现场声光可能没有变化，"
                          "请检查 DO 通道与通信链路")
         return {'success': ok, 'output_ok': ok, 'state': self.current_state.copy()}
+
+    def _cancel_manual_timer(self) -> None:
+        """取消手动测试的自动复位计时器（round 370 / BUG-034）。"""
+        timer = getattr(self, '_manual_timer', None)
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception as e:      # noqa: BLE001
+                logger.debug("取消手动测试计时器失败: %s", e)
+            self._manual_timer = None
+
+    def _on_manual_timeout(self) -> None:
+        """手动测试到时**只复位手动状态**，不覆盖正在进行的真实报警。"""
+        self._manual_timer = None
+        try:
+            if self.current_state.get('level') == 'manual':
+                self.reset()
+            else:
+                logger.info("手动测试计时器到期，但当前已有真实报警输出，"
+                            "跳过自动复位（不覆盖紧急报警）")
+        except Exception as e:          # noqa: BLE001
+            logger.error("手动测试到时复位失败: %s", e)
 
     # ==================== 蜂鸣器脉冲控制 ====================
 
@@ -632,8 +669,10 @@ class AlarmOutput:
         Returns:
             是否成功
         """
-        result = self.trigger_alarm(level=level, message=message)
-        return result is not None
+        # round 370（BUG-033）：`is not None` 把 False 判成成功。
+        # `trigger_alarm` 在 DO 写失败/手动模式/未连接时明确返回 False，
+        # 上层（联锁、报警引擎）据此以为声光已动作，实际现场一片安静。
+        return bool(self.trigger_alarm(level=level, message=message))
 
     # ==================== 状态查询 ====================
 

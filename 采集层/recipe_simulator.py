@@ -120,9 +120,12 @@ class RecipeSimulator:
         self.recipe = recipe
         self.behavior_simulator = behavior_simulator
         self.current_phase_index = 0
-        self.phase_start_time = time.time()
+        self.phase_start_time = time.monotonic()
         self.is_running = False
-        self._lock = threading.Lock()
+        # round 370：改 RLock —— `_advance_phase()` 在持锁状态下直接调用
+        # `_completion_callback`，回调里若查一下状态（get_status/current_setpoints）
+        # 就会对同一把非可重入锁再上锁 → 整个配方线程永久卡死。
+        self._lock = threading.RLock()
         self._completion_callback: Optional[Callable] = None
         self._cycle_count = 0
         self._history: List[dict] = []
@@ -137,7 +140,7 @@ class RecipeSimulator:
         """开始配方执行"""
         with self._lock:
             self.current_phase_index = 0
-            self.phase_start_time = time.time()
+            self.phase_start_time = time.monotonic()
             self.is_running = True
             logger.info(f"配方 '{self.recipe.name}' 开始执行")
 
@@ -168,12 +171,12 @@ class RecipeSimulator:
         """进入下一阶段"""
         self._history.append({
             'phase': self.current_phase.name,
-            'duration': time.time() - self.phase_start_time,
+            'duration': time.monotonic() - self.phase_start_time,
             'time': time.time()
         })
 
         self.current_phase_index += 1
-        self.phase_start_time = time.time()
+        self.phase_start_time = time.monotonic()
 
         if self.current_phase_index >= len(self.recipe.phases):
             self.is_running = False
@@ -209,7 +212,7 @@ class RecipeSimulator:
         """获取配方状态"""
         with self._lock:
             phase = self.current_phase
-            elapsed = time.time() - self.phase_start_time if self.is_running else 0
+            elapsed = time.monotonic() - self.phase_start_time if self.is_running else 0
             return {
                 'recipe': self.recipe.name,
                 'phase': phase.name if phase else 'idle',
@@ -217,7 +220,10 @@ class RecipeSimulator:
                 'total_phases': len(self.recipe.phases),
                 'elapsed': round(elapsed, 1),
                 'duration': phase.duration if phase else 0,
-                'progress': round(min(1.0, elapsed / phase.duration) * 100, 1) if phase else 0,
+                # round 370：duration 可能为 0（阶段只写 setpoints 不写时长），
+                # 直接除会抛 ZeroDivisionError，把 /recipe/status 变成 500。
+                'progress': (round(min(1.0, elapsed / phase.duration) * 100, 1)
+                             if phase and phase.duration > 0 else 0),
                 'is_running': self.is_running,
                 'cycle_count': self._cycle_count,
                 'setpoints': self.get_current_setpoints(),

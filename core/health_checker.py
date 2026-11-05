@@ -42,8 +42,11 @@ class HealthCheck:
         self._history_lock = threading.Lock()
         self.history = []
         self.max_history = 100
-        # 当前正在执行检查的守护线程（用于检测上一次检查是否卡死）
+        # 当前正在执行检查的守护线程（仅用于观测/排障，不作为并发判据 ——
+        # 判据必须用 `_run_lock`，见 BUG-069）
         self._worker: Optional[threading.Thread] = None
+        #: 同一检查项的并发闸门：`run()` 拿到锁才执行，拿不到说明上一次还没结束。
+        self._run_lock = threading.Lock()
 
     def _record_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """记录检查结果到状态与历史"""
@@ -67,17 +70,40 @@ class HealthCheck:
         Returns:
             检查结果
         """
-        start_time = time.monotonic()
-
-        # 上一次检查仍未返回（检查函数卡死）：不再叠加新线程，直接判定超时
-        if self._worker is not None and self._worker.is_alive():
-            return self._record_result({
-                'status': HealthStatus.UNHEALTHY,
-                'message': f'健康检查超时（{self.timeout}秒），上一次检查仍未结束',
-                'details': {'error': 'TimeoutError'},
+        # BUG-069：**并发判据不能用 `self._worker`**。
+        # 定时巡检线程与 `/api/health/checks` 请求打的是同一个 HealthCheck 实例：
+        # A 刚把线程赋给 `self._worker`，B 立刻看到 "有线程在跑" → 直接谎报
+        # `UNHEALTHY: Health check timed out`，而检查其实一切正常。
+        # 用非阻塞锁做真实互斥；拿不到锁才是"上一次未结束"。
+        if not self._run_lock.acquire(blocking=False):
+            # 另一线程正在**正常执行**同一检查项：这是"进行中"，不是失败。
+            # 原来这种情况被记成 UNHEALTHY + TimeoutError（谎报故障）。
+            # 不写历史（`_record_result`），避免把"跳过"污染成检查结果。
+            return {
+                'status': HealthStatus.UNKNOWN,
+                'message': f'检查 {self.name} 正在进行中，本次跳过',
+                'details': {'skipped': True},
                 'duration': 0.0,
-                'timestamp': datetime.now().isoformat()
-            })
+                'timestamp': datetime.now().isoformat(),
+            }
+        try:
+            # 上一次的线程仍然卡着（已超时退出但函数没返回）：不再叠加新线程，
+            # 立即判超时 —— 这是真正的故障，与上面的"并发进行中"要区分开。
+            if self._worker is not None and self._worker.is_alive():
+                return self._record_result({
+                    'status': HealthStatus.UNHEALTHY,
+                    'message': f'健康检查超时（{self.timeout}秒），上一次检查仍未结束',
+                    'details': {'error': 'TimeoutError'},
+                    'duration': 0.0,
+                    'timestamp': datetime.now().isoformat()
+                })
+            return self._run_locked()
+        finally:
+            self._run_lock.release()
+
+    def _run_locked(self) -> Dict[str, Any]:
+        """`run()` 的实际执行体（调用方必须已持有 `_run_lock`）。"""
+        start_time = time.monotonic()
 
         outcome: Dict[str, Any] = {}
 
@@ -90,14 +116,15 @@ class HealthCheck:
         # 用守护线程执行：join(timeout) 到点即返回，守护线程不会阻塞进程退出。
         # 不能用 `with ThreadPoolExecutor(...)`：其 __exit__ 会 shutdown(wait=True)，
         # 卡死的检查函数会让超时形同虚设、run() 永久阻塞。
-        self._worker = threading.Thread(
+        worker = threading.Thread(
             target=_target, daemon=True, name=f'health-check-{self.name}')
-        self._worker.start()
-        self._worker.join(timeout=self.timeout)
+        self._worker = worker      # 仅供排障观测，不参与并发判定
+        worker.start()
+        worker.join(timeout=self.timeout)
 
         duration = time.monotonic() - start_time
 
-        if self._worker.is_alive():
+        if worker.is_alive():
             # 超时：明确标记为不健康，不静默忽略
             return self._record_result({
                 'status': HealthStatus.UNHEALTHY,
@@ -427,7 +454,7 @@ class HealthChecker:
         if database:
             cls.register(
                 'device_freshness',
-                lambda: _check_device_freshness(database),
+                lambda: _check_device_freshness(database, device_manager),
                 interval=30,
             )
 
@@ -504,19 +531,38 @@ def _check_backup_readiness():
             'details': details}
 
 
-def _check_device_freshness(database):
+def _check_device_freshness(database, device_manager=None):
     """逐设备的数据新鲜度（单台失联在这里必须能看见）。
 
     与 `_check_data_freshness` 的区别：后者看 `MAX(timestamp)`（全库最新一条），
     25 台设备只要有一台在写就一直"新鲜"。这里按设备看。
+
+    BUG-068：① 慢速设备要按自己的 `collection_interval` 判（否则 60s 周期的
+    设备每 30s 被误报一次失联）；② 必须过滤"已删除设备"的残留历史，
+    否则删过设备之后 `/api/health/status` 永久 DEGRADED 且永远回不去。
     """
     from core.freshness_watch import scan
 
+    device_intervals: dict[str, float] = {}
+    known_devices = None
+    if device_manager is not None:
+        devices = getattr(device_manager, 'devices', None) or {}
+        known_devices = set(devices)
+        for did, cfg in devices.items():
+            if isinstance(cfg, dict):
+                interval = cfg.get('collection_interval')
+                if interval is not None:
+                    device_intervals[did] = interval
+
     try:
-        snapshot = scan(database)
+        snapshot = scan(database, device_intervals=device_intervals)
     except Exception as e:      # noqa: BLE001 —— 查不了库本身要报出来
         return {'status': HealthStatus.UNHEALTHY,
                 'message': f'逐设备新鲜度检查失败: {e}'}
+
+    if known_devices is not None:
+        snapshot = {dev: info for dev, info in snapshot.items()
+                    if dev in known_devices}
 
     if not snapshot:
         return {'status': HealthStatus.UNKNOWN,

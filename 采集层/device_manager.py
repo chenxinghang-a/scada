@@ -21,6 +21,23 @@ import paths
 logger = logging.getLogger(__name__)
 
 
+def _device_stopped_state(device_id: str, client: Any) -> bool:
+    """设备是否处于「单台停止 / 急停」状态。
+
+    round 370（BUG-022）：真实客户端没有 `stopped` 属性，原来
+    `getattr(client, 'stopped', False)` 恒为 False。停机标志的**真源**是
+    `采集层.simulated_client` 里的全局表（急停与单台停止都写在那里），
+    这里优先读它，取不到才退回客户端属性。
+    """
+    try:
+        from .simulated_client import is_device_stopped
+        if is_device_stopped(device_id):
+            return True
+    except Exception as e:      # noqa: BLE001 —— 状态查询不该因导入/实现差异失败
+        logger.debug("读取停机标志失败 %s: %s", device_id, e)
+    return bool(getattr(client, 'stopped', False))
+
+
 # ---- 协议工厂：根据protocol字段自动选择客户端 ----
 def _create_client(config: dict[str, Any], simulation_mode: bool, use_enhanced: bool = True):
     """
@@ -87,6 +104,23 @@ def _create_client(config: dict[str, Any], simulation_mode: bool, use_enhanced: 
             from .rest_client import RESTDeviceClient
             return RESTDeviceClient(config)
 
+    elif protocol in ('mc', 'fins'):
+        # round 370（BUG-022）：三菱 MC / 欧姆龙 FINS 已在客户端层实现，
+        # 但工厂与 SUPPORTED_PROTOCOLS 都没收它们 —— 配置里写 protocol: mc
+        # 会被判"不支持的协议"直接拒绝，现场三菱/欧姆龙设备根本接不进来。
+        if simulation_mode:
+            # 两者都是寄存器语义，模拟时复用 Modbus 模拟器（地址/类型一致）
+            if use_enhanced:
+                from .enhanced_simulated_client import EnhancedSimulatedModbusClient
+                return EnhancedSimulatedModbusClient(config)
+            from .simulated_client import SimulatedModbusClient
+            return SimulatedModbusClient(config)
+        if protocol == 'mc':
+            from .mc_client import MCClient
+            return MCClient(config)
+        from .fins_client import FINSClient
+        return FINSClient(config)
+
     else:
         logger.error(f"不支持的协议类型: {protocol}")
         return None
@@ -105,7 +139,9 @@ class DeviceManager:
     """
 
     # 支持的协议列表
-    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest']
+    #: round 370（BUG-022）：补 mc / fins —— 与 `_create_client` 的分支保持一致。
+    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest',
+                           'mc', 'fins']
 
     def __init__(self, config_path: str | None = None, simulation_mode: bool = True, use_enhanced_simulation: bool = True):
         """
@@ -299,6 +335,11 @@ class DeviceManager:
 
         with self._lock:
             self.devices = new_devices
+            # round 370（BUG-022）：配置变了，5 秒 TTL 的状态缓存必须失效。
+            # 否则改完设备地址后，前 5 秒 `get_device_status()` 还回旧连接状态，
+            # 前端"已连接"与现场对不上。
+            self._status_cache.clear()
+            self._status_cache_time.clear()
 
         new_ids = set(self.devices.keys())
 
@@ -511,6 +552,9 @@ class DeviceManager:
 
         # 4. 更新模式标志
         self.simulation_mode = new_mode
+        # round 370（BUG-022）：模式切换后旧状态缓存全部作废
+        self._status_cache.clear()
+        self._status_cache_time.clear()
 
         # 5. 重新连接所有设备
         results = self.connect_all()
@@ -603,7 +647,9 @@ class DeviceManager:
                             logger.debug(f"设备 {device_id} 自动重连失败: {e}")
 
             status['connected'] = getattr(client, 'connected', False)
-            status['stopped'] = getattr(client, 'stopped', False)
+            # round 370（BUG-022）：真实客户端没有 `stopped` 属性，
+            # 原来 getattr 兜底恒为 False —— 真机停机后界面仍显示"运行中"。
+            status['stopped'] = _device_stopped_state(device_id, client)
             status['stats'] = getattr(client, 'stats', {})
 
         # 更新缓存
@@ -638,14 +684,19 @@ class DeviceManager:
             'name': device_config.get('name', device_id),
             'zone': device_config.get('zone', ''),
             'connected': connected,
-            'stopped': getattr(client, 'stopped', False) if client else False,
+            # round 370（BUG-022）：同上，用管理器的停机标志而不是客户端属性
+            'stopped': _device_stopped_state(device_id, client),
             'status': 'online' if connected else 'offline',
             'protocol': device_config.get('protocol', 'modbus_tcp'),
             'host': device_config.get('host', device_config.get('endpoint', '')),
             'device_category': IDeviceManager.get_device_category(device_config),
             'registers': [{'name': r.get('name', ''), 'unit': r.get('unit', '')} for r in regs],
             'nodes': [{'name': n.get('name', ''), 'unit': n.get('unit', '')} for n in nodes],
-            'topics': [{'name': t.get('name', ''), 'unit': t.get('unit', '')} for t in topics],
+            # round 370（BUG-021）：topics 允许裸字符串，直接 .get 会 AttributeError
+            'topics': [{'name': (t.get('name', '') if isinstance(t, dict)
+                                 else str(t).rsplit('/', 1)[-1]),
+                        'unit': (t.get('unit', '') if isinstance(t, dict) else '')}
+                       for t in topics],
             'endpoints': [{'name': e.get('name', ''), 'unit': e.get('unit', '')} for e in endpoints],
         }
 

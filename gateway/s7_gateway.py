@@ -42,6 +42,18 @@ except ImportError:
         "python-snap7未安装，S7网关不可用。安装: pip install python-snap7"
     )
 
+    # BUG-084：布尔位编解码**不需要** snap7（就是移位/掩码）。
+    # 没有这两个兜底时，bool 分支会抛 `name 'set_bool' is not defined` ——
+    # 被 except 吞成"S7写入失败"，看板上就是"这个位怎么都写不进去"。
+    def get_bool(data, byte_index: int, bit_index: int) -> bool:
+        return bool((data[byte_index] >> bit_index) & 0x01)
+
+    def set_bool(data, byte_index: int, bit_index: int, value: bool) -> None:
+        if value:
+            data[byte_index] |= (1 << bit_index)
+        else:
+            data[byte_index] &= (~(1 << bit_index)) & 0xFF
+
 
 class S7Gateway(BaseGateway):
     """
@@ -180,8 +192,13 @@ class S7Gateway(BaseGateway):
             offset = reg_config.get('offset', 0)
             data_type = reg_config.get('type', 'real')
 
+            # BUG-084：DBX 布尔量要按位读。原来 `float(data[0])` 把整个字节
+            # 当值 —— 同字节其它位为 1 时读出 128.0，联锁判据完全错。
+            bit_offset = reg_config.get('bit', reg_config.get('bit_offset', 0))
+
             try:
-                value = self._read_register(client, db_number, offset, data_type)
+                value = self._read_register(client, db_number, offset, data_type,
+                                            bit_offset=bit_offset)
                 if value is not None:
                     result[name] = value
                 else:
@@ -194,7 +211,7 @@ class S7Gateway(BaseGateway):
         return result if result else None
 
     def _read_register(self, client, db_number: int, offset: int,
-                       data_type: str) -> float | None:
+                       data_type: str, bit_offset: int = 0) -> float | None:
         """
         读取单个S7寄存器
 
@@ -231,7 +248,7 @@ class S7Gateway(BaseGateway):
             elif data_type == 'byte':
                 return float(get_byte(data, 0))
             elif data_type == 'bool':
-                return float(data[0])
+                return float(get_bool(data, 0, bit_offset))
             else:
                 self.logger.error(f"不支持的S7数据类型: {data_type}")
                 return None
@@ -282,7 +299,8 @@ class S7Gateway(BaseGateway):
         return False
 
     def write_register(self, device_id: str, db_number: int, offset: int,
-                       value: float, data_type: str = 'real') -> bool:
+                       value: float, data_type: str = 'real',
+                       bit_offset: int = 0) -> bool:
         """
         写入S7寄存器（用于设备控制）
 
@@ -317,8 +335,12 @@ class S7Gateway(BaseGateway):
             elif data_type in ('bool', 'boolean'):
                 # round 369：`_read_register` 支持 bool，`write_register` 却漏了
                 # 这个分支 —— S7 DB 块的布尔量（启动位/阀门位）根本写不进去。
-                data = bytearray(1)
-                set_bool(data, 0, 0, bool(value))
+                #
+                # BUG-084：**必须读-改-写**。构造全零 bytearray 再整字节 db_write，
+                # 会把同字节另外 7 个布尔位一起清零 —— 写一个阀门位 =
+                # 悄悄关掉同一字节里的 7 个设备。
+                data = bytearray(client.db_read(db_number, offset, 1))
+                set_bool(data, 0, bit_offset, bool(value))
             else:
                 self.logger.error(f"不支持的S7写入类型: {data_type}")
                 return False

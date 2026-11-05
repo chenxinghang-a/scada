@@ -220,6 +220,12 @@ class EdgeDecisionEngine:
             ordered_rules = sorted(
                 self.rules.items(), key=lambda kv: kv[1].get('priority', 10)
             )
+            # BUG-050：PID 也要在锁内取快照。原来这一句是锁外裸遍历
+            # `self.pid_controllers.items()`，而 add/remove_pid 不持锁 →
+            # 并发时抛 `RuntimeError: dictionary changed size during iteration`，
+            # 该异常从锁内抛出后被 `_decision_loop` 整轮捕获 ——
+            # 连着已经算好的联锁一起跳过（含 0 级急停），不只是丢 PID。
+            ordered_pids = list(self.pid_controllers.items())
 
         # 1. 安全联锁（最高优先级）
         for rule_id, rule in ordered_interlocks:
@@ -241,8 +247,8 @@ class EdgeDecisionEngine:
             except Exception as e:
                 logger.error(f"决策规则 {rule_id} 执行异常: {e}")
 
-        # 3. PID控制
-        for ctrl_id, ctrl in self.pid_controllers.items():
+        # 3. PID控制（遍历锁内快照，见上）
+        for ctrl_id, ctrl in ordered_pids:
             if not ctrl.get('enabled', True):
                 continue
             try:
@@ -271,7 +277,8 @@ class EdgeDecisionEngine:
             action_name: 动作名称
             callback: 回调函数 callback(device_id, register_name, value)
         """
-        self._action_callbacks[action_name] = callback
+        with self._lock:
+            self._action_callbacks[action_name] = callback
         logger.info(f"注册决策动作: {action_name}")
 
     # ==================== 规则管理 ====================
@@ -302,16 +309,20 @@ class EdgeDecisionEngine:
             priority: 优先级（数字越小优先级越高）
             enabled: 是否启用
         """
-        self.rules[rule_id] = {
-            'name': name or rule_id,
-            'condition': condition,
-            'action': action,
-            'priority': priority,
-            'enabled': enabled,
-            'created_at': datetime.now().isoformat(),
-            'last_triggered': None,
-            'trigger_count': 0,
-        }
+        # BUG-050：写方必须持锁。`_execute_cycle` 在锁内 `sorted(self.rules.items())`，
+        # 但写方不持锁 → 那把锁形同虚设，并发时 `RuntimeError` 会让整轮
+        # （含安全联锁）被跳过。
+        with self._lock:
+            self.rules[rule_id] = {
+                'name': name or rule_id,
+                'condition': condition,
+                'action': action,
+                'priority': priority,
+                'enabled': enabled,
+                'created_at': datetime.now().isoformat(),
+                'last_triggered': None,
+                'trigger_count': 0,
+            }
         logger.info(f"添加决策规则: {rule_id} - {name}")
 
     def add_interlock(self, interlock_id: str, condition: dict[str, Any], action: dict[str, Any],
@@ -323,16 +334,18 @@ class EdgeDecisionEngine:
         同类联锁之间也支持 priority 排序（数字越小越先执行），用于把
         "急停/烟感" 这类 0 级安全动作排在 "门禁" 这类降级动作之前。
         """
-        self.interlocks[interlock_id] = {
-            'name': name or interlock_id,
-            'condition': condition,
-            'action': action,
-            'priority': priority,
-            'enabled': enabled,
-            'created_at': datetime.now().isoformat(),
-            'last_triggered': None,
-            'trigger_count': 0,
-        }
+        # BUG-050：与 add_rule 同口径 —— 联锁字典同样是工作线程的遍历对象。
+        with self._lock:
+            self.interlocks[interlock_id] = {
+                'name': name or interlock_id,
+                'condition': condition,
+                'action': action,
+                'priority': priority,
+                'enabled': enabled,
+                'created_at': datetime.now().isoformat(),
+                'last_triggered': None,
+                'trigger_count': 0,
+            }
         logger.info(f"添加安全联锁: {interlock_id} - {name} (priority={priority})")
 
     def add_pid_controller(self, ctrl_id: str, input_key: str, output_key: str,
@@ -354,36 +367,40 @@ class EdgeDecisionEngine:
             output_min: 输出下限
             output_max: 输出上限
         """
-        self.pid_controllers[ctrl_id] = {
-            'name': name or ctrl_id,
-            'input_key': input_key,
-            'output_key': output_key,
-            'setpoint': setpoint,
-            'kp': kp,
-            'ki': ki,
-            'kd': kd,
-            'output_min': output_min,
-            'output_max': output_max,
-            'enabled': enabled,
-            'integral': 0,
-            'prev_error': 0,
-            # round 300：PID 的 dt 必须用**单调时钟**。
-            # 原来存 time.time()（墙钟），NTP 校时往前跳 1 小时 → dt=3600
-            # → 积分项一秒钟打满限幅、输出直接顶到 output_max；
-            # 往后跳则 dt<=0 被 return 吞掉，控制静默丢拍。
-            # 这个值只活在本进程内存里，不落盘、不做跨机比较，换单调时钟无副作用。
-            'prev_time': time.monotonic(),
-            'output': 0,
-        }
+        with self._lock:
+            self.pid_controllers[ctrl_id] = {
+                'name': name or ctrl_id,
+                'input_key': input_key,
+                'output_key': output_key,
+                'setpoint': setpoint,
+                'kp': kp,
+                'ki': ki,
+                'kd': kd,
+                'output_min': output_min,
+                'output_max': output_max,
+                'enabled': enabled,
+                'integral': 0,
+                'prev_error': 0,
+                # round 300：PID 的 dt 必须用**单调时钟**。
+                # 原来存 time.time()（墙钟），NTP 校时往前跳 1 小时 → dt=3600
+                # → 积分项一秒钟打满限幅、输出直接顶到 output_max；
+                # 往后跳则 dt<=0 被 return 吞掉，控制静默丢拍。
+                # 这个值只活在本进程内存里，不落盘、不做跨机比较，换单调时钟无副作用。
+                'prev_time': time.monotonic(),
+                'output': 0,
+            }
         logger.info(f"添加PID控制器: {ctrl_id} - {name} (SP={setpoint})")
 
     def remove_rule(self, rule_id: str):
         """删除规则"""
-        self.rules.pop(rule_id, None)
+        # BUG-050：与 add_rule 同锁 —— 删除同样会改变字典大小。
+        with self._lock:
+            self.rules.pop(rule_id, None)
 
     def remove_interlock(self, interlock_id: str):
         """删除联锁"""
-        self.interlocks.pop(interlock_id, None)
+        with self._lock:
+            self.interlocks.pop(interlock_id, None)
 
     # ==================== 条件评估 ====================
 
@@ -474,8 +491,7 @@ class EdgeDecisionEngine:
                 # "PLC 拒写"记成 ok=True，触发计数照涨，看板上像是闭环生效了。
                 res = self._action_callbacks['write_register'](
                     device_id, register_name, value)
-                if res is False or (isinstance(res, dict)
-                                    and res.get('success') is False):
+                if self._action_failed(res):
                     log_entry['ok'] = False
                     log_entry['result'] = (
                         f'写入未生效: {target} = {value}（底层返回 {res!r}）')
@@ -498,8 +514,18 @@ class EdgeDecisionEngine:
             # round 300：回调抛异常时不许再写「报警: xxx」——
             # 现场音柱没响、日志说报了警，正是 287 那一族的老毛病。
             try:
-                callback(alarm_msg, action.get('level', 'warning'))
-                log_entry['result'] = f'报警: {alarm_msg}'
+                # BUG-050：`set_alarm` 原来不看返回值 —— 音柱/广播链路返回
+                # False 时仍然记 `ok=True`、`trigger_count` 照涨、失败数不涨，
+                # 看板显示「联锁已触发」，现场一声没响。
+                res = callback(alarm_msg, action.get('level', 'warning'))
+                if self._action_failed(res):
+                    log_entry['ok'] = False
+                    log_entry['result'] = f'报警未生效: {alarm_msg}（底层返回 {res!r}）'
+                    with self._lock:
+                        self._action_failures += 1
+                    logger.error("set_alarm 回调返回失败: %r", res)
+                else:
+                    log_entry['result'] = f'报警: {alarm_msg}'
             except Exception as e:      # noqa: BLE001 —— 动作失败不许拖垮决策循环
                 log_entry['ok'] = False
                 log_entry['result'] = f'报警失败: {e}'
@@ -511,8 +537,17 @@ class EdgeDecisionEngine:
             callback_name = action.get('callback_name', '')
             callback = self._action_callbacks[callback_name]
             try:
-                callback(snapshot)
-                log_entry['result'] = f'回调: {callback_name}'
+                # BUG-050：同上，回调返回 False 也算没生效。
+                res = callback(snapshot)
+                if self._action_failed(res):
+                    log_entry['ok'] = False
+                    log_entry['result'] = (
+                        f'回调未生效: {callback_name}（底层返回 {res!r}）')
+                    with self._lock:
+                        self._action_failures += 1
+                    logger.error("回调 %s 返回失败: %r", callback_name, res)
+                else:
+                    log_entry['result'] = f'回调: {callback_name}'
             except Exception as e:      # noqa: BLE001
                 log_entry['ok'] = False
                 log_entry['result'] = f'回调失败: {callback_name}: {e}'
@@ -540,6 +575,17 @@ class EdgeDecisionEngine:
         else:
             logger.warning(f"[{rule_type.upper()}] {rule_id}: 动作未生效 — "
                            f"{log_entry.get('result', '')}")
+
+    @staticmethod
+    def _action_failed(result: Any) -> bool:
+        """动作回调的返回值是否表示「没生效」（round 369 口径，BUG-050 补齐）。
+
+        项目内所有写/执行路径失败时都是**返回 False 或 `{'success': False}`**，
+        不抛异常。`None` 不能算失败 —— 通知类回调（如 `lambda msg, level: ...`）
+        本来就不返回结论，否则每次报警都会被记成失败、`trigger_count` 永不增长。
+        """
+        return result is False or (
+            isinstance(result, dict) and result.get('success') is False)
 
     def _execute_pid(self, ctrl_id: str, ctrl: dict[str, Any], snapshot: dict[str, Any]):
         """执行PID控制计算"""

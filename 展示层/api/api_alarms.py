@@ -413,6 +413,14 @@ def add_alarm_rule():
     manager = current_app.alarm_manager
     with manager._state_lock:
         manager.rules[data['id']] = data
+        # BUG-030：死区表必须与 rules 同步。`_check_condition` 只读
+        # `_deadbands`，API 新增规则时不同步 → YAML 里写的 deadband 不生效
+        # （报警在阈值附近来回抖动、刷屏）。NaN/非法值一律按「无死区」处理。
+        _db = try_finite_float(data.get('deadband'))
+        if _db and _db > 0:
+            manager._deadbands[data['id']] = _db
+        else:
+            manager._deadbands.pop(data['id'], None)
         manager._rebuild_rules_index()
     get_auth_manager().log_operation(
         request.current_user['username'], 'add_alarm_rule', f"添加报警规则: {data['id']}")
@@ -456,6 +464,12 @@ def update_alarm_rule(rule_id):
 
     with manager._state_lock:
         manager.rules[rule_id] = new_rule
+        # BUG-030：改规则同样要同步死区（改大改小、改成 0 都要落到 _deadbands）。
+        _db = try_finite_float(new_rule.get('deadband'))
+        if _db and _db > 0:
+            manager._deadbands[rule_id] = _db
+        else:
+            manager._deadbands.pop(rule_id, None)
         manager._rebuild_rules_index()
 
     # round 358：**改成 `enabled: false` 与「删规则」是同一件事** ——
@@ -518,6 +532,9 @@ def delete_alarm_rule(rule_id):
     if rule_id in manager.rules:
         with manager._state_lock:
             del manager.rules[rule_id]
+            # BUG-030：删规则要连带清死区，否则 `_deadbands` 只增不减；
+            # 同名规则重建时还会继承一条陈旧的死区配置。
+            manager._deadbands.pop(rule_id, None)
             manager._rebuild_rules_index()
 
         # round 358：**删规则必须连带收尾它的活跃报警**。
@@ -676,6 +693,12 @@ def update_alarm_output_config():
     alarm_manager = current_app.alarm_manager
     if alarm_manager.alarm_output:
         ao = alarm_manager.alarm_output
+        # BUG-054：**运行时开关也要跟着改**。`AlarmOutputController.activate_alarm`
+        # 判的是 `self.enabled`（构造期从 config 读一次），只改 YAML 不改它 ——
+        # 界面上"关闭声光"保存成功，现场照样响（或反之）。
+        if 'enabled' in data:
+            ao.enabled = bool(data['enabled'])
+            ao.config['enabled'] = ao.enabled
         tower_cfg = alarm_output.get('signal_tower', {})
         if 'host' in tower_cfg:
             ao.config.setdefault('modbus', {})['host'] = tower_cfg['host']

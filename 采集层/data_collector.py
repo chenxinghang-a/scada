@@ -949,7 +949,10 @@ class DataCollector:
 
         if not device_config.get('enabled', True):
             logger.info(f"设备 {device_id} 已禁用，跳过采集启动")
-            return
+            # round 370：契约是 `-> bool`，裸 `return` 返回 None，
+            # 调用方 `if not start_device_task(...)` 虽能判假，但
+            # `result is False` 的写法会漏判（None is False == False）。
+            return False
 
         with self._tasks_lock:
             if device_id in self.tasks:

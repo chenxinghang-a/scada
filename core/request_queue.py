@@ -21,7 +21,7 @@ import threading
 from queue import Queue, Empty
 from typing import Any, Callable, Optional
 from functools import wraps
-from flask import jsonify, request
+from flask import current_app, jsonify, request
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,25 @@ def queued_task(queue: RequestQueue):
     def decorator(f):
         @wraps(f)
         def decorated(*args, **kwargs):
-            task_id = queue.submit(f, *args, **kwargs)
+            # BUG-074：后台线程**没有 Flask 请求上下文**。原来直接把视图函数
+            # 丢进队列，视图里一碰 `request` / `jsonify` 就抛
+            # "Working outside of request context"。这里把当前请求快照下来，
+            # 在工作线程里用 `test_request_context` 重建。
+            app = current_app._get_current_object()
+            _path = request.path
+            _method = request.method
+            _query = request.query_string
+            try:
+                _json = request.get_json(silent=True)
+            except Exception:       # noqa: BLE001 —— 非 JSON 请求
+                _json = None
+
+            def _runner(*a, **kw):
+                with app.test_request_context(
+                        _path, method=_method, query_string=_query, json=_json):
+                    return f(*a, **kw)
+
+            task_id = queue.submit(_runner, *args, **kwargs)
             status = queue.get_status(task_id)
 
             # round 369：**只把「入队就失败」当 503**。
@@ -238,7 +256,10 @@ def queued_task(queue: RequestQueue):
                 'message': '任务已提交',
                 'task_id': task_id,
                 'queue_position': status.get('queue_position', 0) if status else 0,
-                'status_url': f'/api/tasks/{task_id}',
+                # BUG-074：实际路由是 `/api/health/tasks/<task_id>`
+                # （api_health.py 的 `url_prefix='/api/health'`）。
+                # 原来返回 `/api/tasks/...`，客户端轮询恒 404。
+                'status_url': f'/api/health/tasks/{task_id}',
             }), 202
 
         return decorated

@@ -105,9 +105,10 @@ class TestInterlocks:
             'name': 'High Temp',
             'device_id': 'dev1',
             'register_name': 'temp',
-            'condition': 'greater_than',
-            'threshold': 80.0,
-            'action': 'stop',
+            # round 370：改用与 `interlocks.yaml` 一致的结构化规则
+            'condition': {'type': 'threshold', 'device_id': 'dev1',
+                          'register': 'temp', 'operator': 'gt', 'value': 80.0},
+            'action': {'type': 'emergency_stop', 'device_id': 'dev1'},
             'enabled': True
         }
         result = device_control.add_interlock(rule)
@@ -121,9 +122,10 @@ class TestInterlocks:
             'name': 'High Temp',
             'device_id': 'dev1',
             'register_name': 'temp',
-            'condition': 'greater_than',
-            'threshold': 80.0,
-            'action': 'stop',
+            # round 370：改用与 `interlocks.yaml` 一致的结构化规则
+            'condition': {'type': 'threshold', 'device_id': 'dev1',
+                          'register': 'temp', 'operator': 'gt', 'value': 80.0},
+            'action': {'type': 'emergency_stop', 'device_id': 'dev1'},
             'enabled': True
         }
         device_control.add_interlock(rule)
@@ -143,9 +145,10 @@ class TestInterlocks:
             'name': 'High Temp',
             'device_id': 'dev1',
             'register_name': 'temp',
-            'condition': 'greater_than',
-            'threshold': 80.0,
-            'action': 'stop',
+            # round 370：改用与 `interlocks.yaml` 一致的结构化规则
+            'condition': {'type': 'threshold', 'device_id': 'dev1',
+                          'register': 'temp', 'operator': 'gt', 'value': 80.0},
+            'action': {'type': 'emergency_stop', 'device_id': 'dev1'},
             'enabled': True
         }
         device_control.add_interlock(rule)
@@ -159,9 +162,10 @@ class TestInterlocks:
             'name': 'High Temp',
             'device_id': 'dev1',
             'register_name': 'temp',
-            'condition': 'greater_than',
-            'threshold': 80.0,
-            'action': 'stop',
+            # round 370：改用与 `interlocks.yaml` 一致的结构化规则
+            'condition': {'type': 'threshold', 'device_id': 'dev1',
+                          'register': 'temp', 'operator': 'gt', 'value': 80.0},
+            'action': {'type': 'emergency_stop', 'device_id': 'dev1'},
             'enabled': True
         }
         device_control.add_interlock(rule)
@@ -180,9 +184,10 @@ class TestBypassRequest:
             'name': 'High Temp',
             'device_id': 'dev1',
             'register_name': 'temp',
-            'condition': 'greater_than',
-            'threshold': 80.0,
-            'action': 'stop',
+            # round 370：改用与 `interlocks.yaml` 一致的结构化规则
+            'condition': {'type': 'threshold', 'device_id': 'dev1',
+                          'register': 'temp', 'operator': 'gt', 'value': 80.0},
+            'action': {'type': 'emergency_stop', 'device_id': 'dev1'},
             'enabled': True
         }
         device_control.add_interlock(rule)
@@ -196,9 +201,10 @@ class TestBypassRequest:
             'name': 'High Temp',
             'device_id': 'dev1',
             'register_name': 'temp',
-            'condition': 'greater_than',
-            'threshold': 80.0,
-            'action': 'stop',
+            # round 370：改用与 `interlocks.yaml` 一致的结构化规则
+            'condition': {'type': 'threshold', 'device_id': 'dev1',
+                          'register': 'temp', 'operator': 'gt', 'value': 80.0},
+            'action': {'type': 'emergency_stop', 'device_id': 'dev1'},
             'enabled': True
         }
         device_control.add_interlock(rule)
@@ -213,9 +219,10 @@ class TestBypassRequest:
             'name': 'High Temp',
             'device_id': 'dev1',
             'register_name': 'temp',
-            'condition': 'greater_than',
-            'threshold': 80.0,
-            'action': 'stop',
+            # round 370：改用与 `interlocks.yaml` 一致的结构化规则
+            'condition': {'type': 'threshold', 'device_id': 'dev1',
+                          'register': 'temp', 'operator': 'gt', 'value': 80.0},
+            'action': {'type': 'emergency_stop', 'device_id': 'dev1'},
             'enabled': True
         }
         device_control.add_interlock(rule)
@@ -649,6 +656,20 @@ class TestInterlockActionFailClosed:
         """反向对照：写成功必须返回 True（别修过头）。"""
         dc, _ = self._dc(write_ret=True)
         assert dc._execute_interlock_action(dict(self.RULE)) is True
+
+    def test_write_releases_device_lock(self):
+        """联锁写完之后设备锁必须真的释放（BUG-044 的修复曾多传参数）。
+
+        `release_device_lock(device_id, lock_holder)` 会抛 TypeError 并被
+        `except` 吞掉，锁从此被永久持有：操作员手动写等锁 5s 后被拒，
+        事故后无法复位。这里用"能否再次立刻拿到锁"来验证。
+        """
+        dc, _ = self._dc(write_ret=True)
+        assert dc._execute_interlock_action(dict(self.RULE)) is True
+
+        assert dc._device_lock_owners.get('plc_a') is None
+        assert dc.acquire_device_lock('plc_a', 'tester', timeout=0.1) is True
+        dc.release_device_lock('plc_a')
 
     def test_missing_device_manager_returns_false(self):
         """device_manager 为 None 时不能算成功。"""

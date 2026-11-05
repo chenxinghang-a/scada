@@ -343,7 +343,12 @@ class SimulationInitializer:
             if name:
                 var_names.append(name)
         for node in topics:
-            name = node.get('name', '')
+            # round 370（BUG-021）：topics 允许裸字符串（`- scada/dev1/temp`），
+            # 直接 `.get` 会 AttributeError，整台设备的模拟初始化失败。
+            if isinstance(node, dict):
+                name = node.get('name', '')
+            else:
+                name = str(node).rsplit('/', 1)[-1]
             if name:
                 var_names.append(name)
         for ep in endpoints:

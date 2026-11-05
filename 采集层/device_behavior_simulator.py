@@ -458,10 +458,15 @@ class DeviceBehaviorSimulator:
                 self._device_param_names.add(name)
                 addr = reg.get('address')
                 if addr is not None:
+                    # round 370（BUG-016）：**必须带 offset**。
+                    # `handle_write_register` 按 `reg_info.get('offset', 0.0)`
+                    # 反算工程值，这里漏存 → 永远取默认 0，带偏置的点位
+                    # （如 4-20mA 换算）写入后物理模型偏一个常量。
                     self._register_address_map[addr] = {
                         'name': name,
                         'data_type': reg.get('data_type', 'uint16'),
                         'scale': reg.get('scale', 1.0),
+                        'offset': reg.get('offset', 0.0),
                     }
         
         # OPC UA节点
@@ -471,8 +476,12 @@ class DeviceBehaviorSimulator:
                 self._device_param_names.add(name)
         
         # MQTT主题
+        # round 370（BUG-021）：topics 允许是**裸字符串**（`- scada/dev1/temp`），
+        # 直接 `.get` 会 AttributeError；裸字符串没有点位名，跳过即可。
         for topic in self.device_config.get('topics', []):
-            name = topic.get('name', '')
+            if isinstance(topic, str):
+                continue
+            name = topic.get('name', '') if isinstance(topic, dict) else ''
             if name:
                 self._device_param_names.add(name)
         
@@ -796,14 +805,22 @@ class DeviceBehaviorSimulator:
         """清除某个点位的写入值（恢复正常模型输出）。"""
         self._point_overrides.pop(str(name or ''), None)
 
-    def handle_write_register(self, address: int, value: int):
+    def handle_write_register(self, address: int, value: int,
+                              *, engineering: bool = False):
         """
         处理写寄存器命令 — 写操作影响后续读取
-        
+
         核心逻辑：
         1. 存储写入值（回读验证用）
         2. 识别控制命令（启动/停止/复位）
         3. 影响设备状态和物理参数
+
+        Args:
+            engineering: 调用方传进来的已经是**工程值**（REST/OPC UA 点位写、
+                数据中枢已解码的寄存器写）。默认 False 表示传的是保持寄存器里的
+                原始整数，需要按 scale/offset 反算。
+                round 370（BUG-088）：数据中枢先 `_decode_point()` 得到工程量，
+                又调这里按原始值再乘一次 scale —— 带缩放的点位写 50 变成 500。
         """
         self._written_values[address] = value
         
@@ -857,7 +874,7 @@ class DeviceBehaviorSimulator:
             offset = try_finite_float(reg_info.get('offset', 0.0))
             if offset is None:
                 offset = 0.0
-            eng_value = float(value) * scale + offset
+            eng_value = float(value) if engineering else float(value) * scale + offset
             
             # 温度设定点
             if 'setpoint' in name_lower and 'temp' in name_lower:
@@ -893,8 +910,10 @@ class DeviceBehaviorSimulator:
             # 阀门开度
             elif 'valve' in name_lower:
                 # 阀门开度影响流量
-                self.process_model.base_flow = 15.0 * (float(value) / 100)
-                logger.info(f"[行为模拟] 设备 {self.device_name} 阀门开度→{value}%")
+                # round 370（BUG-017）：必须用**工程值**，不是原始寄存器整数。
+                # scale=0.1 时写 500 代表 50%，原实现算成 500/100=5 → 截成 100%。
+                self.process_model.base_flow = 15.0 * (eng_value / 100.0)
+                logger.info(f"[行为模拟] 设备 {self.device_name} 阀门开度→{eng_value}%")
             
             # 继电器写入
             elif 'relay' in name_lower:
@@ -1416,8 +1435,12 @@ class DeviceBehaviorSimulator:
         # 故障严重度随时间增长（缓慢）
         for fault_type in list(self.active_faults.keys()):
             growth_rate = 0.01 if fault_type != FaultType.COMMUNICATION else -0.05
-            self.active_faults[fault_type] = min(1.0,
-                self.active_faults[fault_type] + growth_rate * self._dt)
+            # round 370（BUG-018）：通信故障的 growth_rate 是负数（表示"间歇性减弱"），
+            # 只夹上界会一路减到负数 —— 然后 `_update_health` 里
+            # `fault_penalty = severity * 权重` 变成负惩罚，**反而给健康度加分**。
+            # 严重度必须夹在 [0, 1]。
+            self.active_faults[fault_type] = max(0.0, min(1.0,
+                self.active_faults[fault_type] + growth_rate * self._dt))
 
             # 通信故障会自行恢复（间歇性）
             if fault_type == FaultType.COMMUNICATION and random.random() < 0.01:
@@ -1667,8 +1690,7 @@ class DeviceBehaviorSimulator:
                 # MES指标
                 'oee': 0.0, 'quality_rate': 0.0, 'defect_rate': 0.0,
                 'planned_quantity': 0, 'actual_quantity': 0,
-                # OPC UA
-                'motor_speed': 0.0,
+                # OPC UA（motor_speed 已在通用键里定义，round 370 去掉重复字面量）
                 # 通用
                 'co2': round(400 + random.gauss(0, 10), 0),
                 # 停机时负荷率为 0 —— 有确定值比「点位消失」好：
@@ -1692,7 +1714,10 @@ class DeviceBehaviorSimulator:
         state_factor = 1.0 if self.state == DeviceState.RUNNING else 0.1
 
         # 三相电压 - 基于负载的平衡系统
-        voltage_base = 220 + 5 * math.sin(t / 60)
+        # round 370（BUG-019）：用过程模型的 `base_voltage`（默认 380V 三相），
+        # 不再硬编码 220 —— 否则 380V 设备的大屏电压永远显示在 220V 附近，
+        # 欠压/过压判断全部失真。
+        voltage_base = self.process_model.base_voltage + 5 * math.sin(t / 60)
         voltage_imbalance = random.gauss(0, 0.5)
         voltage_a = voltage_base + voltage_imbalance + random.gauss(0, 1)
         voltage_b = voltage_base + voltage_imbalance * 0.5 + random.gauss(0, 1)

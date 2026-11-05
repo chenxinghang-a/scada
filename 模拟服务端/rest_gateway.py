@@ -99,7 +99,11 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             })
             return
 
-        endpoints = self.server.routes.get(path)
+        # round 370（BUG-091）：路由表现在同时收 GET 与写端点，
+        # GET 必须只挑 GET，否则同一个 path 的 POST 端点会被当成读端点，
+        # 返回值恒为 None → 503。
+        endpoints = [e for e in (self.server.routes.get(path) or [])
+                     if str(e.get('method', 'GET')).upper() == 'GET']
         if not endpoints:
             self._send_json(404, {
                 'error': 'not_found',
@@ -170,7 +174,9 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             })
             return
 
-        endpoints = self.server.routes.get(path)
+        # 只认写端点（POST/PUT）
+        endpoints = [e for e in (self.server.routes.get(path) or [])
+                     if str(e.get('method', 'GET')).upper() in ('POST', 'PUT')]
         if not endpoints:
             self._send_json(404, {
                 'error': 'not_found',
@@ -382,9 +388,13 @@ class RestSimGateway:
                                cfg.get('id'), endpoint)
                 continue
             method = str(endpoint.get('method', 'GET')).upper()
-            if method != 'GET':
-                logger.debug("REST 模拟网关只实现 GET，跳过 %s %s", method, path)
+            # round 370（BUG-091）：**写端点也要建路由**。
+            # 原来在这里 `continue` 掉一切非 GET，而 `do_POST/do_PUT`
+            # 早已实现（round 369）—— 结果写请求永远走到 404。
+            if method not in ('GET', 'POST', 'PUT'):
+                logger.debug("REST 模拟网关不支持 %s %s，跳过", method, path)
                 continue
+            endpoint['method'] = method
             if not path.startswith('/'):
                 path = '/' + path
             routes.setdefault(path, []).append(endpoint)

@@ -543,7 +543,10 @@ class DNP3Client:
         self.socket: socket.socket | None = None
         self.connected = False
         self._lock = threading.Lock()
-        self._last_data: dict[int, dict] = {}  # index -> {value, quality, group, time}
+        # round 370（BUG-079）：键是 **(group, index)**，不是裸 index。
+        # 遥信 ("bi", 0) 与遥测 ("ai", 0) 在 DNP3 里是完全不同的对象，
+        # 用裸 index 做键会让它们互相覆盖 —— 定时上报一来，模拟量里就混进开关量。
+        self._last_data: dict[tuple, dict] = {}
         self._running = False
         self._recv_thread: threading.Thread | None = None
         # 接收缓冲区：TCP 是字节流，DNP3 帧会**跨包/粘包**，
@@ -717,10 +720,11 @@ class DNP3Client:
                         "丢弃无法解析的 DNP3 响应（累计 %d 个）：%s", n, parse_error)
                 return
             for obj in objects:
-                self._last_data[obj['index']] = {
+                self._last_data[(obj['group'], obj['index'])] = {
                     'value': obj['value'],
                     'quality': obj['quality'],
                     'group': obj['group'],
+                    'index': obj['index'],
                     'time': time.time(),
                 }
 
@@ -850,6 +854,16 @@ class DNP3Gateway(BaseGateway):
             self._note_read_failure(device_id, "*", "设备未连接")
             return None
 
+        # round 370（BUG-079）：**每轮必须重新发读请求**。
+        # DNP3 的 `read_data()` 只是"最后一次响应"的缓存，原实现从不调用
+        # `request_data()` —— 设备如果不主动上送，网关读到的第一帧永远不变，
+        # 而 `raw_data is not None` 让上层一直判定"读取成功"（冻结的假数据）。
+        try:
+            client.request_data()
+        except Exception as e:      # noqa: BLE001 —— 请求失败按本轮读取失败处理
+            self._note_read_failure(device_id, "*", f"request_data 失败: {e}")
+            return None
+
         data = client.read_data()
         if not data:
             self._note_read_failure(device_id, "*", "client.read_data() 返回空")
@@ -858,8 +872,9 @@ class DNP3Gateway(BaseGateway):
         reverse_map = self._reverse_maps.get(device_id, {})
         result: dict[str, float] = {}
 
-        for index, info in data.items():
+        for key, info in data.items():
             group = info.get('group', DNP3ObjectGroup.AI)
+            index = info.get('index', key[1] if isinstance(key, tuple) else key)
             register_name = reverse_map.get((group, index), f"obj_{index}")
             result[register_name] = float(info['value'])
 
@@ -868,11 +883,16 @@ class DNP3Gateway(BaseGateway):
     def convert_to_telemetry(self, device_id: str,
                              raw_data: dict[str, float]) -> DeviceTelemetry:
         """将原始DNP3数据转换为统一物模型"""
-        return ThingModelConverter.from_modbus_registers(
+        telemetry = ThingModelConverter.from_modbus_registers(
             device_id=device_id,
             registers=raw_data,
             gateway_id=self.gateway_id
         )
+        # round 370（BUG-079）：协议标签必须如实写 DNP3。
+        # 复用 Modbus 转换器会把 protocol 标成 'ModbusTCP' —— 下游按协议
+        # 分流/统计时，DNP3 设备全被算进 Modbus，现场排查"谁断了"完全失真。
+        telemetry.protocol = 'DNP3'
+        return telemetry
 
     def write_register(self, device_id: str, index: int, value: int) -> bool:
         """

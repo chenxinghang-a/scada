@@ -215,8 +215,11 @@ function pointGaugeMarkup(deviceId, p) {
 
     const thr = pointThreshold(deviceId, p.name);
     if (thr) {
-        const span = Math.abs(thr.threshold) * 2;   // 阈值落在 50% 处
-        const ratio = Math.max(0, Math.min(1, v / span));
+        // BUG-096：负阈值（冷库 -18℃ / 负压）时 `v/span` 恒为负，被 clamp
+        // 成 0%，而刻度线画在 50% —— 条和刻度自相矛盾。
+        // 以阈值为中点做线性映射：正阈值下与原来的 `v/span` 逐字等价。
+        const span = Math.abs(thr.threshold) * 2 || 1;   // 阈值落在 50% 处
+        const ratio = Math.max(0, Math.min(1, (v - thr.threshold) / span + 0.5));
         const violated = thr.condition === 'less_than' ? v < thr.threshold : v > thr.threshold;
         const near = !violated && Math.abs(v - thr.threshold) / Math.abs(thr.threshold) <= 0.1;
         const mod = violated ? ' point-gauge--alarm' : (near ? ' point-gauge--warn' : '');

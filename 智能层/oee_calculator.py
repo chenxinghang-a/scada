@@ -255,7 +255,12 @@ class OEECalculator:
                 'downtime': 0,
                 'total_count': 0,
                 'good_count': 0,
-                'ideal_cycle_time': old.get('ideal_cycle_time', 0),
+                # round 370（BUG-047）：首班次必须落 **60.0**（与 defaultdict
+                # 工厂里的默认值一致）。原来 `old.get(..., 0)`：设备第一次
+                # start_shift 时 old 是空 dict → 理想节拍 0 → 性能率 0 → OEE 恒 0%，
+                # 大屏上所有设备开场都是 0，没人知道是"没设节拍"还是"真停机"。
+                'ideal_cycle_time': (old.get('ideal_cycle_time')
+                                     or 60.0),
             }
             # round 369：**必须同步重置 `since`**。
             # 否则新班次第一次 update_device_state 会把「上一班次自上次状态

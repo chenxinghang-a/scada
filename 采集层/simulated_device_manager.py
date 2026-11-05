@@ -14,7 +14,7 @@ from pathlib import Path
 import paths
 
 from .interfaces import IDeviceManager, IDeviceClient
-from .base_client import encode_float32_registers
+from .base_client import encode_float32_registers, encode_int32_registers
 from core.safe_numeric import try_finite_float, try_int
 from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
 from .simulated_client import set_estop_state, set_device_stopped
@@ -365,6 +365,22 @@ class SimulatedDeviceManager(IDeviceManager):
         logger.info(f"[模拟] 设备 {device_id} 已启动")
         return True
 
+    @staticmethod
+    def _write_registers_compat(client: Any, address: int,
+                                values: list[int]) -> bool:
+        """连续写多个寄存器，兼容只有单寄存器能力的客户端（round 370）。"""
+        fn = getattr(client, 'write_multiple_registers', None)
+        if callable(fn):
+            try:
+                return bool(fn(address, [int(v) & 0xFFFF for v in values]))
+            except NotImplementedError:
+                pass
+        ok = True
+        for offset, word in enumerate(values):
+            ok = bool(client.write_single_register(address + offset,
+                                                   int(word) & 0xFFFF)) and ok
+        return ok
+
     def adjust_device(self, device_id: str, register_name: str, value: float) -> dict:
         """调节设备参数（**真的写进模拟客户端**，而不是只打一行日志）。
 
@@ -416,21 +432,25 @@ class SimulatedDeviceManager(IDeviceManager):
         data_type = str(target.get('data_type', 'uint16')).lower()
 
         try:
+            byte_order = config.get('byte_order', 'ABCD')
             if data_type in ('float32', 'float', 'real'):
-                regs = encode_float32_registers(
-                    float(raw_value), config.get('byte_order', 'ABCD'))
-                if not hasattr(client, 'write_multiple_registers'):
-                    return {'success': False,
-                            'message': '模拟客户端不支持批量寄存器写入'}
-                ok = client.write_multiple_registers(address, regs)
+                regs = encode_float32_registers(float(raw_value), byte_order)
+                # round 370（BUG-008）：**不能用 hasattr 判断**。
+                # 基类 `ModbusClientInterface` 定义了 `write_multiple_registers`
+                # 且直接 raise NotImplementedError，模拟客户端没重写它 ——
+                # `hasattr` 恒为 True，一调即崩，float32 设定值 100% 失败。
+                ok = self._write_registers_compat(client, address, regs)
+            elif data_type in ('int32', 'uint32'):
+                # round 370（BUG-010）：32 位整数必须写两个寄存器。
+                # 原来落进 else 分支 `write_single_register(int(raw))`，
+                # 高 16 位被丢掉，写 70000 会变成 4464。
+                regs = encode_int32_registers(
+                    int(round(raw_value)), byte_order,
+                    signed=(data_type == 'int32'))
+                ok = self._write_registers_compat(client, address, regs)
             elif data_type in ('bool', 'boolean', 'coil'):
-                if not hasattr(client, 'write_single_coil'):
-                    return {'success': False, 'message': '模拟客户端不支持线圈写入'}
                 ok = client.write_single_coil(address, bool(value))
             else:
-                if not hasattr(client, 'write_single_register'):
-                    return {'success': False,
-                            'message': '模拟客户端不支持寄存器写入'}
                 ok = client.write_single_register(address, int(round(raw_value)))
         except Exception as e:          # noqa: BLE001
             logger.error("[模拟] 设备 %s 调节 %s 失败: %s", device_id, register_name, e)
@@ -561,7 +581,11 @@ class SimulatedDeviceManager(IDeviceManager):
             'device_category': IDeviceManager.get_device_category(device_config),
             'registers': [{'name': r.get('name', ''), 'unit': r.get('unit', '')} for r in regs],
             'nodes': [{'name': n.get('name', ''), 'unit': n.get('unit', '')} for n in nodes],
-            'topics': [{'name': t.get('name', ''), 'unit': t.get('unit', '')} for t in topics],
+            # round 370（BUG-021）：topics 允许裸字符串，直接 .get 会 AttributeError
+            'topics': [{'name': (t.get('name', '') if isinstance(t, dict)
+                                 else str(t).rsplit('/', 1)[-1]),
+                        'unit': (t.get('unit', '') if isinstance(t, dict) else '')}
+                       for t in topics],
             'endpoints': [{'name': e.get('name', ''), 'unit': e.get('unit', '')} for e in endpoints],
         }
 

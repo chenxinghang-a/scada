@@ -105,7 +105,10 @@ def test_unknown_action_type_is_not_success(caplog):
     而动作一次都没执行。
     """
     dc = _dc([])
-    dc.add_interlock(_rule('injected', act_type='write_registor'))
+    # round 370：`add_interlock` 现在与配置加载同口径校验，非法动作会被**拒绝**；
+    # 本用例测的是「脏规则已经进了内存（旧库/直接写 `_interlock_rules`）」时
+    # 执行期必须如实返回 False，所以绕过 setter 直接注入。
+    dc._interlock_rules['injected'] = _rule('injected', act_type='write_registor')
 
     with caplog.at_level(logging.ERROR):
         ok = dc._execute_interlock_action(dc._interlock_rules['injected'])

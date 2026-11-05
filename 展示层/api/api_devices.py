@@ -635,6 +635,26 @@ def update_device(device_id):
             'runtime_applied': True,
             'persisted': False,
         }), 500
+    # BUG-056：**热更新必须真的"热"**。
+    # ① 连接参数变了却继续用旧 client：`DeviceManager.clients` 是缓存，
+    #    只有 `disconnect_device()` 会失效它。改完 host/port/protocol 仍是
+    #    旧连接在采数（甚至写到已经换掉的 PLC 上）。
+    # ② enabled / collection_interval 变了不同步采集任务：定时器还是旧周期，
+    #    禁用设备照旧在采、改周期不生效，直到重启。
+    if any(k in data for k in ('protocol', 'host', 'port', 'slave_id', 'registers')):
+        try:
+            device_manager.disconnect_device(device_id)
+        except Exception as e:      # noqa: BLE001 —— 断开失败不影响配置已生效
+            logger.warning("设备 %s 配置已变更，断开旧连接失败: %s", device_id, e)
+
+    data_collector = getattr(current_app, 'data_collector', None)
+    if data_collector is not None and any(
+            k in data for k in ('enabled', 'collection_interval', 'protocol')):
+        try:
+            data_collector.sync_device_tasks()
+        except Exception as e:      # noqa: BLE001
+            logger.error("设备 %s 更新后同步采集任务失败: %s", device_id, e)
+
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_device', f"更新设备: {device_id}")
     return jsonify({'success': True, 'message': f'设备 {device_id} 更新成功'})

@@ -116,18 +116,22 @@ class TestReadDeviceDataAsync:
                          {"name": "b", "node_id": "bad", "type": "double"}])
         assert out == {"g": 1.5}, f"坏节点拖垮了好节点: {out}"
 
-    def test_all_nodes_failing_returns_empty(self):
+    def test_all_nodes_failing_returns_none(self):
+        """全部节点失败必须返回 None（BUG-083）。
+
+        `{}` 会被 `_poll_loop` 当成"读取成功"，断连设备每轮发布 running。
+        """
         g = _gw()
         out = self._run(g, _client({"a": Exception("x"), "b": Exception("y")}),
                         [{"name": "a", "node_id": "a", "type": "double"},
                          {"name": "b", "node_id": "b", "type": "double"}])
-        assert out == {}
+        assert out is None
 
     def test_missing_node_id_in_value(self):
         """node_config 没有 node_id → get_node(None) 应走异常路径而不是 KeyError。"""
         g = _gw()
         out = self._run(g, _client({}), [{"name": "x", "type": "double"}])
-        assert out == {}
+        assert out is None
 
 
 class TestReadDeviceDataNonePaths:

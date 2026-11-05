@@ -215,7 +215,11 @@ class WriteSafetyValidator:
                 min_value=min_val,
                 max_value=max_val,
                 risk_level=risk,
-                writable=(access in ('rw', 'write')),
+                # BUG-077：`DEVICE_SCHEMA` 允许用 `writable: true` 声明可写，
+                # 原来只看 `access` —— 只写 writable 的寄存器被误判只读、
+                # 每次写入都被拒（现场表现为"这个点位改不了"）。
+                writable=(str(access).lower() in ('rw', 'write', 'r/w', 'readwrite')
+                          or bool(reg.get('writable'))),
                 requires_confirm=requires_confirm,
                 description=reg.get('description', ''),
             )
@@ -318,7 +322,11 @@ class WriteSafetyValidator:
 
         # 4. 安全联锁检查 (GB/T 15969)
         interlock = _INTERLOCK_RULES.get(profile.name)
-        if interlock and current_value is not None:
+        # BUG-077：内置联锁规则（压力设定值 <=2.5、转速 <=2800）**只用到新值**，
+        # 但原来被 `current_value is not None` 挡着 —— 所有调用方都不传
+        # current_value，于是阶段 4 整段被跳过，写 9.9MPa 也放行。
+        # 规则签名保留 current_val 位置，需要它的规则自行判空。
+        if interlock:
             if not interlock['condition'](current_value, value):
                 self.blocked_count += 1
                 reason = f'安全联锁阻止: {interlock["message"]}'

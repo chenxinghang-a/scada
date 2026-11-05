@@ -328,12 +328,15 @@ def db_vacuum():
     """执行 VACUUM（采集运行中默认拒绝，见 `_maintenance_guard`）"""
     blocked = _maintenance_guard('VACUUM')
     if blocked is not None:
-        ops_audit.log_operation('db_vacuum', result='rejected',
+        ops_audit.log_operation('db_vacuum', operator=_ops_operator(),
+                                result='rejected',
                                 details={'reason': 'collector_running'})
         return blocked
     try:
         result = db_maintainer.vacuum()
-        ops_audit.log_operation('db_vacuum', details=result)
+        # BUG-058：走 `_log_ops` —— 记真实操作人，并按后端返回的 status
+        # 判 success/error（原来恒为 system + success）。
+        _log_ops('db_vacuum', result)
         return _ops_status_response(result, 'VACUUM')
     except Exception as e:
         logger.error(f"VACUUM 失败: {e}", exc_info=True)
@@ -347,14 +350,15 @@ def db_reindex():
     """执行 REINDEX（采集运行中默认拒绝）"""
     blocked = _maintenance_guard('REINDEX')
     if blocked is not None:
-        ops_audit.log_operation('db_reindex', result='rejected',
+        ops_audit.log_operation('db_reindex', operator=_ops_operator(),
+                                result='rejected',
                                 details={'reason': 'collector_running'})
         return blocked
     try:
         data = request.get_json() or {}
         table = data.get('table')
         result = db_maintainer.reindex(table)
-        ops_audit.log_operation('db_reindex', details=result)
+        _log_ops('db_reindex', result)
         return _ops_status_response(result, 'REINDEX')
     except Exception as e:
         logger.error(f"REINDEX 失败: {e}", exc_info=True)
@@ -368,12 +372,13 @@ def db_analyze():
     """执行 ANALYZE（采集运行中默认拒绝）"""
     blocked = _maintenance_guard('ANALYZE')
     if blocked is not None:
-        ops_audit.log_operation('db_analyze', result='rejected',
+        ops_audit.log_operation('db_analyze', operator=_ops_operator(),
+                                result='rejected',
                                 details={'reason': 'collector_running'})
         return blocked
     try:
         result = db_maintainer.analyze()
-        ops_audit.log_operation('db_analyze', details=result)
+        _log_ops('db_analyze', result)
         return _ops_status_response(result, 'ANALYZE')
     except Exception as e:
         logger.error(f"ANALYZE 失败: {e}", exc_info=True)
@@ -499,7 +504,7 @@ def cleanup_logs():
         days = data.get('retention_days', 30)
         require_positive_int(days, 'retention_days')
         result = data_cleaner.clean_log_files(retention_days=days)
-        ops_audit.log_operation('cleanup_logs', details=result)
+        _log_ops('cleanup_logs', result)
         return _cleanup_response(result)
     except ValueError as e:
         logger.warning("清理日志入参非法: %s", e)
@@ -526,7 +531,8 @@ def export_diagnostics():
             include_db_stats=data.get('include_db_stats', True),
             include_system_state=data.get('include_system_state', True),
         )
-        ops_audit.log_operation('export_diagnostics', details={'status': result.get('status')})
+        _log_ops('export_diagnostics', result,
+                 details={'status': result.get('status')})
         return _ops_status_response(result, '导出诊断信息')
     except Exception as e:
         logger.error(f"导出诊断信息失败: {e}", exc_info=True)

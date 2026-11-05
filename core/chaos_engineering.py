@@ -307,19 +307,22 @@ class ChaosEngine:
 
         执行步骤 → 验证稳态 → 回滚（如失败）
         """
+        # BUG-067：「检查 RUNNING → 置 RUNNING」必须在**同一把锁内**。
+        # 原来只把"取对象"包进锁里，两个并发 POST 会同时看到 IDLE，
+        # 随后各自把同一个实验跑一遍（故障注入被执行两次）。
         with self._lock:
             experiment = self._experiments.get(name)
             if not experiment:
                 return {'error': f'实验 {name} 不存在'}
 
-        if experiment.state == ExperimentState.RUNNING:
-            return {'error': f'实验 {name} 正在运行中'}
+            if experiment.state == ExperimentState.RUNNING:
+                return {'error': f'实验 {name} 正在运行中'}
 
-        experiment.state = ExperimentState.RUNNING
-        experiment.start_time = time.time()
-        experiment.results = []
-        experiment.steady_state_results = []
-        experiment.error = None
+            experiment.state = ExperimentState.RUNNING
+            experiment.start_time = time.time()
+            experiment.results = []
+            experiment.steady_state_results = []
+            experiment.error = None
 
         logger.warning("开始混沌实验: %s", name)
 
@@ -334,7 +337,17 @@ class ChaosEngine:
                 return experiment.to_dict()
 
             # 执行实验步骤
+            # BUG-067：`timeout` 原来只是个字段，从未被检查过 —— 卡死的步骤
+            # 会让实验永远停在 RUNNING，之后同名实验全部被「正在运行中」拒绝。
+            deadline = experiment.start_time + experiment.timeout
+            timed_out = False
             for i, step in enumerate(experiment.steps):
+                if time.time() > deadline:
+                    experiment.state = ExperimentState.FAILED
+                    experiment.error = f'实验超时（>{experiment.timeout}s），已中止'
+                    timed_out = True
+                    logger.error("混沌实验超时中止: %s", name)
+                    break
                 logger.info("实验 [%s] 步骤 %d/%d: %s", name, i + 1, len(experiment.steps), step.action)
                 result = self._execute_step(step, experiment)
                 experiment.results.append(result)
@@ -342,6 +355,12 @@ class ChaosEngine:
                 if result.get('status') == 'error':
                     experiment.error = f"步骤 {i + 1} 执行失败: {result.get('error')}"
                     break
+
+            if timed_out:
+                if experiment.rollback_on_failure:
+                    self._rollback(experiment)
+                experiment.end_time = time.time()
+                return experiment.to_dict()
 
             # 执行后置稳态检查
             post_checks = self._run_steady_state_checks("后置检查")

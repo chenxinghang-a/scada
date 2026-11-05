@@ -66,7 +66,12 @@
     return fetch('/api/i18n/' + encodeURIComponent(lang || ''), {
       headers: { 'Accept': 'application/json' }
     })
-      .then(function (r) { return r.json(); })
+      // BUG-100：不校验 HTTP 状态就直接 `r.json()` —— 404/500 时后端返回
+      // HTML 错误页，JSON.parse 抛错被 catch 成"切换失败"，真正原因看不到。
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
       .then(function (data) {
         messages = data.messages || {};
         current = data.language || FALLBACK;
@@ -80,6 +85,17 @@
         document.dispatchEvent(new CustomEvent('scada:language-changed', {
           detail: { language: current, messages: messages }
         }));
+        // BUG-100：写回后端部署默认值，换浏览器打开也是同一种语言。
+        // 未登录（登录页）会 401，属预期 —— 本地切换已生效，忽略即可。
+        var token = window.localStorage.getItem('auth_token');
+        fetch('/api/i18n', {
+          method: 'PUT',
+          headers: Object.assign(
+            { 'Content-Type': 'application/json' },
+            token ? { 'Authorization': 'Bearer ' + token } : {}
+          ),
+          body: JSON.stringify({ language: current })
+        }).catch(function () { /* 写回失败不影响本地切换 */ });
         return current;
       })
       .catch(function (e) {

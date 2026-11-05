@@ -211,7 +211,16 @@ class BroadcastSystem:
         template = self.preset_templates.get(template_key)
         if not template:
             return {'success': False, 'message': f'预设模板 {template_key} 不存在'}
-        text = template.format(area=area or self.default_area, **kwargs)
+        # round 370（BUG-035）：① `area` 既显式传又可能出现在 kwargs 里，
+        # `format(area=..., **kwargs)` 会抛 "got multiple values for keyword"；
+        # ② 模板少了占位符对应的键会抛 KeyError，整条广播失败。
+        kwargs.pop('area', None)
+        kwargs.setdefault('area', area or self.default_area)
+        try:
+            text = template.format(**kwargs)
+        except (KeyError, IndexError, ValueError) as e:
+            logger.warning("广播模板 %s 格式化失败（%s），按原文播报", template_key, e)
+            text = template
         return self.speak(text=text, area=area, source='preset')
 
     # ==================== 区域广播 ====================

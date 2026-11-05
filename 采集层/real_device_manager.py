@@ -11,7 +11,7 @@ from typing import Any
 from pathlib import Path
 
 from .interfaces import IDeviceManager, IDeviceClient
-from .base_client import encode_float32_registers
+from .base_client import encode_float32_registers, encode_int32_registers
 from .modbus_client import ModbusClient
 from .opcua_client import OPCUAClient
 from .mqtt_client import MQTTClient
@@ -519,6 +519,27 @@ class RealDeviceManager(IDeviceManager):
         logger.info(f"[真实] 设备 {device_id} 已启动")
         return True
 
+    @staticmethod
+    def _write_registers_compat(client: Any, address: int,
+                                values: list[int]) -> bool:
+        """连续写多个寄存器，兼容只有单寄存器能力的客户端。
+
+        `ModbusClientInterface.write_multiple_registers` 是**抽象实现**
+        （直接 `raise NotImplementedError`），所以 `hasattr()` 判断不可靠。
+        这里先真调一次，不支持时退化为逐字写（地址递增）。
+        """
+        fn = getattr(client, 'write_multiple_registers', None)
+        if callable(fn):
+            try:
+                return bool(fn(address, [int(v) & 0xFFFF for v in values]))
+            except NotImplementedError:
+                pass
+        ok = True
+        for offset, word in enumerate(values):
+            ok = bool(client.write_single_register(address + offset,
+                                                   int(word) & 0xFFFF)) and ok
+        return ok
+
     def adjust_device(self, device_id: str, register_name: str, value: float) -> dict:
         """
         调节设备参数（写入指定寄存器值）
@@ -563,21 +584,27 @@ class RealDeviceManager(IDeviceManager):
         raw_value = (value - offset) / scale if scale else value
 
         try:
-            if data_type in ('float32', 'float', 'real'):
+            byte_order = config.get('byte_order', 'ABCD')
+            dt = str(data_type).lower()
+            if dt in ('float32', 'float', 'real'):
                 # round 369：**必须按设备 byte_order 编码**。
                 # 原来硬编码 `struct.pack('>f', ...)`（等价 ABCD），
                 # 对 CDAB/BADC/DCBA 的 PLC（如施耐德 M340）等于把高低字
                 # 写反 —— 设定温度 50.0 会被设备解释成完全不同的数。
-                if hasattr(client, 'write_float32'):
-                    success = client.write_float32(address, float(raw_value))
-                else:
-                    regs = encode_float32_registers(
-                        float(raw_value), config.get('byte_order', 'ABCD'))
-                    success = client.write_multiple_registers(address, regs)
-            elif data_type in ('uint16', 'int16'):
-                success = client.write_single_register(address, int(raw_value))
+                #
+                # round 370（BUG-009/010）：**不能再调 `write_float32(address, value)`**。
+                # FINS/MC 的这个方法是 `write_float32(area, address, value)`
+                # （区域名是第一个参数），两参调用直接 TypeError；而且
+                # int32/uint32 落进 else 分支只写一个 16 位寄存器（高字丢失）。
+                # 统一走「编码成字 → 多寄存器写」，三家协议共用同一条路径。
+                regs = encode_float32_registers(float(raw_value), byte_order)
+                success = self._write_registers_compat(client, address, regs)
+            elif dt in ('int32', 'uint32'):
+                regs = encode_int32_registers(
+                    int(round(raw_value)), byte_order, signed=(dt == 'int32'))
+                success = self._write_registers_compat(client, address, regs)
             else:
-                success = client.write_single_register(address, int(raw_value))
+                success = client.write_single_register(address, int(round(raw_value)))
 
             if success:
                 logger.info(f"[真实] 设备 {device_id} 调节 {register_name} = {value}")
@@ -793,7 +820,11 @@ class RealDeviceManager(IDeviceManager):
             'device_category': IDeviceManager.get_device_category(device_config),
             'registers': [{'name': r.get('name', ''), 'unit': r.get('unit', '')} for r in regs],
             'nodes': [{'name': n.get('name', ''), 'unit': n.get('unit', '')} for n in nodes],
-            'topics': [{'name': t.get('name', ''), 'unit': t.get('unit', '')} for t in topics],
+            # round 370（BUG-021）：topics 允许裸字符串，直接 .get 会 AttributeError
+            'topics': [{'name': (t.get('name', '') if isinstance(t, dict)
+                                 else str(t).rsplit('/', 1)[-1]),
+                        'unit': (t.get('unit', '') if isinstance(t, dict) else '')}
+                       for t in topics],
             'endpoints': [{'name': e.get('name', ''), 'unit': e.get('unit', '')} for e in endpoints],
         }
 

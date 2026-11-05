@@ -232,6 +232,16 @@ def watch_interlocks_once(device_control, *, state: dict | None = None) -> dict[
         return {'changed': True, 'reloaded': False, 'diff': None,
                 'reason': f'重载异常: {e}'}
 
+    # round 370（BUG-007）：**回滚不是重载成功**。
+    # `reload_interlocks()` 在「重载后规则为 0 而原来非 0」时会回滚旧规则，
+    # 并在返回字典里带 `error`。原来完全不看这个字段，照样记 INFO + reloaded=True，
+    # 于是坏掉的 interlocks.yaml 每轮都被当成"已生效"，运维改完看到日志干净。
+    if diff.get('error'):
+        logger.error(
+            "联锁配置热重载失败，已回滚到重载前的规则：%s", diff.get('error'))
+        return {'changed': True, 'reloaded': False, 'diff': diff,
+                'reason': f"重载失败并回滚: {diff.get('error')}"}
+
     if diff.get('added') or diff.get('removed') or diff.get('changed'):
         logger.warning(
             "联锁配置已自动热重载：新增 %s / 移除 %s / 变更 %s",

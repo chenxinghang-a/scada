@@ -24,6 +24,30 @@ performance_bp = Blueprint('performance', __name__, url_prefix='/api/performance
 _metrics_file_lock = threading.Lock()
 
 
+def _trim_metric_lines(lines: list[str], retention_days: int, max_lines: int) -> list[str]:
+    """按**天数 + 行数**双上限裁剪指标行（BUG-059）。
+
+    原来 `retention_days` 只出现在函数签名和 docstring 里，函数体从不使用 ——
+    文档承诺"保留 7 天"，实际只受 `max_lines` 约束（5 分钟一行时 2 万行 ≈ 70 天）。
+    解析失败的行一律保留，交给行数上限兜底（宁可多留，不可因半行 JSON 丢数据）。
+    """
+    kept = lines
+    if retention_days and retention_days > 0:
+        cutoff = datetime.now() - timedelta(days=retention_days)
+        kept = []
+        for ln in lines:
+            try:
+                ts = datetime.fromisoformat(json.loads(ln).get('timestamp'))
+            except (ValueError, TypeError, AttributeError):
+                kept.append(ln)
+                continue
+            if ts >= cutoff:
+                kept.append(ln)
+    if len(kept) > max_lines:
+        kept = kept[-max_lines:]
+    return kept
+
+
 class PerformanceCollector:
     """性能指标采集器"""
 
@@ -43,6 +67,7 @@ class PerformanceCollector:
         try:
             import psutil
             metrics['cpu_percent'] = psutil.cpu_percent(interval=0.5)
+            # 说明：0.0% 是**合法采样**（整机空闲），下游统计不能把它当缺失值。
             metrics['cpu_count'] = psutil.cpu_count()
         except ImportError:
             metrics['cpu_percent'] = -1
@@ -236,34 +261,39 @@ class PerformanceCollector:
             paths.METRICS_DIR.mkdir(parents=True, exist_ok=True)
 
             line = json.dumps(metrics, ensure_ascii=False)
-            with open(metrics_file, 'a', encoding='utf-8') as f:
-                f.write(line + '\n')
+            # BUG-059：**「追加 + 读 + 裁」必须在同一把锁内**。
+            # 原来只有重写那几步持锁，追加与读取都在锁外：两个线程同时采样时，
+            # A 追加后 B 读到的是 A 写了一半的行（readlines 拿到半截 JSON）。
+            # 锁非重入，所以内层原来那个 `with _metrics_file_lock` 必须去掉。
+            with _metrics_file_lock:
+                with open(metrics_file, 'a', encoding='utf-8') as f:
+                    f.write(line + '\n')
 
-            # 裁剪：行数超限时只保留尾部（旧行在前，因为追加写）
-            try:
-                with open(metrics_file, 'r', encoding='utf-8') as f:
-                    all_lines = f.readlines()
-            except Exception as e:      # noqa: BLE001 —— 读失败不影响本次写入
-                logger.warning("指标文件读取失败，跳过裁剪: %s", e)
-                return -1
+                # 裁剪：按天数 + 行数双重上限只保留尾部（旧行在前，因为追加写）
+                try:
+                    with open(metrics_file, 'r', encoding='utf-8') as f:
+                        all_lines = f.readlines()
+                except Exception as e:      # noqa: BLE001 —— 读失败不影响本次写入
+                    logger.warning("指标文件读取失败，跳过裁剪: %s", e)
+                    return -1
 
-            if len(all_lines) > max_lines:
-                kept = all_lines[-max_lines:]
+                kept = _trim_metric_lines(all_lines, retention_days, max_lines)
+                if len(kept) == len(all_lines):
+                    return len(all_lines)
+
                 # round 369：**原子裁剪**。原来 `open(..., 'w')` 先截断再重写：
                 # 多请求并发或写到一半进程退出，metrics.jsonl 直接变成 0 字节/
                 # 半截文件（历史指标全丢）。改为临时文件 + os.replace。
-                with _metrics_file_lock:
-                    tmp_path = metrics_file.with_name(metrics_file.name + '.tmp')
-                    with open(tmp_path, 'w', encoding='utf-8') as f:
-                        f.writelines(kept)
-                        f.flush()
-                        os.fsync(f.fileno())
-                    os.replace(tmp_path, metrics_file)
+                tmp_path = metrics_file.with_name(metrics_file.name + '.tmp')
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    f.writelines(kept)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, metrics_file)
                 logger.info(
-                    "指标文件超行数上限（%d > %d），已裁剪到 %d 行",
-                    len(all_lines), max_lines, len(kept))
+                    "指标文件已裁剪：%d → %d 行（保留 %s 天 / 上限 %d 行）",
+                    len(all_lines), len(kept), retention_days, max_lines)
                 return len(kept)
-            return len(all_lines)
         except Exception as e:
             logger.error("性能指标采样失败: %s", e, exc_info=True)
             return -1
@@ -341,8 +371,11 @@ def get_metrics_summary():
                 'message': '无历史数据',
             })
 
-        cpu_values = [m.get('system', {}).get('cpu_percent', 0) for m in history if m.get('system', {}).get('cpu_percent', -1) > 0]
-        memory_values = [m.get('system', {}).get('memory_percent', 0) for m in history if m.get('system', {}).get('memory_percent', -1) > 0]
+        # BUG-059：判据必须是 `>= 0`。`0.0%` 是**合法采样**（整机空闲），
+        # 原来 `> 0` 把它当缺失值跳过 → 空闲机器的平均 CPU 被系统性抬高，
+        # 采样点越空闲、偏差越大。`-1` 才是 psutil 缺失的哨兵值。
+        cpu_values = [m.get('system', {}).get('cpu_percent', 0) for m in history if m.get('system', {}).get('cpu_percent', -1) >= 0]
+        memory_values = [m.get('system', {}).get('memory_percent', 0) for m in history if m.get('system', {}).get('memory_percent', -1) >= 0]
 
         summary = {
             'hours': hours,

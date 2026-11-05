@@ -281,6 +281,20 @@ class AuthManager:
                 remaining = int((locked_until - datetime.now()).total_seconds()) // 60
                 return {'success': False, 'message': f'账户已锁定，请{remaining}分钟后重试'}
 
+            # round 370（BUG-039）：**锁定期满必须归零计数**。
+            # 原来只放行、不清 `login_attempts`（仍是 5），用户哪怕只输错一次
+            # 也会 5+1>=5 立刻再锁 30 分钟 —— 表现是"锁一次就再也登不进去"，
+            # 只能改库或等运维手工清零。
+            user['login_attempts'] = 0
+            try:
+                with self.database.get_connection() as conn:
+                    conn.execute(
+                        'UPDATE users SET login_attempts = 0, locked_until = NULL '
+                        'WHERE username = ?', (username,))
+                logger.info("账户 %s 锁定期已满，失败计数已归零", username)
+            except Exception as e:      # noqa: BLE001 —— 归零失败不该阻断登录流程
+                logger.warning("重置账户 %s 的登录失败计数失败: %s", username, e)
+
         # 验证密码
         if not bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
             # 增加失败次数

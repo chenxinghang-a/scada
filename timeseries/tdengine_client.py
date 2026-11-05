@@ -62,7 +62,11 @@ class TDengineClient:
         self.logger = logging.getLogger("TDengineClient")
 
         # REST API基础URL
-        self.rest_url = f"http://{host}:{port}/rest/sql"
+        # BUG-086：`/rest/sql` 是**无状态**接口 —— 上一条 `USE db` 在下一条
+        # HTTP 请求里就失效了，而建表/写入全都不带库名，等于在"无库上下文"
+        # 里执行。必须把库名放进 URL 路径，每条请求自带库上下文。
+        self.rest_url = (
+            f"http://{host}:{port}/rest/sql/{self._sanitize_identifier(database)}")
 
         # 原生连接（如果使用）
         self._connection = None
@@ -156,8 +160,8 @@ class TDengineClient:
         db_name = self._sanitize_identifier(self.database)
         sql = f"CREATE DATABASE IF NOT EXISTS {db_name} KEEP 365 DAYS 10 BLOCKS 6"
         self._execute_sql(sql)
-        sql = f"USE {db_name}"
-        self._execute_sql(sql)
+        # BUG-086：不再发 `USE db`（REST 无会话，发了也不会生效）。
+        # 库上下文已由 rest_url 的 `/{database}` 路径携带。
         self.logger.info(f"数据库 {self.database} 已就绪")
 
     def _execute_sql(self, sql: str) -> dict[str, Any] | None:
@@ -310,7 +314,8 @@ class TDengineClient:
         # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
         # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
         # 没人读的 stats 里）。
-        self.stats['errors'] += 1
+        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
+        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
         self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
         return False
 
@@ -394,7 +399,8 @@ class TDengineClient:
         # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
         # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
         # 没人读的 stats 里）。
-        self.stats['errors'] += 1
+        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
+        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
         self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
         return False
 
@@ -417,7 +423,8 @@ class TDengineClient:
         # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
         # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
         # 没人读的 stats 里）。
-        self.stats['errors'] += 1
+        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
+        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
         self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
         return False
 
@@ -440,7 +447,8 @@ class TDengineClient:
         # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
         # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
         # 没人读的 stats 里）。
-        self.stats['errors'] += 1
+        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
+        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
         self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
         return False
 
@@ -463,7 +471,8 @@ class TDengineClient:
         # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
         # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
         # 没人读的 stats 里）。
-        self.stats['errors'] += 1
+        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
+        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
         self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
         return False
 
@@ -502,7 +511,11 @@ class TDengineClient:
         result = self._execute_sql(sql)
         if result and result.get('data'):
             self.stats['queries'] += 1
-            return self._format_query_result(result)
+            # BUG-086：TDengine 返回的列名是 `ts`，而上层（tsdb_adapter 等）
+            # 一律读 `record['timestamp']` —— 不显式映射就全是 None。
+            # 聚合/能源查询早就这么传了，这里漏了。
+            return self._format_query_result(
+                result, columns=['timestamp', 'value', 'quality'])
         return []
 
     def query_telemetry_latest(self, device_id: str, register_name: str) -> dict[str, Any] | None:
@@ -532,6 +545,10 @@ class TDengineClient:
         Args:
             interval: 聚合间隔，如 "1m", "5m", "1h", "1d"
         """
+        # BUG-086：`interval` 是**直接拼进 SQL** 的（`INTERVAL({interval})`），
+        # 不校验就是注入面 + 语法错误面。与 query_builder 的取值口径对齐。
+        if not re.match(r'^\d{1,6}[smhdwn]$', str(interval or ''), re.IGNORECASE):
+            raise ValueError(f'非法 interval: {interval!r}')
         table_name = get_telemetry_table_name(device_id, register_name)
         safe_table = self._sanitize_identifier(table_name)
 
@@ -611,6 +628,9 @@ class TDengineClient:
     def query_energy(self, device_id: str, start_time: datetime, end_time: datetime,
                      interval: str = "1h") -> list[dict[str, Any]]:
         """查询能源数据聚合"""
+        # BUG-086：同 query_telemetry_agg —— interval 直接拼 SQL，必须先校验。
+        if not re.match(r'^\d{1,6}[smhdwn]$', str(interval or ''), re.IGNORECASE):
+            raise ValueError(f'非法 interval: {interval!r}')
         table_name = get_energy_table_name(device_id)
         safe_table = self._sanitize_identifier(table_name)
 

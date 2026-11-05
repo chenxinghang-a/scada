@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Optional, Callable, Dict, Any
 from dataclasses import dataclass, field
 
-from core.safe_numeric import try_finite_float
+from core.safe_numeric import try_finite_float, try_int
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +172,12 @@ class HAManager:
     def stop(self):
         """停止HA管理器"""
         self._running = False
+        # BUG-070：必须等后台线程退出。原来只置标志，线程还要跑完一个
+        # 2s 的 socket 超时才结束；紧接着 start() 会起第二组线程，
+        # SO_REUSEADDR 下两组抢同一端口，心跳/选主互相打架。
+        for t in (self._heartbeat_thread, self._listen_thread):
+            if t is not None and t.is_alive():
+                t.join(timeout=5)
         logger.info(f"HA节点 {self.node_id}: 停止")
 
     def _set_role(self, new_role: HARole):
@@ -349,7 +355,14 @@ class HAManager:
                 return
             self._peer_last_timestamps[peer_id] = ts
 
-        peer_priority = msg.get('priority', 0)
+        # BUG-070：畸形报文里的 priority 可能是 None/字符串。直接比较会抛
+        # TypeError，被外层吞掉后本条心跳丢失，`HANode.priority` 还会被写进
+        # 一个 None —— 之后每一轮 `_wins_election` 都炸，主备仲裁永久失效。
+        peer_priority = try_int(msg.get('priority'))
+        if peer_priority is None:
+            logger.warning("心跳 priority 非法，丢弃本条: peer=%s priority=%r",
+                           peer_id, msg.get('priority'))
+            return
         peer_role = _parse_role(msg.get('role'))
 
         with self._lock:

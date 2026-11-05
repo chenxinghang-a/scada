@@ -158,10 +158,23 @@ class RESTDeviceClient:
             if self.endpoints:
                 first_ep = self.endpoints[0]
                 url = self.base_url.rstrip('/') + first_ep.get('path', '/')
+                method = str(first_ep.get('method', 'GET')).upper()
+                # round 370（BUG-026）：探针必须带上端点自己的参数/请求体。
+                # 原来只发裸请求：需要 `params` 的 GET 或需要 body 的 POST
+                # 一律 400/422 → `raise_for_status()` 抛错 → 整台设备判"连接失败"，
+                # 而实际用 curl 带参数访问完全正常。
+                probe_kwargs: dict[str, Any] = {}
+                if first_ep.get('params') and method in ('GET', 'DELETE'):
+                    probe_kwargs['params'] = first_ep['params']
+                probe_body = (first_ep.get('json') or first_ep.get('probe_body')
+                              or first_ep.get('write_body'))
+                if probe_body and method in ('POST', 'PUT', 'PATCH'):
+                    probe_kwargs['json'] = probe_body
                 resp = self._session.request(
-                    method=first_ep.get('method', 'GET'),
+                    method=method,
                     url=url,
-                    timeout=getattr(self, '_timeout', (3, 5))
+                    timeout=getattr(self, '_timeout', (3, 5)),
+                    **probe_kwargs,
                 )
                 resp.raise_for_status()
 
@@ -277,22 +290,43 @@ class RESTDeviceClient:
         Returns:
             bool: 是否成功
         """
-        try:
-            url = self.base_url.rstrip('/') + endpoint_config.get('path', '/')
-            body = endpoint_config.get('write_body', {'value': value})
-            if callable(body):
-                body = body(value)
+        # round 370（BUG-026）：写路径必须与读路径同口径 ——
+        # 连接态检查、熔断器、统计一个都不能少。原来直接 `self._session.request`：
+        # ① 连接断开后仍继续发（`_session` 可能已是 None → AttributeError）；
+        # ② 对端连续失败时不熔断，采集线程被拖死；
+        # ③ `/api/system/status` 的读写统计里永远看不到写失败。
+        if not self.connected or self._session is None:
+            logger.warning("REST 设备未连接，拒绝写入: %s", self.base_url)
+            self.stats['failed_requests'] = self.stats.get('failed_requests', 0) + 1
+            return False
 
+        url = self.base_url.rstrip('/') + endpoint_config.get('path', '/')
+        body = endpoint_config.get('write_body', {'value': value})
+        if callable(body):
+            body = body(value)
+        write_method = method or endpoint_config.get('write_method', 'POST')
+
+        def _do_write():
             resp = self._session.request(
-                method=(method or endpoint_config.get('write_method', 'POST')),
+                method=write_method,
                 url=url,
                 json=body,
                 timeout=getattr(self, '_timeout', (3, 5))
             )
             resp.raise_for_status()
+            return resp
+
+        try:
+            self._circuit_breaker.call(_do_write)
+            self.stats['total_requests'] += 1
+            self.stats['successful_requests'] += 1
+            self.stats['writes'] = self.stats.get('writes', 0) + 1
             return True
 
         except Exception as e:
+            self.stats['total_requests'] += 1
+            self.stats['failed_requests'] += 1
+            self.stats['last_error'] = f'写入失败: {e}'
             logger.error(f"REST写入失败: {e}")
             return False
 

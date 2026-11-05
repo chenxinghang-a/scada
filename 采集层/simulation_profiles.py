@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 from pathlib import Path
@@ -63,10 +64,16 @@ def _load_profiles() -> Dict[str, Any]:
 
 
 def _merge_missing(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
-    """把 src 里 dst 没有的键补进 dst（递归一层 dict）。"""
+    """把 src 里 dst 没有的键补进 dst（递归一层 dict）。
+
+    round 370：赋值时必须 **deepcopy**。
+    原来直接 `dst[key] = value`，把全局 `_cache` 里的嵌套字典按引用挂到
+    `device_config` 上 —— 运行时改某台设备的 `simulation` / 点位 `sim` 参数
+    会原地污染缓存，后续所有同型号设备都继承被改过的值，且只有重启才恢复。
+    """
     for key, value in src.items():
         if key not in dst or dst[key] is None:
-            dst[key] = value
+            dst[key] = copy.deepcopy(value)
         elif isinstance(dst[key], dict) and isinstance(value, dict):
             _merge_missing(dst[key], value)
 

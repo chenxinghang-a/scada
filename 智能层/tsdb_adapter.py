@@ -112,11 +112,14 @@ class TSDBAdapter:
         `_write_results()` 也会给它写结果行 —— 时序库里因此出现
         "已删除设备仍在产生数据"的记录，报表对不上设备清单。
         """
-        if device_id in self._registered_devices:
-            self._registered_devices.pop(device_id, None)
+        # BUG-049：**必须持锁**。`_sync_data`（226-227 行写 last_sync）与
+        # `_write_energy_results`（422 行遍历）都在别的线程里跑；
+        # 这里原来是 check-then-act 无锁 pop —— 并发时那边会拿到已被删掉的 key。
+        with self._lock:
+            removed = self._registered_devices.pop(device_id, None) is not None
+        if removed:
             logger.info("时序适配器已注销已删除设备: %s", device_id)
-            return True
-        return False
+        return removed
 
     def register_device(self, device_id: str, registers: list[dict[str, Any]]):
         """
@@ -223,8 +226,13 @@ class TSDBAdapter:
                     self.stats['records_synced'] += len(data)
 
                 # 更新最后同步时间
+                # BUG-049：锁内也要用 `.get()`。本轮同步期间设备可能已被
+                # `forget_device` 删除，下标赋值会抛 KeyError ——
+                # 被下面的 except 吞成 errors+=1，每轮刷一条无意义错误日志。
                 with self._lock:
-                    self._registered_devices[device_id]['last_sync'] = end_time
+                    entry = self._registered_devices.get(device_id)
+                    if entry is not None:
+                        entry['last_sync'] = end_time
 
             except Exception as e:
                 logger.error(f"同步设备 {device_id} 数据失败: {e}")
@@ -297,6 +305,11 @@ class TSDBAdapter:
                         self.oee_calculator.record_production(device_id, count=int(float(value)))
                     elif register_name == 'good_count':
                         self.oee_calculator.record_production(device_id, good_count=int(float(value)))
+                    elif register_name == 'total_count':
+                        # BUG-049：白名单里有 total_count，内层却只有两支 ——
+                        # 只有 total_count 寄存器的设备，OEE 产量恒为 0。
+                        # 口径与 data_collector 一致：total_count 就是 `count`。
+                        self.oee_calculator.record_production(device_id, count=int(float(value)))
 
     def _write_results(self):
         """将智能层计算结果写回TDengine"""
@@ -419,7 +432,13 @@ class TSDBAdapter:
             return
         try:
             # 获取所有设备的实时功率
-            for device_id in self._registered_devices:
+            # BUG-049：先在锁内取快照再遍历。原来直接迭代活字典，与
+            # `register_device` / `forget_device` 并发时抛
+            # `RuntimeError: dictionary changed size during iteration`，
+            # 被外层 except 吞掉 → **这一轮能源结果整体丢失**，只记一条 errors。
+            with self._lock:
+                device_ids = list(self._registered_devices)
+            for device_id in device_ids:
                 power_data = self.energy_manager.realtime_power.get(device_id)
                 if power_data:
                     record = EnergyRecord(

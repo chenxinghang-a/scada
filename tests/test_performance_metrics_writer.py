@@ -86,11 +86,18 @@ class TestSampling:
         所以裁完首行仍是旧行、末行必须是最新那条 —— 要断言的是
         "新采样没被裁掉" + "总数被压到上限"。
         """
-        from datetime import datetime
+        from datetime import datetime, timedelta
         f = metrics_dir / 'metrics.jsonl'
         metrics_dir.mkdir(parents=True, exist_ok=True)
-        old = json.dumps({'timestamp': '2020-01-01T00:00:00', 'system': {}})
-        f.write_text('\n'.join([old] * 10) + '\n', encoding='utf-8')
+        # 用**最近几分钟**的时间戳：`retention_days` 会先按时间过滤，
+        # 用 2020 年的行会被当成过期数据整批删掉（那是另一条策略，
+        # 由 test_retention_days_* 覆盖），会把本条"按行数裁剪"的用例带偏。
+        old_lines = [
+            json.dumps({'timestamp': (datetime.now() - timedelta(minutes=m)).isoformat(),
+                        'system': {'marker': 'old'}})
+            for m in range(10, 0, -1)
+        ]
+        f.write_text('\n'.join(old_lines) + '\n', encoding='utf-8')
 
         lines = perf_collector.append_sample(max_lines=5)
         assert lines == 5, f'应裁剪到 5 行，实际 {lines}'
@@ -101,7 +108,7 @@ class TestSampling:
         assert newest['timestamp'][:4] == str(datetime.now().year), (
             '最新采样被裁掉了 —— 保留策略留旧弃新')
         # 裁掉了 6 行旧的（10 旧 + 1 新 = 11 → 留 5）
-        assert sum(1 for c in content if '2020-01-01' in c) == 4
+        assert sum(1 for c in content if '"marker": "old"' in c) == 4
 
     def test_history_filters_by_hours(self, perf_collector, metrics_dir):
         """早于 cutoff 的旧行不该出现在 history 里（保留策略的另一半）。"""

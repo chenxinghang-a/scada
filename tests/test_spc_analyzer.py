@@ -423,3 +423,100 @@ class TestViolationDedup:
         fingerprints = [(v['rule'], v['abs_index'], v['span'])
                         for v in spc.violations[self.KEY]]
         assert len(fingerprints) == len(set(fingerprints))
+
+
+# ============================================================
+# BUG-046：NaN/bool 入口、0.0 规格限、X̄-S 缓存与选图
+# ============================================================
+
+class TestBug046NumericGuardAndChartSelection:
+    """BUG-046 (P1)：四个子问题各自的回归用例。"""
+
+    @pytest.mark.parametrize('bad', [
+        float('nan'), float('inf'), float('-inf'), True, False, None, 'x',
+    ])
+    def test_feed_data_rejects_non_finite_and_bool(self, spc, bad):
+        """② bool/NaN/Inf 不得进入缓冲区。
+
+        NaN 与任何阈值的比较都是 False → 判异规则会静默显示"受控"；
+        bool 经 float() 变成 1.0，会把温度序列的均值整个拽偏。
+        """
+        assert spc.feed_data('dev1', 'temperature', bad) is False
+        assert len(spc.data_buffers['dev1:temperature']) == 0
+        assert spc._total_fed['dev1:temperature'] == 0
+
+    def test_spec_limits_with_zero_lsl_keeps_target(self, spc):
+        """① `lsl == 0.0` 是 falsy，但规格下限为 0 是最常见的配置。"""
+        spc.set_spec_limits('dev1:temp', usl=100.0, lsl=0.0)
+        spec = spc.spec_limits['dev1:temp']
+        assert spec['lsl'] == 0.0
+        assert spec['target'] == 50.0
+
+    def test_spec_limits_explicit_zero_target(self, spc):
+        """target=0.0 不能被 `target or ...` 吞掉。"""
+        spc.set_spec_limits('dev1:temp', usl=10.0, lsl=-10.0, target=0.0)
+        assert spc.spec_limits['dev1:temp']['target'] == 0.0
+
+    @pytest.mark.parametrize('bad', [float('nan'), float('inf'), 'x'])
+    def test_spec_limits_reject_non_finite(self, spc, bad):
+        """NaN/Inf 规格限会让 Cpk/PPM 全部变 NaN，必须在入口拒绝。"""
+        with pytest.raises(ValueError):
+            spc.set_spec_limits('dev1:temp', usl=bad, lsl=0.0)
+
+    def test_spec_limits_reject_inverted_bounds(self, spc):
+        with pytest.raises(ValueError):
+            spc.set_spec_limits('dev1:temp', usl=10.0, lsl=10.0)
+
+    def test_xbar_s_chart_caches_control_limits(self, spc):
+        """③ X̄-S 计算结果必须写入 control_limits。
+
+        否则 `calculate_capability` 取不到 's_chart'，组内 σ 只能退化成
+        总体 σ → n>10（只能走 S 图）时 Cp/Cpk 与 Pp/Ppk 同值，能力被高估。
+        """
+        for i in range(60):
+            spc.feed_data('dev1', 'temp', 50.0 + (i % 7) * 0.3)
+        result = spc.calculate_xbar_s_chart('dev1', 'temp')
+        assert result is not None
+        cached = spc.control_limits['dev1:temp']
+        assert cached['s_chart']['cl'] == result['s_chart']['cl']
+
+    def test_capability_uses_s_chart_sigma(self, spc):
+        """③ 联动：能力分析用 s̄/c4 作为组内 σ，与总体 σ 区分开。"""
+        for i in range(160):
+            spc.feed_data('dev1', 'temp', 50.0 + i * 0.05 + (i % 7) * 0.3)
+        spc.calculate_xbar_s_chart('dev1', 'temp')
+        spc.set_spec_limits('dev1:temp', usl=80.0, lsl=20.0)
+        result = spc.calculate_capability('dev1', 'temp')
+        assert result is not None
+        s_bar = spc.control_limits['dev1:temp']['s_chart']['cl']
+        # 结果对 4 位小数取整，比较时留相应余量
+        assert math.isclose(result['sigma_within'], s_bar / SPCAnalyzer._c4(5),
+                            abs_tol=1e-3)
+        assert result['sigma_within'] != result['sigma_total']
+
+    def test_get_control_chart_switches_to_s_chart_above_10(self):
+        """④ 子组 >10 时 R 图系数（A2/D3/D4）无定义，必须改用 X̄-S 图。
+
+        原实现无条件调 `calculate_xbar_r_chart`，而 `a2_table.get(n, 0.577)`
+        会静默套用 n=5 的系数 —— 控制限偏窄，正常波动被成批判成异常。
+        """
+        spc = SPCAnalyzer(MagicMock(), {'subgroup_size': 15})
+        for i in range(160):
+            spc.feed_data('dev1', 'temp', 50.0 + (i % 7) * 0.3)
+
+        chart = spc.get_control_chart('dev1', 'temp')
+        assert chart['chart_type'] == 'X̄-S'
+        assert chart['subgroup_size'] == 15
+        # 直接调 R 图入口也不能静默给出错误系数
+        assert spc.calculate_xbar_r_chart('dev1', 'temp')['chart_type'] == 'X̄-S'
+
+    def test_get_control_chart_keeps_r_chart_at_10_or_below(self, spc):
+        """④ 反向约束：n<=10 仍走 X̄-R，不能一刀切成 S 图。"""
+        for i in range(60):
+            spc.feed_data('dev1', 'temp', 50.0 + (i % 5) * 0.2)
+        assert spc.get_control_chart('dev1', 'temp')['chart_type'] == 'X̄-R'
+
+    def test_c4_fallback_matches_gamma_definition(self):
+        """c4 超出查表范围时用 Γ 函数，结果必须连续可算。"""
+        assert math.isclose(SPCAnalyzer._c4(10), 0.9727, rel_tol=1e-4)
+        assert math.isclose(SPCAnalyzer._c4(26), 0.99, rel_tol=5e-3)

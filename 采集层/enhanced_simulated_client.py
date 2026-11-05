@@ -22,9 +22,12 @@ from typing import Any, Callable, Dict, List, Optional
 from .base_client import (
     ModbusClientInterface,
     PushClientInterface,
+    decode_float64_registers,
     encode_float32_registers,
     encode_int32_registers,
+    reorder_32_words,
 )
+from core.safe_numeric import try_finite_float
 from .device_behavior_simulator import DeviceBehaviorSimulator, DeviceState, FaultType
 from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
 from .modbus_client import ByteOrder
@@ -249,11 +252,19 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                     results.extend([0] * width)
                 else:
                     # 传感器：从缓存读取（行为模拟器仍在更新环境值）
-                    val = self._latest_data.get(reg_name)
+                    # round 370（BUG-012）：① 必须在 `_data_lock` 内取快照，
+                    # 更新线程每轮都会整体替换 `_latest_data`；
+                    # ② 反向换算必须减 offset，与正常分支 `(value-offset)/scale`
+                    # 同口径，否则带 offset 的点位在停机期间读数跳变。
+                    with self._data_lock:
+                        val = (self._latest_data or {}).get(reg_name)
                     if val is None:
                         val = 25.0
-                    scale = reg_cfg.get('scale', 1.0)
-                    raw = val / scale if scale != 0 else val
+                    scale = try_finite_float(reg_cfg.get('scale', 1.0))
+                    if scale is None or scale == 0:
+                        scale = 1.0
+                    offset = try_finite_float(reg_cfg.get('offset', 0.0)) or 0.0
+                    raw = (float(val) - offset) / scale
                     if data_type == 'float32':
                         results.extend(encode_float32_registers(
                             float(raw), self.byte_order))
@@ -422,28 +433,10 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         return struct.unpack('!f', struct.pack('!I', raw))[0]
     
     def decode_float64(self, registers: List[int]) -> float:
-        """解码float64，支持4种字节序"""
+        """解码 float64，支持 4 种字节序（round 370：与 base_client 同源）。"""
         if len(registers) < 4:
             raise ValueError("需要至少4个寄存器")
-
-        if self.byte_order == ByteOrder.ABCD:
-            raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
-        elif self.byte_order == ByteOrder.BADC:
-            raw = struct.pack('>HHHH', registers[1], registers[0], registers[3], registers[2])
-        elif self.byte_order == ByteOrder.CDAB:
-            raw = struct.pack('>HHHH', registers[2], registers[3], registers[0], registers[1])
-        elif self.byte_order == ByteOrder.DCBA:
-            def _swap16(w):
-                return ((w & 0xFF) << 8) | ((w >> 8) & 0xFF)
-            b0 = _swap16(registers[0])
-            b1 = _swap16(registers[1])
-            b2 = _swap16(registers[2])
-            b3 = _swap16(registers[3])
-            raw = struct.pack('>HHHH', b3, b2, b1, b0)
-        else:
-            raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
-
-        return struct.unpack('>d', raw)[0]
+        return decode_float64_registers(registers, self.byte_order)
     
     def decode_uint16(self, register: int) -> int:
         """解码uint16"""
@@ -456,15 +449,15 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         return register
     
     def decode_int32(self, registers: List[int]) -> int:
-        """解码int32"""
-        raw = (registers[0] << 16) | registers[1]
+        """解码 int32（round 370：按配置字节序，原先硬编码 ABCD）"""
+        raw = reorder_32_words(registers[0], registers[1], self.byte_order)
         if raw & 0x80000000:
             raw -= 0x100000000
         return raw
-    
+
     def decode_uint32(self, registers: List[int]) -> int:
-        """解码uint32"""
-        return (registers[0] << 16) | registers[1]
+        """解码 uint32（round 370：按配置字节序，原先硬编码 ABCD）"""
+        return reorder_32_words(registers[0], registers[1], self.byte_order) & 0xFFFFFFFF
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
@@ -885,7 +878,11 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
             if hasattr(self, 'behavior_simulator') and self.behavior_simulator:
                 addr = self._resolve_endpoint_address(name)
                 if addr is not None:
-                    self.behavior_simulator.handle_write_register(addr, int(value) if isinstance(value, (int, float)) else 0)
+                    # REST/OPC UA 点位写进来的是工程值
+                    self.behavior_simulator.handle_write_register(
+                        addr,
+                        int(value) if isinstance(value, (int, float)) else 0,
+                        engineering=True)
 
             logger.info(f"[增强模拟] REST {method}写入成功: {path} -> {name} = {value}")
         else:

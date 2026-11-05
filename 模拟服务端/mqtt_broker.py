@@ -98,14 +98,30 @@ def _utf8(value: str) -> bytes:
 
 
 def _read_utf8(body: bytes, pos: int) -> tuple[str, int]:
+    """读一个 MQTT UTF-8 字符串（2 字节长度前缀）。
+
+    BUG-092：**必须有边界检查**。原来直接 `struct.unpack('>H', body[pos:pos+2])`
+    并在切片上做 decode —— 截断/畸形报文会让 `body[pos:pos+2]` 短于 2 字节
+    （struct.error），或 `pos+length` 越界读到半截 UTF-8，单个畸形 PUBLISH
+    就能把整条客户端处理协程打崩。
+    """
+    if pos + 2 > len(body):
+        raise ValueError('UTF-8 长度字段越界')
     length = struct.unpack('>H', body[pos:pos + 2])[0]
     pos += 2
+    if pos + length > len(body):
+        raise ValueError(f'UTF-8 字符串越界（需要 {length} 字节，剩余 {len(body) - pos}）')
     return body[pos:pos + length].decode('utf-8', 'replace'), pos + length
 
 
 def _read_binary(body: bytes, pos: int) -> tuple[bytes, int]:
+    """读一个二进制字段（2 字节长度前缀）。边界检查同 `_read_utf8`。"""
+    if pos + 2 > len(body):
+        raise ValueError('二进制长度字段越界')
     length = struct.unpack('>H', body[pos:pos + 2])[0]
     pos += 2
+    if pos + length > len(body):
+        raise ValueError(f'二进制字段越界（需要 {length} 字节，剩余 {len(body) - pos}）')
     return body[pos:pos + length], pos + length
 
 
@@ -357,11 +373,21 @@ class _BrokerTCPHandler(socketserver.BaseRequestHandler):
                     flags: int, body: bytes) -> None:
         qos = (flags >> 1) & 0x03
         retain = bool(flags & 0x01)
-        topic, pos = _read_utf8(body, 0)
-        pid = 0
-        if qos > 0:
-            pid = struct.unpack('>H', body[pos:pos + 2])[0]
-            pos += 2
+        # BUG-092：畸形/截断报文只丢弃这一条，不许穿出 `_on_publish` ——
+        # 外层 `handle()` 只捕 ConnectionError/OSError/ValueError，
+        # IndexError/struct.error 会一路抛到 `finally` 把整个连接 drop 掉。
+        try:
+            topic, pos = _read_utf8(body, 0)
+            pid = 0
+            if qos > 0:
+                if pos + 2 > len(body):
+                    raise ValueError('PUBLISH 报文缺少 packet id')
+                pid = struct.unpack('>H', body[pos:pos + 2])[0]
+                pos += 2
+        except (ValueError, IndexError, struct.error) as exc:
+            logger.warning("MQTT PUBLISH 报文非法（%s），已丢弃: %s",
+                           exc, self.client_address)
+            return
         payload = body[pos:]
 
         if qos == 1:

@@ -56,10 +56,11 @@ COLLECT_DIR = BACKEND_ROOT / "采集层"
 
 #: 两套设备管理器的协议集（已核实，**双向**断言）。
 #:
-#: ⚠️ 这两套**不一样**是事实：模拟模式不支持 mc/fins（没有对应的模拟客户端），
-#: 真实模式才支持。这**不是**本守卫要修的缺陷 —— 它只是要求「差异是显式的」。
+#: round 370（BUG-022）：模拟模式的 `DeviceManager` 已支持 mc/fins，两套现在一致。
 DECLARED_MANAGER_PROTOCOLS: dict[str, set[str]] = {
-    "采集层/device_manager.py": {"modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest"},
+    "采集层/device_manager.py": {
+        "modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest", "mc", "fins",
+    },
     "采集层/real_device_manager.py": {
         "modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest", "mc", "fins",
     },

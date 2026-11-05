@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import paths
 from core.safe_numeric import to_finite_float, try_finite_float, try_int
+from 采集层.base_client import encode_float32_registers, encode_int32_registers
 
 try:
     import yaml
@@ -335,6 +336,7 @@ class DeviceControlSafety:
 
         # 失效规则（删除 / 改动）的运行时状态必须清干净
         if removed or changed:
+            invalid = set(removed) | set(changed)
             with self._lock:
                 # removed：规则没了，状态表里也不该留 key
                 for rid in removed:
@@ -349,6 +351,23 @@ class DeviceControlSafety:
                         self._interlock_states[rid] = False
                     self._interlock_action_failures.pop(rid, None)
                     self._interlock_bypass.discard(rid)
+
+            # round 370（BUG-041）：旁路状态有**五份**，只清 `_interlock_bypass`
+            # 等于没清干净 —— 改高阈值后，旧的"已旁路"仍在 `_active_bypasses`、
+            # 库里的 approved 请求、以及那个还没到期的 Timer 里，
+            # 到期时 `_auto_restore_bypass` 会把**新规则**的旁路一起撤掉。
+            with self._bypass_lock:
+                for rid in invalid:
+                    self._active_bypasses.discard(rid)
+                    self._interlock_pending.pop(rid, None)
+                    stale = [req_id for req_id, req in self._bypass_requests.items()
+                             if getattr(req, 'interlock_id', None) == rid]
+                    for req_id in stale:
+                        self._bypass_requests.pop(req_id, None)
+            for rid in invalid:
+                self._cancel_bypass_timer(rid)
+            # 落库放在锁外（与 remove/restore 两条路径一致）
+            self._persist_bypasses()
 
         # 恢复 **kept** 规则的旧状态（`_load_preset_interlocks` 会把新表
         # 全部填成 False，这里只覆盖没变的那部分）
@@ -1101,12 +1120,30 @@ class DeviceControlSafety:
                     continue        # 已过期，不恢复（由下面的重写清掉）
                 with self._lock:
                     self._interlock_bypass.add(interlock_id)
-                with self._bypass_lock:
-                    self._active_bypasses.add(interlock_id)
                 # 重建定时器：用"还剩多久"换算成单调时钟
                 remaining = expires_at - now_wall
+                req_id = str(info.get('request_id') or f'restored-{interlock_id}')
+                # round 370（BUG-040）：**必须同时重建 `_bypass_requests` 记录**。
+                # `_persist_bypasses()` 只落库「`_bypass_requests` 里 approved 且
+                # 未过期」的旁路；恢复出来的旁路原来只进 `_active_bypasses`，
+                # 于是下面第 1128 行那次 `_persist_bypasses()` 算出空表、
+                # 把数据库里的记录**当场抹掉** —— 再重启一次旁路就永久消失，
+                # 正在检修的设备会被联锁动作。
+                restored = BypassRequest(
+                    request_id=req_id,
+                    interlock_id=interlock_id,
+                    requested_by=str(info.get('requested_by') or 'unknown'),
+                    requested_at=now_wall,
+                    expires_at=float(expires_at),
+                    reason='进程重启后从数据库恢复',
+                    status='approved',
+                    expires_at_mono=time.monotonic() + remaining,
+                )
+                restored.approvals = ['restored'] * restored.required_approvals
+                with self._bypass_lock:
+                    self._active_bypasses.add(interlock_id)
+                    self._bypass_requests[req_id] = restored
                 try:
-                    req_id = info.get('request_id', '')
                     timer = threading.Timer(
                         remaining, self._auto_restore_bypass,
                         args=[interlock_id, req_id])
@@ -1148,10 +1185,31 @@ class DeviceControlSafety:
         return {**summary, 'loaded_once': True}
 
     def add_interlock(self, rule: dict[str, Any]) -> bool:
-        """添加自定义联锁规则"""
+        """添加自定义联锁规则。
+
+        round 370（BUG-042）：**与 `reload_interlocks` 同口径校验**。
+        原来只检查 `id`，API 可以写入任何 `condition` / `action` 类型 ——
+        一条 `condition: 'foo'` 的规则永远不会触发，界面上却显示"已启用"，
+        属于最危险的假保护。校验放在这里，所有入口（API / 配置写入）共用。
+        """
         rule_id = rule.get('id')
         if not rule_id:
             return False
+
+        cond_type = rule.get('condition', {}).get('type') if isinstance(
+            rule.get('condition'), dict) else None
+        if cond_type not in SUPPORTED_CONDITION_TYPES:
+            logger.error("拒绝添加联锁 %s：不支持的条件类型 %r（支持: %s）",
+                         rule_id, cond_type, sorted(SUPPORTED_CONDITION_TYPES))
+            return False
+
+        action_type = rule.get('action', {}).get('type') if isinstance(
+            rule.get('action'), dict) else None
+        if action_type not in SUPPORTED_ACTION_TYPES:
+            logger.error("拒绝添加联锁 %s：不支持的动作类型 %r（支持: %s）",
+                         rule_id, action_type, sorted(SUPPORTED_ACTION_TYPES))
+            return False
+
         with self._lock:
             self._interlock_rules[rule_id] = rule
             self._interlock_states[rule_id] = False
@@ -1726,8 +1784,42 @@ class DeviceControlSafety:
                         # register可能是寄存器名称，需要查找对应地址
                         address = self._resolve_register_address(device_id, register)
                         if address is not None:
-                            # **必须接收返回值**：写失败返回 False、不抛异常。
-                            write_res = client.write_single_register(address, int(value))
+                            # round 370（BUG-044）：联锁动作是**工程值**（如 80.0℃），
+                            # 而寄存器存的是 (value-offset)/scale 的原始整数，
+                            # float32/int32 还占两个寄存器。原来直接
+                            # `int(value)` 单寄存器写：带缩放的设备会写错量级，
+                            # 浮点联锁值被截断 —— 联锁动作"执行成功"但没进入安全状态。
+                            write_words, expected_raw = self._encode_engineering_write(
+                                device_id, address, value)
+                            # 设备互斥锁：防止与操作员手动写入交叉。
+                            # 联锁是安全动作，抢不到锁也要继续（只记录）。
+                            lock_holder = f'interlock:{rule_id}'
+                            got_lock = False
+                            try:
+                                got_lock = self.acquire_device_lock(device_id, lock_holder)
+                            except Exception as lock_err:   # noqa: BLE001
+                                logger.warning("联锁动作获取设备锁异常 %s: %s",
+                                               device_id, lock_err)
+                            try:
+                                if write_words is not None:
+                                    write_res = self._write_registers_compat(
+                                        client, address, write_words)
+                                else:
+                                    write_res = client.write_single_register(
+                                        address, expected_raw)
+                            finally:
+                                if got_lock:
+                                    try:
+                                        # ⚠️ `release_device_lock(device_id)` 只收一个参数。
+                                        # round 370 引入时把 `lock_holder` 也传了进来 →
+                                        # TypeError 被下面的 except 吞成 debug 日志，
+                                        # 锁**永不释放**（threading.Lock 不可重入、_device_locks
+                                        # 常驻）：此后操作员手动写等锁 5s 后被拒 —— RRR 之后
+                                        # 无法手动复位；联锁自己也拿不到锁，互斥形同虚设。
+                                        self.release_device_lock(device_id)
+                                    except Exception as rel_err:   # noqa: BLE001
+                                        logger.warning("释放联锁设备锁失败 %s: %s",
+                                                       device_id, rel_err)
                             action_ok = bool(write_res)
                             if action_ok:
                                 logger.info(f"联锁动作执行: 写入 {device_id}/addr={address} = {value}")
@@ -1986,7 +2078,15 @@ class DeviceControlSafety:
             action = rule.get('action', {})
             if action.get('type') == 'block_start':
                 cond = rule.get('condition', {})
-                if cond.get('device_id') == device_id:
+                # round 370（BUG-043）：**跨设备联锁要看动作目标**。
+                # 典型配置是「A 的温度高 → 禁止 B 启动」：条件源是 A、
+                # 受控目标是 B。原来只比对 `cond.device_id`，对 B 的写请求
+                # 永远匹配不上，这条联锁形同虚设（而界面上显示已启用）。
+                action_device = action.get('device_id')
+                blocked = (cond.get('device_id') == device_id
+                           or action_device == device_id
+                           or action_device is None)
+                if blocked:
                     # 检查联锁是否触发
                     if self._interlock_states.get(rule_id, False):
                         result['allowed'] = False
@@ -2581,10 +2681,70 @@ class DeviceControlSafety:
 
     # ==================== 写操作回读验证 ====================
 
+    def _resolve_register_config(self, device_id: str,
+                                 name_or_address: Any) -> dict[str, Any] | None:
+        """按点位名或地址取寄存器配置（含 scale/offset/data_type）。"""
+        devices = getattr(self.device_manager, 'devices', None) or {}
+        device = devices.get(device_id) or {}
+        registers = device.get('registers') or []
+        target = str(name_or_address)
+        for reg in registers:
+            if isinstance(reg, dict) and str(reg.get('name')) == target:
+                return reg
+        addr = try_int(name_or_address)
+        if addr is not None:
+            for reg in registers:
+                if isinstance(reg, dict) and try_int(reg.get('address')) == addr:
+                    return reg
+        return None
+
+    def _encode_engineering_write(self, device_id: str, address: int,
+                                  value: Any) -> tuple[list[int] | None, int]:
+        """把工程值转换成寄存器写入形态。
+
+        Returns:
+            `(words, raw)`：多寄存器点位返回 `(编码后的字列表, 0)`；
+            单寄存器点位返回 `(None, 原始整数)`。
+        """
+        reg_cfg = self._resolve_register_config(device_id, address) or {}
+        _scale = try_finite_float(reg_cfg.get('scale', 1.0))
+        _scale = 1.0 if _scale in (None, 0) else _scale
+        _offset = try_finite_float(reg_cfg.get('offset', 0.0)) or 0.0
+        _raw = (float(value) - _offset) / _scale
+        _dtype = str(reg_cfg.get('data_type', 'uint16')).lower()
+        _order = self._device_byte_order(device_id)
+        if _dtype in ('float32', 'float', 'real'):
+            return encode_float32_registers(float(_raw), _order), 0
+        if _dtype in ('int32', 'uint32'):
+            return (encode_int32_registers(int(round(_raw)), _order,
+                                           signed=(_dtype == 'int32')), 0)
+        return None, int(round(_raw))
+
+    def _device_byte_order(self, device_id: str) -> str:
+        devices = getattr(self.device_manager, 'devices', None) or {}
+        return str((devices.get(device_id) or {}).get('byte_order') or 'ABCD').upper()
+
+    @staticmethod
+    def _write_registers_compat(client: Any, address: int,
+                                words: list[int]) -> bool:
+        """连续写多个寄存器；客户端不支持时逐字退化写入。"""
+        fn = getattr(client, 'write_multiple_registers', None)
+        if callable(fn):
+            try:
+                return bool(fn(address, [int(w) & 0xFFFF for w in words]))
+            except NotImplementedError:
+                pass
+        ok = True
+        for offset, word in enumerate(words):
+            ok = bool(client.write_single_register(address + offset,
+                                                   int(word) & 0xFFFF)) and ok
+        return ok
+
     def write_with_verification(self, device_id: str, address: int, value: int,
                                 operator: str, max_retries: int = 2,
                                 kind: str = 'register',
-                                control_point: bool = False) -> dict[str, Any]:
+                                control_point: bool = False,
+                                engineering: bool = False) -> dict[str, Any]:
         """
         带回读验证的写操作
 
@@ -2681,6 +2841,41 @@ class DeviceControlSafety:
                             f'写入失败: 客户端不支持寄存器写入 ({device_id}/{address})')
                 return {'success': False, 'message': '该设备的客户端不支持寄存器写入'}
 
+            # round 370（BUG-002/052）：**工程值写入**。
+            #
+            # 联锁动作、边缘 PID 输出、`/adjust` 传的都是工艺值（50.0°C），
+            # 而寄存器里存的是 (value-offset)/scale 的原始整数；float32/int32/
+            # uint32 还要占两个寄存器。原来这条路径既不换算也不编码：
+            # 非整数直接拒绝（PID 永远写不进去），整数则按未缩放值写错量。
+            #
+            # 安全校验用**工程值**（write_limits 的上下限就是工艺单位），
+            # 换算放在校验/审计之后 —— 这样审计日志里记的也是人能看懂的值。
+            write_words: list[int] | None = None
+            expected_raw: int | None = None
+            if kind != 'coil' and engineering:
+                reg_cfg = self._resolve_register_config(device_id, address)
+                if reg_cfg is None:
+                    self._audit('write_failed', operator,
+                                f'写入失败: 无法解析 {device_id}/{address} 的寄存器配置')
+                    return {'success': False,
+                            'message': f'设备 {device_id} 的地址 {address} 不在寄存器表中'}
+                _scale = try_finite_float(reg_cfg.get('scale', 1.0))
+                _scale = 1.0 if _scale in (None, 0) else _scale
+                _offset = try_finite_float(reg_cfg.get('offset', 0.0)) or 0.0
+                _raw = (float(value) - _offset) / _scale
+                _dtype = str(reg_cfg.get('data_type', 'uint16')).lower()
+                _order = self._device_byte_order(device_id)
+                if _dtype in ('float32', 'float', 'real'):
+                    write_words = encode_float32_registers(float(_raw), _order)
+                elif _dtype in ('int32', 'uint32'):
+                    write_words = encode_int32_registers(
+                        int(round(_raw)), _order, signed=(_dtype == 'int32'))
+                else:
+                    expected_raw = int(round(_raw))
+                    if expected_raw != _raw and abs(expected_raw - _raw) > 1e-9:
+                        logger.info("工程值 %s 按 scale=%s 换算为 %s（非整数，四舍五入）",
+                                    value, _scale, expected_raw)
+
             # round 339：**寄存器写入不接受非整数**，不做静默截断。
             #
             # 原实现直接 `int(value)`：`1.9 → 1`，PLC 收到 1，而审计日志记的是
@@ -2692,8 +2887,7 @@ class DeviceControlSafety:
             # 本路径**不具备 float32 写能力**（那要按 2 个寄存器编位 + 回读解码），
             # 所以宁可拒绝也不猜 —— 猜错的代价是写了一个错误的设定值。
             # 线圈分支保持 `bool(value)`：非零即真本来就是线圈语义。
-            if kind != 'coil':
-                from core.safe_numeric import try_finite_float
+            if kind != 'coil' and not engineering:
                 _fv = try_finite_float(value)
                 if _fv is None:
                     self._audit('write_failed', operator,
@@ -2716,8 +2910,13 @@ class DeviceControlSafety:
                 try:
                     if kind == 'coil':
                         success = client.write_single_coil(int(address), bool(value))
+                    elif write_words is not None:
+                        success = self._write_registers_compat(
+                            client, int(address), write_words)
                     else:
-                        success = client.write_single_register(int(address), int(value))
+                        success = client.write_single_register(
+                            int(address),
+                            expected_raw if expected_raw is not None else int(value))
                     break
                 except Exception as e:
                     if attempt < max_retries:
@@ -2787,11 +2986,19 @@ class DeviceControlSafety:
                                 device_id, address)
                 else:
                     if hasattr(client, 'read_holding_registers'):
-                        raw = client.read_holding_registers(int(address), 1)
+                        _count = len(write_words) if write_words else 1
+                        raw = client.read_holding_registers(int(address), _count)
                         fresh = getattr(client, 'last_read_source', 'fresh') == 'fresh'
                         if raw and fresh:
-                            readback_value = int(raw[0])
-                            verified = (readback_value == int(value))
+                            if write_words is not None:
+                                # 双寄存器点位按**字**比对（解码后比对会引入浮点误差）
+                                readback_value = [int(w) & 0xFFFF for w in raw[:_count]]
+                                verified = readback_value == write_words
+                            else:
+                                readback_value = int(raw[0])
+                                _expected = (expected_raw
+                                             if expected_raw is not None else int(value))
+                                verified = (readback_value == _expected)
                         elif raw:
                             logger.warning(
                                 "回读来自陈旧缓存，按未验证处理（不能当通过）: %s/%s",

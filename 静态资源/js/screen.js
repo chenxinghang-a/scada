@@ -77,7 +77,15 @@ let lastDeviceValues = {};
 async function apiFetch(url) {
     const token = localStorage.getItem('auth_token');
     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-    const resp = await fetch('/api' + url, { headers });
+    // BUG-099：fetch 自身失败（断网/DNS/超时）会直接 reject，
+    // 原来没有 try/catch —— 异常穿出 apiFetch，调用方只拿到 rejected promise。
+    let resp;
+    try {
+        resp = await fetch('/api' + url, { headers });
+    } catch (e) {
+        console.warn('apiFetch:', url, e);
+        return null;
+    }
     if (resp.status === 401) {
         localStorage.removeItem('auth_token');
         window.location.href = '/login';
@@ -299,7 +307,8 @@ function resizeAllCharts() {
 async function loadDeviceList() {
     try {
         const resp = await apiFetch('/devices');
-        if (resp.devices) {
+        // BUG-099：apiFetch 失败时为 null，这里必须先判空再取属性。
+        if (resp && resp.devices) {
             const select = document.getElementById('trend-device-select');
             const devices = Array.isArray(resp.devices) ? resp.devices : Object.values(resp.devices);
             devices.forEach(d => {
@@ -360,7 +369,14 @@ async function loadData() {
         if (gen !== loadGeneration) return;
         updateKPI(status);
         updateDeviceStatus(status);
-        updateHealth(status);
+        // BUG-098：健康度排行必须用**真实健康评分**，不能按"是否连接"给分。
+        // BUG-097：OEE 仪表盘也要在这里拉数据，否则永远停在 0%。
+        const health = await apiFetch('/industry40/health');
+        if (gen !== loadGeneration) return;
+        updateHealth(status, health && health.data);
+        const oee = await apiFetch('/industry40/oee');
+        if (gen !== loadGeneration) return;
+        updateOEE(oee && oee.data);
 
         // 实时数据
         const data = await apiFetch('/data/realtime?limit=5000');
@@ -436,7 +452,21 @@ function updateDeviceStatus(stats) {
 }
 
 // ========== 健康度 ==========
-function updateHealth(stats) {
+/**
+ * BUG-098：从 `/industry40/health` 的 `{device_id:register_name: {health_score}}`
+ * 里按设备聚合平均分。没有分析数据时退回"在线=100/离线=0"，避免整屏变 0。
+ */
+function deviceHealthScore(health, d) {
+    const prefix = (d.device_id || '') + ':';
+    const values = Object.keys(health || {})
+        .filter(k => k.indexOf(prefix) === 0)
+        .map(k => Number(health[k] && health[k].health_score))
+        .filter(Number.isFinite);
+    if (!values.length) return d.connected ? 100 : 0;
+    return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+}
+
+function updateHealth(stats, health) {
     if (!stats.devices || !healthChart) return;
     const t = readTheme();
     let devices = stats.devices;
@@ -445,7 +475,7 @@ function updateHealth(stats) {
     const rows = devices
         .map(d => ({
             name: (d.name || d.device_id || '').substring(0, 10),
-            score: d.connected ? 100 : 0,
+            score: deviceHealthScore(health, d),
         }))
         .sort((a, b) => b.score - a.score);
     const color = (v) => v >= 80 ? t.success : v >= 60 ? t.warning : t.danger;
@@ -454,6 +484,25 @@ function updateHealth(stats) {
         series: [{
             data: rows.map(r => ({ value: r.score, itemStyle: { color: color(r.score), borderRadius: [0, 3, 3, 0] } })),
         }],
+    });
+}
+
+// ========== OEE 仪表盘 ==========
+/**
+ * BUG-097：大屏的 OEE 仪表盘初始化后从来没人更新过。
+ * `/industry40/oee` 返回 `{data: {device_id: {oee_percent}}}`，
+ * 这里取所有设备的平均值（0~1 或 0~100 都兼容）。
+ */
+function updateOEE(all) {
+    if (!oeeChart || !all) return;
+    const values = Object.values(all)
+        .map(d => Number(d && (d.oee_percent !== undefined ? d.oee_percent : d.oee)))
+        .filter(Number.isFinite)
+        .map(v => (v > 0 && v <= 1 ? v * 100 : v));
+    if (!values.length) return;
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    oeeChart.setOption({
+        series: [{ data: [{ value: +avg.toFixed(1), name: '综合效率' }] }],
     });
 }
 

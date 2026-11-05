@@ -262,6 +262,8 @@ class TestRESTWriteEndpoint:
         mock_resp.raise_for_status = MagicMock()
         mock_session.request.return_value = mock_resp
 
+        # round 370：写路径现在要求"已连接"（与读路径同口径）
+        rest_client.connected = True
         ep = {'path': '/control', 'write_method': 'POST'}
         result = rest_client.write_endpoint(ep, 100)
 
@@ -274,6 +276,7 @@ class TestRESTWriteEndpoint:
         mock_resp.raise_for_status = MagicMock()
         mock_session.request.return_value = mock_resp
 
+        rest_client.connected = True
         ep = {'path': '/control', 'write_body': lambda v: {'cmd': 'set', 'val': v}}
         result = rest_client.write_endpoint(ep, 50)
 

@@ -147,7 +147,12 @@ class MetricsCollector:
                 if isinstance(alarm, dict):
                     level = alarm.get('alarm_level') or alarm.get('level') or 'unknown'
                 by_level[level] = by_level.get(level, 0) + 1
-            for level in ('critical', 'warning', 'info', 'unknown'):
+            # BUG-071：级别口径必须与 `AlarmManager.SEVERITY_ORDER` 一致
+            # （critical/high/warning/medium/low/info）。原来只导出 4 级，
+            # high/medium/low 的活动报警**根本不导出** —— 看板上各级之和
+            # 远小于实际活跃数，按级别写的告警规则对这三档永不触发。
+            for level in ('critical', 'high', 'warning', 'medium', 'low',
+                          'info', 'unknown'):
                 ALARMS_ACTIVE.labels(level=level).set(by_level.get(level, 0))
         except Exception as e:
             logger.debug(f"告警指标更新失败: {e}")
@@ -163,6 +168,7 @@ class MetricsCollector:
         """设备健康评分（round 255：此前该 gauge 从未被设置，恒 0）。"""
         try:
             scores = predictive_maintenance.get_health_scores() or {}
+            seen: set[str] = set()
             for key, item in scores.items():
                 if not isinstance(item, dict):
                     continue
@@ -172,7 +178,18 @@ class MetricsCollector:
                     # NaN/Inf 会让 gauge 变成 nan —— Prometheus 侧聚合全被污染，
                     # 比「没这个样本」更糟，直接跳过。
                     continue
+                seen.add(str(device_id))
                 HEALTH_SCORE.labels(device_id=str(device_id)).set(value)
+
+            # BUG-071：**设备删掉后标签序列要回收**。Gauge 的 label 组合
+            # 只增不减，删过的设备会永久留在 /metrics 里（值停在被删前），
+            # 报表按序列数统计"有多少台设备"永远偏高。
+            for gone in getattr(self, '_health_seen', set()) - seen:
+                try:
+                    HEALTH_SCORE.remove(gone)
+                except Exception as e:      # noqa: BLE001 —— 序列已不存在
+                    logger.debug("回收健康评分指标序列失败 %s: %s", gone, e)
+            self._health_seen = seen
         except Exception as e:
             logger.debug(f"健康评分指标更新失败: {e}")
 
@@ -180,6 +197,7 @@ class MetricsCollector:
         """OEE 评分（round 255：此前恒 0）。"""
         try:
             summary = oee_calculator.get_all_oee() or {}
+            seen: set[tuple[str, str]] = set()
             for device_id, metrics in summary.items():
                 if not isinstance(metrics, dict):
                     continue
@@ -188,8 +206,17 @@ class MetricsCollector:
                     if value is None:
                         # 同上：NaN/Inf 不许进 gauge
                         continue
+                    seen.add((str(device_id), metric))
                     OEE_SCORE.labels(device_id=str(device_id),
                                      metric=metric).set(value)
+
+            # BUG-071：同健康评分 —— 删设备后 OEE 的 label 序列也要回收。
+            for gone in getattr(self, '_oee_seen', set()) - seen:
+                try:
+                    OEE_SCORE.remove(*gone)
+                except Exception as e:      # noqa: BLE001
+                    logger.debug("回收 OEE 指标序列失败 %s: %s", gone, e)
+            self._oee_seen = seen
         except Exception as e:
             logger.debug(f"OEE 指标更新失败: {e}")
 

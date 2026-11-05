@@ -224,6 +224,16 @@ class ModbusSlavePool:
                 logger.warning('[从站池] 设备 %s 是 modbus_tcp 但没登记任何寄存器/线圈，跳过',
                                device_id)
                 continue
+            # BUG-090：设备配置里写死的 `sim_endpoint.port` 必须优先。
+            # 原来一律从 base_port 按枚举顺序递增 —— 设备顺序一调整（或中间
+            # 禁用一台），后面所有从站端口整体错位，采集端连到别人的从站上，
+            # 数据全串台。
+            sim = device.get('sim_endpoint')
+            fixed_port = sim.get('port') if isinstance(sim, dict) else None
+            if isinstance(fixed_port, int) and 0 < fixed_port < 65536:
+                targets.append((device_id, device, fixed_port))
+                port = max(port, fixed_port + 1)
+                continue
             if port > 65535:
                 logger.error('[从站池] 端口耗尽，设备 %s 及之后的设备不会启动', device_id)
                 break

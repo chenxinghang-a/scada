@@ -199,8 +199,15 @@ class IEC104ASDU:
 
             elif type_id == TypeID.M_SP_NA_1:      # 单点信息
                 if offset < len(data):
-                    value = data[offset] & 0x01
-                    info_objects.append({'ioa': ioa, 'value': float(value), 'quality': 0})
+                    # BUG-080：SIQ 字节高 4 位是品质位（IV/NT/SB/BL）。
+                    # 原来硬编码 quality=0，把"值不可信/被取代/被闭锁"
+                    # 全都报成"品质良好" —— 上位机会拿坏值做联锁判断。
+                    siq = data[offset]
+                    info_objects.append({
+                        'ioa': ioa,
+                        'value': float(siq & 0x01),
+                        'quality': siq & 0xF0,
+                    })
                     offset += 1
                 else:
                     break
@@ -373,8 +380,11 @@ class IEC104Client:
         round 369：原来 socket 为 None 时静默什么都不做，调用方无条件
         `return True` —— 未连接状态下所有控制命令都"成功"。
         """
-        frame = IEC104APCI.build_i_frame(self.send_seq, self.recv_seq, asdu)
+        # BUG-080：序号必须在**锁内**读取并组帧。原来先读 `send_seq` 组帧、
+        # 再进锁自增 —— 两个并发 `send_command` 会发出**同一个序号**，
+        # 从站按重复帧丢弃/复位链路。
         with self._lock:
+            frame = IEC104APCI.build_i_frame(self.send_seq, self.recv_seq, asdu)
             if not self.connected or not self.socket:
                 self.logger.error("I帧未发送：IEC104 连接未建立（seq=%s）", self.send_seq)
                 return False
@@ -657,11 +667,16 @@ class IEC104Gateway(BaseGateway):
     def convert_to_telemetry(self, device_id: str,
                              raw_data: dict[str, float]) -> DeviceTelemetry:
         """将原始IEC 104数据转换为统一物模型"""
-        return ThingModelConverter.from_modbus_registers(
+        telemetry = ThingModelConverter.from_modbus_registers(
             device_id=device_id,
             registers=raw_data,
             gateway_id=self.gateway_id
         )
+        # BUG-080：复用 Modbus 转换器会把协议标签写成 'ModbusTCP' ——
+        # 下游按协议分流/统计时，IEC104 设备全被算进 Modbus，
+        # 现场排查"哪个协议的网关掉线"完全失真。
+        telemetry.Protocol = ProtocolType.IEC_104.value
+        return telemetry
 
     def write_register(self, device_id: str, ioa: int, value: float,
                        type_id: int = TypeID.C_SE_NC_1) -> bool:

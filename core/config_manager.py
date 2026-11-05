@@ -145,6 +145,10 @@ class ConfigManager:
             bool: 是否真的落盘成功。
         """
         try:
+            # round 370（BUG-005）：键必须与 `load_yaml` 同口径（str）。
+            # 原来这里用原始入参做 `_configs` 键：调用方传 `Path` 时，
+            # `load_yaml` 写的 str 键读不到 → 每次重读磁盘 + 监听器收不到通知。
+            config_path = str(config_path)
             path = Path(config_path)
             path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -177,6 +181,8 @@ class ConfigManager:
         Returns:
             配置值
         """
+        # round 370（BUG-005）：与 load_yaml/save_yaml 统一用 str 键
+        config_path = str(config_path)
         with cls._lock:
             config = cls._configs.get(config_path, {}).copy()
 
@@ -202,6 +208,11 @@ class ConfigManager:
             key: 配置键（支持点号分隔的路径）
             value: 配置值
         """
+        # round 370（BUG-005/006）：键统一 str；中间节点不是 dict 时要**报错**，
+        # 不能 `data = data[k]` 之后继续索引 —— 那会在下一轮抛
+        # `TypeError: 'str' object does not support item assignment`，
+        # 而调用方（配置更新接口）看到的是 500，看不出是「键路径撞上了标量」。
+        config_path = str(config_path)
         with cls._lock:
             if config_path not in cls._configs:
                 cls._configs[config_path] = {}
@@ -213,6 +224,10 @@ class ConfigManager:
             for k in keys[:-1]:
                 if k not in config:
                     config[k] = {}
+                elif not isinstance(config[k], dict):
+                    raise ValueError(
+                        f"配置键路径冲突: '{k}' 已是 {type(config[k]).__name__}，"
+                        f"无法在其下设置 '{key}'")
                 config = config[k]
 
             config[keys[-1]] = value
@@ -226,6 +241,8 @@ class ConfigManager:
             config_path: 配置文件路径
             callback: 回调函数，参数为 (config_path, config)
         """
+        # round 370（BUG-005）：与 load_yaml 的通知键（str）保持一致
+        config_path = str(config_path)
         with cls._lock:
             if config_path not in cls._watchers:
                 cls._watchers[config_path] = []

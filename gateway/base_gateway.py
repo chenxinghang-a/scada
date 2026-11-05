@@ -239,6 +239,10 @@ class BaseGateway(ABC):
             self.stats['start_time'] = None
             self._note_publish_failure(
                 f"设备全部连接失败（0/{len(configured)}），网关未启动")
+            # BUG-078：`_connect_mqtt()` 已经 `loop_start()` 起了后台线程，
+            # 这里直接返回 False 会把线程留在后台（进程不退出就一直重连），
+            # 再次 start() 又起一个 —— 线程越积越多。
+            self._disconnect_mqtt()
             return False
 
         if configured and not all_connected:
@@ -260,6 +264,13 @@ class BaseGateway(ABC):
 
     def stop(self):
         """停止网关"""
+        # BUG-078：**先从活动列表摘除再判 running**。原来 `if not self.running:
+        # return` 在前面，而 start() 失败的网关 running 恒为 False ——
+        # 实例永久留在 `_active_gateways` 里，信号处理器会反复 stop 死实例。
+        try:
+            _active_gateways.remove(self)
+        except ValueError:
+            pass
         if not self.running:
             return
 
@@ -283,6 +294,13 @@ class BaseGateway(ABC):
         """连接MQTT Broker"""
         try:
             self.mqtt_client = mqtt.Client(client_id=f"{self.gateway_id}_{int(time.time())}")
+            # BUG-078：配置里早就有 `mqtt_username`/`mqtt_password`，但从来
+            # 没调用过 `username_pw_set` —— 开了认证的 Broker 一律连不上
+            # （报 not authorized），而配置看起来"填了用户名密码"。
+            mqtt_user = self.config.get('mqtt_username') or ''
+            if mqtt_user:
+                self.mqtt_client.username_pw_set(
+                    mqtt_user, self.config.get('mqtt_password') or '')
             self.mqtt_client.on_connect = self._on_mqtt_connect
             self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
             self.mqtt_client.on_publish = self._on_mqtt_publish

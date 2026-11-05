@@ -280,12 +280,15 @@ class QueryBuilder:
                 limit_clause += f" OFFSET {self._offset}"
 
         # 组装SQL
+        # BUG-087：TDengine 的语法顺序是
+        # `WHERE ... INTERVAL(...) [FILL(...)] [GROUP BY ...] ORDER BY ... LIMIT`。
+        # 原来把 GROUP BY 排在 INTERVAL 前面 —— 带分组的降采样查询直接语法错误。
         parts = [
             f"SELECT {select_clause}",
             f"FROM {from_clause}",
             where_clause,
-            group_clause,
             interval_clause,
+            group_clause,
             order_clause,
             limit_clause
         ]
@@ -304,7 +307,8 @@ class QueryBuilder:
         if not columns:
             columns = ("ts", "value", "quality")
 
-        cols = ", ".join(columns)
+        # BUG-087：与 select/select_agg 同口径校验列名（这里原来直接拼串）。
+        cols = ", ".join(_require_identifier(c, '列名') for c in columns)
         return f"SELECT LAST({cols}) FROM {self._table}"
 
     def build_first(self, *columns: str) -> str:
@@ -312,7 +316,7 @@ class QueryBuilder:
         if not columns:
             columns = ("ts", "value", "quality")
 
-        cols = ", ".join(columns)
+        cols = ", ".join(_require_identifier(c, '列名') for c in columns)
         return f"SELECT FIRST({cols}) FROM {self._table}"
 
 

@@ -231,8 +231,11 @@ def resolve_config_file(p) -> Path:
         rest = text[len(prefix):].lstrip('/')
         if rest:
             if os.environ.get('SCADA_CONFIG_DIR'):
-                # env 显式隔离（多实例）：走 CONFIG_DIR（import 时按 env 算好）
-                return CONFIG_DIR / rest
+                # env 显式隔离（多实例）：**按当前 env 重新解析**。
+                # round 370（BUG-004）：原来直接用 import 期固化的 CONFIG_DIR，
+                # 进程启动后再设/改 SCADA_CONFIG_DIR 不生效 —— 测试与多实例
+                # 热切换会把文件读到旧目录，看起来"隔离成功"实则读写真实配置。
+                return _env_path('SCADA_CONFIG_DIR', _BASE / '配置') / rest
             # 未设 env：按 BASE_DIR **动态**解析（与 CONFIG_DIR 的默认值等价，
             # 但保留 monkeypatch BASE_DIR 的能力 —— test_path_resolution 的
             # CWD 独立性用例依赖这一点；第一版直接走 CONFIG_DIR 时它是失真的，

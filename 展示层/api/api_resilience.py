@@ -231,9 +231,11 @@ def update_rate_limiter_profile():
         valid_levels = [LoadLevel.LOW, LoadLevel.MEDIUM, LoadLevel.HIGH, LoadLevel.CRITICAL]
         if level not in valid_levels:
             return error_response(f"无效等级: {level}, 可选: {valid_levels}", 400)
-        if not isinstance(rpm, int) or rpm < 1:
+        # BUG-060：`isinstance(True, int)` 为真、`True >= 1` 也为真 ——
+        # JSON 里的 `true` 会把限流阈值悄悄设成 1（全站 429）。bool 必须单独挡。
+        if isinstance(rpm, bool) or not isinstance(rpm, int) or rpm < 1:
             return error_response("rpm 必须为正整数", 400)
-        if not isinstance(rps, int) or rps < 1:
+        if isinstance(rps, bool) or not isinstance(rps, int) or rps < 1:
             return error_response("rps 必须为正整数", 400)
 
         applied = dynamic_rate_limiter.override_profile(level, rpm, rps)
