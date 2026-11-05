@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import paths
 from core.safe_numeric import to_finite_float, try_finite_float, try_int
+from core.engineering_units import to_raw
+from core.action_result import is_failure
 from 采集层.base_client import encode_float32_registers, encode_int32_registers
 
 try:
@@ -1820,7 +1822,11 @@ class DeviceControlSafety:
                                     except Exception as rel_err:   # noqa: BLE001
                                         logger.warning("释放联锁设备锁失败 %s: %s",
                                                        device_id, rel_err)
-                            action_ok = bool(write_res)
+                            # round 372：**不能用 `bool()`** ——
+                            # `bool({'success': False})` 是 True，写入失败会被
+                            # 记成"联锁动作执行成功"，随后 `_interlock_states`
+                            # 锁死，停机指令永不重试。统一口径见 action_result。
+                            action_ok = not is_failure(write_res)
                             if action_ok:
                                 logger.info(f"联锁动作执行: 写入 {device_id}/addr={address} = {value}")
                             else:
@@ -1903,9 +1909,13 @@ class DeviceControlSafety:
         # acquire_device_lock 里读写同一批字典，无锁 pop 会撞上
         # "dictionary changed size during iteration"。
         with self._lock:
+            # round 372：补 `_write_limits` / `_write_whitelist` —— 它们同样是
+            # `device_id -> {...}`，漏清时**同名设备重建会继承旧量程/白名单**：
+            # 改了工艺量程却仍按旧范围校验，或旧地址白名单继续放行。
             for container in (self._device_health, self._comm_failures,
                               self._device_locks, self._safe_state_handlers,
-                              self._device_lock_owners):
+                              self._device_lock_owners, self._write_limits,
+                              self._write_whitelist):
                 if device_id in container:
                     container.pop(device_id, None)
                     removed = True
@@ -2707,10 +2717,11 @@ class DeviceControlSafety:
             单寄存器点位返回 `(None, 原始整数)`。
         """
         reg_cfg = self._resolve_register_config(device_id, address) or {}
-        _scale = try_finite_float(reg_cfg.get('scale', 1.0))
-        _scale = 1.0 if _scale in (None, 0) else _scale
-        _offset = try_finite_float(reg_cfg.get('offset', 0.0)) or 0.0
-        _raw = (float(value) - _offset) / _scale
+        # round 372：换算统一走 `core.engineering_units.to_raw` ——
+        # 本仓库原来有 5 份 `(value-offset)/scale`，其中两份漏换算、
+        # 一份双算。scale=0 也由它显式报错，不再静默当成 1.0。
+        _raw = to_raw(value, reg_cfg.get('scale'), reg_cfg.get('offset'))
+        _scale = try_finite_float(reg_cfg.get('scale', 1.0)) or 1.0
         _dtype = str(reg_cfg.get('data_type', 'uint16')).lower()
         _order = self._device_byte_order(device_id)
         if _dtype in ('float32', 'float', 'real'):
@@ -2859,10 +2870,9 @@ class DeviceControlSafety:
                                 f'写入失败: 无法解析 {device_id}/{address} 的寄存器配置')
                     return {'success': False,
                             'message': f'设备 {device_id} 的地址 {address} 不在寄存器表中'}
-                _scale = try_finite_float(reg_cfg.get('scale', 1.0))
-                _scale = 1.0 if _scale in (None, 0) else _scale
-                _offset = try_finite_float(reg_cfg.get('offset', 0.0)) or 0.0
-                _raw = (float(value) - _offset) / _scale
+                # round 372：与 `_encode_engineering_write` 共用同一个换算入口。
+                _scale = try_finite_float(reg_cfg.get('scale', 1.0)) or 1.0
+                _raw = to_raw(value, reg_cfg.get('scale'), reg_cfg.get('offset'))
                 _dtype = str(reg_cfg.get('data_type', 'uint16')).lower()
                 _order = self._device_byte_order(device_id)
                 if _dtype in ('float32', 'float', 'real'):

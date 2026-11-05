@@ -28,6 +28,7 @@ from .base_client import (
     reorder_32_words,
 )
 from core.safe_numeric import try_finite_float
+from core.engineering_units import to_raw
 from .device_behavior_simulator import DeviceBehaviorSimulator, DeviceState, FaultType
 from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
 from .modbus_client import ByteOrder
@@ -264,7 +265,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                     if scale is None or scale == 0:
                         scale = 1.0
                     offset = try_finite_float(reg_cfg.get('offset', 0.0)) or 0.0
-                    raw = (float(val) - offset) / scale
+                    raw = to_raw(val, scale, offset)
                     if data_type == 'float32':
                         results.extend(encode_float32_registers(
                             float(raw), self.byte_order))
@@ -325,7 +326,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         # 应用缩放和偏移
         scale = reg_config.get('scale', 1.0)
         offset = reg_config.get('offset', 0) or 0
-        raw_value = (value - offset) / scale if scale != 0 else value
+        raw_value = to_raw(value, scale or 1.0, offset or 0.0)
         
         # 根据数据类型编码
         data_type = reg_config.get('data_type', 'uint16')

@@ -19,6 +19,8 @@ from pymodbus.client import ModbusTcpClient, ModbusSerialClient
 from pymodbus.exceptions import ModbusException, ConnectionException
 from pymodbus.pdu import ExceptionResponse
 
+from core.engineering_units import from_raw
+
 logger = logging.getLogger(__name__)
 
 # Modbus 异常码分类（Modbus Application Protocol V1.1b3）
@@ -229,9 +231,8 @@ class ModbusClient:
         # 从设备配置中查找scale和offset
         for reg in self.config.get('registers', []):
             if reg.get('address') == address:
-                scale = reg.get('scale', 1.0)
-                offset = reg.get('offset', 0)
-                return raw_value * scale + offset
+                # round 372：换算统一走 `core.engineering_units.from_raw`
+                return from_raw(raw_value, reg.get('scale'), reg.get('offset'))
         return float(raw_value)
 
     def _log_operation(self, operation: str, address: int, count: int,

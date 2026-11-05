@@ -324,6 +324,103 @@ def test_no_silently_swallowed_broad_exception():
     )
 
 
+# ---------------------------------------------------------------------------
+# 第三条规则：写/保存类函数的返回值必须被检查（round 372）
+# ---------------------------------------------------------------------------
+#
+# 背景：审计里"假成功"最常见的形态不是吞异常，而是**根本没人看返回值**：
+#
+#     self._save_config()                 # 返回 False，没人知道
+#     client.write_single_register(...)   # 返回 False，联锁照样记成功
+#     save_yaml_config(path, cfg)         # 落盘失败，接口回 200
+#
+# 社区做法是交给静态检查（Ruff `B018 useless-expression` / pylint
+# `W0104 pointless-statement`），但它们只抓"无用表达式"，分不清
+# `logger.info(...)` 与 `write_register(...)`。这里收窄到**项目内已知
+# 返回 bool/dict 的写/保存函数**，误报可控。
+
+#: 返回值必须被使用的函数名（**显式枚举**，不用前缀）。
+#:
+#: 为什么不用 `write_` 前缀：`Path.write_text()` / `save_rules()` 这类
+#: 失败时直接抛异常，返回值没有检查价值 —— 前缀会把它们一起抓进来，
+#: 几十条误报会训练人"看到红了就忽略"，守卫随即失效。
+MUST_CHECK_NAMES = {
+    # 配置落盘（失败返回 False，不抛）
+    "_save_config", "save_yaml_config", "save_config",
+    # 寄存器 / 线圈 / 点位写入（失败返回 False 或 {'success': False}）
+    "write_register", "write_registers", "write_single_register",
+    "write_multiple_registers", "write_with_verification",
+    "write_coil", "write_single_coil", "write_multiple_coils",
+    "write_bit", "write_single_bit", "write_bits",
+    "write_words", "write_single_word", "write_float32",
+    "write_node", "write_point", "write_data",
+    # 时序库写入（契约就是返回 bool）
+    "write_telemetry", "write_telemetry_batch", "write_alarm",
+    "write_oee", "write_energy", "write_predictive",
+    # 网关 / HTTP
+    "write_endpoint",
+}
+
+#: 有意丢弃返回值的例外：(相对路径, 该行源码) -> 理由。
+#: 按源码文本索引而不是行号 —— 行号会随插入漂移，制造假红。
+ALLOWED_DISCARDED_RESULTS: dict[tuple[str, str], str] = {
+    ("timeseries/integration_example.py", "client.write_telemetry(record)"):
+        "示例代码（integration_example），用于展示 API 调用形状，不参与生产。",
+    ("timeseries/integration_example.py", "oee_writer.write_oee("):
+        "同上：示例代码，不参与生产。",
+    ("timeseries/integration_example.py", "energy_writer.write_energy("):
+        "同上：示例代码，不参与生产。",
+    ("timeseries/tdengine_client.py", "client.write_telemetry(record)"):
+        "`if __name__ == '__main__'` 的手工自测，失败与否由后面 get_stats 打印。",
+}
+
+
+def _call_name(node: ast.Call) -> str:
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return ""
+
+
+def _collect_discarded_results() -> list[str]:
+    hits: list[str] = []
+    for rel, abs_path in _iter_py(BROAD_RULE_SKIP):
+        try:
+            tree = _parse(rel, abs_path)
+        except SyntaxError as exc:  # pragma: no cover
+            pytest.fail(f"{rel} 语法错误: {exc}")
+        with open(abs_path, encoding="utf-8") as fh:
+            source_lines = fh.read().splitlines()
+
+        for node in ast.walk(tree):
+            # 只关心"整条语句就是一个函数调用" —— 赋值/return/if 里用到了返回值
+            if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+                continue
+            name = _call_name(node.value)
+            if not name:
+                continue
+            if name not in MUST_CHECK_NAMES:
+                continue
+            line = source_lines[node.lineno - 1].strip() if node.lineno <= len(source_lines) else ""
+            if (rel, line) in ALLOWED_DISCARDED_RESULTS:
+                continue
+            hits.append(f"{rel}:{node.lineno} -> {line}")
+    return hits
+
+
+def test_write_and_save_results_are_checked():
+    """写寄存器 / 保存配置的返回值必须被使用（否则失败=假成功）。"""
+    hits = _collect_discarded_results()
+    assert not hits, (
+        "以下调用丢弃了返回值 —— 写失败/落盘失败会被当成成功（本项目最危险的"
+        "'静默假成功'）：\n  " + "\n  ".join(sorted(hits)) +
+        "\n修法：`if not <调用>:` 或 `ok = <调用>`；"
+        "动作结果统一用 `core.action_result.is_failure()` 判定。"
+    )
+
+
 def test_narrow_silent_except_is_tolerated():
     """反向验证：窄异常被忽略是允许的，守卫不能误伤。
 

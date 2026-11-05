@@ -16,6 +16,7 @@ import paths
 from .interfaces import IDeviceManager, IDeviceClient
 from .base_client import encode_float32_registers, encode_int32_registers
 from core.safe_numeric import try_finite_float, try_int
+from core.engineering_units import to_raw
 from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
 from .simulated_client import set_estop_state, set_device_stopped
 from .enhanced_simulated_client import (
@@ -428,7 +429,8 @@ class SimulatedDeviceManager(IDeviceManager):
         offset = try_finite_float(target.get('offset', 0.0))
         if offset is None:
             offset = 0.0
-        raw_value = (float(value) - offset) / scale if scale else float(value)
+        # round 372：换算统一入口（scale/offset 的兜底保持本文件既有口径）
+        raw_value = to_raw(value, scale, offset)
         data_type = str(target.get('data_type', 'uint16')).lower()
 
         try:

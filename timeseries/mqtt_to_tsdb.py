@@ -342,7 +342,10 @@ class OEEDataWriter:
         )
 
         try:
-            self.tdengine.write_oee(record)
+            # round 372：**返回值必须检查** —— `write_*` 失败是返回 False
+            # 而不是抛异常，原来这里只 catch 异常，TDengine 挂了也静默。
+            if not self.tdengine.write_oee(record):
+                self.logger.error("写入OEE数据失败：TDengine 写入返回 False")
         except Exception as e:
             self.logger.error(f"写入OEE数据失败: {e}")
 
@@ -372,7 +375,8 @@ class EnergyDataWriter:
         )
 
         try:
-            self.tdengine.write_energy(record)
+            if not self.tdengine.write_energy(record):
+                self.logger.error("写入能源数据失败：TDengine 写入返回 False")
         except Exception as e:
             self.logger.error(f"写入能源数据失败: {e}")
 
@@ -403,7 +407,8 @@ class PredictiveDataWriter:
         )
 
         try:
-            self.tdengine.write_predictive(record)
+            if not self.tdengine.write_predictive(record):
+                self.logger.error("写入预测性维护数据失败：TDengine 写入返回 False")
         except Exception as e:
             self.logger.error(f"写入预测性维护数据失败: {e}")
 

@@ -17,6 +17,8 @@ from datetime import datetime
 from typing import Any, Callable
 from collections import deque
 
+from core.action_result import is_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -584,8 +586,9 @@ class EdgeDecisionEngine:
         不抛异常。`None` 不能算失败 —— 通知类回调（如 `lambda msg, level: ...`）
         本来就不返回结论，否则每次报警都会被记成失败、`trigger_count` 永不增长。
         """
-        return result is False or (
-            isinstance(result, dict) and result.get('success') is False)
+        # 口径统一到 `core.action_result`：False / {'success': False} 才算失败，
+        # None 是"没有结论"（通知类回调本来就不返回结果）。
+        return is_failure(result)
 
     def _execute_pid(self, ctrl_id: str, ctrl: dict[str, Any], snapshot: dict[str, Any]):
         """执行PID控制计算"""

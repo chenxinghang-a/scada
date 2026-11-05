@@ -107,7 +107,11 @@ class PredictiveMaintenance:
         # 「遍历中改变字典大小」抛 RuntimeError（分析循环整轮中断），
         # 或读到半删状态的评分。
         with self._lock:
-            for container in (self.health_scores, self.data_windows):
+            # round 372：`thresholds` 里既有**全局**的寄存器名默认值
+            # （'temperature' 等，不能删），也可能有 `set_threshold()` 写入的
+            # `device_id:register` 复合键 —— 按前缀清，只删后者。
+            for container in (self.health_scores, self.data_windows,
+                              self.thresholds):
                 for key in [k for k in list(container) if k.startswith(prefix)]:
                     container.pop(key, None)
                     removed = True

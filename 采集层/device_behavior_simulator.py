@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 
 from core.safe_numeric import try_finite_float
+from core.engineering_units import from_raw
 
 logger = logging.getLogger(__name__)
 
@@ -874,7 +875,8 @@ class DeviceBehaviorSimulator:
             offset = try_finite_float(reg_info.get('offset', 0.0))
             if offset is None:
                 offset = 0.0
-            eng_value = float(value) if engineering else float(value) * scale + offset
+            # round 372：换算统一走 `core.engineering_units.from_raw`
+            eng_value = float(value) if engineering else from_raw(value, scale, offset)
             
             # 温度设定点
             if 'setpoint' in name_lower and 'temp' in name_lower:

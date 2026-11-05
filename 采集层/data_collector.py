@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 # paths 是仓库根模块。用别名 _paths 避免与局部变量 / 参数名冲突。
 import paths as _paths
 from core.safe_numeric import try_finite_float
+from core.engineering_units import from_raw
 from core.degradation_manager import degradation_manager
 
 logger = logging.getLogger(__name__)
@@ -1821,7 +1822,7 @@ class DataCollector:
             # 在 scale 配置过大或异常数据下会溢出成 ±inf，NaN 也可能由此产生。
             # 缓存采集路径（`_collect_from_cache`）早就有这道检查，Modbus 路径没有 ——
             # 两条采集路径对同一个问题不一致，就是漏网的口子。
-            scaled = value * scale + offset
+            scaled = from_raw(value, scale, offset)
             numeric = try_finite_float(scaled)
             if numeric is None:
                 logger.warning(
@@ -1932,7 +1933,7 @@ class DataCollector:
                 else:
                     value = raw_values[0]
 
-            value = value * scale + offset
+            value = from_raw(value, scale, offset)
             return round(value, 4)
 
         except Exception as e:

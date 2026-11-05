@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict
 
 from core.safe_numeric import try_finite_float
+from core.engineering_units import to_raw
 from .base_client import (
     ModbusClientInterface,
     PushClientInterface,
@@ -675,7 +676,7 @@ class SimulatedModbusClient(ModbusClientInterface):
                         value = _generate_value(rule, elapsed, addr)
                         scale = try_finite_float(rt.get('scale', 1.0)) or 1.0
                         offset = try_finite_float(rt.get('offset', 0.0)) or 0.0
-                        raw_value = (value - offset) / scale
+                        raw_value = to_raw(value, scale, offset)
                         if data_type == 'float32':
                             results.extend(encode_float32_registers(
                                 float(raw_value), self.byte_order))
@@ -722,7 +723,8 @@ class SimulatedModbusClient(ModbusClientInterface):
 
         # 模拟值是实际值，需要反算为原始寄存器值再编码
         # round 370（BUG-015）：补 offset 与字节序
-        raw_value = (value - offset) / scale
+        # round 372：换算统一走 `core.engineering_units.to_raw`
+        raw_value = to_raw(value, scale, offset)
 
         if data_type == 'float32':
             return encode_float32_registers(raw_value, self.byte_order)

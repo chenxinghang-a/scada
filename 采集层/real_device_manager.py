@@ -19,6 +19,7 @@ from .rest_client import RESTDeviceClient
 import paths
 from core.safe_numeric import try_int
 from core.device_lifecycle import notify_device_removed
+from core.engineering_units import to_raw
 
 logger = logging.getLogger(__name__)
 
@@ -580,8 +581,8 @@ class RealDeviceManager(IDeviceManager):
         scale = target_reg.get('scale', 1.0)
         offset = target_reg.get('offset', 0)
 
-        # 反向换算：工程值 → 原始值
-        raw_value = (value - offset) / scale if scale else value
+        # 反向换算：工程值 → 原始值（round 372：统一入口）
+        raw_value = to_raw(value, scale or 1.0, offset or 0.0)
 
         try:
             byte_order = config.get('byte_order', 'ABCD')

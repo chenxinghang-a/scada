@@ -24,6 +24,7 @@ from pymodbus.exceptions import ModbusException
 from pymodbus.constants import Endian
 from pymodbus.payload import BinaryPayloadDecoder
 
+from core.engineering_units import from_raw
 from .base_gateway import BaseGateway
 from .thing_model import (
     DeviceTelemetry, ThingModelConverter, 
@@ -190,9 +191,9 @@ class ModbusGateway(BaseGateway):
                     # BUG-081：**必须按点位配置换算工程量**。原来直接上报
                     # 原始寄存器值 —— scale=0.1 的温度 500 被报成 500℃
                     # （应为 50.0），看板/报警/历史库全错一个量级。
-                    scale = reg_config.get('scale', 1.0)
-                    offset = reg_config.get('offset', 0.0)
-                    result[name] = value * (scale if scale else 1.0) + (offset or 0.0)
+                    # round 372：换算统一走 `core.engineering_units.from_raw`。
+                    result[name] = from_raw(
+                        value, reg_config.get('scale'), reg_config.get('offset'))
                 else:
                     self.logger.warning(f"设备 {device_id} 寄存器 {name} 读取失败")
                     self._note_read_failure(device_id, name, "读取返回空/错误响应")

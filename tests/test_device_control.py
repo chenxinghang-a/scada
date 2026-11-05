@@ -652,6 +652,15 @@ class TestInterlockActionFailClosed:
         dc, _ = self._dc(write_ret=False)
         assert dc._execute_interlock_action(dict(self.RULE)) is False
 
+    def test_write_failed_dict_returns_false(self):
+        """写 PLC 返回 `{'success': False}` 时也必须判失败。
+
+        `bool({'success': False})` 是 **True** —— 原来 `action_ok = bool(...)`
+        会把"寄存器拒写"记成联锁执行成功，`_interlock_states` 随即锁死。
+        """
+        dc, _ = self._dc(write_ret={'success': False, 'message': 'PLC 拒写'})
+        assert dc._execute_interlock_action(dict(self.RULE)) is False
+
     def test_write_success_returns_true(self):
         """反向对照：写成功必须返回 True（别修过头）。"""
         dc, _ = self._dc(write_ret=True)
