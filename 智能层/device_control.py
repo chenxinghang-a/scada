@@ -770,7 +770,13 @@ class DeviceControlSafety:
         if action in ('start', 'reset'):
             scope = set(device_ids) if device_ids else None
             global_blocks: list[tuple[str, Any, str]] = []
-            for rule_id, rule in self._interlock_rules.items():
+            # round 373：**锁内取快照再遍历**。`_interlock_rules` 会被
+            # `reload_interlocks()` 整体替换、`_interlock_states` 由采集线程
+            # 更新 —— 直接迭代活字典会抛 `RuntimeError: dictionary changed
+            # size during iteration`，API 侧表现为 500 或"这次批量控制没反应"。
+            with self._lock:
+                interlock_items = list(self._interlock_rules.items())
+            for rule_id, rule in interlock_items:
                 if rule_id in self._interlock_bypass:
                     continue
                 if not self._interlock_states.get(rule_id, False):
@@ -2082,7 +2088,10 @@ class DeviceControlSafety:
                 return result
 
         # 4. 联锁阻止检查
-        for rule_id, rule in self._interlock_rules.items():
+        # round 373：锁内快照（理由同 batch_control）。
+        with self._lock:
+            interlock_rules = list(self._interlock_rules.items())
+        for rule_id, rule in interlock_rules:
             if rule_id in self._interlock_bypass:
                 continue
             action = rule.get('action', {})
@@ -2111,7 +2120,9 @@ class DeviceControlSafety:
             return result
 
         # 6. 警告检查
-        for rule_id, triggered in self._interlock_states.items():
+        with self._lock:
+            interlock_states = list(self._interlock_states.items())
+        for rule_id, triggered in interlock_states:
             if triggered and rule_id not in self._interlock_bypass:
                 rule = self._interlock_rules.get(rule_id, {})
                 result['warnings'].append(f'注意: 联锁 {rule_id} ({rule.get("name")}) 当前触发中')
@@ -2683,7 +2694,11 @@ class DeviceControlSafety:
             'unknown': 0,
             'devices': {}
         }
-        for device_id, health in self._device_health.items():
+        # round 373：健康表由采集线程持续写入，读侧必须拿快照 ——
+        # 否则看板刷新时会随机 500（dictionary changed size during iteration）。
+        with self._lock:
+            health_items = list(self._device_health.items())
+        for device_id, health in health_items:
             status = health.get('status', 'unknown')
             summary[status] = summary.get(status, 0) + 1
             summary['devices'][device_id] = health

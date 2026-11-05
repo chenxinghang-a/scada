@@ -326,7 +326,10 @@ class MQTTSubscriber:
 
     def _resubscribe(self):
         """重新订阅所有主题"""
-        for topic in self._subscribed_topics:
+        # round 373：`subscribe()/unsubscribe()` 会增删这个列表，而本方法
+        # 跑在 MQTT 重连回调线程里。列表边改边遍历不会抛 RuntimeError，
+        # 但会**漏订阅/重复订阅** —— 快照后再遍历。
+        for topic in list(self._subscribed_topics):
             self._client.subscribe(topic, qos=1)
             self.logger.info(f"重新订阅: {topic}")
 
@@ -417,6 +420,9 @@ class MQTTDataDistributor:
 
         # 业务模块引用
         self._modules: dict[str, Any] = {}
+        # round 373：`register_module()` 可能在消息线程已开始分发后才调用
+        # （启动顺序不保证），而分发侧直接迭代活字典 —— 锁内快照。
+        self._modules_lock = threading.Lock()
 
         # 设置回调
         self.subscriber.on_telemetry = self._on_telemetry
@@ -431,12 +437,15 @@ class MQTTDataDistributor:
             name: 模块名称 (oee, predictive, spc, energy, alarm)
             module: 模块实例
         """
-        self._modules[name] = module
+        with self._modules_lock:
+            self._modules[name] = module
         self.logger.info(f"注册模块: {name}")
 
     def _on_telemetry(self, telemetry: DeviceTelemetry):
         """分发遥测数据到各模块"""
-        for name, module in self._modules.items():
+        with self._modules_lock:
+            modules = list(self._modules.items())
+        for name, module in modules:
             try:
                 if hasattr(module, 'update_from_telemetry'):
                     module.update_from_telemetry(telemetry)
@@ -449,7 +458,9 @@ class MQTTDataDistributor:
 
     def _on_status(self, status: DeviceStatus):
         """分发状态数据"""
-        for name, module in self._modules.items():
+        with self._modules_lock:
+            modules = list(self._modules.items())
+        for name, module in modules:
             try:
                 if hasattr(module, 'update_device_status'):
                     module.update_device_status(

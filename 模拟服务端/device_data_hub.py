@@ -509,7 +509,12 @@ class DeviceDataHub:
                          '点位 %s 写入被拒绝', device_id, name)
             return False
         try:
-            accepted = bool(setter(name, value))
+            # round 373：**写覆盖层必须与 tick 同一把锁**。
+            # `_tick_once()` 持有 `self._lock` 调 `sim.update()`，而 update 会
+            # 迭代 `_point_overrides`；这里原来在锁外改同一个字典 ——
+            # OPC UA/REST 写入撞上采样拍就会 RuntimeError（写成功但服务端报错）。
+            with self._lock:
+                accepted = bool(setter(name, value))
         except Exception:
             logger.exception('[数据中枢] %s 点位 %s 交给 set_point_override 失败',
                              device_id, name)

@@ -196,7 +196,9 @@ class OPCUAGateway(BaseGateway):
 
     def disconnect(self):
         """断开所有OPC UA设备"""
-        for device_id, client in self._clients.items():
+        # round 373：先摘链再遍历（理由同 modbus_gateway.disconnect）。
+        clients, self._clients = self._clients, {}
+        for device_id, client in clients.items():
             try:
                 future = asyncio.run_coroutine_threadsafe(
                     client.disconnect(),

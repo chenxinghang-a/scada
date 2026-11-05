@@ -384,7 +384,16 @@ class MQTTClient:
             client.publish(status_topic, status_payload, qos=MQTTConfig.QOS, retain=True)
 
             # 自动订阅已记录的主题（QoS 1）
-            for topic, qos in self._subscriptions.items():
+            # round 373：`subscribe()/unsubscribe()` 是持 `_lock` 改这张表的，
+            # 而 `_on_connect` 跑在 MQTT 网络线程里 —— 直接迭代活字典会抛
+            # RuntimeError，重连时表现为"订阅恢复一半"。
+            lock = getattr(self, '_lock', None)      # 兼容 `__new__` 构造的测试替身
+            if lock is not None:
+                with lock:
+                    subscription_items = list(self._subscriptions.items())
+            else:
+                subscription_items = list(self._subscriptions.items())
+            for topic, qos in subscription_items:
                 client.subscribe(topic, qos)
                 logger.info(f"自动订阅: {topic} (QoS {qos})")
         else:

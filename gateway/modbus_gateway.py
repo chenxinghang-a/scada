@@ -108,7 +108,10 @@ class ModbusGateway(BaseGateway):
 
     def disconnect(self):
         """断开所有Modbus设备"""
-        for device_id, client in self._clients.items():
+        # round 373：**先摘链再遍历**。重连线程可能同时在 `_clients` 里增删，
+        # 直接迭代活字典会抛 RuntimeError，停网关时表现为"断到一半就抛异常"。
+        clients, self._clients = self._clients, {}
+        for device_id, client in clients.items():
             try:
                 client.close()
                 self.logger.info(f"设备 {device_id} 已断开")
