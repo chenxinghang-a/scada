@@ -664,7 +664,8 @@ def update_device(device_id):
 
     # 通用字段
     try:
-        for key in ('name', 'description', 'enabled', 'collection_interval', 'protocol'):
+        for key in ('name', 'description', 'enabled', 'collection_interval',
+                    'protocol', 'device_class', 'electrical', 'autonomy'):
             if key in data:
                 if key == 'collection_interval':
                     device_config[key] = safe_int(data[key], key)
@@ -1622,6 +1623,10 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         'description': data.get('description', ''),
         'protocol': protocol,
         'device_category': data.get('device_category', 'instrument'),
+        # round 378：面向任意电气设备的元数据（可选）
+        'device_class': data.get('device_class', 'other'),
+        'electrical': data.get('electrical') or {},
+        'autonomy': data.get('autonomy', 'automatic'),
         'enabled': data.get('enabled', True),
         'collection_interval': safe_int(data.get('collection_interval', 5), 'collection_interval')
     }

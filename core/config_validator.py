@@ -30,6 +30,28 @@ DEVICE_SCHEMA = {
                     "byte_order": {"type": "string", "enum": ["ABCD", "BADC", "CDAB", "DCBA"]},
                     "poll_interval": {"type": "number", "minimum": 0.1, "maximum": 3600},
                     "enabled": {"type": "boolean"},
+                    # round 378：设备模型面向“任意电气设备”。
+                    # `device_class` 决定标准点位角色（传感器/执行器/驱动/仪表…）；
+                    # `electrical` 是铭牌参数（只做展示/校验提示，不参与协议解析）。
+                    "device_class": {
+                        "type": "string",
+                        "enum": ["sensor", "actuator", "drive", "meter",
+                                 "plc", "relay", "hmi", "other"]
+                    },
+                    "electrical": {
+                        "type": "object",
+                        "properties": {
+                            "rated_voltage": {"type": "number", "minimum": 0},
+                            "rated_current": {"type": "number", "minimum": 0},
+                            "phases": {"type": "integer", "enum": [1, 3]},
+                            "power_type": {"type": "string", "enum": ["ac", "dc", "unknown"]}
+                        }
+                    },
+                    #: 控制权归属：manual / supervised / automatic
+                    "autonomy": {
+                        "type": "string",
+                        "enum": ["manual", "supervised", "automatic"]
+                    },
                     "registers": {
                         "type": "array",
                         "items": {

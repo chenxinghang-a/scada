@@ -84,6 +84,146 @@ REGISTER_VALUE_INT16_MAX = 65535
 
 # ==================== 设备控制API ====================
 
+# ==================== 自主等级（HOTL / HOOTL，round 378）====================
+
+@control_bp.route('/devices/<device_id>/autonomy', methods=['GET'])
+@_require_auth
+def get_device_autonomy(device_id):
+    """查看设备当前控制权归属：manual / supervised / automatic。"""
+    dc = getattr(current_app, 'device_control', None)
+    if dc is None:
+        return module_unavailable_response('device_control')
+    return jsonify({'success': True, **dc.get_autonomy(device_id)})
+
+
+@control_bp.route('/devices/<device_id>/autonomy', methods=['POST'])
+@_require_engineer
+def set_device_autonomy(device_id):
+    """切换自主等级（运行期生效，不写回配置文件）。"""
+    dc = getattr(current_app, 'device_control', None)
+    if dc is None:
+        return module_unavailable_response('device_control')
+
+    data = request.get_json() or {}
+    mode = data.get('mode')
+    operator = request.current_user['username']
+    ok, message = dc.set_autonomy_mode(
+        device_id, mode, operator, str(data.get('reason') or ''))
+    if not ok:
+        return api_error(message, 400)
+
+    get_auth_manager().log_operation(
+        operator, 'set_autonomy', f'设备 {device_id} 自主等级 → {message}')
+    return jsonify({'success': True, 'mode': message,
+                    **dc.get_autonomy(device_id)})
+
+
+@control_bp.route('/devices/<device_id>/autonomy/arm', methods=['POST'])
+@_require_engineer
+def arm_device_autonomy(device_id):
+    """人在环上（supervised）：授权一段时间内的自动写入。"""
+    dc = getattr(current_app, 'device_control', None)
+    if dc is None:
+        return module_unavailable_response('device_control')
+
+    data = request.get_json() or {}
+    try:
+        minutes = safe_int(data.get('minutes', 60), 'minutes')
+    except ValueError as e:
+        return api_error(str(e), 400)
+
+    operator = request.current_user['username']
+    ok, message = dc.arm_autonomy(device_id, operator, minutes)
+    if not ok:
+        return api_error(message, 400)
+
+    get_auth_manager().log_operation(
+        operator, 'arm_autonomy', f'设备 {device_id} 自动控制武装 {minutes} 分钟')
+    return jsonify({'success': True, 'message': message,
+                    **dc.get_autonomy(device_id)})
+
+
+@control_bp.route('/devices/<device_id>/autonomy/disarm', methods=['POST'])
+@_require_engineer
+def disarm_device_autonomy(device_id):
+    """人在环上（supervised）：人工接管，立即撤销自动写入授权。"""
+    dc = getattr(current_app, 'device_control', None)
+    if dc is None:
+        return module_unavailable_response('device_control')
+
+    operator = request.current_user['username']
+    existed = dc.disarm_autonomy(device_id, operator)
+    if existed:
+        get_auth_manager().log_operation(
+            operator, 'disarm_autonomy', f'设备 {device_id} 自动控制解除武装')
+    return jsonify({'success': True, 'was_armed': existed,
+                    **dc.get_autonomy(device_id)})
+
+
+# ==================== HITL 待审批动作（round 378）====================
+
+@control_bp.route('/control/pending-actions', methods=['GET'])
+@_require_auth
+def list_pending_actions():
+    """列出等待人工审批的自动写入提案（可按设备过滤）。"""
+    dc = getattr(current_app, 'device_control', None)
+    if dc is None:
+        return module_unavailable_response('device_control')
+    device_id = request.args.get('device_id')
+    return jsonify({
+        'success': True,
+        'actions': dc.get_pending_actions(device_id=device_id),
+    })
+
+
+@control_bp.route('/control/pending-actions/<action_id>/approve', methods=['POST'])
+@_require_engineer
+def approve_pending_action(action_id):
+    """批准一条提案并执行；可传 `value` 修改后再执行。"""
+    dc = getattr(current_app, 'device_control', None)
+    if dc is None:
+        return module_unavailable_response('device_control')
+
+    data = request.get_json(silent=True) or {}
+    value = data.get('value')
+    if value is not None:
+        try:
+            value = safe_float(value, 'value')
+        except ValueError as e:
+            return api_error(str(e), 400)
+
+    operator = request.current_user['username']
+    handled, result = dc.approve_pending(action_id, operator, value)
+    if not handled:
+        return api_error(str(result), 404)
+
+    get_auth_manager().log_operation(
+        operator, 'approve_pending_action', f'批准自动动作 {action_id}')
+    if isinstance(result, dict) and result.get('success'):
+        return jsonify(result)
+    return jsonify(result if isinstance(result, dict)
+                   else {'success': False, 'message': str(result)}), 400
+
+
+@control_bp.route('/control/pending-actions/<action_id>/reject', methods=['POST'])
+@_require_engineer
+def reject_pending_action(action_id):
+    """驳回一条自动写入提案。"""
+    dc = getattr(current_app, 'device_control', None)
+    if dc is None:
+        return module_unavailable_response('device_control')
+
+    data = request.get_json(silent=True) or {}
+    operator = request.current_user['username']
+    ok = dc.reject_pending(action_id, operator, str(data.get('reason') or ''))
+    if not ok:
+        return api_error('待审批动作不存在或已处理', 404)
+
+    get_auth_manager().log_operation(
+        operator, 'reject_pending_action', f'驳回自动动作 {action_id}')
+    return jsonify({'success': True, 'action_id': action_id})
+
+
 @control_bp.route('/devices/<device_id>/write-register', methods=['POST'])
 @_require_engineer
 def write_register(device_id):

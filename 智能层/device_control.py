@@ -133,6 +133,48 @@ class BypassRequest:
         return time.time() > self.expires_at
 
 
+@dataclass
+class PendingAction:
+    """HITL 待审批动作（round 378）。
+
+    HITL 的语义是“人必须做决定”，所以自动来源的写入在 manual / 未武装的
+    supervised 下不是直接失败，而是变成一条**提案**：人可以批准、改值或驳回。
+    """
+    action_id: str
+    device_id: str
+    address: int
+    value: Any
+    kind: str
+    engineering: bool
+    control_point: bool
+    source: str                    # 谁发起的（edge_decision / pid / 外部系统）
+    reason: str = ''
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    expires_mono: float = 0.0
+    updates: int = 1               # 同一目标被自动重复提案的次数
+    status: str = 'pending'        # pending / executing / approved / rejected / expired
+
+    def to_dict(self) -> dict[str, Any]:
+        remaining = max(0, int(self.expires_mono - time.monotonic())) \
+            if self.expires_mono else 0
+        return {
+            'action_id': self.action_id,
+            'device_id': self.device_id,
+            'address': self.address,
+            'value': self.value,
+            'kind': self.kind,
+            'engineering': self.engineering,
+            'control_point': self.control_point,
+            'source': self.source,
+            'reason': self.reason,
+            'created_at': datetime.fromtimestamp(self.created_at).isoformat(),
+            'updates': self.updates,
+            'status': self.status,
+            'remaining_seconds': remaining,
+        }
+
+
 class DeviceControlSafety:
     """
     工厂级设备控制安全管理器
@@ -185,6 +227,27 @@ class DeviceControlSafety:
         #:   · `remove_interlock()` 删规则后定时器仍会触发并写审计。
         self._bypass_timers: dict[str, tuple[str, Any]] = {}
         self._bypass_lock = threading.Lock()
+
+        # ===== 自主等级（round 378） =====
+        #: 每台设备的控制权归属：
+        #:  * manual     —— 人工在环（human-in-the-loop）：只接受人工下发；
+        #:  * supervised —— 人在环上（human-on-the-loop）：自动写入必须由人
+        #:                  “武装/授权”且未过期，人可随时解除；
+        #:  * automatic  —— 人在环外（human-out-of-the-loop）：全自动，无人值守。
+        #: 配置基线来自设备配置 `autonomy:`；运行期可用 API 覆盖。
+        self._AUTONOMY_MODES = ('manual', 'supervised', 'automatic')
+        self._autonomy_override: dict[str, str] = {}
+        #: device_id -> 武装到期时刻（time.monotonic()）
+        self._autonomy_armed_until: dict[str, float] = {}
+        self._autonomy_armed_by: dict[str, str] = {}
+
+        #: HITL 待审批动作：action_id -> PendingAction
+        self._pending_actions: dict[str, PendingAction] = {}
+        self._pending_lock = threading.Lock()
+        #: 提案有效期与上限：PID 每周期都会提案，靠 (device,address,kind)
+        #: 去重合并，避免几百条同目标提案把队列撑爆。
+        self.PENDING_TTL_S = 300
+        self.PENDING_MAX = 200
 
         # ===== 写操作安全配置 =====
         # 设备写操作白名单：device_id -> {register_name: (min_value, max_value)}
@@ -1963,8 +2026,242 @@ class DeviceControlSafety:
 
     # ==================== 写操作安全校验 ====================
 
+    # ------------------------------------------------------------------
+    # 自主等级（HOTL / HOOTL）
+    # ------------------------------------------------------------------
+
+    def _device_autonomy(self, device_id: str) -> str:
+        """当前生效的自主等级：运行期覆盖 > 设备配置 > 默认 automatic。"""
+        with self._lock:
+            override = self._autonomy_override.get(device_id)
+        if override in self._AUTONOMY_MODES:
+            return override
+
+        devices = getattr(self.device_manager, 'devices', {}) or {}
+        cfg = devices.get(device_id) if isinstance(devices, dict) else None
+        mode = str((cfg or {}).get('autonomy') or 'automatic').lower()
+        return mode if mode in self._AUTONOMY_MODES else 'automatic'
+
+    def set_autonomy_mode(self, device_id: str, mode: str, operator: str,
+                          reason: str = '') -> tuple[bool, str]:
+        """切换设备自主等级（运行期覆盖，不写回配置文件）。"""
+        mode = str(mode or '').lower()
+        if mode not in self._AUTONOMY_MODES:
+            return False, f'非法自主等级: {mode!r}（允许 {self._AUTONOMY_MODES}）'
+
+        with self._lock:
+            self._autonomy_override[device_id] = mode
+            if mode != 'supervised':
+                # 切走监督模式时撤销武装，避免下次切回来带着旧授权
+                self._autonomy_armed_until.pop(device_id, None)
+                self._autonomy_armed_by.pop(device_id, None)
+
+        self._audit('autonomy_mode_changed', operator,
+                    f'设备 {device_id} 自主等级 → {mode}'
+                    + (f'，原因: {reason}' if reason else ''))
+        logger.warning("设备 %s 自主等级切换为 %s（操作人: %s）",
+                       device_id, mode, operator)
+        return True, mode
+
+    def arm_autonomy(self, device_id: str, operator: str,
+                     minutes: int = 60) -> tuple[bool, str]:
+        """武装自动控制（HOTL）：在指定时长内允许自动写入。"""
+        if isinstance(minutes, bool):
+            return False, '武装时长必须是整数分钟'
+        minutes = try_int(minutes)
+        if minutes is None or not (1 <= minutes <= 480):
+            return False, '武装时长必须在 1~480 分钟之间'
+
+        if self._device_autonomy(device_id) != 'supervised':
+            return False, '只有 supervised（人在环上）模式需要武装'
+
+        until = time.monotonic() + minutes * 60
+        with self._lock:
+            self._autonomy_armed_until[device_id] = until
+            self._autonomy_armed_by[device_id] = operator
+
+        self._audit('autonomy_armed', operator,
+                    f'设备 {device_id} 自动控制武装 {minutes} 分钟')
+        logger.warning("设备 %s 自动控制已武装 %d 分钟（操作人: %s）",
+                       device_id, minutes, operator)
+        return True, f'已武装 {minutes} 分钟'
+
+    def disarm_autonomy(self, device_id: str, operator: str) -> bool:
+        """解除自动控制授权（人在环上时的“接管”动作）。"""
+        with self._lock:
+            existed = self._autonomy_armed_until.pop(device_id, None) is not None
+            self._autonomy_armed_by.pop(device_id, None)
+        if existed:
+            self._audit('autonomy_disarmed', operator,
+                        f'设备 {device_id} 自动控制解除武装')
+            logger.warning("设备 %s 自动控制已解除武装（操作人: %s）",
+                           device_id, operator)
+        return existed
+
+    def get_autonomy(self, device_id: str) -> dict[str, Any]:
+        mode = self._device_autonomy(device_id)
+        with self._lock:
+            until = self._autonomy_armed_until.get(device_id)
+            armed_by = self._autonomy_armed_by.get(device_id)
+        remaining = max(0, int(until - time.monotonic())) if until else 0
+        return {
+            'device_id': device_id,
+            'mode': mode,
+            'armed': remaining > 0,
+            'armed_by': armed_by if remaining > 0 else None,
+            'armed_remaining_seconds': remaining,
+        }
+
+    def _autonomy_allows_auto(self, device_id: str) -> tuple[bool, str]:
+        """自动来源的写入是否允许（人工写入永远放行）。"""
+        mode = self._device_autonomy(device_id)
+        if mode == 'automatic':
+            return True, 'automatic'
+        if mode == 'manual':
+            return False, (f'设备 {device_id} 处于 manual（人工在环）模式，'
+                           f'拒绝自动写入')
+        with self._lock:
+            until = self._autonomy_armed_until.get(device_id, 0.0)
+        if time.monotonic() >= until:
+            return False, (f'设备 {device_id} 处于 supervised（人在环上）模式，'
+                           f'自动写入未武装或已过期，请先授权')
+        return True, 'supervised'
+
+    # ------------------------------------------------------------------
+    # HITL 待审批提案
+    # ------------------------------------------------------------------
+
+    def _prune_pending_locked(self) -> list[str]:
+        """清理过期/超限提案（调用方必须已持有 `_pending_lock`）。"""
+        now = time.monotonic()
+        removed = [
+            aid for aid, act in self._pending_actions.items()
+            if act.status == 'pending' and act.expires_mono and now >= act.expires_mono
+        ]
+        for aid in removed:
+            self._pending_actions.pop(aid, None)
+
+        overflow = len(self._pending_actions) - self.PENDING_MAX
+        if overflow > 0:
+            oldest = sorted(self._pending_actions.items(),
+                            key=lambda kv: kv[1].created_at)
+            for aid, act in oldest[:overflow]:
+                if act.status == 'pending':
+                    self._pending_actions.pop(aid, None)
+                    removed.append(aid)
+        return removed
+
+    def _propose_action(self, device_id: str, address: int, value: Any,
+                        source: str, *, kind: str, engineering: bool,
+                        control_point: bool, reason: str = '') -> PendingAction:
+        """自动写入在当前策略下不能直接执行 → 生成/合并一条待审批提案。"""
+        key = (device_id, int(address), kind)
+        with self._pending_lock:
+            expired = self._prune_pending_locked()
+            proposal = None
+            for act in self._pending_actions.values():
+                if act.status == 'pending' and \
+                        (act.device_id, act.address, act.kind) == key:
+                    act.value = value
+                    act.engineering = engineering
+                    act.control_point = control_point
+                    act.source = source
+                    act.reason = reason or act.reason
+                    act.updated_at = time.time()
+                    act.updates += 1
+                    proposal = act
+                    break
+            if proposal is None:
+                proposal = PendingAction(
+                    action_id=uuid.uuid4().hex[:8],
+                    device_id=device_id,
+                    address=int(address),
+                    value=value,
+                    kind=kind,
+                    engineering=engineering,
+                    control_point=control_point,
+                    source=source,
+                    reason=reason,
+                    expires_mono=time.monotonic() + self.PENDING_TTL_S,
+                )
+                self._pending_actions[proposal.action_id] = proposal
+
+        for aid in expired:
+            self._audit('pending_action_expired', 'system',
+                        f'待审批动作 {aid} 已过期，自动作废')
+        self._audit('write_pending_approval', source,
+                    f'{device_id}/{address}={value}（{kind}）等待人工审批，'
+                    f'action={proposal.action_id}')
+        return proposal
+
+    def get_pending_actions(self, device_id: str | None = None) -> list[dict[str, Any]]:
+        with self._pending_lock:
+            expired = self._prune_pending_locked()
+            items = [
+                act.to_dict() for act in self._pending_actions.values()
+                if act.status == 'pending'
+                and (device_id is None or act.device_id == device_id)
+            ]
+        for aid in expired:
+            self._audit('pending_action_expired', 'system',
+                        f'待审批动作 {aid} 已过期，自动作废')
+        items.sort(key=lambda x: x['created_at'])
+        return items
+
+    def approve_pending(self, action_id: str, approver: str,
+                        value: Any | None = None) -> tuple[bool, Any]:
+        """批准提案并执行（可传 `value` 修改后再执行）。
+
+        Returns:
+            (是否找到并处理, 执行结果 dict 或失败说明字符串)
+        """
+        with self._pending_lock:
+            act = self._pending_actions.get(action_id)
+            if act is None or act.status != 'pending':
+                return False, '待审批动作不存在或已处理'
+            if act.expires_mono and time.monotonic() >= act.expires_mono:
+                self._pending_actions.pop(action_id, None)
+                return False, '待审批动作已过期'
+            act.status = 'executing'
+            execute_value = act.value if value is None else value
+            params = (act.device_id, act.address, execute_value, act.kind,
+                      act.control_point, act.engineering)
+
+        device_id, address, execute_value, kind, control_point, engineering = params
+        try:
+            result = self.write_with_verification(
+                device_id, address, execute_value, approver,
+                kind=kind, control_point=control_point,
+                engineering=engineering, origin='human')
+        except Exception as exc:      # noqa: BLE001 —— 审批接口不能 500
+            logger.exception("执行待审批动作 %s 时异常", action_id)
+            result = {'success': False, 'message': f'执行失败: {exc}'}
+        finally:
+            with self._pending_lock:
+                self._pending_actions.pop(action_id, None)
+
+        ok = bool(isinstance(result, dict) and result.get('success'))
+        self._audit('write_approved' if ok else 'write_approval_failed',
+                    approver,
+                    f'批准 {device_id}/{address}={execute_value} '
+                    f'(action={action_id}) → {"成功" if ok else "失败"}')
+        return True, result
+
+    def reject_pending(self, action_id: str, approver: str,
+                       reason: str = '') -> bool:
+        with self._pending_lock:
+            act = self._pending_actions.pop(action_id, None)
+        if act is None:
+            return False
+        self._audit('write_rejected', approver,
+                    f'驳回 {act.device_id}/{act.address}={act.value}'
+                    + (f'，原因: {reason}' if reason else ''))
+        logger.warning("待审批动作 %s 被 %s 驳回", action_id, approver)
+        return True
+
     def validate_write(self, device_id: str, address: int, value: int,
-                       operator: str, control_point: bool = False) -> dict[str, Any]:
+                       operator: str, control_point: bool = False,
+                       origin: str = 'human') -> dict[str, Any]:
         """
         写操作安全校验
 
@@ -1980,6 +2277,21 @@ class DeviceControlSafety:
             {'allowed': bool, 'reason': str, 'warnings': list}
         """
         result = {'allowed': True, 'reason': '', 'warnings': []}
+
+        # 0. 自主等级闸门（round 378）。
+        #    人工下发（origin='human'）永远放行 —— 这一层只约束自动来源
+        #    （边缘决策 / PID / 外部系统），把“人在环上/环外”变成可执行的策略：
+        #    manual 拒绝、supervised 需武装、automatic 放行。
+        if origin != 'human':
+            auto_allowed, auto_reason = self._autonomy_allows_auto(device_id)
+            if not auto_allowed:
+                result['allowed'] = False
+                result['reason'] = auto_reason
+                return result
+            if auto_reason == 'supervised':
+                result['warnings'].append(
+                    f'自动写入已授权（人在环上，操作人: '
+                    f'{self.get_autonomy(device_id).get("armed_by") or "?"}）')
 
         # 0. 非有限值（NaN / ±Infinity）一律拒绝。
         #
@@ -2770,7 +3082,8 @@ class DeviceControlSafety:
                                 operator: str, max_retries: int = 2,
                                 kind: str = 'register',
                                 control_point: bool = False,
-                                engineering: bool = False) -> dict[str, Any]:
+                                engineering: bool = False,
+                                origin: str = 'human') -> dict[str, Any]:
         """
         带回读验证的写操作
 
@@ -2792,9 +3105,42 @@ class DeviceControlSafety:
                 不同的对象**（一个数据字 vs 一个开关位），等于操作员以为按下了
                 启动位、实际往数据寄存器里写了个数。
         """
+        # HITL：自动来源在当前策略下不能直接执行时，**不是拒绝，而是提案**。
+        # manual / 未武装的 supervised 都把动作排进待审批队列，由人批准、
+        # 改值或驳回 —— 这才是"人在回路"，而不是"人盯着看"。
+        if origin != 'human':
+            auto_allowed, auto_reason = self._autonomy_allows_auto(device_id)
+            if not auto_allowed:
+                # 提案前先跑一遍**静态安全校验**（急停/联锁/量程/健康/互斥），
+                # 明显违规的动作直接拒绝，不塞给人去批准 —— 否则 HITL 队列
+                # 会变成"把危险动作包装成待办"。
+                precheck = self.validate_write(
+                    device_id, address, value, operator,
+                    control_point=control_point, origin='human')
+                if not precheck['allowed']:
+                    self._audit('write_proposal_rejected', operator,
+                                f'{device_id}/{address}={value} 提案被安全校验拒绝: '
+                                f'{precheck["reason"]}')
+                    return {
+                        'success': False,
+                        'message': f'自动动作未进入审批：{precheck["reason"]}',
+                        'validation': precheck,
+                    }
+                proposal = self._propose_action(
+                    device_id, address, value, operator,
+                    kind=kind, engineering=engineering,
+                    control_point=control_point, reason=auto_reason)
+                return {
+                    'success': False,
+                    'pending_approval': True,
+                    'action_id': proposal.action_id,
+                    'message': f'已提交人工审批（{auto_reason}）',
+                }
+
         # 安全校验
         validation = self.validate_write(device_id, address, value, operator,
-                                         control_point=control_point)
+                                         control_point=control_point,
+                                         origin=origin)
         if not validation['allowed']:
             self._audit('write_blocked', operator,
                         f'写入被阻止: {device_id}/{address}={value}, 原因: {validation["reason"]}')

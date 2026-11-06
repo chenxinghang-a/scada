@@ -670,13 +670,22 @@ def main():
                         result = device_control.write_with_verification(
                             device_id, int(address), value,
                             operator='edge_decision', kind='register',
-                            engineering=True) or {}
+                            engineering=True,
+                            # round 378：标记为自动来源，由设备自主等级
+                            # （manual/supervised/automatic）决定是否放行。
+                            origin='auto') or {}
                     except Exception as e:      # noqa: BLE001
                         logger.error("边缘决策写入异常: %s/%s=%s — %s",
                                      device_id, address, value, e)
                         return
 
-                    if not result.get('success'):
+                    if result.get('pending_approval'):
+                        # HITL：设备处于人工在环/未授权监督模式，动作已转为
+                        # 待审批提案。这不是故障，不能刷 ERROR。
+                        logger.info("边缘决策写入等待人工审批: %s/%s=%s "
+                                    "(action=%s)", device_id, address, value,
+                                    result.get('action_id'))
+                    elif not result.get('success'):
                         logger.error("边缘决策写入失败: %s/%s=%s — %s",
                                      device_id, address, value,
                                      result.get('message') or '未知原因')
