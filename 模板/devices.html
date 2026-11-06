@@ -301,6 +301,9 @@
                                 <option value="opcua">OPC UA</option>
                                 <option value="mqtt">MQTT</option>
                                 <option value="rest">REST HTTP</option>
+                                <option value="custom">自定义接口 / 工厂插件</option>
+                                <option value="mc">三菱 MC</option>
+                                <option value="fins">欧姆龙 FINS</option>
                             </select>
                         </div>
                     </div>
@@ -323,6 +326,60 @@
                                 <option value="safety">安全设备（灯/蜂鸣器/继电器）</option>
                             </select>
                             <div class="form-text">机械类设备在设备管理中显示停止/启动按钮，E-STOP 时机械数据归零</div>
+                        </div>
+                    </div>
+
+                    <!-- 设备语义与铭牌（round 380：面向任意电气设备） -->
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">设备类别</label>
+                            <select class="form-select" id="device-class">
+                                <option value="other">其他</option>
+                                <option value="sensor">传感器</option>
+                                <option value="actuator">执行器</option>
+                                <option value="drive">驱动/变频器</option>
+                                <option value="meter">电表/仪表</option>
+                                <option value="plc">PLC/远程 IO</option>
+                                <option value="relay">继电器</option>
+                                <option value="hmi">HMI/网关</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">控制权归属</label>
+                            <select class="form-select" id="device-autonomy">
+                                <option value="manual">HITL · 人工在环（自动动作需审批）</option>
+                                <option value="supervised">HOTL · 人监督（授权后自动）</option>
+                                <option value="automatic">HOOTL · 全自动（无人值守）</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">供电类型</label>
+                            <select class="form-select" id="device-power-type">
+                                <option value="">未填写</option>
+                                <option value="ac">交流 AC</option>
+                                <option value="dc">直流 DC</option>
+                                <option value="unknown">未知</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">额定电压 (V)</label>
+                            <input type="number" class="form-control mono" id="device-rated-voltage"
+                                   min="0" step="0.1" placeholder="如 380">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">额定电流 (A)</label>
+                            <input type="number" class="form-control mono" id="device-rated-current"
+                                   min="0" step="0.1" placeholder="如 32">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">相数</label>
+                            <select class="form-select" id="device-phases">
+                                <option value="">未填写</option>
+                                <option value="1">单相</option>
+                                <option value="3">三相</option>
+                            </select>
                         </div>
                     </div>
 
@@ -528,6 +585,47 @@
                             <div class="state-box__hint">点击上方「添加端点」补充 REST 数据源</div>
                         </div>
                     </div>
+
+                    <!-- ==================== 自定义接口 / 工厂插件 ==================== -->
+                    <div id="custom-fields" class="protocol-fields" style="display:none;">
+                        <div class="form-section-title">
+                            <span><i class="bi bi-puzzle me-2"></i>自定义接口 / 工厂插件</span>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">可用插件</label>
+                                <select class="form-select" id="custom-plugin-select"
+                                        onchange="applyPluginTemplate()">
+                                    <option value="">（HTTP 声明式适配器不需要插件）</option>
+                                </select>
+                                <div class="form-text">
+                                    插件放在 `扩展/adapters/`；选择后会自动生成 `transport: plugin` 模板。
+                                </div>
+                            </div>
+                            <div class="col-md-6 d-flex align-items-end gap-2">
+                                <button type="button" class="btn btn-sm btn-outline-info"
+                                        onclick="loadAvailablePlugins(true)">刷新插件</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                        onclick="fillAdapterTemplate('http')">HTTP 模板</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                        onclick="fillAdapterTemplate('plugin')">插件模板</button>
+                            </div>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">adapter 配置（JSON）</label>
+                            <textarea id="custom-adapter-json" class="form-control mono" rows="14"
+                                      spellcheck="false"
+                                      placeholder='{"transport":"http","base_url":"https://...","request":{"path":"/points"},"points":[]}'></textarea>
+                            <div class="form-text">
+                                字段参考 `文档/自定义接口适配.md`；`${ENV}` 占位符会由服务端展开。
+                            </div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <button type="button" class="btn btn-sm btn-outline-success"
+                                    onclick="validateAdapterJson()">校验 JSON</button>
+                            <span class="small" id="custom-adapter-status"></span>
+                        </div>
+                    </div>
                 </form>
             </div>
             <div class="modal-footer">
@@ -619,7 +717,8 @@ function onProtocolChange() {
     document.querySelectorAll('.protocol-fields').forEach(el => el.style.display = 'none');
     
     // 根据协议显示对应区域
-    if (protocol === 'modbus_tcp' || protocol === 'modbus_rtu') {
+    if (protocol === 'modbus_tcp' || protocol === 'modbus_rtu'
+            || protocol === 'mc' || protocol === 'fins') {
         document.getElementById('modbus-fields').style.display = 'block';
         // Modbus RTU 显示波特率、隐藏端口
         document.getElementById('modbus-rtu-extra').style.display = protocol === 'modbus_rtu' ? 'block' : 'none';
@@ -629,6 +728,111 @@ function onProtocolChange() {
         document.getElementById('mqtt-fields').style.display = 'block';
     } else if (protocol === 'rest') {
         document.getElementById('rest-fields').style.display = 'block';
+    } else if (protocol === 'custom') {
+        document.getElementById('custom-fields').style.display = 'block';
+        loadAvailablePlugins();
+    }
+}
+
+// ==================== 自定义接口 / 工厂插件 ====================
+
+let adapterPluginsLoaded = false;
+
+async function loadAvailablePlugins(force = false) {
+    if (adapterPluginsLoaded && !force) return;
+    const select = document.getElementById('custom-plugin-select');
+    try {
+        const resp = await fetch('/api/devices/adapters', { headers: getAuthHeaders() });
+        const data = await resp.json();
+        if (!resp.ok) return;
+        select.innerHTML = '<option value="">（HTTP 声明式适配器不需要插件）</option>';
+        (data.plugins || []).forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = `${p.name}${p.version ? ' v' + p.version : ''}`
+                + `${p.description ? ' · ' + p.description : ''}`;
+            select.appendChild(opt);
+        });
+        adapterPluginsLoaded = true;
+    } catch (e) {
+        console.warn('加载插件列表失败:', e);
+    }
+}
+
+function fillAdapterTemplate(kind) {
+    const textarea = document.getElementById('custom-adapter-json');
+    const status = document.getElementById('custom-adapter-status');
+    const plugin = document.getElementById('custom-plugin-select').value;
+    let template;
+
+    if (kind === 'plugin') {
+        template = {
+            transport: 'plugin',
+            plugin: plugin || 'example_mock',
+            settings: {},
+            points: [
+                { name: 'temperature', path: 'temperature', type: 'float', unit: '°C' }
+            ]
+        };
+        status.textContent = '插件模板：请补 settings 与 points 的 path';
+    } else {
+        template = {
+            transport: 'http',
+            base_url: 'https://example.com/api',
+            auth: { type: 'none' },
+            request: { method: 'GET', path: '/points', timeout: 5 },
+            response: { records: 'data.items' },
+            points: [
+                { name: 'temperature', path: 'value', type: 'float', scale: 1, unit: '°C' }
+            ],
+            poll_interval: 5
+        };
+        status.textContent = 'HTTP 模板：请改成实际接口与 fields';
+    }
+    textarea.value = JSON.stringify(template, null, 2);
+    status.className = 'small text-muted';
+}
+
+function applyPluginTemplate() {
+    const name = document.getElementById('custom-plugin-select').value;
+    if (!name) return;
+    const textarea = document.getElementById('custom-adapter-json');
+    const status = document.getElementById('custom-adapter-status');
+
+    let current = null;
+    try {
+        current = JSON.parse(textarea.value || '{}');
+    } catch (e) { /* 保持空对象，下面重写 */ }
+
+    const base = (current && typeof current === 'object' && !Array.isArray(current)
+                  && current.transport === 'plugin')
+        ? current
+        : { transport: 'plugin', settings: {}, points: [] };
+    base.transport = 'plugin';
+    base.plugin = name;
+    if (!base.settings || typeof base.settings !== 'object') base.settings = {};
+    if (!Array.isArray(base.points)) base.points = [];
+
+    textarea.value = JSON.stringify(base, null, 2);
+    status.textContent = `已选择插件 ${name}，请补 settings/points`;
+    status.className = 'small text-muted';
+}
+
+function validateAdapterJson() {
+    const raw = document.getElementById('custom-adapter-json').value.trim();
+    const status = document.getElementById('custom-adapter-status');
+    try {
+        const obj = JSON.parse(raw);
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+            throw new Error('adapter 必须是 JSON 对象');
+        }
+        status.textContent = 'JSON 合法';
+        status.className = 'small text-success';
+        return obj;
+    } catch (e) {
+        status.textContent = 'JSON 错误: ' + e.message;
+        status.className = 'small text-danger';
+        return null;
     }
 }
 
@@ -837,6 +1041,8 @@ function resetAllProtocolFields() {
     document.getElementById('no-nodes-hint').style.display = 'block';
     document.getElementById('no-topics-hint').style.display = 'block';
     document.getElementById('no-endpoints-hint').style.display = 'block';
+    document.getElementById('custom-adapter-json').value = '';
+    document.getElementById('custom-adapter-status').textContent = '';
 }
 
 function showAddDeviceModal() {
@@ -852,6 +1058,13 @@ function showAddDeviceModal() {
     document.getElementById('device-enabled').value = 'true';
     document.getElementById('mqtt-port').value = '1883';
     document.getElementById('rest-poll-interval').value = '10';
+    document.getElementById('device-class').value = 'other';
+    document.getElementById('device-autonomy').value = 'automatic';
+    document.getElementById('device-power-type').value = '';
+    document.getElementById('device-rated-voltage').value = '';
+    document.getElementById('device-rated-current').value = '';
+    document.getElementById('device-phases').value = '';
+    document.getElementById('custom-plugin-select').value = '';
     editIntervalDisplayed = null;   // 新增设备：采集周期按输入框实际值回传
     
     resetAllProtocolFields();
@@ -861,10 +1074,10 @@ function showAddDeviceModal() {
     modal.show();
 }
 
-function editDevice(deviceId) {
+async function editDevice(deviceId) {
     const device = devicesList.find(d => d.device_id === deviceId);
     if (!device) return;
-    
+
     document.getElementById('deviceModalTitle').textContent = '编辑设备';
     document.getElementById('device-id-old').value = deviceId;
     document.getElementById('device-id').value = deviceId;
@@ -875,13 +1088,26 @@ function editDevice(deviceId) {
     document.getElementById('device-interval').value = device.collection_interval || 5;
     editIntervalDisplayed = document.getElementById('device-interval').value;
     document.getElementById('device-enabled').value = device.enabled !== false ? 'true' : 'false';
-    
+
+    // round 380：设备语义 / 铭牌 / 自主等级
+    document.getElementById('device-class').value = device.device_class || 'other';
+    document.getElementById('device-autonomy').value = device.autonomy || 'automatic';
+    const electrical = device.electrical || {};
+    document.getElementById('device-power-type').value = electrical.power_type || '';
+    document.getElementById('device-rated-voltage').value =
+        electrical.rated_voltage !== undefined ? electrical.rated_voltage : '';
+    document.getElementById('device-rated-current').value =
+        electrical.rated_current !== undefined ? electrical.rated_current : '';
+    document.getElementById('device-phases').value =
+        electrical.phases !== undefined ? electrical.phases : '';
+
     resetAllProtocolFields();
     onProtocolChange();
-    
+
     const protocol = device.protocol || 'modbus_tcp';
-    
-    if (protocol === 'modbus_tcp' || protocol === 'modbus_rtu') {
+
+    if (protocol === 'modbus_tcp' || protocol === 'modbus_rtu'
+            || protocol === 'mc' || protocol === 'fins') {
         document.getElementById('device-host').value = device.host || '';
         document.getElementById('device-port').value = device.port || 502;
         document.getElementById('device-slave-id').value = device.slave_id || 1;
@@ -931,8 +1157,30 @@ function editDevice(deviceId) {
             device.endpoints.forEach(ep => addEndpointRow(ep));
             document.getElementById('no-endpoints-hint').style.display = 'none';
         }
+    } else if (protocol === 'custom') {
+        // adapter 里可能有密钥，列表接口刻意不返回；编辑时单独向 engineer 接口取
+        try {
+            const resp = await fetch(`/api/devices/${deviceId}/adapter-config`, {
+                headers: getAuthHeaders()
+            });
+            const payload = await resp.json();
+            if (resp.ok && payload.adapter) {
+                document.getElementById('custom-adapter-json').value =
+                    JSON.stringify(payload.adapter, null, 2);
+                document.getElementById('custom-adapter-status').textContent =
+                    payload.source === 'raw'
+                        ? '已加载配置原文（保留 ${ENV} 占位符）'
+                        : '已加载运行期配置';
+            } else {
+                document.getElementById('custom-adapter-status').textContent =
+                    payload.message || '读取 adapter 配置失败，请手动填写';
+            }
+        } catch (e) {
+            document.getElementById('custom-adapter-status').textContent =
+                '读取 adapter 配置失败: ' + e.message;
+        }
     }
-    
+
     const modal = new bootstrap.Modal(document.getElementById('deviceModal'));
     modal.show();
 }
@@ -1187,8 +1435,22 @@ async function saveDevice() {
         name: name,
         description: document.getElementById('device-description').value.trim(),
         protocol: protocol,
+        device_class: document.getElementById('device-class').value || 'other',
+        autonomy: document.getElementById('device-autonomy').value || 'automatic',
         enabled: document.getElementById('device-enabled').value === 'true'
     };
+    // 铭牌参数：全部留空时不传，避免覆盖成空对象
+    const electrical = {};
+    const ratedVoltage = document.getElementById('device-rated-voltage').value;
+    const ratedCurrent = document.getElementById('device-rated-current').value;
+    const phases = document.getElementById('device-phases').value;
+    const powerType = document.getElementById('device-power-type').value;
+    if (ratedVoltage !== '') electrical.rated_voltage = Number(ratedVoltage);
+    if (ratedCurrent !== '') electrical.rated_current = Number(ratedCurrent);
+    if (phases !== '') electrical.phases = Number(phases);
+    if (powerType !== '') electrical.power_type = powerType;
+    if (Object.keys(electrical).length > 0) deviceConfig.electrical = electrical;
+
     // 编辑态且用户未改动采集周期 → 不回传该字段，保留设备原有周期
     if (!isEdit || intervalInput !== editIntervalDisplayed) {
         deviceConfig.collection_interval = parseInt(intervalInput) || 5;
@@ -1229,6 +1491,12 @@ async function saveDevice() {
         }
         deviceConfig.topics = collectDataPoints('#topics-container');
         if (deviceConfig.topics.length === 0) { showAlert('请至少添加一个 MQTT 主题', 'warning'); return; }
+    } else if (protocol === 'mc' || protocol === 'fins') {
+        const host = document.getElementById('device-host').value.trim();
+        if (!host) { showAlert('请输入 IP 地址', 'warning'); return; }
+        deviceConfig.host = host;
+        deviceConfig.port = parseInt(document.getElementById('device-port').value) || 5000;
+        deviceConfig.registers = collectDataPoints('#registers-container');
     } else if (protocol === 'rest') {
         const baseUrl = document.getElementById('rest-base-url').value.trim();
         if (!baseUrl) { showAlert('请输入 REST Base URL', 'warning'); return; }
@@ -1246,6 +1514,24 @@ async function saveDevice() {
         }
         deviceConfig.endpoints = collectDataPoints('#endpoints-container');
         if (deviceConfig.endpoints.length === 0) { showAlert('请至少添加一个 REST 端点', 'warning'); return; }
+    } else if (protocol === 'custom') {
+        const raw = document.getElementById('custom-adapter-json').value.trim();
+        if (!raw) {
+            showAlert('请填写 adapter 配置（可点「HTTP 模板」开始）', 'warning');
+            return;
+        }
+        let adapter;
+        try {
+            adapter = JSON.parse(raw);
+        } catch (e) {
+            showAlert('adapter JSON 格式错误: ' + e.message, 'danger');
+            return;
+        }
+        if (!adapter || typeof adapter !== 'object' || Array.isArray(adapter)) {
+            showAlert('adapter 必须是 JSON 对象', 'danger');
+            return;
+        }
+        deviceConfig.adapter = adapter;
     }
     
     try {

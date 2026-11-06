@@ -534,6 +534,10 @@ class SimulatedDeviceManager(IDeviceManager):
             'connected': False,
             'stopped': is_device_stopped(device_id) or _ESTOP_ACTIVE,
             'device_category': IDeviceManager.get_device_category(device_config),
+            # round 380：设备语义/铭牌/自主等级（界面编辑需要）
+            'device_class': device_config.get('device_class', 'other'),
+            'electrical': device_config.get('electrical') or {},
+            'autonomy': device_config.get('autonomy', 'automatic'),
             'register_count': len(device_config.get('registers', [])) + len(device_config.get('nodes', [])) + len(device_config.get('topics', [])) + len(device_config.get('endpoints', [])),
             'registers': device_config.get('registers', []),
             'nodes': device_config.get('nodes', []),

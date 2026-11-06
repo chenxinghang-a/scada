@@ -351,12 +351,58 @@ class TestApiDeviceValidation:
         assert config['adapter']['response']['records'] == 'data.points'
         assert config['poll_interval'] == 7
 
+    def test_build_config_keeps_device_metadata(self):
+        from 展示层.api.api_devices import _build_device_config
+
+        data = _adapter()
+        data.update({
+            'device_class': 'meter',
+            'autonomy': 'hitl',
+            'electrical': {'rated_voltage': 380, 'phases': 3},
+        })
+        config = _build_device_config('custom', data)
+        assert config['device_class'] == 'meter'
+        assert config['autonomy'] == 'hitl'
+        assert config['electrical']['phases'] == 3
+
+    @pytest.mark.parametrize('field, value', [
+        ('autonomy', 'robot'),
+        ('device_class', 'spaceship'),
+        ('electrical', ['x']),
+    ])
+    def test_invalid_device_metadata_rejected(self, field, value):
+        from 展示层.api.api_devices import _validate_protocol_fields
+
+        data = _adapter()
+        data[field] = value
+        with pytest.raises(ValueError):
+            _validate_protocol_fields('custom', data)
+
     def test_connection_test_uses_custom_client(self):
         """设备页的"测试连接"必须走真实适配器，而不是当成不支持的协议。"""
         from 展示层.api.api_devices import _create_test_client
 
         client = _create_test_client(_adapter(), simulation_mode=True)
         assert isinstance(client, custom_adapter.CustomAdapterClient)
+
+    def test_devices_page_supports_custom_and_device_metadata(self):
+        """设备页必须能选 custom、编辑 adapter、填设备类别/自主等级。"""
+        from pathlib import Path
+
+        html = (Path(__file__).resolve().parent.parent
+                / '模板' / 'devices.html').read_text(encoding='utf-8')
+        for token in (
+            'value="custom"',
+            'id="custom-fields"',
+            'id="custom-adapter-json"',
+            'id="custom-plugin-select"',
+            '/api/devices/adapters',
+            '/adapter-config',
+            'id="device-class"',
+            'id="device-autonomy"',
+            'id="device-rated-voltage"',
+        ):
+            assert token in html, f'设备页缺少 {token}'
 
     def test_devices_yaml_validation_catches_bad_adapter(self, tmp_path):
         """启动/保存阶段的配置校验必须能发现 adapter 结构错误（round 376）。"""

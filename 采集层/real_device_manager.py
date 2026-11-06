@@ -787,6 +787,10 @@ class RealDeviceManager(IDeviceManager):
             'connected': False,
             'stopped': device_id in self._stopped_devices or self._estop_active,
             'device_category': IDeviceManager.get_device_category(device_config),
+            # round 380：设备语义/铭牌/自主等级（界面编辑需要；不含 adapter）
+            'device_class': device_config.get('device_class', 'other'),
+            'electrical': device_config.get('electrical') or {},
+            'autonomy': device_config.get('autonomy', 'automatic'),
             'registers': device_config.get('registers', []),
             'nodes': device_config.get('nodes', []),
             'topics': device_config.get('topics', []),
