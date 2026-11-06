@@ -358,6 +358,81 @@ class TestApiDeviceValidation:
         client = _create_test_client(_adapter(), simulation_mode=True)
         assert isinstance(client, custom_adapter.CustomAdapterClient)
 
+    def test_devices_yaml_validation_catches_bad_adapter(self, tmp_path):
+        """启动/保存阶段的配置校验必须能发现 adapter 结构错误（round 376）。"""
+        import yaml
+        from core.config_validator import validate_config
+
+        bad = _spec_bad_records()
+        path = tmp_path / 'devices.yaml'
+        path.write_text(yaml.safe_dump({'devices': [bad]}, allow_unicode=True),
+                        encoding='utf-8')
+
+        ok, errors = validate_config(str(path), 'devices')
+        assert ok is False
+        assert any('adapter' in e and 'record' in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# 5. MQTT 复用同一套映射引擎（round 376）
+# ---------------------------------------------------------------------------
+
+class TestMqttDeclarativeMapping:
+    def _client(self, points, **topic_over):
+        from 采集层.mqtt_client import MQTTClient
+
+        topic = {'topic': 'factory/line1/state', 'points': points}
+        topic.update(topic_over)
+        return MQTTClient({'id': 'mqtt_dev', 'topics': [topic]})
+
+    def test_topic_points_map_multiple_values(self):
+        """一个主题出多个点位，含 enum / scale / 显式 device_id。"""
+        client = self._client(
+            [
+                {'name': 'temperature', 'path': 'temp', 'type': 'float',
+                 'scale': 0.1, 'unit': 'C'},
+                {'name': 'run_state', 'path': 'state', 'type': 'string',
+                 'enum': {'RUNNING': 1, 'IDLE': 0}},
+            ],
+            device_id='line1',
+        )
+        seen = []
+        client.add_data_callback(lambda d, n, v, u: seen.append((d, n, v, u)))
+
+        client._process_message('factory/line1/state',
+                                {'temp': 500, 'state': 'running'})
+
+        assert client.latest_data['temperature']['value'] == 50.0
+        assert client.latest_data['temperature']['unit'] == 'C'
+        assert client.latest_data['run_state']['value'] == 1
+        assert ('line1', 'temperature', 50.0, 'C') in seen
+
+    def test_topic_records_list(self):
+        """`records` 指向列表：与 HTTP 适配器同口径，后一条覆盖前一条。"""
+        client = self._client(
+            [{'name': 'value', 'path': 'v', 'type': 'float'}],
+            records='data.points',
+        )
+        client._process_message('factory/line1/state',
+                                {'data': {'points': [{'v': 1}, {'v': 2}]}})
+        assert client.latest_data['value']['value'] == 2.0
+
+    def test_invalid_points_config_is_explicit(self):
+        """点位配置写错 → 该主题明确不采集，不能回退成按整包猜点位名。"""
+        client = self._client([{'name': 'broken'}])      # 缺 path
+        assert client._declared_topic_map()['factory/line1/state'] is None
+        client._process_message('factory/line1/state', {'broken': 1, 'temp': 25})
+        assert client.latest_data == {}
+        assert client.stats['parse_errors'] == 0        # 编译期已记 ERROR，不重复计数
+
+    def test_legacy_json_path_still_works(self):
+        """没有 points 的主题继续走旧的 json_path 路径（别修过头）。"""
+        client = self._client([])
+        client.topics_config = [{'topic': 'legacy/t', 'name': 'vibration_x',
+                                 'json_path': 'value', 'unit': 'mm/s'}]
+        client._process_message('legacy/t', {'value': 0.12, 'ts': 1})
+        assert client.latest_data['vibration_x']['value'] == 0.12
+
 
 def _spec_bad_records():
     """response 里写错字段名（record 而不是 records）。"""

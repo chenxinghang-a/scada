@@ -275,7 +275,32 @@ def validate_config(config_path: str, schema_type: str) -> tuple[bool, list[str]
     except jsonschema.SchemaError as e:
         errors.append(f"Schema错误: {e.message}")
 
+    # round 376：JSON Schema 只能校验"protocol 是字符串"，管不到 adapter
+    # 内部的 records/points 结构。这里补一遍语义校验 —— 配置写错时在
+    # **启动/保存阶段**就报出来，而不是等设备连不上才发现。
+    if schema_type == 'devices' and not errors:
+        errors.extend(validate_custom_adapters(config))
+
     return len(errors) == 0, errors
+
+
+def validate_custom_adapters(config: dict) -> list[str]:
+    """校验 `protocol: custom` 设备的 adapter 段（round 376）。"""
+    from 采集层.adapter_spec import AdapterConfigError, AdapterSpec
+
+    problems: list[str] = []
+    devices = (config or {}).get('devices') or []
+    if not isinstance(devices, list):
+        return problems
+    for idx, dev in enumerate(devices):
+        if not isinstance(dev, dict) or dev.get('protocol') != 'custom':
+            continue
+        try:
+            AdapterSpec.from_device_config(dev)
+        except AdapterConfigError as exc:
+            label = dev.get('id') or f'#{idx + 1}'
+            problems.append(f'设备 {label} 的 adapter 配置非法: {exc}')
+    return problems
 
 
 def validate_all_configs(config_dir: str = "配置") -> Dict[str, tuple[bool, list[str]]]:

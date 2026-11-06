@@ -69,7 +69,9 @@ __all__ = [
     'RequestSpec',
     'dig',
     'join_url',
+    'map_message',
     'map_payload',
+    'parse_point_specs',
 ]
 
 _ALLOWED_TRANSPORTS = {'http'}
@@ -170,13 +172,7 @@ class AdapterSpec:
                                          or not records_path.strip()):
             raise AdapterConfigError('adapter.response.records 必须是非空字符串')
 
-        raw_points = adapter.get('points')
-        if not isinstance(raw_points, list) or not raw_points:
-            raise AdapterConfigError('adapter.points 必须是非空列表')
-        points = tuple(_point_spec(item, idx) for idx, item in enumerate(raw_points))
-        names = [p.name for p in points]
-        if len(names) != len(set(names)):
-            raise AdapterConfigError(f'adapter.points 存在重名点位: {names}')
+        points = parse_point_specs(adapter.get('points'), 'adapter.points')
 
         write = None
         if adapter.get('write') is not None:
@@ -261,8 +257,19 @@ def _request_spec(raw: Any, where: str, *, require_path: bool) -> RequestSpec:
     )
 
 
-def _point_spec(raw: Any, idx: int) -> PointSpec:
-    where = f'adapter.points[{idx}]'
+def parse_point_specs(raw_points: Any, where: str = 'points') -> tuple[PointSpec, ...]:
+    """校验并编译一组点位映射（HTTP `adapter.points` 与 MQTT `topics[].points` 共用）。"""
+    if not isinstance(raw_points, list) or not raw_points:
+        raise AdapterConfigError(f'{where} 必须是非空列表')
+    points = tuple(_point_spec(item, idx, where) for idx, item in enumerate(raw_points))
+    names = [p.name for p in points]
+    if len(names) != len(set(names)):
+        raise AdapterConfigError(f'{where} 存在重名点位: {names}')
+    return points
+
+
+def _point_spec(raw: Any, idx: int, where_prefix: str = 'adapter.points') -> PointSpec:
+    where = f'{where_prefix}[{idx}]'
     if not isinstance(raw, Mapping):
         raise AdapterConfigError(f'{where} 必须是对象')
     _reject_unknown(raw, _ALLOWED_POINT, where)
@@ -427,34 +434,28 @@ def convert_value(raw: Any, point: PointSpec) -> Any:
     return from_raw(numeric, point.scale, point.offset)
 
 
-def map_payload(payload: Any, spec: AdapterSpec,
-                now: datetime | None = None) -> dict[str, dict[str, Any]]:
-    """把一整个响应体映射成 `{point_name: {value, unit, quality, timestamp}}`。
-
-    Raises:
-        AdapterDataError: records 不是列表 / 必填点缺失 / 没有任何点位命中。
-    """
-    timestamp = (now or datetime.now()).isoformat()
-
-    if spec.records_path:
-        found = dig(payload, spec.records_path)
+def _extract_records(payload: Any, records_path: str | None,
+                     where: str) -> list[Any]:
+    if records_path:
+        found = dig(payload, records_path)
         if found is _MISSING or not isinstance(found, list):
             raise AdapterDataError(
-                f'response.records={spec.records_path!r} 未取到列表'
+                f'{where}={records_path!r} 未取到列表'
                 f'（实际: {type(found).__name__ if found is not _MISSING else "缺失"}）')
         if not found:
-            raise AdapterDataError(
-                f'response.records={spec.records_path!r} 是空列表')
-        records = found
-    else:
-        records = [payload]
+            raise AdapterDataError(f'{where}={records_path!r} 是空列表')
+        return found
+    return [payload]
 
+
+def _map_records(records: list[Any], points: tuple[PointSpec, ...],
+                 timestamp: str, source: str) -> dict[str, dict[str, Any]]:
     mapped: dict[str, dict[str, Any]] = {}
     for idx, record in enumerate(records):
         if not isinstance(record, Mapping):
             raise AdapterDataError(
                 f'第 {idx} 条记录不是对象（{type(record).__name__}）')
-        for point in spec.points:
+        for point in points:
             raw = dig(record, point.path)
             if raw is _MISSING or raw is None:
                 if point.required:
@@ -478,5 +479,30 @@ def map_payload(payload: Any, spec: AdapterSpec,
 
     if not mapped:
         raise AdapterDataError(
-            '响应没有匹配到任何点位（检查 response.records 与 points[].path）')
+            f'{source}没有匹配到任何点位（检查 records 与 points[].path）')
     return mapped
+
+
+def map_payload(payload: Any, spec: AdapterSpec,
+                now: datetime | None = None) -> dict[str, dict[str, Any]]:
+    """把一整个 HTTP 响应体映射成 `{point_name: {value, unit, quality, timestamp}}`。
+
+    Raises:
+        AdapterDataError: records 不是列表 / 必填点缺失 / 没有任何点位命中。
+    """
+    timestamp = (now or datetime.now()).isoformat()
+    records = _extract_records(payload, spec.records_path, 'response.records')
+    return _map_records(records, spec.points, timestamp, '响应')
+
+
+def map_message(payload: Any, points: tuple[PointSpec, ...],
+                records_path: str | None = None,
+                now: datetime | None = None) -> dict[str, dict[str, Any]]:
+    """映射一条 MQTT 消息（不依赖 `AdapterSpec`，规则与 HTTP 完全一致）。
+
+    MQTT 侧此前只有 `json_path + name`：一个主题只能出一个数值点，枚举/类型/
+    批量记录都得写代码。这里复用同一套 `PointSpec`，配置即可扩展。
+    """
+    timestamp = (now or datetime.now()).isoformat()
+    records = _extract_records(payload, records_path, 'records')
+    return _map_records(records, points, timestamp, '消息')

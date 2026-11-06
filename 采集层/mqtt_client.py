@@ -12,6 +12,14 @@ from datetime import datetime
 from core.safe_numeric import to_finite_float, try_finite_float
 from config import MQTTConfig
 
+from .adapter_spec import (
+    AdapterConfigError,
+    AdapterDataError,
+    PointSpec,
+    map_message,
+    parse_point_specs,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -453,12 +461,36 @@ class MQTTClient:
         2. {"temperature": 25.5, "pressure": 0.101}  (自动从topic提取device_id)
         3. {"device_id": "xxx", "data": {"temperature": 25.5, "pressure": 0.101}}
         """
+        meta = self._topic_meta(topic)
+
+        # round 376：**声明式映射优先**。主题配置里写了 `points:` 时，
+        # 走与 HTTP 适配器完全相同的映射引擎（路径/类型/枚举/scale/records）——
+        # 一个主题可以出多个点位，不再需要为新接口写解析代码。
+        declared = self._declared_topic_map()
+        if topic in declared:
+            compiled = declared[topic]
+            if compiled is None:
+                # 编译期已记 ERROR（字段拼错等），这里不能回退到启发式解析 ——
+                # 否则会把错误配置"猜"出一堆乱七八糟的点位名，比直接不采更难查。
+                return
+            records_path, points = compiled
+            try:
+                mapped = map_message(data, points, records_path)
+            except AdapterDataError as exc:
+                logger.warning("MQTT %s 声明式映射失败: %s", topic, exc)
+                self.stats['parse_errors'] = self.stats.get('parse_errors', 0) + 1
+                return
+            device_id = self._topic_device_id(topic)
+            for name, item in mapped.items():
+                self._notify_callbacks(device_id, name, item['value'],
+                                       item.get('unit', ''), retain=retain)
+            return
+
         # round 370（BUG-025）：**先看主题配置的 json_path / name**。
         # `topics` 里常写成 `json_path: value` + `name: vibration_x`，
         # 而载荷是 `{"value": 0.12, "ts": ...}` —— 原实现完全不看这两个字段，
         # 把整个 JSON 的每个数值键都当成点位，点位名变成 "value"/"ts"，
         # 与设备配置里的寄存器名对不上，数据被采集器丢弃。
-        meta = self._topic_meta(topic)
         json_path = str(meta.get('json_path') or '').strip()
         if json_path:
             cur: Any = data
@@ -530,8 +562,49 @@ class MQTTClient:
                 return entry
         return {}
 
+    def _declared_topic_map(self) -> dict[str, tuple[str | None, tuple[PointSpec, ...]] | None]:
+        """编译 `topics[].points` 声明式映射；配置非法时值为 None（显式失败）。
+
+        缓存按 `(id(topics_config), len(topics_config))` 失效，测试里改完配置
+        直接调 `_process_message` 也能生效。
+        """
+        entries = getattr(self, 'topics_config', None) or []
+        cache_key = (id(entries), len(entries))
+        if getattr(self, '_topic_map_key', None) == cache_key:
+            return self._topic_map_cache
+
+        compiled: dict[str, tuple[str | None, tuple[PointSpec, ...]] | None] = {}
+        for entry in entries:
+            if not isinstance(entry, dict) or 'points' not in entry:
+                continue
+            topic = str(entry.get('topic') or '').strip()
+            if not topic:
+                logger.error("MQTT topics 里有 points 但缺少 topic，已忽略: %r", entry)
+                continue
+            try:
+                points = parse_point_specs(entry.get('points'),
+                                           f'topics[{topic}].points')
+                records = entry.get('records')
+                if records is not None and (not isinstance(records, str)
+                                            or not records.strip()):
+                    raise AdapterConfigError(
+                        f'topics[{topic}].records 必须是非空字符串')
+                compiled[topic] = (records.strip() if records else None, points)
+            except AdapterConfigError as exc:
+                logger.error("MQTT 主题 %s 的声明式映射配置非法（该主题不采集）: %s",
+                             topic, exc)
+                compiled[topic] = None
+
+        self._topic_map_key = cache_key
+        self._topic_map_cache = compiled
+        return compiled
+
     def _topic_device_id(self, topic: str) -> str:
-        """设备 ID：优先用客户端绑定的设备，取不到才退回主题末段。"""
+        """设备 ID：主题配置显式声明 > 客户端绑定设备 > 主题末段。"""
+        meta = self._topic_meta(topic)
+        explicit = str(meta.get('device_id') or '').strip()
+        if explicit:
+            return explicit
         device_id = getattr(self, 'device_id', '') or ''
         if device_id:
             return device_id
@@ -566,7 +639,7 @@ class MQTTClient:
             logger.debug(f"无法解析原始消息: {topic} = {payload}")
 
     def _notify_callbacks(self, device_id: str, register_name: str,
-                         value: float, unit: str, retain: bool = False):
+                         value: Any, unit: str, retain: bool = False):
         """
         通知所有回调函数
         签名统一: callback(device_id, register_name, value, unit)
