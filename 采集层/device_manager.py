@@ -108,6 +108,11 @@ def _create_client(config: dict[str, Any], simulation_mode: bool, use_enhanced: 
         # round 375：声明式自定义接口。**模拟模式下也连真实接口** ——
         # 适配器本身就是"指向某个 HTTP 服务"，没有可模拟的语义；
         # 想离线演练就把它指向本地 mock 服务。
+        # round 377：transport=plugin 走工厂插件，其余走声明式 HTTP。
+        from .adapter_spec import adapter_transport
+        if adapter_transport(config) == 'plugin':
+            from .plugin_adapter import PluginAdapterClient
+            return PluginAdapterClient(config)
         from .custom_adapter import CustomAdapterClient
         return CustomAdapterClient(config)
 

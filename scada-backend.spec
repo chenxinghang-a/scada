@@ -36,7 +36,7 @@ a = Analysis(
     ['run.py'],
     pathex=[os.path.abspath(SPECPATH)],
     binaries=[],
-    datas=[('run.py', '.'), ('VERSION', '.'), ('模板', '模板'), ('静态资源', '静态资源'), ('配置', '配置'), ('core', 'core'), ('采集层', '采集层'), ('存储层', '存储层'), ('报警层', '报警层'), ('展示层', '展示层'), ('智能层', '智能层'), ('用户层', '用户层'), ('timeseries', 'timeseries'), ('tools', 'tools'), ('paths.py', '.'), ('config.py', '.')],
+    datas=[('run.py', '.'), ('VERSION', '.'), ('模板', '模板'), ('静态资源', '静态资源'), ('配置', '配置'), ('core', 'core'), ('采集层', '采集层'), ('存储层', '存储层'), ('报警层', '报警层'), ('展示层', '展示层'), ('智能层', '智能层'), ('用户层', '用户层'), ('timeseries', 'timeseries'), ('tools', 'tools'), ('扩展', '扩展'), ('paths.py', '.'), ('config.py', '.')],
     hiddenimports=['run', 'flask', 'flask_socketio', 'socketio', 'engineio', 'engineio.async_drivers.threading', 'engineio.async_drivers._websocket_wsgi', 'pymodbus', 'asyncua', 'paho.mqtt', 'jwt', 'bcrypt', 'pandas', 'numpy', 'yaml', 'loguru', 'apscheduler', 'openpyxl', 'dotenv', 'requests', 'psutil'],
     hookspath=[],
     hooksconfig={},

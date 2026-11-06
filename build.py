@@ -54,6 +54,8 @@ def build():
     data_dirs = [
         '模板', '静态资源', '配置', 'core', '采集层', '存储层',
         '报警层', '展示层', '智能层', '用户层', 'timeseries', 'tools',
+        # round 377：工厂插件目录必须随包分发（否则 exe 里找不到 example/自写插件）
+        '扩展',
     ]
 
     cmd = [

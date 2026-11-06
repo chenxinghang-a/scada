@@ -67,6 +67,7 @@ __all__ = [
     'AdapterSpec',
     'PointSpec',
     'RequestSpec',
+    'adapter_transport',
     'dig',
     'join_url',
     'map_message',
@@ -74,13 +75,13 @@ __all__ = [
     'parse_point_specs',
 ]
 
-_ALLOWED_TRANSPORTS = {'http'}
+_ALLOWED_TRANSPORTS = {'http', 'plugin'}
 _ALLOWED_METHODS = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}
 _ALLOWED_TYPES = {'auto', 'float', 'int', 'bool', 'string'}
 _ALLOWED_AUTH_TYPES = {'none', 'basic', 'bearer', 'api_key'}
 
 _ALLOWED_TOP = {'transport', 'base_url', 'request', 'response', 'points',
-                'write', 'poll_interval', 'auth', 'name'}
+                'write', 'poll_interval', 'auth', 'name', 'plugin', 'settings'}
 _ALLOWED_REQUEST = {'method', 'path', 'params', 'json', 'headers', 'timeout'}
 _ALLOWED_RESPONSE = {'records'}
 _ALLOWED_WRITE = _ALLOWED_REQUEST
@@ -90,6 +91,7 @@ _ALLOWED_AUTH = {'type', 'token', 'username', 'password', 'header', 'value'}
 
 _ENV_PATTERN = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
 _TOKEN_PATTERN = re.compile(r'([^.\[\]]+)|\[(\d+)\]')
+_PLUGIN_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 _MISSING = object()
 
@@ -133,12 +135,15 @@ class AdapterSpec:
     """整台设备的适配器规格。"""
 
     base_url: str
-    request: RequestSpec
+    request: RequestSpec | None
     points: tuple[PointSpec, ...]
     records_path: str | None = None
     write: RequestSpec | None = None
     poll_interval: float | None = None
     auth: Mapping[str, Any] = field(default_factory=dict)
+    transport: str = 'http'
+    plugin: str | None = None
+    settings: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_device_config(cls, config: Mapping[str, Any]) -> 'AdapterSpec':
@@ -152,16 +157,8 @@ class AdapterSpec:
         transport = str(adapter.get('transport', 'http')).lower()
         if transport not in _ALLOWED_TRANSPORTS:
             raise AdapterConfigError(
-                f'不支持的 adapter.transport: {transport!r}（当前只支持 http）')
-
-        base_url = _env(adapter.get('base_url'))
-        if not isinstance(base_url, str) or not base_url.strip():
-            raise AdapterConfigError('adapter.base_url 必须是非空字符串')
-        if not base_url.lower().startswith(('http://', 'https://')):
-            raise AdapterConfigError(f'base_url 必须是 http(s) 地址: {base_url!r}')
-
-        request = _request_spec(adapter.get('request'), 'adapter.request',
-                                require_path=True)
+                f'不支持的 adapter.transport: {transport!r}'
+                f'（支持 {sorted(_ALLOWED_TRANSPORTS)}）')
 
         response = adapter.get('response') or {}
         if not isinstance(response, Mapping):
@@ -172,19 +169,37 @@ class AdapterSpec:
                                          or not records_path.strip()):
             raise AdapterConfigError('adapter.response.records 必须是非空字符串')
 
-        points = parse_point_specs(adapter.get('points'), 'adapter.points')
-
-        write = None
-        if adapter.get('write') is not None:
-            write = _request_spec(adapter.get('write'), 'adapter.write',
-                                  require_path=True)
-
         poll = adapter.get('poll_interval')
         if poll is not None:
             poll = try_finite_float(poll)
             if poll is None or poll <= 0:
                 raise AdapterConfigError(
                     f'adapter.poll_interval 必须是正数: {adapter.get("poll_interval")!r}')
+
+        if transport == 'plugin':
+            return _plugin_spec(adapter, records_path, poll)
+
+        # HTTP 专属字段：出现在 plugin 配置里多半是复制粘贴错误，直接报错
+        # 比"配了但没生效"好查。
+        if 'plugin' in adapter or 'settings' in adapter:
+            raise AdapterConfigError(
+                'transport=http 不接受 plugin/settings（插件字段只用于 transport=plugin）')
+
+        base_url = _env(adapter.get('base_url'))
+        if not isinstance(base_url, str) or not base_url.strip():
+            raise AdapterConfigError('adapter.base_url 必须是非空字符串')
+        if not base_url.lower().startswith(('http://', 'https://')):
+            raise AdapterConfigError(f'base_url 必须是 http(s) 地址: {base_url!r}')
+
+        request = _request_spec(adapter.get('request'), 'adapter.request',
+                                require_path=True)
+
+        points = parse_point_specs(adapter.get('points'), 'adapter.points')
+
+        write = None
+        if adapter.get('write') is not None:
+            write = _request_spec(adapter.get('write'), 'adapter.write',
+                                  require_path=True)
 
         auth = _auth_spec(adapter.get('auth'))
 
@@ -196,7 +211,57 @@ class AdapterSpec:
             write=write,
             poll_interval=poll,
             auth=auth,
+            transport='http',
         )
+
+
+def _plugin_spec(adapter: Mapping[str, Any], records_path: Any,
+                 poll: float | None) -> AdapterSpec:
+    """解析 `transport: plugin`（round 377）。"""
+    for key in ('base_url', 'request', 'write', 'auth'):
+        if adapter.get(key) not in (None, {}, ''):
+            raise AdapterConfigError(
+                f'transport=plugin 不接受 {key}（连接参数请放进 settings，由插件读取）')
+
+    name = adapter.get('plugin')
+    if not isinstance(name, str) or not _PLUGIN_NAME_RE.fullmatch(name.strip()):
+        raise AdapterConfigError(
+            f'adapter.plugin 必须是合法的模块名（字母/数字/下划线，且不以数字开头）: '
+            f'{name!r}')
+
+    settings = adapter.get('settings') or {}
+    if not isinstance(settings, Mapping):
+        raise AdapterConfigError('adapter.settings 必须是对象（传给插件构造器）')
+
+    points: tuple[PointSpec, ...] = ()
+    if adapter.get('points') is not None:
+        points = parse_point_specs(adapter.get('points'), 'adapter.points')
+
+    if records_path and not points:
+        raise AdapterConfigError(
+            'transport=plugin 配了 response.records 就必须同时配 points'
+            '（没有 points 时插件应直接返回 {点位: 值}）')
+
+    return AdapterSpec(
+        base_url='',
+        request=None,
+        points=points,
+        records_path=records_path.strip() if records_path else None,
+        write=None,
+        poll_interval=poll,
+        auth={'type': 'none'},
+        transport='plugin',
+        plugin=name.strip(),
+        settings=_env(dict(settings)),
+    )
+
+
+def adapter_transport(config: Mapping[str, Any]) -> str:
+    """读取设备配置里的 transport（不构造 spec，供工厂分支用）。"""
+    adapter = config.get('adapter')
+    if not isinstance(adapter, Mapping):
+        return 'http'
+    return str(adapter.get('transport', 'http')).lower()
 
 
 # ---------------------------------------------------------------------------

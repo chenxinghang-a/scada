@@ -48,6 +48,11 @@ def create_protocol_client(config: dict[str, Any]) -> IDeviceClient | None:
         return RESTDeviceClient(config)
     if protocol == 'custom':
         # round 375：声明式自定义接口（adapter 段），与模拟模式共用
+        # round 377：transport=plugin 走工厂插件
+        from .adapter_spec import adapter_transport
+        if adapter_transport(config) == 'plugin':
+            from .plugin_adapter import PluginAdapterClient
+            return PluginAdapterClient(config)
         from .custom_adapter import CustomAdapterClient
         return CustomAdapterClient(config)
     if protocol == 'mc':
@@ -172,6 +177,10 @@ class RealDeviceManager(IDeviceManager):
             from core.config_manager import expand_env_vars
             with open(config_file, 'r', encoding='utf-8') as f:
                 raw = yaml.safe_load(f)
+            # round 377：保存**原始**（未展开）设备表，落盘时用它还原 ${VAR}。
+            # 否则 `_save_config` 会把展开后的明文密码写回 YAML。
+            raw_devices = ((raw or {}).get('devices')
+                           if isinstance(raw, dict) else None)
             # 展开 ${VAR} / ${VAR:-default}；未注入的保留占位符并告警
             config = expand_env_vars(raw or {}, _source=str(config_file))
         except yaml.YAMLError as exc:
@@ -211,6 +220,9 @@ class RealDeviceManager(IDeviceManager):
 
         with self._lock:
             self.devices = new_devices
+            # 只有本次解析成功才更新原始快照（失败时保留旧表/旧快照）
+            self._raw_devices = [d for d in (raw_devices or [])
+                                 if isinstance(d, dict)]
 
         proto_count: dict[str, int] = {}
         for d in new_devices.values():
@@ -934,8 +946,13 @@ class RealDeviceManager(IDeviceManager):
         try:
             # 持锁取快照：API 线程正在增删时，裸 `list(self.devices.values())`
             # 会抛 RuntimeError，被下面的 except 吞掉 → 配置静默不写盘。
+            # round 377：**落盘前还原 `${VAR}` 占位符**。内存里是展开后的明文，
+            # 直接 dump 会把全厂密码写成明文（改一次设备名就泄露一次）。
+            from core.config_manager import restore_device_placeholders
             with self._lock:
-                config = {'devices': list(self.devices.values())}
+                devices = list(self.devices.values())
+                raw_devices = list(getattr(self, '_raw_devices', []))
+            config = {'devices': restore_device_placeholders(devices, raw_devices)}
             config_file = paths.resolve(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
             # round 369：**原子写**（同目录临时文件 + fsync + os.replace）。

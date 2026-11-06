@@ -458,6 +458,75 @@ def get_topology():
     })
 
 
+# ==================== 插件适配器（工厂开发空间，round 377）====================
+
+@devices_bp.route('/devices/adapters', methods=['GET'])
+@_require_auth
+def list_adapter_plugins():
+    """列出 `扩展/adapters/` 下可用的插件（只读元数据，不执行插件代码）。"""
+    from 采集层.plugin_adapter import discover_plugins, get_plugin_dir
+
+    return jsonify({
+        'plugins': discover_plugins(),
+        'directory': str(get_plugin_dir()),
+        'note': '插件以主进程权限运行，只部署可信代码；改完代码可调用 '
+                'POST /api/devices/adapters/reload 热加载。',
+    })
+
+
+@devices_bp.route('/devices/adapters/reload', methods=['POST'])
+@_require_engineer
+def reload_adapter_plugins():
+    """断开所有插件设备并清模块缓存，下一次采集重新加载插件代码。"""
+    from 采集层.plugin_adapter import clear_plugin_cache
+
+    manager = current_app.device_manager
+    disconnected = []
+    for dev_id, cfg in list(getattr(manager, 'devices', {}).items()):
+        adapter = cfg.get('adapter') if isinstance(cfg, dict) else None
+        if isinstance(adapter, dict) and adapter.get('transport') == 'plugin':
+            try:
+                manager.disconnect_device(dev_id)
+                disconnected.append(dev_id)
+            except Exception as e:      # noqa: BLE001
+                logger.warning("热加载插件时断开设备 %s 失败: %s", dev_id, e)
+
+    removed = clear_plugin_cache()
+    logger.info("插件热加载: 清理模块 %d 个，断开设备 %s", removed, disconnected)
+    return jsonify({
+        'success': True,
+        'cleared_modules': removed,
+        'reconnecting_devices': disconnected,
+    })
+
+
+@devices_bp.route('/devices/<device_id>/adapter-config', methods=['GET'])
+@_require_engineer
+def get_device_adapter_config(device_id):
+    """读取设备的 `adapter` 配置。
+
+    优先返回**文件原文**（`${ENV}` 占位符未被展开），供界面/工具编辑；
+    运行时新增（文件里没有）的设备回退到内存配置 —— 那种情况可能含明文密钥，
+    所以只对 engineer 及以上开放。
+    """
+    manager = current_app.device_manager
+    runtime = getattr(manager, 'devices', {}).get(device_id)
+    if not runtime:
+        return api_error(f'设备 {device_id} 不存在', 404)
+
+    raw = next((d for d in getattr(manager, '_raw_devices', [])
+                if isinstance(d, dict) and d.get('id') == device_id), None)
+    source = raw or runtime
+    adapter = source.get('adapter')
+    if adapter is None:
+        return api_error(f'设备 {device_id} 不使用 adapter 配置', 404)
+    return jsonify({
+        'device_id': device_id,
+        'adapter': adapter,
+        'source': 'raw' if raw else 'runtime',
+    })
+
+
 @devices_bp.route('/devices/<device_id>', methods=['GET'])
 @_require_auth
 def get_device(device_id):
@@ -1676,6 +1745,10 @@ def _create_test_client(config: dict, simulation_mode: bool):
 
     # 自定义适配器没有"模拟"语义：连接测试必须打真实接口（与工厂一致）
     if protocol == 'custom':
+        from 采集层.adapter_spec import adapter_transport
+        if adapter_transport(config) == 'plugin':
+            from 采集层.plugin_adapter import PluginAdapterClient
+            return PluginAdapterClient(config)
         from 采集层.custom_adapter import CustomAdapterClient
         return CustomAdapterClient(config)
 

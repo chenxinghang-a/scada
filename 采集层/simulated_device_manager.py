@@ -105,6 +105,9 @@ class SimulatedDeviceManager(IDeviceManager):
             from core.config_manager import expand_env_vars
             with open(config_file, 'r', encoding='utf-8') as f:
                 raw = yaml.safe_load(f)
+            # round 377：保留原始设备表，落盘时还原 ${VAR}（理由同 RealDeviceManager）
+            raw_devices = ((raw or {}).get('devices')
+                           if isinstance(raw, dict) else None)
             config = expand_env_vars(raw or {}, _source=str(config_file))
         except yaml.YAMLError as exc:
             logger.error("配置文件语法错误（保留原有设备表）: %s — %s",
@@ -140,6 +143,8 @@ class SimulatedDeviceManager(IDeviceManager):
 
         with self._lock:
             self.devices = new_devices
+            self._raw_devices = [d for d in (raw_devices or [])
+                                 if isinstance(d, dict)]
 
         proto_count: dict[str, int] = {}
         for d in new_devices.values():
@@ -697,8 +702,12 @@ class SimulatedDeviceManager(IDeviceManager):
         try:
             # 持锁取快照：API 线程正在增删时，裸 `list(self.devices.values())`
             # 会抛 RuntimeError，被下面的 except 吞掉 → 配置静默不写盘。
+            # round 377：落盘前还原 ${VAR}（同 RealDeviceManager）
+            from core.config_manager import restore_device_placeholders
             with self._lock:
-                config = {'devices': list(self.devices.values())}
+                devices = list(self.devices.values())
+                raw_devices = list(getattr(self, '_raw_devices', []))
+            config = {'devices': restore_device_placeholders(devices, raw_devices)}
             config_file = paths.resolve(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
             # round 369：原子写（同 RealDeviceManager，理由见那边）

@@ -55,6 +55,56 @@ def expand_env_vars(value: Any, _source: str = '') -> Any:
     return value
 
 
+def restore_env_placeholders(runtime_value: Any, raw_value: Any) -> Any:
+    """保存前把**未改动**的 `${VAR}` 值还原成占位符（round 377）。
+
+    `load_config()` 会把 `${DEVICE_X_PASSWORD}` 展开成明文放进内存；
+    如果保存时直接 dump 内存，现场一改设备名就会把**全厂密码写成明文**。
+    这里逐字段比对：只有「当前值恰好等于该占位符的展开结果」才还原，
+    用户在界面上真改过的值保持新值。
+
+    Args:
+        runtime_value: 内存中的（已展开）值
+        raw_value: 文件里的（原始）值，可能含 `${VAR}`
+    """
+    if isinstance(raw_value, str) and isinstance(runtime_value, str):
+        if _ENV_VAR_PATTERN.search(raw_value):
+            expanded = expand_env_vars(raw_value)
+            # 未设置的环境变量会原样保留占位符，此时 expanded == raw，
+            # 直接还原没有意义，但也不会造成损失。
+            if runtime_value == expanded:
+                return raw_value
+        return runtime_value
+
+    if isinstance(raw_value, dict) and isinstance(runtime_value, dict):
+        return {
+            key: (restore_env_placeholders(val, raw_value[key])
+                  if key in raw_value else val)
+            for key, val in runtime_value.items()
+        }
+
+    if isinstance(raw_value, list) and isinstance(runtime_value, list) \
+            and len(raw_value) == len(runtime_value):
+        return [restore_env_placeholders(rt, rw)
+                for rt, rw in zip(runtime_value, raw_value)]
+
+    return runtime_value
+
+
+def restore_device_placeholders(runtime_devices: list[dict],
+                                raw_devices: list[dict]) -> list[dict]:
+    """按设备 id 对齐后还原占位符（增删设备后用 id 而不是下标匹配）。"""
+    raw_by_id = {
+        dev.get('id'): dev for dev in raw_devices
+        if isinstance(dev, dict) and dev.get('id')
+    }
+    restored = []
+    for dev in runtime_devices:
+        raw = raw_by_id.get(dev.get('id')) if isinstance(dev, dict) else None
+        restored.append(restore_env_placeholders(dev, raw) if raw else dev)
+    return restored
+
+
 class ConfigManager:
     """
     配置管理器

@@ -62,6 +62,15 @@ class CustomAdapterClient:
             self._config_error = str(exc)
             logger.error("自定义适配器配置非法 device=%s: %s", self.device_id, exc)
 
+        # round 377：本类是 HTTP 实现；插件传输由 PluginAdapterClient 负责。
+        # 直接构造时明确报错，避免"配了 plugin 却按 HTTP 发请求"。
+        if self.spec is not None and self.spec.transport != 'http':
+            self._config_error = (f'CustomAdapterClient 只处理 transport=http，'
+                                  f'收到 {self.spec.transport!r}')
+            self.spec = None
+            logger.error("自定义适配器配置错误 device=%s: %s",
+                         self.device_id, self._config_error)
+
         device_interval = try_finite_float(config.get('poll_interval'))
         self.poll_interval = (
             self.spec.poll_interval if (self.spec and self.spec.poll_interval)
