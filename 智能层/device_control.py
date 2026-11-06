@@ -236,6 +236,12 @@ class DeviceControlSafety:
         #:  * automatic  —— 人在环外（human-out-of-the-loop）：全自动，无人值守。
         #: 配置基线来自设备配置 `autonomy:`；运行期可用 API 覆盖。
         self._AUTONOMY_MODES = ('manual', 'supervised', 'automatic')
+        #: 现场常直接写英文缩写，配置/API 都接受别名
+        self._AUTONOMY_ALIASES = {
+            'hitl': 'manual',
+            'hotl': 'supervised',
+            'hootl': 'automatic',
+        }
         self._autonomy_override: dict[str, str] = {}
         #: device_id -> 武装到期时刻（time.monotonic()）
         self._autonomy_armed_until: dict[str, float] = {}
@@ -2030,24 +2036,30 @@ class DeviceControlSafety:
     # 自主等级（HOTL / HOOTL）
     # ------------------------------------------------------------------
 
+    def _normalize_autonomy(self, mode: Any) -> str | None:
+        text = str(mode or '').lower()
+        text = self._AUTONOMY_ALIASES.get(text, text)
+        return text if text in self._AUTONOMY_MODES else None
+
     def _device_autonomy(self, device_id: str) -> str:
         """当前生效的自主等级：运行期覆盖 > 设备配置 > 默认 automatic。"""
         with self._lock:
-            override = self._autonomy_override.get(device_id)
-        if override in self._AUTONOMY_MODES:
+            override = self._normalize_autonomy(
+                self._autonomy_override.get(device_id))
+        if override:
             return override
 
         devices = getattr(self.device_manager, 'devices', {}) or {}
         cfg = devices.get(device_id) if isinstance(devices, dict) else None
-        mode = str((cfg or {}).get('autonomy') or 'automatic').lower()
-        return mode if mode in self._AUTONOMY_MODES else 'automatic'
+        return self._normalize_autonomy((cfg or {}).get('autonomy')) or 'automatic'
 
     def set_autonomy_mode(self, device_id: str, mode: str, operator: str,
                           reason: str = '') -> tuple[bool, str]:
         """切换设备自主等级（运行期覆盖，不写回配置文件）。"""
-        mode = str(mode or '').lower()
-        if mode not in self._AUTONOMY_MODES:
-            return False, f'非法自主等级: {mode!r}（允许 {self._AUTONOMY_MODES}）'
+        mode = self._normalize_autonomy(mode)
+        if mode is None:
+            return False, ('非法自主等级（允许 manual/supervised/automatic，'
+                           '或别名 hitl/hotl/hootl）')
 
         with self._lock:
             self._autonomy_override[device_id] = mode

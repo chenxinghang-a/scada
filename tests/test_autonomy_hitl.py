@@ -175,6 +175,14 @@ class TestHOOTL:
         dc, _ = _dc({'d1': {}})
         assert dc.get_autonomy('d1')['mode'] == 'automatic'
 
+    @pytest.mark.parametrize('alias, canonical', [
+        ('hitl', 'manual'), ('hotl', 'supervised'), ('hootl', 'automatic'),
+    ])
+    def test_accepts_english_aliases(self, alias, canonical):
+        """现场常直接写 HITL/HOTL/HOOTL，配置层要认。"""
+        dc, _ = _dc({'d1': {'autonomy': alias}})
+        assert dc.get_autonomy('d1')['mode'] == canonical
+
 
 class TestModeSwitch:
     def test_set_mode_and_override(self):

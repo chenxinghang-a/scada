@@ -50,7 +50,8 @@ DEVICE_SCHEMA = {
                     #: 控制权归属：manual / supervised / automatic
                     "autonomy": {
                         "type": "string",
-                        "enum": ["manual", "supervised", "automatic"]
+                        "enum": ["manual", "supervised", "automatic",
+                                 "hitl", "hotl", "hootl"]
                     },
                     "registers": {
                         "type": "array",
