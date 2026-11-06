@@ -23,7 +23,7 @@ DEVICE_SCHEMA = {
                 "properties": {
                     "id": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$"},
                     "name": {"type": "string", "minLength": 1, "maxLength": 100},
-                    "protocol": {"type": "string", "enum": ["modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest", "s7", "iec104", "fins", "mc", "dnp3"]},
+                    "protocol": {"type": "string", "enum": ["modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest", "s7", "iec104", "fins", "mc", "dnp3", "custom"]},
                     "host": {"type": "string"},
                     "port": {"type": "integer", "minimum": 1, "maximum": 65535},
                     "unit_id": {"type": "integer", "minimum": 0, "maximum": 255},

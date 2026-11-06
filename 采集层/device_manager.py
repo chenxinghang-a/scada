@@ -104,6 +104,13 @@ def _create_client(config: dict[str, Any], simulation_mode: bool, use_enhanced: 
             from .rest_client import RESTDeviceClient
             return RESTDeviceClient(config)
 
+    elif protocol == 'custom':
+        # round 375：声明式自定义接口。**模拟模式下也连真实接口** ——
+        # 适配器本身就是"指向某个 HTTP 服务"，没有可模拟的语义；
+        # 想离线演练就把它指向本地 mock 服务。
+        from .custom_adapter import CustomAdapterClient
+        return CustomAdapterClient(config)
+
     elif protocol in ('mc', 'fins'):
         # round 370（BUG-022）：三菱 MC / 欧姆龙 FINS 已在客户端层实现，
         # 但工厂与 SUPPORTED_PROTOCOLS 都没收它们 —— 配置里写 protocol: mc
@@ -140,8 +147,9 @@ class DeviceManager:
 
     # 支持的协议列表
     #: round 370（BUG-022）：补 mc / fins —— 与 `_create_client` 的分支保持一致。
+    #: round 375：补 custom —— 声明式 HTTP 适配器（adapter 段）。
     SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest',
-                           'mc', 'fins']
+                           'mc', 'fins', 'custom']
 
     def __init__(self, config_path: str | None = None, simulation_mode: bool = True, use_enhanced_simulation: bool = True):
         """

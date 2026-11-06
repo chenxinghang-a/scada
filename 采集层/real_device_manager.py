@@ -46,6 +46,10 @@ def create_protocol_client(config: dict[str, Any]) -> IDeviceClient | None:
         return MQTTClient(config)
     if protocol == 'rest':
         return RESTDeviceClient(config)
+    if protocol == 'custom':
+        # round 375：声明式自定义接口（adapter 段），与模拟模式共用
+        from .custom_adapter import CustomAdapterClient
+        return CustomAdapterClient(config)
     if protocol == 'mc':
         from .mc_client import MCClient
         return MCClient(config)
@@ -68,7 +72,8 @@ class RealDeviceManager(IDeviceManager):
     - 适用于生产环境
     """
 
-    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest', 'mc', 'fins']
+    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest',
+                           'mc', 'fins', 'custom']
 
     # 连接失败重试策略
     MAX_RETRY_COUNT = 3       # 最大重试次数后进入退避

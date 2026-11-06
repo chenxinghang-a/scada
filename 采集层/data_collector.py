@@ -1622,8 +1622,8 @@ class DataCollector:
                 with self._stats_lock:
                     self.stats['last_collection_time'] = timestamp
                 return ok
-            elif protocol in ('rest', 'opcua', 'mqtt'):
-                # REST/OPC-UA/MQTT都是缓存型协议，统一从缓存采集。
+            elif protocol in ('rest', 'opcua', 'mqtt', 'custom'):
+                # REST/OPC-UA/MQTT/自定义适配器都是缓存型协议，统一从缓存采集。
                 # **必须看返回值**：0 条 = 没采到任何数据（未连接/缓存空/全坏值），
                 # 不能计成功 —— 否则断路器对这三类设备永不打开。
                 produced = self._collect_from_cache(client, device_id, timestamp)

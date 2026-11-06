@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request, current_app
 from 用户层.auth import jwt_required, role_required
 from core.safe_numeric import to_int
 from core.device_lifecycle import notify_device_removed
+from 采集层.adapter_spec import AdapterConfigError, AdapterSpec
 from ._common import get_auth_manager, api_error_handler, api_error, safe_int
 
 logger = logging.getLogger(__name__)
@@ -536,7 +537,9 @@ def add_device():
         _validate_protocol_fields(protocol, data)
     except ValueError as e:
         logger.warning(f"设备配置验证失败: {e}")
-        return api_error('设备配置验证失败，请检查必填字段')
+        # 自定义适配器的错误必须原样带回（`records`/`points` 拼错时，
+        # "请检查必填字段"等于没说，用户根本不知道该改哪一行）。
+        return api_error(f'设备配置验证失败: {e}')
 
     # 构建设备配置
     try:
@@ -641,7 +644,8 @@ def update_device(device_id):
     #    旧连接在采数（甚至写到已经换掉的 PLC 上）。
     # ② enabled / collection_interval 变了不同步采集任务：定时器还是旧周期，
     #    禁用设备照旧在采、改周期不生效，直到重启。
-    if any(k in data for k in ('protocol', 'host', 'port', 'slave_id', 'registers')):
+    if any(k in data for k in ('protocol', 'host', 'port', 'slave_id',
+                               'registers', 'adapter', 'poll_interval')):
         try:
             device_manager.disconnect_device(device_id)
         except Exception as e:      # noqa: BLE001 —— 断开失败不影响配置已生效
@@ -1036,6 +1040,7 @@ def get_supported_protocols():
         {'id': 'opcua', 'name': 'OPC UA', 'description': '工业4.0标准协议，面向对象，内置安全认证', 'default_port': 4840, 'requires': ['endpoint', 'nodes']},
         {'id': 'mqtt', 'name': 'MQTT', 'description': '物联网消息协议，适合无线传感器和IoT设备', 'default_port': 1883, 'requires': ['host', 'port', 'topics']},
         {'id': 'rest', 'name': 'REST HTTP', 'description': 'HTTP接口，适合智能网关和云平台对接', 'default_port': 80, 'requires': ['base_url', 'endpoints']},
+        {'id': 'custom', 'name': '自定义接口', 'description': '声明式 HTTP 适配器：records/points 映射第三方接口，无需改代码', 'default_port': 443, 'requires': ['adapter']},
         {'id': 'mc', 'name': '三菱MC协议', 'description': '三菱PLC SLMP/3E帧协议，适用于FX5U/Q/iQ-R系列', 'default_port': 5000, 'requires': ['host', 'port', 'registers']},
         {'id': 'fins', 'name': '欧姆龙FINS', 'description': '欧姆龙PLC FINS/TCP协议，适用于NJ/NX/CJ系列', 'default_port': 9600, 'requires': ['host', 'port', 'registers']},
     ]
@@ -1505,6 +1510,13 @@ def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
             raise ValueError('REST设备缺少必填字段: base_url')
         if not data.get('endpoints'):
             raise ValueError('REST设备缺少端点配置')
+    elif protocol == 'custom':
+        if not isinstance(data.get('adapter'), dict):
+            raise ValueError('自定义接口设备缺少 adapter 配置')
+        try:
+            AdapterSpec.from_device_config(data)
+        except AdapterConfigError as exc:
+            raise ValueError(f'自定义接口配置非法: {exc}') from exc
     elif protocol == 'mc':
         for field in ('host', 'port'):
             if field not in data:
@@ -1566,6 +1578,17 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
             config['username'] = data['username']
             config['password'] = data.get('password', '')
         config['topics'] = data['topics']
+    elif protocol == 'custom':
+        # round 375：声明式适配器。`poll_interval` 同时决定客户端轮询周期；
+        # 没填时跟随采集周期，避免"采集每 5s 拉一次缓存、缓存却 60s 才更新"。
+        config['adapter'] = data['adapter']
+        # 轮询周期允许写在 adapter 段（与 spec 一致），也兼容设备级字段。
+        _adapter = data.get('adapter') or {}
+        config['poll_interval'] = safe_int(
+            data.get('poll_interval',
+                     _adapter.get('poll_interval',
+                                  data.get('collection_interval', 5))),
+            'poll_interval')
     elif protocol == 'rest':
         config['base_url'] = data['base_url']
         config['poll_interval'] = safe_int(data.get('poll_interval', 10), 'poll_interval')
@@ -1610,6 +1633,8 @@ def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: 
         fields = ('endpoint', 'security_mode', 'username', 'password', 'nodes')
     elif protocol == 'mqtt':
         fields = ('host', 'port', 'username', 'password', 'topics')
+    elif protocol == 'custom':
+        fields = ('adapter', 'poll_interval')
     elif protocol == 'rest':
         fields = ('base_url', 'poll_interval', 'auth_type', 'auth_token', 'auth_username', 'auth_password', 'endpoints')
     elif protocol == 'mc':
@@ -1626,6 +1651,13 @@ def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: 
             else:
                 device_config[key] = data[key]
 
+    # round 375：改完立即校验适配器规格，别等下一次连接才报错。
+    if protocol == 'custom':
+        try:
+            AdapterSpec.from_device_config(device_config)
+        except AdapterConfigError as exc:
+            raise ValueError(f'自定义接口配置非法: {exc}') from exc
+
 
 # ==================== 模拟设备预设API ====================
 
@@ -1641,6 +1673,11 @@ def _create_test_client(config: dict, simulation_mode: bool):
         设备客户端实例，不支持的协议返回None
     """
     protocol = config.get('protocol', 'modbus_tcp')
+
+    # 自定义适配器没有"模拟"语义：连接测试必须打真实接口（与工厂一致）
+    if protocol == 'custom':
+        from 采集层.custom_adapter import CustomAdapterClient
+        return CustomAdapterClient(config)
 
     if simulation_mode:
         from 采集层.enhanced_simulated_client import (

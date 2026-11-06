@@ -60,9 +60,11 @@ COLLECT_DIR = BACKEND_ROOT / "采集层"
 DECLARED_MANAGER_PROTOCOLS: dict[str, set[str]] = {
     "采集层/device_manager.py": {
         "modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest", "mc", "fins",
+        "custom",
     },
     "采集层/real_device_manager.py": {
         "modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest", "mc", "fins",
+        "custom",
     },
 }
 
