@@ -1990,7 +1990,12 @@ class DeviceControlSafety:
             for container in (self._device_health, self._comm_failures,
                               self._device_locks, self._safe_state_handlers,
                               self._device_lock_owners, self._write_limits,
-                              self._write_whitelist):
+                              self._write_whitelist,
+                              # round 378：自主等级/武装状态必须以设备为键清理，
+                              # 否则同名设备重建会继承旧的“全自动”授权。
+                              self._autonomy_override,
+                              self._autonomy_armed_until,
+                              self._autonomy_armed_by):
                 if device_id in container:
                     container.pop(device_id, None)
                     removed = True
@@ -2004,6 +2009,15 @@ class DeviceControlSafety:
         with self._lock:
             if device_id in self._degraded_devices:
                 self._degraded_devices.discard(device_id)
+                removed = True
+
+        # 待审批提案以 action_id 为键，但同样属于该设备：设备删掉后不能再
+        # 让人批准一个已经不存在的设备的写入。
+        with self._pending_lock:
+            stale = [aid for aid, act in self._pending_actions.items()
+                     if act.device_id == device_id]
+            for aid in stale:
+                self._pending_actions.pop(aid, None)
                 removed = True
 
         if removed:
@@ -2180,6 +2194,10 @@ class DeviceControlSafety:
                     act.source = source
                     act.reason = reason or act.reason
                     act.updated_at = time.time()
+                    # 持续提案意味着“现在仍然想做”，有效期要跟着刷新；
+                    # 否则操作员 5 分钟后回来看到的是不断重建的新提案，
+                    # 队列里 id 一直在变。
+                    act.expires_mono = time.monotonic() + self.PENDING_TTL_S
                     act.updates += 1
                     proposal = act
                     break
@@ -2262,9 +2280,11 @@ class DeviceControlSafety:
     def reject_pending(self, action_id: str, approver: str,
                        reason: str = '') -> bool:
         with self._pending_lock:
-            act = self._pending_actions.pop(action_id, None)
-        if act is None:
-            return False
+            act = self._pending_actions.get(action_id)
+            # 只允许驳回“仍在等待”的提案；正在执行的不能靠驳回假装取消
+            if act is None or act.status != 'pending':
+                return False
+            self._pending_actions.pop(action_id, None)
         self._audit('write_rejected', approver,
                     f'驳回 {act.device_id}/{act.address}={act.value}'
                     + (f'，原因: {reason}' if reason else ''))

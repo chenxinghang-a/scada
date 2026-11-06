@@ -184,6 +184,60 @@ class TestHOOTL:
         assert dc.get_autonomy('d1')['mode'] == canonical
 
 
+def test_control_page_wires_autonomy_and_pending():
+    """控制页必须真的接到接口上，避免"后端有、界面没有"的半截功能。"""
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parent.parent
+            / '模板' / 'control.html').read_text(encoding='utf-8')
+    for token in (
+        'id="autonomy-panel"',
+        'id="pending-list"',
+        '/api/devices/${deviceId}/autonomy',
+        '/api/devices/${deviceId}/autonomy/arm',
+        '/api/devices/${deviceId}/autonomy/disarm',
+        '/api/control/pending-actions',
+        'approvePending',
+        'rejectPending',
+    ):
+        assert token in html, f'控制页缺少 {token}'
+    assert '/api/control/devices/' not in html, '自主等级接口前缀写错了'
+
+
+class TestForgetDevice:
+    def test_forget_clears_autonomy_and_pending(self):
+        """删设备必须清掉自主等级/武装/待审批，否则同名设备继承旧授权。"""
+        dc, _ = _dc({'d1': {'autonomy': 'supervised'},
+                     'd2': {'autonomy': 'manual'}})
+        dc.arm_autonomy('d1', 'supervisor', 10)
+        pending = dc.write_with_verification('d2', 10, 7, 'edge_decision',
+                                             origin='auto')
+        assert pending['pending_approval'] is True
+
+        assert dc.forget_device('d1') is True
+        assert dc.forget_device('d2') is True
+
+        assert dc.get_pending_actions() == []
+        # 运行期 overrides 被清 → 回到设备配置里的基线（supervised），
+        # 而不是回到全局默认 automatic。
+        assert dc.get_autonomy('d1')['mode'] == 'supervised'
+        assert dc.get_autonomy('d1')['armed'] is False
+        assert pending['action_id'] not in dc._pending_actions
+
+    def test_duplicate_proposal_refreshes_expiry(self):
+        """持续提案会刷新有效期，避免操作员回来时看到的全是新 id。"""
+        dc, _ = _dc({'d1': {'autonomy': 'manual'}})
+        first = dc.write_with_verification('d1', 10, 7, 'edge_decision',
+                                           origin='auto')
+        action = dc._pending_actions[first['action_id']]
+        old_expiry = action.expires_mono
+        time.sleep(0.01)
+
+        dc.write_with_verification('d1', 10, 8, 'edge_decision', origin='auto')
+
+        assert action.expires_mono > old_expiry
+
+
 class TestModeSwitch:
     def test_set_mode_and_override(self):
         dc, _ = _dc({'d1': {'autonomy': 'manual'}})

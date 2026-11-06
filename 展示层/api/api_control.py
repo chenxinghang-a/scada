@@ -86,6 +86,12 @@ REGISTER_VALUE_INT16_MAX = 65535
 
 # ==================== 自主等级（HOTL / HOOTL，round 378）====================
 
+def _device_exists(device_id: str) -> bool:
+    manager = getattr(current_app, 'device_manager', None)
+    devices = getattr(manager, 'devices', {}) or {}
+    return device_id in devices
+
+
 @control_bp.route('/devices/<device_id>/autonomy', methods=['GET'])
 @_require_auth
 def get_device_autonomy(device_id):
@@ -93,6 +99,8 @@ def get_device_autonomy(device_id):
     dc = getattr(current_app, 'device_control', None)
     if dc is None:
         return module_unavailable_response('device_control')
+    if not _device_exists(device_id):
+        return api_error(f'设备 {device_id} 不存在', 404)
     return jsonify({'success': True, **dc.get_autonomy(device_id)})
 
 
@@ -103,6 +111,8 @@ def set_device_autonomy(device_id):
     dc = getattr(current_app, 'device_control', None)
     if dc is None:
         return module_unavailable_response('device_control')
+    if not _device_exists(device_id):
+        return api_error(f'设备 {device_id} 不存在', 404)
 
     data = request.get_json() or {}
     mode = data.get('mode')
@@ -112,9 +122,29 @@ def set_device_autonomy(device_id):
     if not ok:
         return api_error(message, 400)
 
+    # 可选：把等级写回 devices*.yaml，否则只是运行期覆盖（重启回到配置值）
+    persisted = False
+    if data.get('persist'):
+        manager = current_app.device_manager
+        dev = getattr(manager, 'devices', {}).get(device_id)
+        if not isinstance(dev, dict):
+            return api_error(f'设备 {device_id} 配置不可写', 400)
+        previous = dev.get('autonomy')
+        dev['autonomy'] = message
+        if not manager._save_config():
+            dev['autonomy'] = previous
+            logger.error("设备 %s 自主等级已生效但落盘失败", device_id)
+            return jsonify({
+                'success': False,
+                'message': '自主等级已生效，但写入配置文件失败；重启后会恢复原等级',
+                'runtime_applied': True,
+                'persisted': False,
+            }), 500
+        persisted = True
+
     get_auth_manager().log_operation(
         operator, 'set_autonomy', f'设备 {device_id} 自主等级 → {message}')
-    return jsonify({'success': True, 'mode': message,
+    return jsonify({'success': True, 'mode': message, 'persisted': persisted,
                     **dc.get_autonomy(device_id)})
 
 
@@ -125,6 +155,8 @@ def arm_device_autonomy(device_id):
     dc = getattr(current_app, 'device_control', None)
     if dc is None:
         return module_unavailable_response('device_control')
+    if not _device_exists(device_id):
+        return api_error(f'设备 {device_id} 不存在', 404)
 
     data = request.get_json() or {}
     try:
@@ -150,6 +182,8 @@ def disarm_device_autonomy(device_id):
     dc = getattr(current_app, 'device_control', None)
     if dc is None:
         return module_unavailable_response('device_control')
+    if not _device_exists(device_id):
+        return api_error(f'设备 {device_id} 不存在', 404)
 
     operator = request.current_user['username']
     existed = dc.disarm_autonomy(device_id, operator)

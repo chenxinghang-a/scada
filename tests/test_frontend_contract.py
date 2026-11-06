@@ -1103,6 +1103,25 @@ UNUSED_BACKEND_PREFIX_RULES: dict[str, str] = {
         "重载与回滚保护，之前无任何生产调用点，改 `配置/interlocks.yaml` 必须重启。"
         "现在供运维脚本/自动化发布调用，UI 不直接点"
     ),
+    "/api/devices/<device_id>/autonomy": (
+        "控制自主等级（round 378）：**由 Flask 模板 `模板/control.html` 使用** ——"
+        "查询/切换/武装/解除都在控制页的「控制权归属」面板里。"
+        "本契约测试只扫 scada-app 的 .ts，看不到 Jinja 侧的 fetch，"
+        "所以「前端不调用」在这里是假象，不是漏接。"
+    ),
+    "/api/control/pending-actions": (
+        "HITL 待审批提案（round 378）：**由 Flask 模板 `模板/control.html` 使用** ——"
+        "控制页每 5 秒刷新列表，批准/驳回按钮直接调 approve/reject。"
+        "同理不在本测试的扫描范围（只扫 .ts）。"
+    ),
+    "/api/devices/<device_id>/adapter-config": (
+        "设备适配器配置原文（round 377）：engineer 排障/回填用，"
+        "Flask 设备页尚未接入编辑表单；不面向普通浏览器操作"
+    ),
+    "/api/devices/adapters": (
+        "工厂插件适配器发现与热加载（round 377）：供集成商脚本与后续设备页使用；"
+        "`/adapters/reload` 会断开插件设备，属于运维动作，不放在普通页面按钮上"
+    ),
 }
 
 

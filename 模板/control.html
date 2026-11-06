@@ -354,6 +354,54 @@
     </div>
 </div>
 
+<!-- 控制权归属与 HITL 待审批（round 378） -->
+<div class="row g-3 mb-4" id="autonomy-panel">
+    <div class="col-xl-5">
+        <div class="panel h-100">
+            <div class="panel__header">
+                <span><i class="bi bi-person-gear me-2"></i>控制权归属</span>
+                <span class="tag tag--offline" id="autonomy-mode-tag">未选择设备</span>
+            </div>
+            <div class="panel__body">
+                <div class="btn-group btn-group-sm w-100 mb-2" role="group">
+                    <button type="button" class="btn btn-outline-secondary"
+                            onclick="setAutonomy('manual')">人工在环 HITL</button>
+                    <button type="button" class="btn btn-outline-info"
+                            onclick="setAutonomy('supervised')">人监督 HOTL</button>
+                    <button type="button" class="btn btn-outline-warning"
+                            onclick="setAutonomy('automatic')">全自动 HOOTL</button>
+                </div>
+                <div class="d-flex gap-2 mb-2">
+                    <button type="button" class="btn btn-sm btn-outline-success flex-fill"
+                            onclick="armAutonomy()">
+                        <i class="bi bi-unlock me-1"></i>武装自动控制
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger flex-fill"
+                            onclick="disarmAutonomy()">
+                        <i class="bi bi-hand-index me-1"></i>人工接管
+                    </button>
+                </div>
+                <div class="small text-muted" id="autonomy-hint">
+                    选择设备后显示当前等级与授权状态。HITL 下自动动作会进入右侧待审批列表。
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-7">
+        <div class="panel h-100">
+            <div class="panel__header">
+                <span><i class="bi bi-list-check me-2"></i>待审批提案（HITL）</span>
+                <span class="tag tag--offline" id="pending-count">0</span>
+            </div>
+            <div class="panel__body" style="max-height:240px;overflow-y:auto;">
+                <div id="pending-list">
+                    <div class="state-box state-box--inline">暂无待审批动作</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- 控制面板 -->
 <div class="row g-3" id="control-panel">
     <!-- 设备选择 -->
@@ -657,9 +705,14 @@ document.addEventListener('DOMContentLoaded', function() {
     // 加载操作日志
     loadControlLogs();
 
+    // HITL 待审批列表（5 秒刷新；审批/驳回后立即刷新）
+    loadPendingActions();
+    setInterval(loadPendingActions, 5000);
+
     // 设备选择变化
     document.getElementById('device-select').addEventListener('change', function() {
         loadDeviceInfo(this.value);
+        loadAutonomy(this.value);
     });
     
     // 线圈预设
@@ -776,10 +829,234 @@ function checkPermission() {
             const user = JSON.parse(userStr);
             if (!['admin', 'engineer'].includes(user.role)) {
                 document.getElementById('permission-warning').style.display = 'block';
-                document.getElementById('control-panel').style.opacity = '0.5';
-                document.getElementById('control-panel').style.pointerEvents = 'none';
+                ['control-panel', 'autonomy-panel'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        el.style.opacity = '0.5';
+                        el.style.pointerEvents = 'none';
+                    }
+                });
             }
         } catch (e) {}
+    }
+}
+
+// ==================== 控制权归属 / HITL 待审批 ====================
+
+const AUTONOMY_LABELS = {
+    manual: '人工在环 HITL',
+    supervised: '人监督 HOTL',
+    automatic: '全自动 HOOTL',
+};
+
+function selectedControlDevice() {
+    return document.getElementById('device-select').value;
+}
+
+async function loadAutonomy(deviceId) {
+    const tag = document.getElementById('autonomy-mode-tag');
+    const hint = document.getElementById('autonomy-hint');
+    if (!deviceId) {
+        tag.textContent = '未选择设备';
+        tag.className = 'tag tag--offline';
+        hint.textContent = '选择设备后显示当前等级与授权状态。';
+        return;
+    }
+
+    try {
+        const resp = await fetch(`/api/devices/${deviceId}/autonomy`, {
+            headers: getAuthHeaders()
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            hint.textContent = data.message || '读取自主等级失败';
+            return;
+        }
+        tag.textContent = AUTONOMY_LABELS[data.mode] || data.mode;
+        tag.className = 'tag ' + (data.mode === 'automatic'
+            ? 'tag--danger'
+            : (data.mode === 'supervised' ? 'tag--info' : 'tag--success'));
+        if (data.armed) {
+            const minutes = Math.ceil((data.armed_remaining_seconds || 0) / 60);
+            hint.textContent = `自动控制已授权，剩余约 ${minutes} 分钟（授权人: ${data.armed_by || '-'}）`;
+        } else {
+            hint.textContent = '当前未授权自动控制：自动动作会进入待审批列表（HOOTL 除外）。';
+        }
+    } catch (e) {
+        hint.textContent = '读取自主等级失败: ' + e.message;
+    }
+}
+
+async function setAutonomy(mode) {
+    const deviceId = selectedControlDevice();
+    if (!deviceId) { showAlert('请先选择设备', 'warning'); return; }
+
+    try {
+        const resp = await fetch(`/api/devices/${deviceId}/autonomy`, {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders()),
+            body: JSON.stringify({ mode: mode, reason: '控制页手动切换' }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            showAlert(data.message || '切换自主等级失败', 'danger');
+            return;
+        }
+        showAlert(`已切换为 ${AUTONOMY_LABELS[data.mode] || data.mode}`, 'success');
+        loadAutonomy(deviceId);
+    } catch (e) {
+        showAlert('切换自主等级失败: ' + e.message, 'danger');
+    }
+}
+
+async function armAutonomy() {
+    const deviceId = selectedControlDevice();
+    if (!deviceId) { showAlert('请先选择设备', 'warning'); return; }
+    const raw = prompt('自动控制授权时长（分钟，1-480）', '60');
+    if (raw === null) return;
+    const minutes = Number(raw);
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 480) {
+        showAlert('授权时长必须是 1~480 分钟的整数', 'warning');
+        return;
+    }
+
+    try {
+        const resp = await fetch(`/api/devices/${deviceId}/autonomy/arm`, {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders()),
+            body: JSON.stringify({ minutes: Math.round(minutes) }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            showAlert(data.message || '授权失败', 'danger');
+            return;
+        }
+        showAlert(data.message || '已授权自动控制', 'success');
+        loadAutonomy(deviceId);
+    } catch (e) {
+        showAlert('授权失败: ' + e.message, 'danger');
+    }
+}
+
+async function disarmAutonomy() {
+    const deviceId = selectedControlDevice();
+    if (!deviceId) { showAlert('请先选择设备', 'warning'); return; }
+
+    try {
+        const resp = await fetch(`/api/devices/${deviceId}/autonomy/disarm`, {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders()),
+            body: '{}',
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            showAlert(data.message || '接管失败', 'danger');
+            return;
+        }
+        showAlert(data.was_armed ? '已解除自动控制，转回人工/监督' : '当前没有生效的授权',
+                  data.was_armed ? 'success' : 'info');
+        loadAutonomy(deviceId);
+    } catch (e) {
+        showAlert('接管失败: ' + e.message, 'danger');
+    }
+}
+
+function renderPendingActions(actions) {
+    const list = document.getElementById('pending-list');
+    const count = document.getElementById('pending-count');
+    count.textContent = String(actions.length);
+
+    if (!actions.length) {
+        list.innerHTML = '<div class="state-box state-box--inline">暂无待审批动作</div>';
+        return;
+    }
+
+    list.innerHTML = actions.map(a => {
+        const remaining = Math.max(0, Math.ceil((a.remaining_seconds || 0) / 60));
+        return `
+            <div class="d-flex justify-content-between align-items-center gap-2 py-2 border-bottom">
+                <div class="small">
+                    <div><strong>${escapeHtml(a.device_id)}</strong>
+                        地址 <span class="mono">${escapeHtml(String(a.address))}</span>
+                        = <span class="mono">${escapeHtml(String(a.value))}</span>
+                        <span class="text-muted">（${escapeHtml(a.kind || '')}）</span></div>
+                    <div class="text-muted">来源: ${escapeHtml(a.source || '-')}
+                        · 重复 ${a.updates || 1} 次 · 剩余 ${remaining} 分钟</div>
+                </div>
+                <div class="d-flex gap-1">
+                    <button class="btn btn-sm btn-outline-success"
+                            onclick="approvePending('${escapeHtml(a.action_id)}')">批准</button>
+                    <button class="btn btn-sm btn-outline-danger"
+                            onclick="rejectPending('${escapeHtml(a.action_id)}')">驳回</button>
+                </div>
+            </div>`;
+    }).join('');
+}
+
+async function loadPendingActions() {
+    try {
+        const resp = await fetch('/api/control/pending-actions', {
+            headers: getAuthHeaders()
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) return;
+        renderPendingActions(Array.isArray(data.actions) ? data.actions : []);
+    } catch (e) {
+        // 轮询失败不打扰操作员，下一轮再试
+    }
+}
+
+async function approvePending(actionId) {
+    const raw = prompt('批准值（留空按提案原值执行）', '');
+    if (raw === null) return;
+
+    const body = {};
+    if (raw.trim() !== '') {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) {
+            showAlert('批准值必须是数值', 'warning');
+            return;
+        }
+        body.value = value;
+    }
+
+    try {
+        const resp = await fetch(`/api/control/pending-actions/${actionId}/approve`, {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders()),
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            showAlert(data.message || '批准执行失败', 'danger');
+        } else {
+            showAlert('已批准并执行', 'success');
+        }
+        loadPendingActions();
+    } catch (e) {
+        showAlert('批准失败: ' + e.message, 'danger');
+    }
+}
+
+async function rejectPending(actionId) {
+    const reason = prompt('驳回原因（可留空）', '');
+    if (reason === null) return;
+
+    try {
+        const resp = await fetch(`/api/control/pending-actions/${actionId}/reject`, {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders()),
+            body: JSON.stringify({ reason: reason }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            showAlert(data.message || '驳回失败', 'danger');
+        } else {
+            showAlert('已驳回', 'success');
+        }
+        loadPendingActions();
+    } catch (e) {
+        showAlert('驳回失败: ' + e.message, 'danger');
     }
 }
 

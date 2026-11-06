@@ -1558,6 +1558,19 @@ def get_device_templates():
 
 def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
     """验证协议必填字段，失败抛异常"""
+    # round 378：设备模型元数据（所有协议通用）
+    autonomy = data.get('autonomy')
+    if autonomy is not None and str(autonomy).lower() not in (
+            'manual', 'supervised', 'automatic', 'hitl', 'hotl', 'hootl'):
+        raise ValueError(f'非法 autonomy: {autonomy!r}'
+                         '（允许 manual/supervised/automatic 或 hitl/hotl/hootl）')
+    device_class = data.get('device_class')
+    if device_class is not None and device_class not in (
+            'sensor', 'actuator', 'drive', 'meter', 'plc', 'relay', 'hmi', 'other'):
+        raise ValueError(f'非法 device_class: {device_class!r}')
+    if data.get('electrical') is not None and not isinstance(data['electrical'], dict):
+        raise ValueError('electrical 必须是对象（铭牌参数）')
+
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         for field in ('host', 'port'):
             if field not in data:
