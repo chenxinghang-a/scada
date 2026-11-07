@@ -1158,7 +1158,8 @@ class DeviceBehaviorSimulator:
         # 温度过高触发过热故障
         if self._current_temp > 150 and FaultType.OVERHEATING not in self.active_faults:
             temp_prob = 0.01 * math.exp((100 - health) / 30)
-            if random.random() < temp_prob:
+            # 概率必须乘步长，否则更新频率越高触发越频繁（同函数 1180 行已这么做）。
+            if random.random() < min(1.0, temp_prob * self._dt):
                 self._trigger_fault(FaultType.OVERHEATING, severity=0.6)
 
         # 每种故障独立概率检查（不再互斥）
@@ -1863,7 +1864,7 @@ class DeviceBehaviorSimulator:
             'conductivity': round(500 + 100 * math.sin(t / 300) + random.gauss(0, 10), 2),
             
             # 能源参数
-            'electricity_consumption': round(5000 + self._total_energy_kwh, 2),
+            'electricity_consumption': round(self._total_energy_kwh, 2),
             'water_consumption': round(500 + t * 0.01, 2),
             'steam_consumption': round(50 + t * 0.01, 2),
             'compressed_air': round(200 + t * 0.005, 2),

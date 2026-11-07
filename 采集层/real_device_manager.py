@@ -255,11 +255,12 @@ class RealDeviceManager(IDeviceManager):
         · 重载成 0 台而原来有设备 → 回滚（文件被清空/编辑器先清后写的
           中间态，照单全收等于**现场全部设备停止采集**）。
         """
-        old_ids = set(self.devices.keys())
-        # 必须用 list(...) 快照：别的线程（API 增删设备）正在改这张表，
-        # 直接迭代活视图会抛 RuntimeError: dictionary changed size during iteration。
-        snapshot = {did: cfg for did, cfg in list(self.devices.items())}
-        old_raw = list(getattr(self, '_raw_devices', []))
+        # 锁内一次性取差集底稿：分三次锁外读，并发增删时差集会算错、
+        # 回滚快照也可能是撕裂的。
+        with self._lock:
+            old_ids = set(self.devices.keys())
+            snapshot = dict(self.devices)
+            old_raw = list(getattr(self, '_raw_devices', []))
 
         if not self.load_config():
             reason = (f'配置文件解析失败（{self.config_path}），'

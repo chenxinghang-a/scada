@@ -353,6 +353,8 @@ class AlarmManager:
         # 配置齐了、代码写了、就是没接上，运维把 `enabled` 改 true 也不会有邮件。
         self.notification = None
         self._notify_executor: ThreadPoolExecutor | None = None
+        #: stop() 之后禁止再新建线程池（没人关闭，非 daemon 线程拖住退出）
+        self._notify_executor_closed = False
         self._notify_lock = Lock()
         #: 各通道"已提交但还没回调"的投递任务数（round 288）。
         #: 超过 `NOTIFY_QUEUE_MAX` 就丢弃新任务并记失败，防止无界积压。
@@ -851,6 +853,7 @@ class AlarmManager:
         # 邮件线程池：等已提交的邮件发完再关，避免停机时丢掉最后几条报警邮件
         with self._notify_lock:
             executor, self._notify_executor = self._notify_executor, None
+            self._notify_executor_closed = True
         if executor is not None:
             try:
                 executor.shutdown(wait=True)
@@ -926,6 +929,10 @@ class AlarmManager:
         """邮件投递用单线程池：顺序发送、不并发轰炸 SMTP。"""
         with self._notify_lock:
             if self._notify_executor is None:
+                if getattr(self, '_notify_executor_closed', False):
+                    # stop() 之后不再新建线程池：它没人关闭，且非 daemon 线程
+                    # 会拖住解释器退出。
+                    return None
                 self._notify_executor = ThreadPoolExecutor(
                     max_workers=1, thread_name_prefix='alarm-email')
             return self._notify_executor
@@ -1232,7 +1239,15 @@ class AlarmManager:
                 continue
 
             if isinstance(first_trigger, str):
-                first_trigger = datetime.fromisoformat(first_trigger)
+                try:
+                    first_trigger = datetime.fromisoformat(first_trigger)
+                except (TypeError, ValueError) as exc:
+                    logger.warning("报警 %s 的 first_trigger_time 非法，跳过本轮升级: %s",
+                                   state_key, exc)
+                    continue
+            if getattr(first_trigger, 'tzinfo', None) is not None:
+                # 带时区的历史值与 naive now 相减会抛 TypeError。
+                first_trigger = first_trigger.astimezone().replace(tzinfo=None)
 
             elapsed = (now - first_trigger).total_seconds()
             if elapsed >= escalation_timeout:
@@ -1680,9 +1695,10 @@ class AlarmManager:
                 current = None
 
             decision = decide(rule_config, current, value, timestamp)
+            cleared_state = None
 
             if decision.action == _ACT_CLEAR:
-                del self.alarm_states[state_key]
+                cleared_state = self.alarm_states.pop(state_key, None)
                 cleared = True
             elif decision.action in (_ACT_FIRE, _ACT_PENDING, _ACT_UPDATE):
                 if current is None:
@@ -1715,12 +1731,13 @@ class AlarmManager:
             # 按超时升级（且其 _states 会无界增长）
             if self._escalation_manager:
                 self._escalation_manager.remove_alarm(rule_id, device_id, register_name)
-            # round 260：把"已恢复"落到数据库。
+            # round 260：把"已恢复"落到数据库。落库失败只记日志，
+            # 不能把报警清除本身也带崩（既有契约）。
             self._clear_alarm_record(rule_id, device_id, register_name, timestamp)
 
     def _clear_alarm_record(self, rule_id: str, device_id: str,
-                            register_name: str, cleared_at) -> None:
-        """把「报警已恢复正常」写进数据库（失败只记日志，绝不影响报警链路）。"""
+                            register_name: str, cleared_at) -> bool:
+        """把「报警已恢复正常」写进数据库；返回是否值得重试。"""
         try:
             ok = self.database.clear_alarm(rule_id, device_id, register_name,
                                            cleared_at=cleared_at)
@@ -1730,9 +1747,13 @@ class AlarmManager:
                 logger.debug(
                     "报警恢复没有对应记录可更新（可能进程重启后内存重建、"
                     "或重复清除）: %s - %s/%s", rule_id, device_id, register_name)
+                # 没有行可更新 → 重试也没用，按成功收尾，避免永久幽灵状态。
+                return True
+            return True
         except Exception as e:      # noqa: BLE001 —— 落库失败不能炸掉报警清除
             logger.error("报警恢复落库失败: %s - %s/%s: %s",
                          rule_id, device_id, register_name, e)
+            return False
 
     def _dedup_now(self) -> float:
         """去重窗口用的时钟：**单调时钟**，不是墙钟。

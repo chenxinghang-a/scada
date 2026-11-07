@@ -548,7 +548,9 @@ class SimulatedDeviceManager(IDeviceManager):
             'device_class': device_config.get('device_class', 'other'),
             'electrical': device_config.get('electrical') or {},
             'autonomy': device_config.get('autonomy', 'automatic'),
-            'register_count': len(device_config.get('registers', [])) + len(device_config.get('nodes', [])) + len(device_config.get('topics', [])) + len(device_config.get('endpoints', [])),
+            'register_count': sum(
+                len(device_config.get(k) or [])
+                for k in ('registers', 'nodes', 'topics', 'endpoints')),
             'registers': device_config.get('registers', []),
             'nodes': device_config.get('nodes', []),
             'topics': device_config.get('topics', []),

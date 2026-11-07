@@ -232,6 +232,12 @@ class Database:
         except sqlite3.OperationalError as e:
             logger.error(f"数据库 PRAGMA 初始化失败: {e}")
             logger.error("可能原因: 数据库文件被其他进程锁定，请关闭所有 Python 进程后重试")
+            # 半初始化的连接也要还回去；否则文件句柄/WAL 锁要等 GC 才释放。
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except Exception:       # noqa: BLE001
+                    pass
             raise
 
     @contextmanager
@@ -475,17 +481,23 @@ class Database:
             #    归档查询返回重复点、归档表体积也涨 24 倍。
             #    历史库里可能已经堆了重复行，所以**先按组保留 id 最小的一条**再去重，
             #    否则 CREATE UNIQUE INDEX 会直接失败（启动报错）。
-            cursor.execute(f'''
-                DELETE FROM {ARCHIVE_TABLE}
-                WHERE id NOT IN (
-                    SELECT MIN(id) FROM {ARCHIVE_TABLE}
-                    GROUP BY device_id, register_name, archive_date
-                )
-            ''')
-            cursor.execute(f'''
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_unique
-                ON {ARCHIVE_TABLE}(device_id, register_name, archive_date)
-            ''')
+            # 索引已存在 ⇒ 表中不可能有重复行，跳过整表 GROUP BY（大表启动
+            # 会长时间持写锁，且 DELETE 会静默删历史归档行）。
+            has_unique = cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index' "
+                "AND name='idx_archive_unique'").fetchone()
+            if not has_unique:
+                cursor.execute(f'''
+                    DELETE FROM {ARCHIVE_TABLE}
+                    WHERE id NOT IN (
+                        SELECT MIN(id) FROM {ARCHIVE_TABLE}
+                        GROUP BY device_id, register_name, archive_date
+                    )
+                ''')
+                cursor.execute(f'''
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_unique
+                    ON {ARCHIVE_TABLE}(device_id, register_name, archive_date)
+                ''')
 
             # realtime_data 的唯一约束迁移：必须放在**表创建之后**
             # （新库的建表语句里已带 UNIQUE，这条只对老库生效）。
@@ -1992,6 +2004,12 @@ class Database:
 
         except Exception as e:
             logger.error(f"数据库备份失败: {e}")
+            # 半成品备份会被后续 restore 当成有效文件选中，必须删掉。
+            try:
+                if 'backup_file' in locals() and Path(str(backup_file)).exists():
+                    Path(str(backup_file)).unlink()
+            except OSError:
+                pass
             return None
 
     #: 恢复时必须存在的表（缺任何一个说明备份不是本系统的库）

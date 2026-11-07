@@ -61,8 +61,8 @@ def _idempotency_begin(write_key: str):
             for k in [k for k, v in _recent_writes.items()
                       if isinstance(v, float) and now - v >= IDEMPOTENCY_WINDOW_S]:
                 _recent_writes.pop(k, None)
-            if len(_recent_writes) > RECENT_WRITES_MAX:
-                _recent_writes.clear()
+            # 绝不整表 clear：里面还有 _IN_FLIGHT 哨兵，清掉会让并发重复
+            # 提交穿透幂等保护。只淘汰已落实且过期的时间戳。
     return None
 
 
@@ -579,8 +579,14 @@ def write_endpoint(device_id):
         }), 503
 
     for _rule_id, _st in interlocks.items():
-        if not isinstance(_st, dict):
-            continue
+        if not isinstance(_st, dict) or 'triggered' not in _st:
+            # 状态不可判定时不能按“未触发”放行（fail-open）。
+            logger.error("联锁条目结构不符，拒绝端点写入: rule=%s st=%r",
+                         _rule_id, _st)
+            return jsonify({
+                'success': False,
+                'message': f'联锁 {_rule_id} 状态不可判定，已拒绝写入',
+            }), 503
         if not _st.get('triggered'):
             continue
         if _st.get('bypassed'):
@@ -880,8 +886,22 @@ def restore_interlock(rule_id):
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
         return api_error('设备控制安全模块未启用', 503)
-    success = device_control.restore_interlock(rule_id, operator)
-    return jsonify({'success': success, 'message': f'联锁 {rule_id} 已恢复' if success else '恢复失败'})
+    interlocks = device_control.get_interlock_status()
+    if rule_id not in interlocks:
+        return api_error(f'联锁 {rule_id} 不存在', 404)
+    was_bypassed = bool((interlocks.get(rule_id) or {}).get('bypassed'))
+    success = bool(device_control.restore_interlock(rule_id, operator))
+    get_auth_manager().log_operation(
+        operator, 'restore_interlock',
+        f'联锁 {rule_id} 手动恢复（此前旁路={was_bypassed}）')
+    if not success:
+        return jsonify({'success': False, 'message': '恢复失败'}), 500
+    return jsonify({
+        'success': True,
+        'was_bypassed': was_bypassed,
+        'message': (f'联锁 {rule_id} 已恢复' if was_bypassed
+                    else f'联锁 {rule_id} 未处于旁路（无需恢复）'),
+    })
 
 
 @control_bp.route('/control/interlocks/bypass-request', methods=['POST'])
@@ -1101,6 +1121,13 @@ def stop_recipe():
         return api_error('该设备没有正在运行的配方')
 
     behavior_sim.stop_recipe()
+    # stop_recipe() 无返回值，只能复核运行态；仍在运行就是根本没停下来。
+    _after = behavior_sim.get_recipe_status() or {}
+    if _after.get('is_running'):
+        return jsonify({
+            'success': False,
+            'message': '配方停止失败（仍在运行，请检查模拟器线程）',
+        }), 500
     operator = request.current_user['username']
     get_auth_manager().log_operation(
         operator, 'stop_recipe',

@@ -482,13 +482,15 @@ class AlarmOutput:
         self._stop_flash()
         self._stop_buzzer()
 
-        self.current_state.update({
-            'red': False, 'yellow': False, 'green': True,
-            'buzzer': False,
-            'pattern': AlarmLightPattern.STEADY,
-            'level': None, 'message': '', 'since': None,
-            'acknowledged': False
-        })
+        # 只把内存写放在锁内；_write_all_do 仍是网络 I/O，保持在锁外。
+        with self._lock:
+            self.current_state.update({
+                'red': False, 'yellow': False, 'green': True,
+                'buzzer': False,
+                'pattern': AlarmLightPattern.STEADY,
+                'level': None, 'message': '', 'since': None,
+                'acknowledged': False
+            })
 
         ok = self._write_all_do(red=False, yellow=False, green=True, buzzer=False)
         if ok:

@@ -193,6 +193,8 @@ class DataExport:
             # pandas.to_excel 走 openpyxl 时，以 `=` 开头的**字符串**会被写成公式
             # （data_type='f'），所以 Excel 这条路同样要中和（CWE-1236）。
             df = pd.DataFrame(_sanitize_rows(data))
+            # 列名同样来自数据/extra_json，`=cmd|...` 表头会被写成公式。
+            df.columns = [_sanitize_cell(str(c)) for c in df.columns]
             df.to_excel(filepath, sheet_name=sheet_name, index=False)
 
             logger.info(f"Excel导出成功: {filepath}")

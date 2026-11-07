@@ -281,6 +281,14 @@ class DataQualityAssessor:
         # 值为None/NaN = BAD
         if value is None or (isinstance(value, float) and math.isnan(value)):
             return DataQualityAssessor.BAD
+        # 非数值不得落到 GOOD；也避免下面 abs(value-last_value) 抛 TypeError
+        # 把整批数据带崩。
+        if isinstance(value, bool):
+            value = int(value)
+        if not isinstance(value, (int, float)):
+            return DataQualityAssessor.BAD
+        if not math.isfinite(value):
+            return DataQualityAssessor.BAD_SENSOR_FAILURE
 
         # 值超出合理范围 = BAD_SENSOR_FAILURE
         if isinstance(value, (int, float)):
@@ -288,7 +296,8 @@ class DataQualityAssessor:
                 return DataQualityAssessor.BAD_SENSOR_FAILURE
 
         # 值长时间不变 = UNCERTAIN（可能传感器卡死）
-        if last_value is not None and last_time is not None:
+        if (isinstance(last_value, (int, float))
+                and last_time is not None):
             # round 264：卡死窗口是时长 → 单调时钟（墙钟回拨会让卡死永远检测不出来）
             if abs(value - last_value) < 0.001 and time.monotonic() - last_time > SENSOR_STUCK_WINDOW_S:
                 return DataQualityAssessor.UNCERTAIN_LAST_USABLE
@@ -407,6 +416,9 @@ class DiskBackedQueue:
                 trimmed = self._trim_if_over_cap()
                 with open(self._persist_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(item, default=str, ensure_ascii=False) + '\n')
+                    # 返回 True 就等于承诺“已落盘”，必须 fsync，不能只 close。
+                    f.flush()
+                    os.fsync(f.fileno())
                 self._pending.append(item)
                 self._pending_ids.add(id(item))
                 if trimmed or self._dirty_since_rewrite >= PENDING_COMPACT_EVERY:
@@ -2131,7 +2143,9 @@ class DataCollector:
                     # 读取虽"成功"返回，但内容来自客户端陈旧缓存（设备实际
                     # 已读不到），必须降级为 UNCERTAIN_LAST_USABLE 而不是 GOOD，
                     # 否则操作员会把几天前的旧值当成实时数据。
-                    if data.get('stale'):
+                    if (data.get('stale')
+                            and quality == DataQualityAssessor.GOOD):
+                        # 不能把已判 BAD/COMM_FAILURE 的值“升级”成 UNCERTAIN。
                         quality = DataQualityAssessor.UNCERTAIN_LAST_USABLE
 
                     data['quality'] = quality
@@ -2171,7 +2185,13 @@ class DataCollector:
                         logger.warning(
                             "批量写入数据库返回 0 条（%d 条全被落库层拒绝），"
                             "保留磁盘副本待重试", len(batch))
-                        self._requeue_failed_batch(batch)
+                        _rc = self._requeue_failed_batch(batch)
+                        if _rc['retried']:
+                            self._inc_stat('requeued_db_retry', _rc['retried'])
+                        if _rc['dropped']:
+                            self._inc_stat('dropped_db_retry', _rc['dropped'])
+                        if _rc['requeue_full']:
+                            self._inc_stat('requeue_full_db_retry', _rc['requeue_full'])
                     elif written < len(batch):
                         # 部分写入：落库层把非法值那部分静默剔除了。已写入的
                         # 不能重投（会重复），未写入的只在磁盘副本里 —— 保留
@@ -2266,7 +2286,10 @@ class DataCollector:
                     # 不再往 self.stats 里写 'queue_size'：它是**派生量**，
                     # 由 get_stats() 实时算（qsize()）。写进来只会把实时值覆盖掉
                     # （`**self.stats` 展开在后面）—— 见 __init__ 里的说明。
-                    self.stats['total_collections'] = self.stats.get('total_collections', 0) + len(batch)
+                    # 重试批次不再累加，否则 total_collections 随重试次数虚增。
+                    _fresh = sum(1 for d in batch if not d.get('_db_retry'))
+                    self.stats['total_collections'] = (
+                        self.stats.get('total_collections', 0) + _fresh)
 
             except Exception as e:
                 if self.running:
@@ -2510,8 +2533,16 @@ class DataCollector:
             ``devices`` 为空、``summary.open == 0``，调用方可以据此判断。
         """
         now = time.monotonic()
-        open_states = dict(getattr(self, '_circuit_state', None) or {})
-        failure_counts = dict(getattr(self, '_failure_counts', None) or {})
+        # 与写侧（1400-1412 / 重置路径）同锁，避免拷出“新状态+旧计数”的混合快照。
+        # `__new__` 构造的测试替身没有这把锁，退回无锁快照。
+        lock = getattr(self, '_tracking_lock', None)
+        if lock is not None:
+            with lock:
+                open_states = dict(getattr(self, '_circuit_state', None) or {})
+                failure_counts = dict(getattr(self, '_failure_counts', None) or {})
+        else:
+            open_states = dict(getattr(self, '_circuit_state', None) or {})
+            failure_counts = dict(getattr(self, '_failure_counts', None) or {})
 
         devices: dict[str, Any] = {}
         for device_id in set(open_states) | {d for d, n in failure_counts.items() if n}:

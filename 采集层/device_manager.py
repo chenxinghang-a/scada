@@ -360,7 +360,8 @@ class DeviceManager:
               或编辑器"先清空再写入"的中间态。此时若照旧替换，采集任务会被
               全部停掉，**现场所有设备停止采集**，而接口还会报成功。
         """
-        old_ids = set(self.devices.keys())
+        with self._lock:
+            old_ids = set(self.devices.keys())
 
         new_devices: dict[str, Any] = {}
         if not self._load_config_into(new_devices):
@@ -385,7 +386,7 @@ class DeviceManager:
             self._status_cache.clear()
             self._status_cache_time.clear()
 
-        new_ids = set(self.devices.keys())
+        new_ids = set(new_devices.keys())
 
         added = sorted(new_ids - old_ids)
         removed = sorted(old_ids - new_ids)
@@ -398,7 +399,10 @@ class DeviceManager:
                 # 它只替换配置表，所以这里必须逐个通知，
                 # 否则「yaml 里删掉一台设备」之后 OEE/能耗报表里它还在，
                 # 重新加回同名设备时还会继承旧的连续失败计数。
-                notify_device_removed(did)
+                try:
+                    notify_device_removed(did)
+                except Exception as e:      # noqa: BLE001
+                    logger.error("热重载通知设备移除失败 %s: %s", did, e)
             logger.info(f"移除设备: {removed}")
 
         return {
@@ -448,8 +452,15 @@ class DeviceManager:
                 logger.error(f"设备 {device_id} 配置不存在")
                 return None
 
-            client = self._connection_pool.acquire(device_id)
+            try:
+                client = self._connection_pool.acquire(device_id)
+            except Exception as e:      # noqa: BLE001
+                # 工厂创建客户端时抛错（缺可选依赖/协议字段类型错），
+                # 不能让一台脏配置把 get_all_status 整批打成 500。
+                logger.error("创建设备 %s 客户端失败: %s", device_id, e, exc_info=True)
+                return None
             if client is None:
+                logger.warning("设备 %s 未取到客户端（池满或已 shutdown）", device_id)
                 return None
 
             # 同步到 legacy 缓存，保持向后兼容
@@ -673,7 +684,8 @@ class DeviceManager:
         if device_id in self._status_cache:
             cache_age = now - self._status_cache_time.get(device_id, 0)
             if cache_age < self._status_cache_ttl:
-                return self._status_cache[device_id]
+                # 返回副本：调用方补字段不能把脏数据写回缓存、串到后续请求。
+                return dict(self._status_cache[device_id])
 
         device_config = self.devices.get(device_id)
 

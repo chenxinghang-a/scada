@@ -450,12 +450,13 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0,
 
     if shape == 'sine' and period > 0:
         # 主波形
-        value = base + amp * math.sin(t / period + phase_offset)
+        value = base + amp * math.sin(2 * math.pi * t / period + phase_offset)
 
         # 低频漂移（模拟环境变化）
         drift_period = period * 3.7
         drift_amp = amp * 0.15
-        value += drift_amp * math.sin(t / drift_period + phase_offset * 0.5)
+        value += drift_amp * math.sin(
+            2 * math.pi * t / drift_period + phase_offset * 0.5)
 
         # 日夜班次影响（24小时周期）
         hour_of_day = (t / 3600) % 24

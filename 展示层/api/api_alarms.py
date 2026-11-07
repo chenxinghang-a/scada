@@ -140,8 +140,9 @@ def shelve_alarm(alarm_id):
     duration = try_finite_float(data.get('duration_minutes', 30))
     if duration is None:
         return api_error('duration_minutes 必须是有限数值', 400)
-    if duration <= 0:
-        return api_error('duration_minutes 必须为正数（0 会造成永久静默）', 400)
+    if duration < 1:
+        # 0<d<1 会被 int() 截成 0 后被 manager 拒绝，文案应直接说清楚。
+        return api_error('duration_minutes 必须 ≥ 1（分钟）', 400)
 
     manager = current_app.alarm_manager
     reason = data.get('reason') or '维护'
@@ -973,9 +974,11 @@ def update_escalation_rules():
         return api_error('升级规则保存失败', 500)
 
     alarm_manager = current_app.alarm_manager
+    reload_ok = True
     try:
         alarm_manager.load_config()      # 装配 / 热更新多级规则
     except Exception as e:               # noqa: BLE001 —— load_config 自己吞异常
+        reload_ok = alarm_manager._escalation_manager is not None
         logger.error("升级规则重载失败: %s", e, exc_info=True)
 
     get_auth_manager().log_operation(
@@ -984,7 +987,9 @@ def update_escalation_rules():
 
     return jsonify({
         'success': True,
-        'message': '升级规则已更新（已写回配置并热加载）',
+        'runtime_applied': reload_ok,
+        'message': ('升级规则已更新（已写回配置并热加载）' if reload_ok else
+                    '升级规则已写入配置，但热加载失败，需重启后生效'),
         'rules': alarm_manager._escalation_manager.get_rules()
         if alarm_manager._escalation_manager is not None else [],
         'mode': 'multi_level' if alarm_manager._escalation_manager is not None

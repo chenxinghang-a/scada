@@ -46,6 +46,7 @@ def _generate_enhanced_data(
     extra_field_fn: Callable[[dict], dict] | None = None,
     stat_inc_keys: list[str] | None = None,
     callback_error_label: str = '回调',
+    dt: float = 2.0,
 ) -> bool:
     """增强版通用数据生成逻辑（供OPC UA/MQTT/REST客户端复用）
 
@@ -68,7 +69,7 @@ def _generate_enhanced_data(
         return False
 
     # 更新行为模拟器
-    data = behavior_simulator.update(2.0)
+    data = behavior_simulator.update(dt)
 
     if data.get('_stopped'):
         return False
@@ -77,7 +78,8 @@ def _generate_enhanced_data(
         name = cfg.get('name', cfg.get('node_id', cfg.get('topic', 'unknown')))
         unit = cfg.get('unit', '')
 
-        value = data.get(name, 50 + 30 * time.time() % 100)
+        # 50 + (30*t)%100 会随墙钟每秒跳 30，且可能到 150；兜底用常量。
+        value = data.get(name, 50.0)
 
         entry = {
             'value': round(float(value), 2),
@@ -724,6 +726,7 @@ class EnhancedSimulatedMQTTClient(PushClientInterface):
             stats=self.stats,
             stat_inc_keys=['messages_received', 'messages_parsed'],
             callback_error_label='MQTT',
+            dt=3.0,          # 与 _push_loop 的 3s 周期一致
         )
         self.stats['last_message_time'] = now
     
@@ -846,8 +849,8 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
         data = self.behavior_simulator.update(1.0)
         
         # 从行为模拟器获取数据
-        value = data.get(name, 50 + 30 * time.time() % 100)
-        
+        value = data.get(name, 50.0)
+
         return round(float(value), 2)
     
     def write_endpoint(self, endpoint_config: Dict[str, Any], value: Any, method: str = 'PUT') -> bool:
@@ -1024,6 +1027,7 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
             stats=self.stats,
             extra_field_fn=lambda cfg: {'endpoint': cfg.get('path', '')},
             callback_error_label='REST',
+            dt=1.0,          # 与 REST 轮询周期一致
         )
     
     def get_stats(self) -> Dict[str, Any]:
