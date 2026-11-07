@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request, current_app
 from 用户层.auth import jwt_required, role_required
 from core.safe_numeric import to_int
 from core.device_lifecycle import notify_device_removed
+from core.device_templates import load_custom_templates, merge_templates
 from 采集层.adapter_spec import AdapterConfigError, AdapterSpec
 from ._common import get_auth_manager, api_error_handler, api_error, safe_int
 
@@ -1551,7 +1552,25 @@ def get_device_templates():
              {'name': 'energy_reactive', 'description': '无功电能', 'address': 34, 'length': 2, 'data_type': 'float64', 'scale': 0.01, 'unit': 'kvarh'},
          ]},
     ]
-    return jsonify({'templates': templates})
+
+    # 工厂自定义模板（配置/device_template_library.yaml）合并进来。
+    # 模板库整份写坏时回落内置列表，错误只体现在 template_error 上 ——
+    # 设备页至少还能用内置模板加设备，不能 500。
+    custom: list[dict[str, Any]] = []
+    template_error: str | None = None
+    try:
+        custom = load_custom_templates()
+    except (ValueError, OSError) as exc:
+        template_error = str(exc)
+        logger.error('自定义设备模板库不可用，已回落内置模板: %s', exc)
+
+    payload: dict[str, Any] = {
+        'templates': merge_templates(templates, custom),
+        'custom_count': len(custom),
+    }
+    if template_error:
+        payload['template_error'] = template_error
+    return jsonify(payload)
 
 
 # ==================== 内部辅助函数 ====================

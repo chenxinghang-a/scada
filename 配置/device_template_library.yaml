@@ -1,0 +1,103 @@
+# =============================================================================
+# 设备页模板库 —— 工厂自己加设备模板，不用改代码、不用重启
+# =============================================================================
+# 谁读它：core/device_templates.py::load_custom_templates()
+#         经 GET /api/devices/templates 出现在设备页「使用模板」里。
+# 改完怎么生效：保存文件 → 刷新设备页（每次请求重读）。
+#
+# ⚠️ 别和 配置/device_templates.yaml 搞混（少一个 _library）：
+#    那个是 tools/gen_factory.py 的设备族模板（映射形态），与设备页无关。
+#
+# 结构：templates 必须是**列表**；id 与内置模板同名 = 覆盖内置。
+# 坏一条只跳过这一条；整份语法错时设备页回落内置模板（响应带 template_error）。
+# =============================================================================
+
+templates:
+
+  # ---------------------------------------------------------------- 计量
+  - id: three_phase_meter
+    name: 三相电表（多功能电力仪表）
+    description: 380V 三相四线电表 —— 分相电压/电流、功率、功率因数、累计电量
+    protocol: modbus_tcp
+    device_class: meter
+    autonomy: supervised
+    host: 192.168.1.31
+    port: 502
+    slave_id: 1
+    poll_interval: 5
+    electrical: {rated_voltage: 380, rated_current: 100, phases: 3, power_type: ac}
+    registers:
+      - {name: voltage_a, description: A 相电压, address: 0, length: 2, data_type: float32, scale: 0.1, unit: V}
+      - {name: voltage_b, description: B 相电压, address: 2, length: 2, data_type: float32, scale: 0.1, unit: V}
+      - {name: voltage_c, description: C 相电压, address: 4, length: 2, data_type: float32, scale: 0.1, unit: V}
+      - {name: current_a, description: A 相电流, address: 6, length: 2, data_type: float32, scale: 0.01, unit: A}
+      - {name: current_b, description: B 相电流, address: 8, length: 2, data_type: float32, scale: 0.01, unit: A}
+      - {name: current_c, description: C 相电流, address: 10, length: 2, data_type: float32, scale: 0.01, unit: A}
+      - {name: active_power, description: 三相有功功率, address: 12, length: 2, data_type: float32, scale: 0.001, unit: kW}
+      - {name: power_factor, description: 功率因数, address: 14, length: 2, data_type: float32, scale: 0.01, unit: ''}
+      - {name: energy_total, description: 累计有功电量, address: 16, length: 4, data_type: float64, scale: 0.1, unit: kWh}
+
+  # ---------------------------------------------------------------- 开关量
+  - id: relay_board_8
+    name: 8 路网络继电器板（HTTP）
+    description: 8 路继电器输出，读回每路通断；可远程单路通断，用于照明/风机/电磁阀
+    protocol: custom
+    device_class: relay
+    autonomy: manual
+    electrical: {rated_voltage: 24, rated_current: 2, power_type: dc}
+    adapter:
+      transport: http
+      base_url: "http://192.168.1.60"
+      poll_interval: 5
+      request: {method: GET, path: "/status", timeout: 3}
+      response: {records: "channels"}
+      points:
+        - {name: ch1, path: "on", type: bool}
+        - {name: ch2, path: "on", type: bool}
+        - {name: ch3, path: "on", type: bool}
+        - {name: ch4, path: "on", type: bool}
+        - {name: ch5, path: "on", type: bool}
+        - {name: ch6, path: "on", type: bool}
+        - {name: ch7, path: "on", type: bool}
+        - {name: ch8, path: "on", type: bool}
+      write:
+        method: POST
+        path: "/channels/{name}"
+        json: {on: "{value}"}
+
+  # ---------------------------------------------------------------- 驱动
+  - id: vfd_drive
+    name: 变频器（通用 VFD）
+    description: 三相 380V 通用变频器 —— 启停/频率给定/运行状态/输出电流/故障码
+    protocol: modbus_tcp
+    device_class: drive
+    autonomy: supervised
+    host: 192.168.1.41
+    port: 502
+    slave_id: 2
+    poll_interval: 2
+    electrical: {rated_voltage: 380, rated_current: 45, phases: 3, power_type: ac}
+    registers:
+      - {name: cmd_run, description: 启停命令 0=停机/1=正转/2=反转, address: 0, data_type: uint16, scale: 1, unit: '', writable: true}
+      - {name: freq_setpoint, description: 频率给定, address: 1, data_type: uint16, scale: 0.01, unit: Hz, writable: true}
+      - {name: run_state, description: 运行状态 0=停机/1=运行/2=故障, address: 2, data_type: uint16, scale: 1, unit: ''}
+      - {name: output_frequency, description: 实际输出频率, address: 3, data_type: uint16, scale: 0.01, unit: Hz}
+      - {name: motor_current, description: 输出电流, address: 4, length: 2, data_type: float32, scale: 0.01, unit: A}
+      - {name: fault_code, description: 当前故障码 0=无故障, address: 6, data_type: uint16, scale: 1, unit: ''}
+
+  # ---------------------------------------------------------------- 传感器
+  - id: temp_humidity_sensor
+    name: 温湿度变送器（RS485/Modbus）
+    description: 环境温湿度变送器 —— 温度/湿度/露点，车间与配电室环境监测常用
+    protocol: modbus_tcp
+    device_class: sensor
+    autonomy: automatic
+    host: 192.168.1.51
+    port: 502
+    slave_id: 3
+    poll_interval: 10
+    electrical: {rated_voltage: 24, power_type: dc}
+    registers:
+      - {name: temperature, description: 环境温度, address: 0, length: 2, data_type: float32, scale: 0.1, unit: °C}
+      - {name: humidity, description: 相对湿度, address: 2, length: 2, data_type: float32, scale: 0.1, unit: '%RH'}
+      - {name: dew_point, description: 露点温度, address: 4, length: 2, data_type: float32, scale: 0.1, unit: °C}
