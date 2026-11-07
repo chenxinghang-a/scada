@@ -287,11 +287,16 @@ class FINSClient(ByteOrderCapableDecoder):
             return None
 
         self.stats['total_reads'] += 1
-        self.stats['successful_reads'] += 1
 
-        # 既有契约：短响应按 0 补齐（测试锁定）；真实设备应依赖帧长校验。
+        # 短响应不能补 0 再报成功：那是“正常的 0”，比缺数据更危险。
+        if len(resp) < count * 2:
+            logger.error("[FINS] 读字响应长度不足: 请求 %d 字，实收 %d 字节",
+                         count, len(resp))
+            self.stats['failed_reads'] += 1
+            return None
+
+        self.stats['successful_reads'] += 1
         return [struct.unpack('>H', resp[i * 2:i * 2 + 2])[0]
-                if i * 2 + 2 <= len(resp) else 0
                 for i in range(count)]
 
     def write_words(self, area: str, address: int, values: list[int]) -> bool:
@@ -514,11 +519,16 @@ class FINSClient(ByteOrderCapableDecoder):
             return None
 
         self.stats['total_reads'] += 1
-        self.stats['successful_reads'] += 1
 
-        # 既有契约：短响应按 False 补齐（测试锁定）。
-        return [resp[i] != 0 if i < len(resp) else False
-                for i in range(count)]
+        # 短响应不能补 False 再报成功：联锁量会被误判为“未动作”。
+        if len(resp) < count:
+            logger.error("[FINS] 读位响应长度不足: 请求 %d 位，实收 %d 字节",
+                         count, len(resp))
+            self.stats['failed_reads'] += 1
+            return None
+
+        self.stats['successful_reads'] += 1
+        return [resp[i] != 0 for i in range(count)]
 
     def write_bits(self, area: str, address: int, bit: int, values: list[bool]) -> bool:
         """写入位"""

@@ -359,7 +359,9 @@ class DNP3Parser:
         #   而 request_data() 的 except 把它吞掉 —— DNP3 从未真正发出过报文。
         # round 323：改用标准 CRC-16/DNP + 数据块 CRC（见 `build_dnp3_frame`）。
         #   原来 `sum(header) & 0xFFFF` 是假 CRC，真实从站会丢弃每一个帧。
-        control = 0xC0  # DIR + PRM（既有测试锁定该帧格式）
+        # DIR(0x80)+PRM(0x40)+FUNC=4（UNCONFIRMED_USER_DATA）→ 0xC4；
+        # 0xC0 是 FUNC=0（RESET_LINK），从站会把应用数据当复位帧丢弃。
+        control = 0xC4
         return build_dnp3_frame(control, destination, source, app_data)
 
     @staticmethod
@@ -373,9 +375,12 @@ class DNP3Parser:
         #   Qualifier **0x28** = 「2 字节数量 + 2 字节索引前缀」（每个对象前带 2 字节索引）。
         #   原来写 0x06（= all objects，不带范围/数量）后面却跟了 index/index/value，
         #   从站无法解析这条命令 —— **遥控实际发不出去**。
-        obj_data = struct.pack('<BBBHHB',
-                               DNP3ObjectGroup.BO, 1, 0x28,
-                               1, index, value & 0x01)
+        # CROB（Group 12 Var 1）是 11 字节：控制码+计数+接通4B+断开4B+状态1B
+        crob = struct.pack('<BBIIB',
+                           0x03 if (value & 0x01) else 0x04,
+                           1, 0, 0, 0)
+        obj_data = (struct.pack('<BBBH', DNP3ObjectGroup.BO, 1, 0x28, 1)
+                    + struct.pack('<H', index) + crob)
 
         app_data = struct.pack('BB', app_control, function_code) + obj_data
 
@@ -596,15 +601,21 @@ class DNP3Client:
     # ── 数据请求 ──────────────────────────────
 
     def request_data(self):
-        """请求数据（读所有模拟输入）"""
+        """请求数据（AI Var2 16 位 + BI Var2），与解析器支持范围一致。"""
+        # 解析器对 AI 按 16 位+标志读取；请求 Var1（32 位）会每点错位。
+        requests = (
+            DNP3Parser.build_read_request(
+                self.local_addr, self.remote_addr,
+                DNP3ObjectGroup.AI, variation=2),
+            DNP3Parser.build_read_request(
+                self.local_addr, self.remote_addr,
+                DNP3ObjectGroup.BI, variation=2),
+        )
         with self._lock:
             try:
-                frame = DNP3Parser.build_read_request(
-                    self.local_addr, self.remote_addr,
-                    DNP3ObjectGroup.AI, variation=1)
-                if self.socket:
-                    # send 可能只写一部分，读请求截断会导致整轮无数据
-                    self.socket.sendall(frame)
+                for frame in requests:
+                    if self.socket:
+                        self.socket.sendall(frame)
             except Exception as e:
                 self.logger.error(f"读请求失败: {e}")
 

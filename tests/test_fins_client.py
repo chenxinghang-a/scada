@@ -199,10 +199,9 @@ class TestFINSReadWriteWords:
 
         result = fins_client.read_words('D', 0, 3)
 
-        assert len(result) == 3
-        assert result[0] == 100
-        assert result[1] == 0  # padding
-        assert result[2] == 0
+        # 短响应必须明确失败，不能补 0 伪装成功
+        assert result is None
+        assert fins_client.stats['failed_reads'] == 1
 
     @patch.object(FINSClient, 'read_words')
     def test_read_single_word(self, mock_read, fins_client):
@@ -291,10 +290,9 @@ class TestFINSReadWriteBits:
 
         result = fins_client.read_bits('W', 0, 0, 3)
 
-        assert len(result) == 3
-        assert result[0] is True
-        assert result[1] is False
-        assert result[2] is False
+        # 短响应必须明确失败，不能补 False 伪装“全部未动作”
+        assert result is None
+        assert fins_client.stats['failed_reads'] == 1
 
     def test_write_bits_not_connected(self, fins_client):
         result = fins_client.write_bits('CIO', 0, 0, [True])

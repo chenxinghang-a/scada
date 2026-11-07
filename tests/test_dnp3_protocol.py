@@ -342,7 +342,7 @@ class TestBuildFrames:
         f = DNP3Parser.build_read_request(source=1, destination=2,
                                           object_group=DNP3ObjectGroup.AI)
         assert f[:2] == START, '起始字节必须是标准的 0x05 0x64'
-        assert f[3] == 0xC0, '控制字节 DIR+PRM'
+        assert f[3] == 0xC4, '控制字节 DIR+PRM+FUNC=4（用户数据）'
         assert struct.unpack('<H', f[4:6])[0] == 2 and struct.unpack('<H', f[6:8])[0] == 1
         assert f[10] == 0xC0 and f[11] == DNP3FunctionCode.READ
 
@@ -367,11 +367,15 @@ class TestBuildFrames:
         p = DNP3Parser.parse_frame(f)
         assert p['valid'] is True and p['crc_verified'] is True
         assert p['function_code'] == DNP3FunctionCode.DIRECT_OPERATE
-        assert p['data'][-1] == 0x01, '单点输出值'
+        # CROB 11 字节：control/count/on(4)/off(4)/status(1)
+        crob = p['data'][-11:]
+        assert crob[0] == 0x03, 'LATCH_ON 控制码'
+        assert crob[1] == 1, '操作次数'
+        assert crob[-1] == 0, '请求状态字节必须为 0'
 
     def test_direct_operate_masks_value_to_one_bit(self):
         f = DNP3Parser.build_direct_operate(1, 2, index=7, value=0xFF)
-        assert DNP3Parser.parse_frame(f)['data'][-1] == 0x01
+        assert DNP3Parser.parse_frame(f)['data'][-11] == 0x03, '非零值应 LATCH_ON'
 
     def test_builders_do_not_raise(self):
         """回归：历史实现多传一个参数，struct.pack 必抛、异常被 except 吞掉
@@ -431,7 +435,8 @@ class TestBuildFrames:
         count = struct.unpack('<H', obj[3:5])[0]
         idx = struct.unpack('<H', obj[5:7])[0]
         assert count == 1 and idx == 7, '数量或索引写错'
-        assert obj[7] == 1, '遥控值应在最后一个字节'
+        assert len(obj) == 7 + 11, 'CROB 必须是 11 字节'
+        assert obj[7] == 0x03 and obj[8] == 1, 'CROB 控制码/计数'
 
 
 # ---------------------------------------------------------------------------
