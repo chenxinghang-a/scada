@@ -73,7 +73,9 @@ def _load_topology_skeleton() -> dict[str, Any]:
     path = Path(__file__).resolve().parent.parent.parent / '配置' / 'topology.yaml'
     try:
         data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, yaml.YAMLError, UnicodeDecodeError) as exc:
+        # 配置文件存成 GBK/含非法字节时 UnicodeDecodeError 既不是 OSError
+        # 也不是 YAMLError，会直接穿出去把拓扑接口打成 500。
         logger.error('拓扑骨架读取失败（将只按设备配置聚合）: %s — %s', path, exc)
         return {}
     return data if isinstance(data, dict) else {}
@@ -321,7 +323,13 @@ def get_topology():
 
     status_map: dict[str, dict[str, Any]] = {}
     try:
-        for st in manager.get_all_status(brief=True):
+        statuses = manager.get_all_status(brief=True)
+        if isinstance(statuses, dict):
+            statuses = list(statuses.values())
+        for st in statuses:
+            if not isinstance(st, dict):
+                logger.warning('拓扑：状态条目格式不符，已跳过: %r', type(st))
+                continue
             status_map[st.get('device_id') or st.get('id')] = st
     except (AttributeError, TypeError) as exc:
         logger.warning('拓扑：状态获取失败，状态将全部显示为未知: %s', exc)

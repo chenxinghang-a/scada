@@ -321,7 +321,8 @@ class DeviceBehaviorSimulator:
 
     def _configure_process_model(self):
         """根据设备类型配置过程模型"""
-        device_type = self.device_config.get('description', '').lower()
+        # description 可能是 None/数字：直接 .lower() 会让整台设备初始化失败。
+        device_type = str(self.device_config.get('description') or '').lower()
         
         # 锅炉类设备（base调高使running时偶尔触碰报警阈值180°C/1.2MPa）
         if '锅炉' in device_type or 'boiler' in device_type:
@@ -532,6 +533,12 @@ class DeviceBehaviorSimulator:
                     continue
 
                 source = str(spec.get('source', '')).strip().lower()
+                # 点位名大小写敏感：统一转小写后先按原拼写回查，否则
+                # 带大写的点位会被判“非法来源”并静默退回内置表。
+                if source not in _SIM_SOURCES:
+                    matched = [n for n in declared if n.lower() == source]
+                    if matched:
+                        source = sorted(matched)[0]
                 if source not in _SIM_SOURCES and source not in declared:
                     logger.warning(
                         "[行为模拟] %s: 点位 %s 的 sim.source=%r 既不是内置源、"

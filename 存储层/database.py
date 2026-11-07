@@ -231,7 +231,9 @@ class Database:
             elapsed = time.time() - start
             if elapsed > 5:
                 logger.warning(f"数据库 PRAGMA 初始化耗时较长: {elapsed:.1f}s，可能存在锁竞争")
-        except sqlite3.OperationalError as e:
+        except sqlite3.Error as e:
+            # 捕获范围必须覆盖所有 sqlite 错误；只抓 OperationalError 时，
+            # DatabaseError（损坏/编码错误）会让 conn 既不 close 也不还回去。
             logger.error(f"数据库 PRAGMA 初始化失败: {e}")
             logger.error("可能原因: 数据库文件被其他进程锁定，请关闭所有 Python 进程后重试")
             # 半初始化的连接也要还回去；否则文件句柄/WAL 锁要等 GC 才释放。

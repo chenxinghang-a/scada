@@ -323,24 +323,26 @@ def _find_rule(name: str, unit: str, data_type: str = 'uint16') -> dict[str, Any
     name_lower = name.lower() if name else ''
     unit_lower = unit.lower() if unit else ''
 
-    # 按name关键字匹配（精确unit匹配优先）
-    for rule in _REGISTER_RULES:
-        kw = rule['kw']
+    # 按name关键字匹配：长关键字优先（inlet_flow 不能被 flow 抢走），
+    # 单位必须精确相等（'W' 不能命中 'kW'）。
+    candidates = sorted((r for r in _REGISTER_RULES if r['kw'] in name_lower),
+                        key=lambda r: len(r['kw']), reverse=True)
+    for rule in candidates:
         unit_kw = rule.get('unit_kw', '')
-        if kw in name_lower:
-            if unit_kw and unit_kw.lower() in unit_lower:
+        if unit_kw:
+            if unit_kw.lower() == unit_lower:
                 return rule
-            elif not unit_kw:
-                return rule
+        elif not unit_lower:
+            return rule
 
     # 按name关键字匹配（忽略unit）
     for rule in _REGISTER_RULES:
         if rule['kw'] in name_lower:
             return rule
 
-    # 按unit兜底
+    # 按unit兜底：必须精确相等（子串会让 m/s 命中 mm/s、W 命中 kW）
     for rule in _UNIT_RULES:
-        if rule['unit_kw'].lower() in unit_lower:
+        if rule['unit_kw'].lower() == unit_lower:
             return rule
 
     # ===== 智能推断：根据data_type和unit生成合理规则 =====

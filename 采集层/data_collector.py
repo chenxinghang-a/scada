@@ -865,12 +865,17 @@ class DataCollector:
             if device_config.get('enabled', True):
                 protocol = device_config.get('protocol', 'modbus_tcp')
 
-                if protocol in ('opcua', 'mqtt'):
-                    started = self._setup_push_device(device_id, device_config)
-                else:
-                    # round 308：采集任务启动失败不能静默 —— 设备"在配置里"但
-                    # 永远不会产生数据，而 `protocols_active` 照样把它计入。
-                    started = self._start_device_collection(device_id, device_config)
+                try:
+                    if protocol in ('opcua', 'mqtt'):
+                        started = self._setup_push_device(device_id, device_config)
+                    else:
+                        # round 308：采集任务启动失败不能静默 —— 设备"在配置里"但
+                        # 永远不会产生数据，而 `protocols_active` 照样把它计入。
+                        started = self._start_device_collection(device_id, device_config)
+                except Exception as e:      # noqa: BLE001
+                    # 单台设备异常不得打断整轮启动（半启动状态更难排查）。
+                    started = False
+                    logger.error("设备 %s 采集启动异常: %s", device_id, e)
                 if started:
                     proto_count[protocol] = proto_count.get(protocol, 0) + 1
                 else:
@@ -937,7 +942,9 @@ class DataCollector:
                 )
 
         if flushed and drained:
-            self.data_queue.clear_persistence()
+            # 只确认本次真的处理过的批次；无参调用会连“队列满时只剩磁盘副本”
+            # 的记录一起删掉（从未入库）。
+            self.data_queue.clear_persistence(remaining)
         else:
             logger.warning(
                 "存在未能入库的数据，已保留持久化文件供下次启动恢复: "
@@ -1361,7 +1368,9 @@ class DataCollector:
 
         def _run_collection():
             """在线程池中执行的采集工作"""
-            if not self.running:
+            # 设备已删除时在途任务也要停：remove_device_task 取消不到已提交的
+            # future，否则删除后的数据仍会入库。
+            if not self.running or device_id in self._cancelled_devices:
                 return
             # Prometheus（round 255）：采集耗时直方图。
             # 此前 `scada_collection_duration_seconds` 恒无数据 —— 看板上
@@ -1407,7 +1416,8 @@ class DataCollector:
 
         def _handle_circuit_breaker():
             """处理断路器逻辑：冷却期内兜底 + 半开试探"""
-            cb = self._circuit_state.get(device_id)
+            with self._tracking_lock:
+                cb = self._circuit_state.get(device_id)
             if not cb or not cb.get('opened_at'):
                 return None  # 无断路器，继续正常采集
 
@@ -1450,15 +1460,17 @@ class DataCollector:
                 probe_ok = False
 
             if probe_ok:
-                self._circuit_state.pop(device_id, None)
-                self._failure_counts[device_id] = 0
+                with self._tracking_lock:
+                    self._circuit_state.pop(device_id, None)
+                    self._failure_counts[device_id] = 0
                 interval = self._get_dynamic_interval(device_id, base_interval)
                 logger.info(f"设备 {device_id} 试探读成功，断路器关闭，恢复采集")
             else:
-                self._circuit_state[device_id] = {
-                    'opened_at': time.monotonic(),      # 窗口计时
-                    'opened_at_wall': time.time(),      # 展示用
-                }
+                with self._tracking_lock:
+                    self._circuit_state[device_id] = {
+                        'opened_at': time.monotonic(),      # 窗口计时
+                        'opened_at_wall': time.time(),      # 展示用
+                    }
                 interval = CIRCUIT_BREAKER_COOLDOWN_S
                 logger.warning(f"设备 {device_id} 试探读失败，断路器重新打开")
 
@@ -1513,6 +1525,8 @@ class DataCollector:
             try:
                 if not self.running:
                     return
+                if device_id in self._cancelled_devices:
+                    return
 
                 # 断路器检查
                 if _handle_circuit_breaker():
@@ -1526,7 +1540,8 @@ class DataCollector:
                 with self._tracking_lock:
                     crash_failures = self._failure_counts.get(device_id, 0) + 1
                     self._failure_counts[device_id] = crash_failures
-                recovery_interval = min(2 ** crash_failures, BACKOFF_CEILING_S)
+                recovery_interval = compute_backoff_interval(
+                    crash_failures, base_interval)
                 _schedule_next(recovery_interval)
 
         # round 272：首次调度**随机抖动**，把各设备相位打散。
@@ -1820,6 +1835,10 @@ class DataCollector:
                 size = reg_sizes[reg['address']]
                 raw = all_regs[offset:offset + size]
                 if len(raw) < size:
+                    self._inc_stat('dropped_register_short')
+                    logger.warning(
+                        "设备 %s 寄存器 %s 响应长度不足（需 %d，实得 %d），本条丢弃",
+                        device_id, reg.get('name', '?'), size, len(raw))
                     continue
                 value = self._decode_register(client, raw, reg)
                 if value is not None:
@@ -1858,6 +1877,10 @@ class DataCollector:
                     size = reg_sizes[reg['address']]
                     raw = chunk[offset:offset + size]
                     if len(raw) < size:
+                        self._inc_stat('dropped_register_short')
+                        logger.warning(
+                            "设备 %s 寄存器 %s 分块响应长度不足（需 %d，实得 %d），本条丢弃",
+                            device_id, reg.get('name', '?'), size, len(raw))
                         continue
                     value = self._decode_register(client, raw, reg)
                     if value is not None:
@@ -2166,7 +2189,8 @@ class DataCollector:
                     # 同一把 `_tracking_lock`；这两个键必须一起更新，不能只写一半）
                     if (value is not None
                             and isinstance(value, (int, float))
-                            and math.isfinite(value)):
+                            and math.isfinite(value)
+                            and device_id not in self._cancelled_devices):
                         with self._tracking_lock:
                             # round 353：**`_last_times` 只在值变化时更新**。
                             #
@@ -2247,6 +2271,9 @@ class DataCollector:
                 # === 报警检查（每条都要检查） ===
                 if self.alarm_manager:
                     for data in batch:
+                        if data.get('_db_retry'):
+                            # 重试批次首次已检查过报警；再查会重复累加触发/升级。
+                            continue
                         try:
                             self.alarm_manager.check_alarm(
                                 device_id=data['device_id'],
@@ -2510,7 +2537,7 @@ class DataCollector:
                 value, device_id, name_lower,
             )
             return
-        count = int(count)
+        count = int(round(count))
 
         good_kw = frozenset(['good', 'ok', 'pass', 'qualified'])
         reject_kw = frozenset(['reject', 'ng', 'defect', 'scrap'])
@@ -2572,7 +2599,9 @@ class DataCollector:
                 elapsed = max(0.0, now - opened_at)
                 # `opened_at` 对外保持"墙钟时刻"的语义（前端/接口契约），
                 # 内部计时用单调值；老状态没有 wall 字段时退回单调值。
-                entry['opened_at'] = cb.get('opened_at_wall', opened_at)
+                opened_wall = cb.get('opened_at_wall')
+                entry['opened_at'] = (time.time() - elapsed
+                                      if opened_wall is None else opened_wall)
                 entry['opened_for_sec'] = round(elapsed, 1)
                 entry['cooldown_remaining_sec'] = round(
                     max(0.0, CIRCUIT_BREAKER_COOLDOWN_S - elapsed), 1)
