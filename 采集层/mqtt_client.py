@@ -543,8 +543,14 @@ class MQTTClient:
             device_id = self._topic_device_id(topic)
             unit = self._topic_unit(topic)
             for register_name, value in data.items():
-                if isinstance(value, (int, float)):
-                    self._notify_callbacks(device_id, register_name, float(value),
+                # round 382：bool 是 int 子类，不能抹成 1.0/0.0 丢布尔语义；
+                # 同时必须挡 NaN/Inf，否则会污染报警与统计。
+                if isinstance(value, bool):
+                    numeric = float(int(value))
+                else:
+                    numeric = try_finite_float(value)
+                if numeric is not None:
+                    self._notify_callbacks(device_id, register_name, numeric,
                                            unit, retain=retain)
 
     def _topic_meta(self, topic: str) -> dict:

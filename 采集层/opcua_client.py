@@ -102,8 +102,13 @@ class OPCUAClient:
             bool: 是否成功启动
         """
         if self._running:
-            logger.warning("OPC UA客户端已在运行")
-            return True
+            if self._thread is not None and self._thread.is_alive():
+                # 只有真正连上才算成功；仍在退避重连时如实回 False，
+                # 否则上层会把“连不上”当在线，latest_data 却一直为空。
+                logger.warning("OPC UA 仍在连接/重连中（connected=%s）", self.connected)
+                return self.connected
+            logger.warning("OPC UA 连接线程已退出但 _running 残留，复位后重启")
+            self._running = False
 
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)

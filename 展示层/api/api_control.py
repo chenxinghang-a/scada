@@ -363,6 +363,8 @@ def write_coil(device_id):
         address = safe_int(address, 'address')
     except ValueError as e:
         return api_error(str(e))
+    if address < REGISTER_ADDRESS_MIN or address > REGISTER_ADDRESS_MAX:
+        return api_error(f'线圈地址超出范围 ({REGISTER_ADDRESS_MIN}-{REGISTER_ADDRESS_MAX})')
 
     # 统一布尔值转换（字符串 "false"/"0" 也应视为 False）
     if isinstance(value, str):
@@ -727,10 +729,14 @@ def trigger_estop():
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
         return api_error('设备控制安全模块未启用', 503)
-    result = device_control.trigger_emergency_stop(reason)
+    result = device_control.trigger_emergency_stop(reason) or {}
+    ok = bool(result.get('success'))
     get_auth_manager().log_operation(
-        request.current_user['username'], 'emergency_stop', f'紧急停机: {reason}')
-    return jsonify(result)
+        request.current_user['username'], 'emergency_stop',
+        f'紧急停机: {reason}' if ok else
+        f'紧急停机**部分失败**: {reason}；未停 {result.get("failed_devices")}')
+    # 部分设备没停下来还回 200，等于告诉运维“全场已停” —— 必须 500。
+    return jsonify(result), (200 if ok else 500)
 
 
 @control_bp.route('/control/estop/reset', methods=['POST'])
@@ -991,11 +997,16 @@ def batch_control():
 
     device_control = getattr(current_app, 'device_control', None)
     if device_control:
-        result = device_control.batch_control(action, operator, device_ids=device_ids)
+        result = device_control.batch_control(action, operator, device_ids=device_ids) or {}
         target_desc = f'{len(device_ids)}台设备' if device_ids else '所有设备'
+        ok = bool(result.get('success'))
         get_auth_manager().log_operation(
-            operator, f'batch_{action}', f'批量{action}{target_desc}')
-        return jsonify(result)
+            operator, f'batch_{action}',
+            f'批量{action}{target_desc}' if ok else
+            f'批量{action}{target_desc}失败/部分失败 '
+            f'{result.get("success_count")}/{result.get("total")}: '
+            f'{result.get("message", "")}')
+        return jsonify(result), (200 if ok else 403)
 
     # round 338：**无安全模块 → 拒绝批量控制**，与 write-register / write-coil 对齐。
     #

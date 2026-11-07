@@ -102,6 +102,9 @@ class ModbusClient:
         self._max_reconnect_delay = 60
         self._last_reconnect_time = 0
         self._consecutive_failures = 0  # 连续失败计数，超过阈值才重连
+        #: 重连串行化：退避判定 + disconnect + connect 必须原子，否则两个线程
+        #: 会各建一个 client，后者覆盖前者，且可能关掉别人正在用的连接。
+        self._reconnect_lock = threading.Lock()
 
         # Fix 2: 最后已知良好值缓存 — 读取失败时返回缓存值而非 None，
         # 避免重连期间数据断流。key = (address, count), value = list[int]
@@ -276,7 +279,8 @@ class ModbusClient:
         返回 None 让调用方走「明确失败」分支（读返回 None、写返回 False）。
         """
         if slave_id is None:
-            return self.slave_id
+            # 默认从站也必须走完整校验：配置成 0/248+ 时不能绕过广播/越界保护。
+            slave_id = self.slave_id
 
         # bool 是 int 子类：`slave_id=True` 会被当成 1 号从站
         if isinstance(slave_id, bool):
@@ -409,6 +413,13 @@ class ModbusClient:
 
     def connect(self) -> bool:
         """建立Modbus连接"""
+        # 重复 connect / 上次失败后重试：先关旧 client，避免每次泄漏一个 socket。
+        if self.client is not None:
+            try:
+                self.client.close()
+            except Exception as e:      # noqa: BLE001
+                logger.debug(f"设备 {self.device_name} 关闭旧连接失败: {e}")
+            self.client = None
         try:
             if self.protocol == 'modbus_tcp':
                 self.client = ModbusTcpClient(
@@ -417,8 +428,12 @@ class ModbusClient:
                     timeout=5  # 5秒超时（3秒太激进，网络稍慢就断）
                 )
             else:  # modbus_rtu
-                # RTU 超时按 T3.5 规范：9600 波特率 ≈ 200ms，115200 ≈ 50ms
-                rtu_timeout = max(0.05, min(0.5, 3.5 * 11 / self.baudrate * 10))
+                # round 382：T3.5 是**帧内静默**（9600 下约 4ms），不能当整帧
+                # 响应超时。按最坏 125 寄存器（255B×11bit）的 2 倍推导，
+                # 9600 下约 0.58s，并允许设备配置覆盖。
+                baud = max(int(self.baudrate or 9600), 1)
+                rtu_timeout = float(self.config.get('timeout')
+                                    or min(3.0, max(0.3, 2.0 * 255 * 11 / baud)))
                 self.client = ModbusSerialClient(
                     port=self.serial_port,
                     baudrate=self.baudrate,
@@ -445,30 +460,34 @@ class ModbusClient:
             return False
 
     def reconnect(self) -> bool:
-        """自动重连（指数退避）"""
-        if self._reconnect_attempts > 0:
-            delay = min(2 ** self._reconnect_attempts, self._max_reconnect_delay)
-            # round 369：退避间隔是**时长**，必须用单调时钟。
-            # 墙钟回拨后 `now - last` 变负，该设备会永久停在"还在退避中"，
-            # 再也不重连（现场表现：断线设备永远离线，重启才恢复）。
-            now = time.monotonic()
-            if now - self._last_reconnect_time < delay:
-                return False  # 还在退避中
+        """自动重连（指数退避，串行化）"""
+        with self._reconnect_lock:
+            # 别的线程已经把它连上了：直接用，别再拆一次。
+            if self.connected and self.client is not None:
+                self._reconnect_attempts = 0
+                return True
 
-        self._reconnect_attempts += 1
-        self._last_reconnect_time = time.monotonic()
+            if self._reconnect_attempts > 0:
+                delay = min(2 ** self._reconnect_attempts, self._max_reconnect_delay)
+                # round 369：退避间隔是**时长**，必须用单调时钟。
+                now = time.monotonic()
+                if now - self._last_reconnect_time < delay:
+                    return False  # 还在退避中
 
-        try:
-            self.disconnect()
-        except Exception as e:
-            # 安全忽略：紧接着就要重连，旧连接清理失败不影响重连流程
-            logger.debug(f"设备 {self.device_name} 重连前断开旧连接失败: {e}")
+            self._reconnect_attempts += 1
+            self._last_reconnect_time = time.monotonic()
 
-        logger.info(f"设备 {self.device_name} 尝试重连 (第{self._reconnect_attempts}次)")
-        success = self.connect()
-        if success:
-            self._consecutive_failures = 0
-        return success
+            try:
+                self.disconnect()
+            except Exception as e:
+                # 安全忽略：紧接着就要重连，旧连接清理失败不影响重连流程
+                logger.debug(f"设备 {self.device_name} 重连前断开旧连接失败: {e}")
+
+            logger.info(f"设备 {self.device_name} 尝试重连 (第{self._reconnect_attempts}次)")
+            success = self.connect()
+            if success:
+                self._consecutive_failures = 0
+            return success
 
     def disconnect(self):
         """断开Modbus连接"""

@@ -1193,8 +1193,12 @@ class DeviceBehaviorSimulator:
         self.fault_start_time = time.time()
         self.fault_severity = severity
 
-        self.state = DeviceState.FAULT
-        self.state_start_time = time.time()
+        # round 382：必须走 _change_state，否则 state_history / 停留时长 /
+        # maintenance_count 全部漏记，故障迁移在统计里消失。
+        if self.state != DeviceState.FAULT:
+            self._change_state(DeviceState.FAULT)
+        else:
+            self.state_start_time = time.time()
         self.stats['fault_count'] += 1
 
         logger.warning(f"[行为模拟] 设备 {self.device_name} 触发故障: {fault_type.value} "
@@ -1400,12 +1404,14 @@ class DeviceBehaviorSimulator:
 
             elif fault_type == FaultType.PRESSURE_LEAK:
                 # 压力泄漏：压力向低压目标偏移（一阶惯性，不会降到零）
-                leak_target = self._current_pressure * (1 - 0.4 * severity)
+                # 用固定基线算目标，不能每帧拿当前值再乘一次 —— 那会变成
+                # 指数衰减，压力一路掉到下限而不是“降 40%”。
+                leak_target = self.process_model.base_pressure * (1 - 0.4 * severity)
                 leak_target = max(self.PRESSURE_MIN, leak_target)
                 alpha = 1 - math.exp(-self._dt / 5)  # 5秒时间常数
                 self._current_pressure += (leak_target - self._current_pressure) * alpha
                 # 泄漏导致流量小幅增加（有界）
-                flow_boost_target = self._current_flow * (1 + 0.3 * severity)
+                flow_boost_target = self.process_model.base_flow * (1 + 0.3 * severity)
                 alpha_flow = 1 - math.exp(-self._dt / 5)
                 self._current_flow += (flow_boost_target - self._current_flow) * alpha_flow
                 # 硬限幅
@@ -2039,12 +2045,16 @@ class MultiDeviceSimulator:
     
     def start(self):
         """启动所有模拟器"""
+        # round 382：重复 start 会叠加更新线程，同一设备每周期被回调 N 次。
+        if self._running and self._update_thread is not None and self._update_thread.is_alive():
+            logger.warning("[多设备模拟器] 已在运行，忽略重复 start()")
+            return
         self._running = True
-        
+
         with self._lock:
             for simulator in self.simulators.values():
                 simulator.start()
-        
+
         # 启动更新线程
         self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
         self._update_thread.start()

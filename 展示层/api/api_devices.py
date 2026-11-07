@@ -1093,6 +1093,7 @@ def test_device_connection(device_id):
 
     protocol = device_config.get('protocol', 'modbus_tcp')
 
+    test_client = None
     try:
         test_client = _create_test_client(device_config, device_manager.simulation_mode)
         if test_client is None:
@@ -1116,22 +1117,19 @@ def test_device_connection(device_id):
                 result = test_client.read_holding_registers(reg['address'], reg.get('length', 1))
                 if result is not None:
                     sample = {'register': reg['name'], 'value': result, 'unit': reg.get('unit', '')}
-            test_client.disconnect()
         elif protocol == 'opcua':
             latest = test_client.get_latest_data()
             if latest:
                 name, ldata = list(latest.items())[0]
                 sample = {'node': name, 'value': ldata.get('value'), 'unit': ldata.get('unit', '')}
-            test_client.disconnect()
         elif protocol == 'rest':
             for ep in device_config.get('endpoints', []):
                 value = test_client.read_endpoint(ep)
                 if value is not None:
                     sample = {'endpoint': ep.get('name'), 'value': value, 'unit': ep.get('unit', '')}
                     break
-            test_client.disconnect()
         elif protocol == 'mqtt':
-            test_client.disconnect()
+            pass
 
         return jsonify({
             'success': True, 'message': f'连接成功（协议: {protocol}）',
@@ -1140,6 +1138,14 @@ def test_device_connection(device_id):
     except Exception as e:
         logger.error(f"连接测试失败: {e}", exc_info=True)
         return jsonify({'success': False, 'message': '连接测试失败，请检查设备配置', 'protocol': protocol})
+    finally:
+        # round 382：mc/fins/custom、connect 返回 False、读取异常 —— 所有路径
+        # 都必须在 finally 关闭，否则测试连接会泄漏 socket/订阅。
+        if test_client is not None:
+            try:
+                test_client.disconnect()
+            except Exception as e:      # noqa: BLE001
+                logger.warning("测试连接后关闭客户端失败: %s", e)
 
 
 @devices_bp.route('/devices/protocols', methods=['GET'])
@@ -1982,6 +1988,8 @@ def batch_add_presets():
             result['message'] = (
                 f"{result.get('message', '')}；其中 {len(failed)} 台**采集任务未启动**"
                 f"（{', '.join(failed)}）：配置已写入，但不会产生数据")
+            result['success'] = False
+            return jsonify(result), 500
         return jsonify(result)
     # round 369：整体失败（预设不存在 / 落盘失败）必须回 4xx/5xx
     return jsonify(result), 400
@@ -2015,6 +2023,8 @@ def add_all_presets():
             result['message'] = (
                 f"{result.get('message', '')}；其中 {len(failed)} 台**采集任务未启动**"
                 f"（{', '.join(failed)}）：配置已写入，但不会产生数据")
+            result['success'] = False
+            return jsonify(result), 500
         return jsonify(result)
     # round 369：整体失败必须回 4xx/5xx
     return jsonify(result), 400

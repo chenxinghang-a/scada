@@ -279,6 +279,12 @@ class Database:
                         f"事务回滚失败，本线程连接可能残留未提交事务 "
                         f"(原始错误: {e}; 回滚错误: {rollback_err})"
                     )
+                    # 连接已不可信：丢弃，下次 get_connection 重建。
+                    try:
+                        conn.close()
+                    except Exception:       # noqa: BLE001
+                        pass
+                    self._local.connection = None
             raise e
 
     def check_health(self) -> Dict[str, Any]:
@@ -621,7 +627,8 @@ class Database:
             )
 
     def insert_data(self, device_id: str, register_name: str,
-                    value: float, timestamp: datetime, unit: str = ''):
+                    value: float, timestamp: datetime, unit: str = '',
+                    quality: int = 192):
         """
         插入数据（单条）
         - realtime_data: UPSERT，每个设备+寄存器只保留最新一条
@@ -645,13 +652,19 @@ class Database:
             # 任何 `WHERE timestamp > created_at` 或按 created_at 分天的报表都会错。
             created_at = datetime.now()
 
+            # round 382：单条路径原来完全不带 quality，Bad/Uncertain 会被
+            # DDL 默认的 192(GOOD) 永久掩盖；批量路径早就写 quality，口径必须一致。
+            q = try_int(quality)
+            if q is None:
+                q = 192
             cursor.execute('''
-                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp, quality, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(device_id, register_name) DO UPDATE SET
                     value = excluded.value, unit = excluded.unit,
-                    timestamp = excluded.timestamp, created_at = excluded.created_at
-            ''', (device_id, register_name, value, unit, timestamp, created_at))
+                    timestamp = excluded.timestamp, quality = excluded.quality,
+                    created_at = excluded.created_at
+            ''', (device_id, register_name, value, unit, timestamp, q, created_at))
 
             cursor.execute('''
                 INSERT INTO history_data (device_id, register_name, value, unit, timestamp, created_at)
@@ -1283,12 +1296,17 @@ class Database:
                     SET acknowledged = 1, acknowledged_at = ?, acknowledged_by = ?
                     WHERE alarm_id = ? AND device_id = ? AND register_name = ? AND acknowledged = 0
                 ''', (datetime.now(), acknowledged_by, alarm_id, device_id, register_name))
+            elif device_id or register_name:
+                # 只给一半条件时退化成“全库按 alarm_id 更新”会误伤其它设备/
+                # 寄存器的同名报警，必须显式拒绝。
+                raise ValueError('acknowledge_alarm: device_id 与 register_name 必须同时提供')
             else:
-                # 否则只使用alarm_id（向后兼容）
+                # 全库兜底只命中活跃记录，绝不改已恢复的历史行
                 cursor.execute('''
                     UPDATE alarm_records
                     SET acknowledged = 1, acknowledged_at = ?, acknowledged_by = ?
                     WHERE alarm_id = ? AND acknowledged = 0
+                      AND (cleared = 0 OR cleared IS NULL)
                 ''', (datetime.now(), acknowledged_by, alarm_id))
 
             return cursor.rowcount > 0
@@ -2083,8 +2101,9 @@ class Database:
                     pass
                 raise last_exc
 
-            # 4) 清掉残留的 WAL/SHM：否则旧日志会被应用到新文件上，直接损坏
-            for suffix in ('-wal', '-shm'):
+            # 4) 清掉残留的 WAL/SHM/**journal**：旧热日志会在下次打开时
+            # 回滚刚恢复的页，属不可逆数据损坏路径。
+            for suffix in ('-wal', '-shm', '-journal'):
                 stale = Path(str(target) + suffix)
                 if stale.exists():
                     stale.unlink()

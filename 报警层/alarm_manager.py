@@ -498,23 +498,29 @@ class AlarmManager:
         db = getattr(self, 'database', None)
         if db is None or not hasattr(db, 'set_system_state'):
             return
-        payload = []
-        with self._state_lock:
-            for (alarm_id, device_id, register_name), st in self._shelved_alarms.items():
-                payload.append({
-                    'alarm_id': alarm_id,
-                    'device_id': device_id,
-                    'register_name': register_name,
-                    'reason': st.reason,
-                    'shelved_by': st.shelved_by,
-                    'shelved_at': (st.shelved_at.isoformat()
-                                   if isinstance(st.shelved_at, datetime) else None),
-                    'shelved_until': (st.shelved_until.isoformat()
-                                      if isinstance(st.shelved_until, datetime) else None),
-                })
-        if not db.set_system_state(self.STATE_KEY_SHELVES, payload or None):
-            logger.error("报警屏蔽状态落库失败 —— 进程重启后屏蔽会失效，"
-                         "正在被屏蔽的报警会重新刷屏")
+        # round 382：快照与落库必须串行，否则并发 shelve/unshelve 时旧快照
+        # 可能后写覆盖新状态，重启后已解除的屏蔽“复活”。
+        lock = getattr(self, '_shelve_persist_lock', None)
+        if lock is None:
+            lock = self._shelve_persist_lock = threading.Lock()
+        with lock:
+            payload = []
+            with self._state_lock:
+                for (alarm_id, device_id, register_name), st in self._shelved_alarms.items():
+                    payload.append({
+                        'alarm_id': alarm_id,
+                        'device_id': device_id,
+                        'register_name': register_name,
+                        'reason': st.reason,
+                        'shelved_by': st.shelved_by,
+                        'shelved_at': (st.shelved_at.isoformat()
+                                       if isinstance(st.shelved_at, datetime) else None),
+                        'shelved_until': (st.shelved_until.isoformat()
+                                          if isinstance(st.shelved_until, datetime) else None),
+                    })
+            if not db.set_system_state(self.STATE_KEY_SHELVES, payload or None):
+                logger.error("报警屏蔽状态落库失败 —— 进程重启后屏蔽会失效，"
+                             "正在被屏蔽的报警会重新刷屏")
 
     def _restore_shelves(self) -> dict[str, int]:
         """启动时恢复报警屏蔽（round 316）。
@@ -540,9 +546,13 @@ class AlarmManager:
             if not isinstance(v, str):
                 return None
             try:
-                return datetime.fromisoformat(v)
-            except ValueError:
+                dt = datetime.fromisoformat(v)
+            except (TypeError, ValueError):
                 return None
+            # 带时区的历史值与 naive now 比较会抛 TypeError：统一成本地 naive。
+            if dt.tzinfo is not None:
+                dt = dt.astimezone().replace(tzinfo=None)
+            return dt
 
         for row in rows:
             if not isinstance(row, dict):
@@ -554,7 +564,12 @@ class AlarmManager:
             if not (alarm_id and device_id and register_name):
                 result['dropped'] += 1
                 continue
-            until = _parse(row.get('shelved_until'))
+            raw_until = row.get('shelved_until')
+            until = _parse(raw_until)
+            if raw_until is not None and until is None:
+                # 解析失败 != 手动屏蔽；当成手动屏蔽会把临时屏蔽变成永久。
+                result['dropped'] += 1
+                continue
             if until is not None and until <= now:
                 result['expired'] += 1
                 continue        # 已过期，不恢复
@@ -1131,6 +1146,12 @@ class AlarmManager:
             except Exception as e:      # noqa: BLE001 —— 收尾失败不许影响重载
                 logger.error("规则 %s 已失效，但数据库记录收尾失败 %s/%s: %s",
                              rule_id, device_id, register_name, e)
+                # 库行仍是 cleared=0：放回内存，下次重载再收尾，避免重启后
+                # 被 _restore_active_alarms 复活成永久幽灵报警。
+                with self._state_lock:
+                    self.alarm_states.setdefault(
+                        (rule_id, device_id, register_name), _state)
+                continue
             if self._escalation_manager:
                 try:
                     self._escalation_manager.remove_alarm(rule_id, device_id, register_name)
@@ -1911,6 +1932,14 @@ class AlarmManager:
                 "报警落库失败（播报继续，现场仍会响）: %s - %s/%s = %r: %s",
                 alarm_message, device_id, register_name, value, e)
             self._record_output_failure('database', f'报警落库失败: {e}')
+            # 无库行 → acknowledge_alarm 永远 rowcount=0，报警无法确认、
+            # 升级链一路打到底；撤销刚登记的升级跟踪。
+            if self._escalation_manager:
+                try:
+                    self._escalation_manager.remove_alarm(
+                        rule_id, device_id, register_name)
+                except Exception:       # noqa: BLE001
+                    pass
 
         if annunciate:
             logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")

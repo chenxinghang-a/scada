@@ -615,7 +615,10 @@ class SimulatedModbusClient(ModbusClientInterface):
             )
             self._register_types[reg['address']] = {
                 'data_type': data_type,
-                'scale': reg.get('scale', 1.0)
+                'scale': reg.get('scale', 1.0),
+                # round 382：678/722 已按 offset 反算，这里漏缓存会让所有
+                # 带 offset 的点位工程值恒错（与增强模拟器读数不一致）。
+                'offset': reg.get('offset', 0.0)
             }
             if _is_machinery(reg.get('name', '')):
                 self._machinery_addresses.add(reg['address'])
@@ -908,9 +911,9 @@ class SimulatedOPCUAClient(PushClientInterface):
                     logger.error("[模拟] OPC UA 数据生成异常，本次跳过: %s", e)
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
-        if self.connected:
-            self._generate_data()
-        return dict(self.latest_data)
+        # round 382：只读快照。数据由推送线程生成；读侧再生成会重复触发
+        # 回调/累加 stats，并与推送线程并发写 latest_data。
+        return {k: dict(v) for k, v in list(self.latest_data.items())}
 
     def get_stats(self) -> dict[str, Any]:
         return {'device_id': self.device_id, 'device_name': self.device_name,
@@ -1098,9 +1101,9 @@ class SimulatedRESTClient(PushClientInterface):
         logger.info(f"[模拟] REST设备 {self.device_name} 已断开")
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
-        if self.connected:
-            self._generate_data()
-        return dict(self.latest_data)
+        # round 382：只读快照。数据由推送线程生成；读侧再生成会重复触发
+        # 回调/累加 stats，并与推送线程并发写 latest_data。
+        return {k: dict(v) for k, v in list(self.latest_data.items())}
 
     def read_endpoint(self, endpoint_config: dict[str, Any]) -> Any:
         self.stats['total_requests'] += 1

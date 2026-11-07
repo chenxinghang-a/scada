@@ -128,6 +128,14 @@ class RESTDeviceClient:
         Returns:
             bool: 连接是否成功
         """
+        # round 382：重复 connect 会覆盖 Session（旧连接池永不 close）并叠加
+        # 第二条轮询线程 —— 双倍频率打设备、回调重复。已连接直接复用；
+        # 否则先回收上一次的线程/Session（含 connect 失败残留）。
+        if self.connected and self._thread is not None and self._thread.is_alive():
+            logger.debug("REST 设备已连接，忽略重复 connect: %s", self.device_id)
+            return True
+        self.disconnect()
+
         try:
             self._session = requests.Session()
             # round 369：**禁用系统代理**。REST 设备是现场内网/本机服务，

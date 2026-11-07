@@ -259,6 +259,7 @@ class RealDeviceManager(IDeviceManager):
         # 必须用 list(...) 快照：别的线程（API 增删设备）正在改这张表，
         # 直接迭代活视图会抛 RuntimeError: dictionary changed size during iteration。
         snapshot = {did: cfg for did, cfg in list(self.devices.items())}
+        old_raw = list(getattr(self, '_raw_devices', []))
 
         if not self.load_config():
             reason = (f'配置文件解析失败（{self.config_path}），'
@@ -271,6 +272,9 @@ class RealDeviceManager(IDeviceManager):
         if not new_ids and old_ids and not allow_empty:
             with self._lock:
                 self.devices = snapshot
+                # 原始快照也要回滚：否则下次落盘按空的 _raw_devices 还原不了
+                # ${VAR}，会把展开后的明文密码写进 YAML。
+                self._raw_devices = old_raw
             reason = ('重载后设备数为 0，已回滚 —— 防止文件被清空时'
                       '现场全部设备停止采集')
             logger.error("设备配置重载被拒绝: %s", reason)
@@ -280,6 +284,21 @@ class RealDeviceManager(IDeviceManager):
         added = sorted(new_ids - old_ids)
         removed = sorted(old_ids - new_ids)
         kept = sorted(new_ids & old_ids)
+        # round 382：kept 设备的配置也可能变了（host/port/寄存器），
+        # 但客户端是缓存 —— 不断开就永远按旧参数采。配置有差异的重建客户端。
+        changed = [did for did in kept
+                   if snapshot.get(did) != self.devices.get(did)]
+        for did in changed:
+            try:
+                self.disconnect_device(did)
+            except Exception as e:      # noqa: BLE001
+                logger.error("[重载] 断开已变更设备 %s 失败: %s", did, e)
+            with self._lock:
+                self.clients.pop(did, None)
+            self._connection_failures.pop(did, None)
+        if changed:
+            logger.info("[重载] 配置已变更，客户端将按新配置重建: %s", changed)
+
         if added or removed:
             logger.info("[重载] 设备变更: +%s -%s", added, removed)
 
@@ -510,6 +529,10 @@ class RealDeviceManager(IDeviceManager):
 
     def start_device(self, device_id: str, write: bool = True) -> bool:
         """启动指定设备（仅限机械类设备）。失败情形同 `stop_device`。"""
+        # round 382：急停期间必须拒绝启动，不能只做状态显示。
+        if self._estop_active:
+            logger.error("[真实] 紧急停机生效中，拒绝启动设备 %s", device_id)
+            return False
         config = self.devices.get(device_id)
         if not config:
             logger.error("[真实] 启动失败：设备 %s 不存在", device_id)
