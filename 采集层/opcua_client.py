@@ -186,7 +186,9 @@ class OPCUAClient:
                 # 连接
                 await self.client.connect()
                 self.connected = True
-                reconnect_delay = 1.0  # 连接成功，重置退避
+                # round 381：**不能在这里重置退避**。后面 create_subscription /
+                # 订阅节点仍可能抛错，此时每轮都从 1s 重连（退避被反复清零），
+                # 形成重连风暴。只有订阅也成功、设备真正可用后才重置。
                 self.stats['connected_since'] = datetime.now().isoformat()
                 logger.info(f"OPC UA已连接: {self.endpoint}")
 
@@ -236,6 +238,10 @@ class OPCUAClient:
                         [n.get('node_id') for n in self.node_configs])
                 elif ok_nodes:
                     self.stats.pop('subscription_failed', None)
+
+                if ok_nodes or not self.node_configs:
+                    # 连接 + 订阅都成功，才算真正可用；此时才允许退避归 1。
+                    reconnect_delay = 1.0
 
                 # 保持运行
                 while self._running:

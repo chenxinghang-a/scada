@@ -72,6 +72,20 @@ SCHEDULE_MIN_DELAY_S = 0.5
 STARTUP_JITTER_MAX_S = 5.0
 
 
+def _register_span(data_type: str) -> int:
+    """一个点位占多少个 16 位寄存器（float64 是 4 个，不是 2 个）。
+
+    round 381：原来把 float64 与 float32 一起按 2 个算，读取范围少 2 个，
+    `decode_float64` 拿到不足 4 个值会抛异常并被吞成 None —— 该点位永远采不到。
+    """
+    dt = str(data_type or 'uint16').lower()
+    if dt == 'float64':
+        return 4
+    if dt in ('float32', 'int32', 'uint32'):
+        return 2
+    return 1
+
+
 def compute_next_delay(interval: float, elapsed: float = 0.0,
                        min_delay: float = SCHEDULE_MIN_DELAY_S) -> float:
     """算下一次采集该等多久（**含漂移补偿**）。
@@ -347,9 +361,14 @@ class DiskBackedQueue:
         return self._queue.get_nowait()
 
     def put_nowait(self, item: Dict[str, Any]) -> None:
-        """非阻塞入队"""
-        self._queue.put_nowait(item)
+        """非阻塞入队（与 put 一致：**先落盘再入队**）。
+
+        round 381：顺序反了会留下“已入库但磁盘仍有孤儿副本”的记录。
+        消费线程可能在本条入队后立刻取走、入库、`clear_persistence(batch)`；
+        而本条还没写进文件，随后才追加 —— 下次启动恢复时重复入库。
+        """
         self._persist_item(item)
+        self._queue.put_nowait(item)
 
     def qsize(self) -> int:
         return self._queue.qsize()
@@ -848,6 +867,12 @@ class DataCollector:
         # 等待处理线程结束
         if self.process_thread and self.process_thread.is_alive():
             self.process_thread.join(timeout=10)
+        # round 381：join 超时后线程可能还攥着“已从队列取走、尚未入库”的一批
+        # 数据。此时若清持久化文件，内存与磁盘副本同时消失 —— 必须保留。
+        drained = not (self.process_thread and self.process_thread.is_alive())
+        if not drained:
+            logger.error("数据处理线程在 10s 内未退出，本轮不清持久化文件"
+                         "（避免删除尚未入库的数据）")
 
         # 线程安全地取消所有定时器
         with self._tasks_lock:
@@ -887,7 +912,7 @@ class DataCollector:
                     f"下次启动将恢复这 {len(remaining)} 条数据（不丢弃）"
                 )
 
-        if flushed:
+        if flushed and drained:
             self.data_queue.clear_persistence()
         else:
             logger.warning(
@@ -1452,9 +1477,17 @@ class DataCollector:
         logger.debug("设备 %s 首次采集在 %.2fs 后（抖动打散相位）", device_id, initial_delay)
         try:
             with self._tasks_lock:
-                self.tasks[device_id] = threading.Timer(initial_delay, collect_task)
-                self.tasks[device_id].daemon = True
-                self.tasks[device_id].start()
+                # round 381：同一设备已存在 Timer 时**先取消旧的再建新的**。
+                # `start()` 与 API 的 `start_device_task()` 可能并发，去重检查
+                # 在锁外时两个调用都能通过；旧 Timer 不取消会形成两条采集链，
+                # 而 `tasks` 只保留最新一条 —— 旧的再也停不掉。
+                old_timer = self.tasks.pop(device_id, None)
+                if old_timer is not None:
+                    old_timer.cancel()
+                timer = threading.Timer(initial_delay, collect_task)
+                timer.daemon = True
+                self.tasks[device_id] = timer
+                timer.start()
         except Exception as e:      # noqa: BLE001 —— 起不来必须如实上报
             # 线程/定时器资源耗尽（现场几十台设备 + 频繁增删会走到这里）。
             # 不接住的话异常冒到 `start_all()`，一台设备把整轮启动打断。
@@ -1693,10 +1726,7 @@ class DataCollector:
         reg_sizes = {}
         for reg in registers:
             dt = reg.get('data_type', 'uint16')
-            if dt in ('float32', 'float64', 'int32', 'uint32'):
-                reg_sizes[reg['address']] = 2
-            else:
-                reg_sizes[reg['address']] = 1
+            reg_sizes[reg['address']] = _register_span(dt)
 
         # 计算整体地址范围
         min_addr = min(r['address'] for r in registers)
@@ -2103,6 +2133,16 @@ class DataCollector:
                             "批量写入数据库返回 0 条（%d 条全被落库层拒绝），"
                             "保留磁盘副本待重试", len(batch))
                         self._requeue_failed_batch(batch)
+                    elif written < len(batch):
+                        # 部分写入：落库层把非法值那部分静默剔除了。已写入的
+                        # 不能重投（会重复），未写入的只在磁盘副本里 —— 保留
+                        # 整批持久化文件，并在指标里把“丢了多少”显式记出来。
+                        dropped = len(batch) - written
+                        self._inc_stat('dropped_invalid_value', dropped)
+                        logger.warning(
+                            "批量写入只成功 %d/%d 条（%d 条被落库层拒绝），"
+                            "保留磁盘副本以防未写入部分丢失",
+                            written, len(batch), dropped)
                 except Exception as e:
                     db_write_ok = False
                     logger.warning(f"批量写入数据库失败 ({len(batch)} 条): {e}")

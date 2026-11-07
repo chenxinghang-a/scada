@@ -3024,8 +3024,13 @@ class AlarmManager:
             logger.warning("设置死区失败：规则 %s 不存在", rule_id)
             return False
 
+        # round 381：回滚要连规则本体里的 deadband 一起还原。原来只记了
+        # `_deadbands` 的旧值，规则里的 `deadband` 被无条件 pop —— 原配置
+        # 有死区时会永久丢失，下一次热重载也重建不回来。
+        _missing = object()
         with self._state_lock:
             previous = self._deadbands.get(rule_id)
+            previous_cfg = self.rules[rule_id].get('deadband', _missing)
             self._deadbands[rule_id] = deadband_value
             # 死区必须同时写进规则本体 —— `load_config` 是从
             # `rule_config['deadband']` 读的，只改 `_deadbands` 存不下来。
@@ -3037,7 +3042,10 @@ class AlarmManager:
                     self._deadbands.pop(rule_id, None)
                 else:
                     self._deadbands[rule_id] = previous
-                self.rules[rule_id].pop('deadband', None)
+                if previous_cfg is _missing:
+                    self.rules[rule_id].pop('deadband', None)
+                else:
+                    self.rules[rule_id]['deadband'] = previous_cfg
             logger.error("设置死区失败（配置落盘失败，已回滚）: %s", rule_id)
             return False
 

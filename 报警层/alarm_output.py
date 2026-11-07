@@ -141,7 +141,16 @@ class AlarmOutput:
                 except TypeError:
                     # 老版本 pymodbus 不接受 timeout 关键字
                     self._modbus_client = ModbusTcpClient(host, port=port)
-                if not self._modbus_client.connect():
+                # round 381：pymodbus 在 DNS/socket 错误时是**抛异常**而不是
+                # 返回 False。不接住的话 client 已赋值且没 close，后续
+                # `_get_modbus_client` 直接复用它 —— 声光写入永久失败，直到重启。
+                try:
+                    connected = self._modbus_client.connect()
+                except Exception as e:      # noqa: BLE001
+                    logger.error("报警输出Modbus连接异常: %s:%s — %s",
+                                 host, port, e)
+                    connected = False
+                if not connected:
                     logger.error(f"报警输出Modbus连接失败: {host}:{port}")
                     # 连不上的 client 也要关掉，否则每次重试都漏一个 socket
                     try:
@@ -574,40 +583,43 @@ class AlarmOutput:
 
     def _buzzer_pulse_loop(self, on_time: float, off_time: float):
         """蜂鸣器脉冲循环（响-停-响-停...）"""
-        while self._buzzer_running:
-            # round 286：I/O 用 `_io_lock`，状态锁不跨网络调用持有
-            with self._io_lock:
-                ok = self._write_do(self.do_buzzer, True)
-            if not ok:
-                # round 308：**脉冲线程写失败必须停下来**。
-                # 原来不看返回值：DO 通道断开后脉冲线程继续空转
-                # （每 on_time/off_time 写一次、每次都失败），
-                # 而 `get_status()['state']['buzzer']` 仍然显示在响 ——
-                # 界面说"蜂鸣器正在叫"，现场其实一点声音都没有。
-                # 停下来至少能让状态机进入可诊断的失败态，而不是空转的假活跃。
-                logger.error("蜂鸣器脉冲：DO 写入失败，停止脉冲"
-                             "（现场可能不再响，请检查 DO 通道与通信链路）")
-                self._buzzer_running = False
-                break
-            time.sleep(on_time)
-            if not self._buzzer_running:
-                break
-            with self._io_lock:
-                ok = self._write_do(self.do_buzzer, False)
-            if not ok:
-                logger.error("蜂鸣器脉冲：关闭 DO 写入失败，停止脉冲"
-                             "（现场可能一直常响，请检查 DO 通道）")
-                self._buzzer_running = False
-                break
-            time.sleep(off_time)
-
-        # 退出时关蜂鸣器
-        # round 309：**退出清理同样要看结果**。round 286 修了循环内的失败检查，
-        # 但漏了这段"退出时"的清理 —— 而它恰恰是最危险的一处：
-        # 线程退出后再没有人会写这个 DO，蜂鸣器一旦没关掉就会**一直响**，
-        # 而 `get_status()['state']['buzzer']` 已经显示 False（意图），
-        # 现场只能靠人去拔电源。
-        self._shutdown_do(self.do_buzzer, '蜂鸣器（退出时关闭）')
+        # round 381：退出关断放进 finally。`time.sleep` 收到非数值会抛
+        # TypeError，原来会跳过末尾 `_shutdown_do`，蜂鸣器可能一直响到拔电源。
+        try:
+            while self._buzzer_running:
+                # round 286：I/O 用 `_io_lock`，状态锁不跨网络调用持有
+                with self._io_lock:
+                    ok = self._write_do(self.do_buzzer, True)
+                if not ok:
+                    # round 308：**脉冲线程写失败必须停下来**。
+                    # 原来不看返回值：DO 通道断开后脉冲线程继续空转
+                    # （每 on_time/off_time 写一次、每次都失败），
+                    # 而 `get_status()['state']['buzzer']` 仍然显示在响 ——
+                    # 界面说"蜂鸣器正在叫"，现场其实一点声音都没有。
+                    # 停下来至少能让状态机进入可诊断的失败态，而不是空转的假活跃。
+                    logger.error("蜂鸣器脉冲：DO 写入失败，停止脉冲"
+                                 "（现场可能不再响，请检查 DO 通道与通信链路）")
+                    self._buzzer_running = False
+                    break
+                time.sleep(on_time)
+                if not self._buzzer_running:
+                    break
+                with self._io_lock:
+                    ok = self._write_do(self.do_buzzer, False)
+                if not ok:
+                    logger.error("蜂鸣器脉冲：关闭 DO 写入失败，停止脉冲"
+                                 "（现场可能一直常响，请检查 DO 通道）")
+                    self._buzzer_running = False
+                    break
+                time.sleep(off_time)
+        finally:
+            # 退出时关蜂鸣器
+            # round 309：**退出清理同样要看结果**。round 286 修了循环内的失败检查，
+            # 但漏了这段"退出时"的清理 —— 而它恰恰是最危险的一处：
+            # 线程退出后再没有人会写这个 DO，蜂鸣器一旦没关掉就会**一直响**，
+            # 而 `get_status()['state']['buzzer']` 已经显示 False（意图），
+            # 现场只能靠人去拔电源。
+            self._shutdown_do(self.do_buzzer, '蜂鸣器（退出时关闭）')
 
     # ==================== 闪烁控制 ====================
 
@@ -637,24 +649,26 @@ class AlarmOutput:
         if do_addr is None:
             return
 
-        while self._flash_running:
-            self._flash_state = not self._flash_state
-            # round 286：I/O 用 `_io_lock`，状态锁不跨网络调用持有
-            with self._io_lock:
-                ok = self._write_do(do_addr, self._flash_state)
-            if not ok:
-                # round 308：与脉冲循环同理 —— 写失败时闪烁线程空转，
-                # 而界面状态机仍显示"红灯在闪"。
-                logger.error("报警灯闪烁：DO 写入失败，停止闪烁"
-                             "（现场指示灯可能停在原状态，请检查 DO 通道）")
-                self._flash_running = False
-                break
-            time.sleep(interval)
-
-        # 退出时灭灯（加锁）
-        # round 309：与蜂鸣器同理 —— 线程退出后没人再写这个 DO，
-        # 灭灯失败就是**灯一直亮着**，而界面已经显示"正常"。
-        self._shutdown_do(do_addr, f'{color} 灯（退出时熄灭）')
+        # round 381：退出灭灯放进 finally，异常路径也不能把灯留在常亮。
+        try:
+            while self._flash_running:
+                self._flash_state = not self._flash_state
+                # round 286：I/O 用 `_io_lock`，状态锁不跨网络调用持有
+                with self._io_lock:
+                    ok = self._write_do(do_addr, self._flash_state)
+                if not ok:
+                    # round 308：与脉冲循环同理 —— 写失败时闪烁线程空转，
+                    # 而界面状态机仍显示"红灯在闪"。
+                    logger.error("报警灯闪烁：DO 写入失败，停止闪烁"
+                                 "（现场指示灯可能停在原状态，请检查 DO 通道）")
+                    self._flash_running = False
+                    break
+                time.sleep(interval)
+        finally:
+            # 退出时灭灯（加锁）
+            # round 309：与蜂鸣器同理 —— 线程退出后没人再写这个 DO，
+            # 灭灯失败就是**灯一直亮着**，而界面已经显示"正常"。
+            self._shutdown_do(do_addr, f'{color} 灯（退出时熄灭）')
 
     # ==================== 接口兼容 ====================
 

@@ -301,8 +301,14 @@ class MQTTToTSDBService:
                     self._alarm_buffer.extend(failed)
             self.logger.debug(f"写入 {len(records)} 条报警数据")
         except Exception as e:
-            self.logger.error(f"写入报警数据失败: {e}")
+            # round 381：records 已在 283-284 行从缓冲区 clear，这里不回填
+            # 就整批永久丢失（报警丢了等于“没发生过”）。
+            self.logger.error("写入报警数据失败（%d 条），已回填缓冲区: %s",
+                              len(records), e)
             self.stats['errors'] += 1
+            self.stats['alarms_requeued'] += len(records)
+            with self._buffer_lock:
+                self._alarm_buffer.extend(records)
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""

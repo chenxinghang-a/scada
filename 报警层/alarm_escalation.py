@@ -167,7 +167,16 @@ class AlarmEscalationManager:
                 '如确需单级升级，请给一条规则。'
             )
 
-        self._check_interval = config.get('check_interval', 30)
+        # round 381：0 会忙循环打满 CPU，负数/非数值会在 _check_loop 的
+        # sleep 处抛错并静默杀死升级线程（此后永不升级）。
+        try:
+            _interval = float(config.get('check_interval', 30))
+        except (TypeError, ValueError):
+            raise ValueError('escalation.check_interval 必须是正数，得到 '
+                             f'{config.get("check_interval")!r}')
+        if _interval <= 0:
+            raise ValueError(f'escalation.check_interval 必须 > 0，得到 {_interval}')
+        self._check_interval = _interval
 
     def start(self):
         """启动升级检查"""
@@ -192,7 +201,8 @@ class AlarmEscalationManager:
                 self.check_escalations()
             except Exception as e:
                 logger.error(f"升级检查异常: {e}")
-            time.sleep(self._check_interval)
+            # sleep 放进 try 外也可以，但必须保证正数下限（配置已在构造时校验）
+            time.sleep(max(float(self._check_interval), 0.05))
 
     def record_alarm(self, alarm_id: str, device_id: str, register_name: str,
                      first_trigger_time: float | None = None):

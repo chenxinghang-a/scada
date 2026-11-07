@@ -147,7 +147,9 @@ class DataExport:
             with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames,
                                         extrasaction='ignore')
-                writer.writeheader()
+                # round 381：列名也可能来自 extra_json 的动态键，同样要中和
+                # 公式前缀，否则 `=cmd|...` 会作为表头进 Excel 执行。
+                writer.writerow({k: _sanitize_cell(k) for k in fieldnames})
                 # 逐格中和公式前缀（CWE-1236），见 _sanitize_cell 的说明
                 writer.writerows(_sanitize_rows(data))
 

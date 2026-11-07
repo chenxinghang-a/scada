@@ -1006,7 +1006,10 @@ class DeviceBehaviorSimulator:
 
         # 模拟模式自动启动：IDLE状态超过5秒自动转RUNNING
         if self.state == DeviceState.IDLE:
-            if not hasattr(self, '_idle_since'):
+            # round 381：非 IDLE 分支会把 `_idle_since` 置 None，设备之后
+            # 再回到 IDLE 时 `hasattr` 仍为真，`current_time - None` 直接抛
+            # TypeError，更新循环每周期失败，该设备从此无数据。
+            if getattr(self, '_idle_since', None) is None:
                 self._idle_since = current_time
             elif current_time - self._idle_since > 5:
                 self._change_state(DeviceState.RUNNING)
@@ -2070,19 +2073,25 @@ class MultiDeviceSimulator:
     
     def _update_all(self):
         """更新所有设备"""
+        # round 381：**锁内只取快照，回调必须在锁外调**。
+        # `self._lock` 是普通 Lock（非可重入），而回调里若查状态/删设备
+        # （get_device_status / remove_device）会再次申请同一把锁 → 自死锁，
+        # 整个模拟器永久卡住；同时也不会再阻塞其它设备的更新。
         with self._lock:
-            for device_id, simulator in self.simulators.items():
-                try:
-                    data = simulator.update(self._update_interval)
-                    if data:
-                        # 触发回调
-                        for callback in self._data_callbacks:
-                            try:
-                                callback(device_id, data)
-                            except Exception as e:
-                                logger.error(f"[多设备模拟器] 回调异常: {e}")
-                except Exception as e:
-                    logger.error(f"[多设备模拟器] 设备 {device_id} 更新异常: {e}")
+            devices = list(self.simulators.items())
+            callbacks = list(self._data_callbacks)
+
+        for device_id, simulator in devices:
+            try:
+                data = simulator.update(self._update_interval)
+                if data:
+                    for callback in callbacks:
+                        try:
+                            callback(device_id, data)
+                        except Exception as e:
+                            logger.error(f"[多设备模拟器] 回调异常: {e}")
+            except Exception as e:
+                logger.error(f"[多设备模拟器] 设备 {device_id} 更新异常: {e}")
     
     def get_device_status(self, device_id: str) -> Optional[Dict[str, Any]]:
         """获取设备状态"""

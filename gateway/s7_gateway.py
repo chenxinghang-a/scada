@@ -19,6 +19,7 @@
 import time
 import struct
 import logging
+import threading
 from typing import Any
 from datetime import datetime
 
@@ -90,6 +91,9 @@ class S7Gateway(BaseGateway):
 
         # S7客户端缓存
         self._clients: dict[str, Any] = {}
+        #: 每设备的布尔写入锁：读-改-写必须原子，否则两个 API 线程写
+        #: 同一字节的不同位会互相覆盖（后写者把前者置的位清掉）。
+        self._write_locks: dict[str, threading.Lock] = {}
 
         # 寄存器配置缓存
         self._register_configs: dict[str, list[dict[str, Any]]] = {}
@@ -341,8 +345,13 @@ class S7Gateway(BaseGateway):
                 # BUG-084：**必须读-改-写**。构造全零 bytearray 再整字节 db_write，
                 # 会把同字节另外 7 个布尔位一起清零 —— 写一个阀门位 =
                 # 悄悄关掉同一字节里的 7 个设备。
-                data = bytearray(client.db_read(db_number, offset, 1))
-                set_bool(data, 0, bit_offset, bool(value))
+                # round 381：db_read→db_write 之间必须持锁。两个线程同时写
+                # 同一字节的不同位会各自读到旧字节，后写者覆盖前者。
+                with self._write_locks.setdefault(device_id, threading.Lock()):
+                    data = bytearray(client.db_read(db_number, offset, 1))
+                    set_bool(data, 0, bit_offset, bool(value))
+                    client.db_write(db_number, offset, data)
+                return True
             else:
                 self.logger.error(f"不支持的S7写入类型: {data_type}")
                 return False

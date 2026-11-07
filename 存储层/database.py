@@ -1704,6 +1704,16 @@ class Database:
         #   · 却删除 7 天前的 → **7~30 天的原始采样直接消失，且从未进过归档表**
         # 每天静默丢 23 天明细，没有任何告警，事后也无法回溯。
         #
+        # round 381：0/负值会把 cutoff 推到当下或未来 —— delete_cutoff 变成
+        # “未来某天之前全删”，等于清空全表（含当天未归档数据）。先校验正数。
+        for _name, _value in (('archive_days', archive_days),
+                              ('delete_days', delete_days)):
+            if isinstance(_value, bool) or not isinstance(_value, (int, float)) \
+                    or _value < 1:
+                raise ValueError(
+                    f'{_name} 必须是 >= 1 的天数，得到 {_value!r} —— '
+                    f'0/负值会把 cutoff 推到未来，等于删除全表')
+
         # 这是**配置错误**，应该在调用时就炸掉，不能"尽力而为"地继续删。
         if archive_days > delete_days:
             raise ValueError(

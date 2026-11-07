@@ -166,8 +166,9 @@ class RESTDeviceClient:
                 probe_kwargs: dict[str, Any] = {}
                 if first_ep.get('params') and method in ('GET', 'DELETE'):
                     probe_kwargs['params'] = first_ep['params']
-                probe_body = (first_ep.get('json') or first_ep.get('probe_body')
-                              or first_ep.get('write_body'))
+                # round 381：读路径的请求体键是 `body`；`write_body` 是**真正
+                # 下发的控制载荷**，拿它做探针 = 每次连接/重连都按一次按钮。
+                probe_body = first_ep.get('probe_body') or first_ep.get('body')
                 if probe_body and method in ('POST', 'PUT', 'PATCH'):
                     probe_kwargs['json'] = probe_body
                 resp = self._session.request(

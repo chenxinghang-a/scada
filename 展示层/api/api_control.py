@@ -1152,8 +1152,9 @@ def _get_behavior_simulator(device_id: Optional[str]):
         if client and hasattr(client, 'behavior_simulator'):
             return client.behavior_simulator
 
-    # 返回任意可用的模拟器
-    if simulators:
+    # 仅在**未指定设备**（单机演示）时才回退。显式传了 device_id 却查不到，
+    # 必须返回 None → 上层 404，不能把配方下发到任意设备上。
+    if not device_id and simulators:
         return next(iter(simulators.values()))
 
     return None

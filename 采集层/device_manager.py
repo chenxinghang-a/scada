@@ -184,6 +184,11 @@ class DeviceManager:
         # 供 switch_simulation_mode() 原样恢复（见该方法内注释）。
         self._reconnect_running = False
         self._reconnect_interval = 30
+        #: 重连线程句柄。不保存句柄时，stop 后旧线程还在 sleep，下一次 start
+        #: 又把共享标志置 True → 旧线程复活 + 新线程并存，重连风暴。
+        self._reconnect_thread: threading.Thread | None = None
+        #: 可被 stop 立刻唤醒的等待事件（替代裸 sleep）
+        self._reconnect_stop = threading.Event()
 
         # 连接池 - 复用连接，避免频繁创建/销毁
         #
@@ -476,6 +481,12 @@ class DeviceManager:
     def disconnect_all(self):
         """断开所有设备连接"""
         self._reconnect_running = False
+        self._reconnect_stop.set()          # 唤醒 sleep 中的旧重连线程
+        old_thread = self._reconnect_thread
+        if (old_thread is not None and old_thread.is_alive()
+                and old_thread is not threading.current_thread()):
+            old_thread.join(timeout=2)
+        self._reconnect_thread = None
         for device_id in list(self.clients.keys()):
             self.disconnect_device(device_id)
         self._connection_pool.shutdown()
@@ -488,7 +499,14 @@ class DeviceManager:
             interval: 检查间隔秒数（默认30s）
         """
         self._reconnect_interval = interval
+        old_thread = self._reconnect_thread
+        if old_thread is not None and old_thread.is_alive():
+            # 已有循环线程：共享同一个 _reconnect_running，直接复用，
+            # 不能再起第二条（否则同一设备会被并发 connect）。
+            self._reconnect_running = True
+            return
         self._reconnect_running = True
+        self._reconnect_stop.clear()
         def _reconnect_loop():
             while self._reconnect_running:
                 try:
@@ -509,9 +527,12 @@ class DeviceManager:
                                 logger.debug(f"自动重连失败 {device_id}: {e}")
                 except Exception as e:
                     logger.error(f"重连循环异常: {e}")
-                import time as _time
-                _time.sleep(interval)
-        t = threading.Thread(target=_reconnect_loop, daemon=True)
+                # 用 Event.wait 而不是 sleep：disconnect_all 能立刻唤醒，
+                # 不必等满一个 interval 才退出。
+                self._reconnect_stop.wait(interval)
+        t = threading.Thread(target=_reconnect_loop, daemon=True,
+                             name='device-reconnect')
+        self._reconnect_thread = t
         t.start()
         logger.info(f"设备自动重连线程已启动（间隔{interval}秒）")
 
@@ -736,6 +757,10 @@ class DeviceManager:
                 logger.error(f"不支持的协议: {protocol}，支持: {self.SUPPORTED_PROTOCOLS}")
                 return False
 
+            # round 381：覆盖前留底。落盘失败时只 pop 新配置会把**旧配置**
+            # 也从内存里弄丢，而文件里仍是旧的 —— 内存/磁盘分裂。
+            old_config = (dict(self.devices.get(device_id))
+                          if device_id in self.devices else None)
             if device_id in self.devices:
                 logger.warning(f"设备 {device_id} 已存在，将被覆盖")
                 self.disconnect_device(device_id)
@@ -760,7 +785,10 @@ class DeviceManager:
             # 这一处漏了。
             if not self._save_config():
                 with self._lock:
-                    self.devices.pop(device_id, None)
+                    if old_config is not None:
+                        self.devices[device_id] = old_config
+                    else:
+                        self.devices.pop(device_id, None)
                     self.clients.pop(device_id, None)
                 try:
                     self._connection_pool.remove(device_id)

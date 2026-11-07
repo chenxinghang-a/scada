@@ -142,8 +142,10 @@ class MCClient(ByteOrderCapableDecoder):
         [副帧头(2)] [网络号(1)] [PC号(1)] [I/O编号(2)] [站号(1)]
         [请求数据长(2)] [监视定时器(2)] [命令(2)] [子命令(2)] [数据(N)]
         """
-        # 请求数据长度 = 子命令(2) + 命令(2) + 数据
-        data_len = 2 + 2 + len(data)
+        # 请求数据长度 = 监视定时器(2) + 命令(2) + 子命令(2) + 数据
+        # round 381：原来漏了监视定时器 2 字节，PLC 按短 2 字节截帧，
+        # 命令/子命令/数据整体错位，剩余字节被当成下一帧帧头 → 协议失步。
+        data_len = 2 + 2 + 2 + len(data)
 
         # 副帧头
         sub_header = 0x5000  # 3E帧（二进制）
@@ -229,6 +231,11 @@ class MCClient(ByteOrderCapableDecoder):
             raise ValueError(f"不支持的设备类型: {device}，支持: {list(DEVICE_CODES.keys())}")
         return DEVICE_CODES[device_upper], address
 
+    @staticmethod
+    def _pack_device_spec(device_code: int, addr: int) -> bytes:
+        """3E 二进制批量访问的数据区头：先地址(3, 低位在前) + 设备代码(1)。"""
+        return struct.pack('<I', addr)[0:3] + struct.pack('B', device_code)
+
     def read_words(self, device: str, address: int, count: int) -> list[int] | None:
         """
         批量读取字设备（命令 0x0401 / 子命令 0x0000）
@@ -246,9 +253,8 @@ class MCClient(ByteOrderCapableDecoder):
 
         device_code, addr = self._parse_device_address(device, address)
 
-        # 构建请求数据：[设备代码(1)] [地址(3)] [点数(2)]
-        data = struct.pack('B', device_code)
-        data += struct.pack('<I', addr)[0:3]  # 3字节地址（小端）
+        # 构建请求数据：[地址(3)] [设备代码(1)] [点数(2)] —— SLMP 3E 规范顺序
+        data = self._pack_device_spec(device_code, addr)
         data += struct.pack('<H', count)
 
         frame = self._build_3e_frame(0x0401, SUBCMD_WORD_READ, data)
@@ -291,9 +297,8 @@ class MCClient(ByteOrderCapableDecoder):
         device_code, addr = self._parse_device_address(device, address)
         count = len(values)
 
-        # 构建请求数据
-        data = struct.pack('B', device_code)
-        data += struct.pack('<I', addr)[0:3]
+        # 构建请求数据：[地址(3)] [设备代码(1)] [点数(2)]
+        data = self._pack_device_spec(device_code, addr)
         data += struct.pack('<H', count)
         for val in values:
             data += struct.pack('<H', val & 0xFFFF)
@@ -326,8 +331,7 @@ class MCClient(ByteOrderCapableDecoder):
 
         device_code, addr = self._parse_device_address(device, address)
 
-        data = struct.pack('B', device_code)
-        data += struct.pack('<I', addr)[0:3]
+        data = self._pack_device_spec(device_code, addr)
         data += struct.pack('<H', count)
 
         frame = self._build_3e_frame(0x0401, SUBCMD_BIT_READ, data)
@@ -373,9 +377,8 @@ class MCClient(ByteOrderCapableDecoder):
         device_code, addr = self._parse_device_address(device, address)
         count = len(values)
 
-        # 构建位数据（每字节2个位）
-        data = struct.pack('B', device_code)
-        data += struct.pack('<I', addr)[0:3]
+        # 构建位数据（每字节2个位）：[地址(3)] [设备代码(1)] [点数(2)]
+        data = self._pack_device_spec(device_code, addr)
         data += struct.pack('<H', count)
 
         # 打包位值

@@ -313,8 +313,20 @@ class SimulatedDeviceManager(IDeviceManager):
             return None
 
     def get_client(self, device_id: str) -> IDeviceClient | None:
-        """获取设备客户端（懒创建）"""
-        if device_id not in self.clients:
+        """获取设备客户端（懒创建）。
+
+        round 381：检查-创建必须原子。采集线程与 API 状态查询会并发进来，
+        两个调用都能通过 `not in clients` → 各建一个客户端，后写覆盖前者，
+        被覆盖的实例（live 模式下是真实连接）永远没人 disconnect。
+        """
+        client = self.clients.get(device_id)
+        if client is not None:          # 无锁快路径
+            return client
+
+        with self._lock:
+            client = self.clients.get(device_id)
+            if client is not None:
+                return client
             device_config = self.devices.get(device_id)
             if not device_config:
                 logger.error(f"设备 {device_id} 配置不存在")
@@ -323,10 +335,8 @@ class SimulatedDeviceManager(IDeviceManager):
             client = self._create_simulated_client(device_config)
             if client is None:
                 return None
-
             self.clients[device_id] = client
-
-        return self.clients[device_id]
+            return client
 
     def connect_device(self, device_id: str) -> bool:
         """连接设备"""

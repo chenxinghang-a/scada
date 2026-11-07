@@ -162,7 +162,9 @@ class RecipeSimulator:
                 return {}
 
             phase = self.current_phase
-            elapsed = time.time() - self.phase_start_time
+            # round 381：`phase_start_time` 全程由 monotonic 赋值，这里
+            # 用 time.time() 相减会得到十亿量级，阶段被瞬间判定完成。
+            elapsed = time.monotonic() - self.phase_start_time
 
             # 检查阶段是否完成
             if elapsed >= phase.duration:
