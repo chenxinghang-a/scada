@@ -36,6 +36,12 @@ def _delete_older_than_chunked(conn, table: str, column: str, cutoff: str) -> in
     后者需要编译期开启 ``SQLITE_ENABLE_UPDATE_DELETE_LIMIT``，
     不是所有构建都带（本项目不能假设）。
     """
+    # 表名/列名无法用 ? 占位符绑定，只能拼进 SQL —— 先校验标识符，
+    # 否则调用方传入外部可控标识即构成注入。
+    for _ident in (table, column):
+        if not isinstance(_ident, str) or not _ident.isidentifier():
+            raise ValueError(f'非法的表名/列名（拒绝拼入 SQL）: {_ident!r}')
+
     total = 0
     while True:
         cursor = conn.execute(
@@ -768,6 +774,9 @@ class Database:
                 # 非数值标记 —— 存进去只会让前端比较逻辑静默判错。
                 q = try_int(q)
                 if q is None:
+                    # 非数值质量码（如 'BAD'）不能静默当成 GOOD，至少留痕
+                    logger.debug("质量码非数值，按 GOOD(192) 落库: %r",
+                                 d.get('quality'))
                     q = 192
 
                 # `value` 必须是**有限数值**。这是落库的最后一道关，也是最该把关
@@ -975,11 +984,13 @@ class Database:
         with self.get_connection(readonly=True) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT DISTINCT register_name
-                FROM history_data
-                WHERE device_id = ?
+                SELECT DISTINCT register_name FROM (
+                    SELECT register_name FROM history_data WHERE device_id = ?
+                    UNION
+                    SELECT register_name FROM realtime_data WHERE device_id = ?
+                )
                 ORDER BY register_name
-            ''', (device_id,))
+            ''', (device_id, device_id))
             return [row['register_name'] for row in cursor.fetchall()]
 
     def get_history_data(self, device_id: str, register_name: str | None,
@@ -1053,7 +1064,8 @@ class Database:
                     SELECT timestamp, value, unit{_rn_col}
                     FROM history_data
                     {base_where}
-                    ORDER BY timestamp
+                    -- 同一时刻多条（多寄存器/同秒采样）必须有确定顺序，否则翻页会重复或漏行
+                    ORDER BY timestamp{_group_extra}, id
                     LIMIT ? OFFSET ?
                 ''', params + [limit, offset])
                 return [dict(row) for row in cursor.fetchall()]
@@ -1145,7 +1157,7 @@ class Database:
             cursor.execute('''
                 SELECT id, trigger_count FROM alarm_records
                 WHERE alarm_id = ? AND device_id = ? AND register_name = ?
-                  AND cleared = 0
+                  AND (cleared = 0 OR cleared IS NULL)
                 ORDER BY timestamp DESC LIMIT 1
             ''', (alarm_id, device_id, register_name))
 
@@ -1160,9 +1172,13 @@ class Database:
                     SET trigger_count = ?,
                         last_trigger_time = ?,
                         last_value = ?,
-                        actual_value = ?
+                        actual_value = ?,
+                        alarm_level = ?,
+                        alarm_message = ?,
+                        threshold = ?
                     WHERE id = ?
-                ''', (new_count, timestamp, actual_value, actual_value, alarm_row_id))
+                ''', (new_count, timestamp, actual_value, actual_value,
+                      alarm_level, alarm_message, threshold, alarm_row_id))
             else:
                 # 无未确认记录 → 新建
                 # round 326：显式写 created_at（本地时间），不再吃 DDL 的
@@ -1219,8 +1235,11 @@ class Database:
                 params.append(end_time)
 
             if acknowledged is not None:
-                query += ' AND acknowledged = ?'
-                params.append(1 if acknowledged else 0)
+                if acknowledged:
+                    query += ' AND acknowledged = 1'
+                else:
+                    # acknowledged 为 NULL 的老行既不属已确认也不属未确认，必须一并命中
+                    query += ' AND (acknowledged = 0 OR acknowledged IS NULL)'
 
             query += ' ORDER BY timestamp DESC LIMIT ? OFFSET ?'
             params.append(limit)
@@ -1288,7 +1307,7 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT * FROM alarm_records
-                WHERE cleared = 0
+                WHERE (cleared = 0 OR cleared IS NULL)
                 ORDER BY timestamp ASC
                 LIMIT ?
             ''', (limit,))
@@ -1316,7 +1335,8 @@ class Database:
                 cursor.execute('''
                     UPDATE alarm_records
                     SET acknowledged = 1, acknowledged_at = ?, acknowledged_by = ?
-                    WHERE alarm_id = ? AND device_id = ? AND register_name = ? AND acknowledged = 0
+                    WHERE alarm_id = ? AND device_id = ? AND register_name = ?
+                      AND (acknowledged = 0 OR acknowledged IS NULL)
                 ''', (datetime.now(), acknowledged_by, alarm_id, device_id, register_name))
             elif device_id or register_name:
                 # 只给一半条件时退化成“全库按 alarm_id 更新”会误伤其它设备/
@@ -1374,7 +1394,11 @@ class Database:
                     SET cleared = 1, cleared_at = ?
                     WHERE alarm_id = ? AND cleared = 0
                 ''', (cleared_at, alarm_id))
-            return cursor.rowcount > 0
+            updated = cursor.rowcount > 0
+        if updated:
+            # 行数变了，30 秒 TTL 的统计缓存必须失效（同 delete_device_data）
+            self.invalidate_stats_cache()
+        return updated
 
     def get_device_summary(self) -> list[dict[str, Any]]:
         """
@@ -1543,7 +1567,9 @@ class Database:
                 cursor.execute(f'SELECT COUNT(*) FROM {ARCHIVE_TABLE}')
                 archive_count = cursor.fetchone()[0]
             except Exception as e:
-                logger.debug(f"查询归档数据统计失败（可能表不存在）: {e}")
+                # 原先只记 debug："表不存在"与"权限/损坏"一样静默。
+                # 归档统计可以降级为 0，但故障必须在日志里可见。
+                logger.warning(f"查询归档数据统计失败（归档统计按 0 计）: {e}")
                 archive_count = 0
 
             # 总记录数（所有表合计）

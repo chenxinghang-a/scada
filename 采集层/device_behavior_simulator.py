@@ -421,7 +421,12 @@ class DeviceBehaviorSimulator:
                 self.device_name, type(sim_cfg).__name__)
             return
         cfg = sim_cfg.get('process_model') or {}
-        if not isinstance(cfg, dict) or not cfg:
+        if not isinstance(cfg, dict):
+            logger.warning(
+                "[行为模拟] %s: simulation.process_model 应为 dict，实际 %s，已忽略",
+                self.device_name, type(cfg).__name__)
+            return
+        if not cfg:
             return
 
         applied = []
@@ -489,7 +494,8 @@ class DeviceBehaviorSimulator:
         
         # REST端点
         for ep in self.device_config.get('endpoints', []):
-            name = ep.get('name', '')
+            # 与 topics 一样兼容裸字符串条目：元素非 dict 时 .get 会 AttributeError
+            name = ep.get('name', '') if isinstance(ep, dict) else ''
             if name:
                 self._device_param_names.add(name)
 
@@ -693,10 +699,13 @@ class DeviceBehaviorSimulator:
             value = value * spec['gain'] + spec['offset']
         if spec['noise']:
             value += random.gauss(0, spec['noise'])
-        if spec['min'] is not None and value < spec['min']:
-            value = spec['min']
-        if spec['max'] is not None and value > spec['max']:
-            value = spec['max']
+        lo, hi = spec['min'], spec['max']
+        if lo is not None and hi is not None and lo > hi:
+            lo, hi = hi, lo     # 配置写反时按区间处理
+        if lo is not None and value < lo:
+            value = lo
+        if hi is not None and value > hi:
+            value = hi
         if spec['dtype'] == 'int':
             return int(round(value))
         if spec['decimals'] is not None:
@@ -760,9 +769,9 @@ class DeviceBehaviorSimulator:
                 "[行为模拟] %s: simulation.monitoring=%r 不是布尔值，回退关键词判定",
                 self.device_name, declared)
 
-        desc = self.device_config.get('description', '').lower()
-        name = self.device_config.get('name', '').lower()
-        device_id = self.device_config.get('id', '').lower()
+        desc = str(self.device_config.get('description') or '').lower()
+        name = str(self.device_config.get('name') or '').lower()
+        device_id = str(self.device_config.get('id') or '').lower()
         
         monitoring_keywords = [
             '监测', '监控', '传感器', '分析仪', '检测', '仪表',

@@ -158,6 +158,7 @@ class DataExport:
 
         except Exception as e:
             logger.error(f"CSV导出失败: {e}")
+            # 保持既有契约：失败返回空串（调用方按 falsy 判断）
             return ""
 
     def export_excel(self, data: list[dict[str, Any]], filename: str | None = None,
@@ -296,7 +297,7 @@ class DataExport:
                 for row in batch:
                     if register_name is not None:
                         # 放在最前，Excel 里一眼能看到归属
-                        row = {'register_name': register_name, **row}
+                        row = {**row, 'register_name': register_name}
                     data.append(row)
                 if len(data) > MAX_EXPORT_ROWS:
                     raise ValueError(
@@ -396,12 +397,18 @@ class DataExport:
 
         for filepath in self.export_dir.iterdir():
             if filepath.is_file():
-                stat = filepath.stat()
+                try:
+                    stat = filepath.stat()
+                except OSError as exc:
+                    # 列举期间文件被并发删除/占用：跳过该条，别让整个列表接口失败
+                    logger.debug(f"跳过无法读取的导出文件 {filepath}: {exc}")
+                    continue
                 exports.append({
                     'filename': filepath.name,
                     'size_bytes': stat.st_size,
                     'size_mb': round(stat.st_size / (1024 * 1024), 2),
-                    'created_at': datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    'created_at': datetime.fromtimestamp(
+                        getattr(stat, 'st_birthtime', stat.st_ctime)).isoformat(),
                     'modified_at': datetime.fromtimestamp(stat.st_mtime).isoformat()
                 })
 

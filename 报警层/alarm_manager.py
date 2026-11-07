@@ -36,17 +36,36 @@ from 报警层.alarm_engine import (
 logger = logging.getLogger(__name__)
 
 
+def _safe_int(value: Any, default: int) -> int:
+    """配置值转 int：非法值告警并沿用 default。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning("配置值 %r 不是合法整数，沿用 %r", value, default)
+        return default
+
+
+def _safe_bool(value: Any) -> bool:
+    """配置值转 bool：字符串 'false'/'0'/'off' 不能被当成 True。"""
+    if isinstance(value, str):
+        return value.strip().lower() not in (
+            '', '0', 'false', 'no', 'off', 'disabled')
+    return bool(value)
+
+
 class AlarmDedupConfig:
     """报警去重配置"""
 
     def __init__(self, config: dict[str, Any] | None = None):
         config = config or {}
         # 冷却窗口（秒）：同一报警在此时间内只推送一次前端通知
-        self.emit_cooldown_seconds: int = config.get('emit_cooldown_seconds', 300)
+        self.emit_cooldown_seconds: int = max(
+            5, _safe_int(config.get('emit_cooldown_seconds', 300), 300))
         # 确认后抑制时间（秒）：用户确认报警后，同一报警在此时间内不再弹窗
-        self.acknowledge_suppress_seconds: int = config.get('acknowledge_suppress_seconds', 600)
-        # 是否启用去重
-        self.enabled: bool = config.get('enabled', True)
+        self.acknowledge_suppress_seconds: int = max(
+            30, _safe_int(config.get('acknowledge_suppress_seconds', 600), 600))
+        # 是否启用去重（"false"/"0"/"off" 不能被当成 True）
+        self.enabled: bool = _safe_bool(config.get('enabled', True))
         # 最大同时显示的报警数（前端）
         self.max_visible_toasts: int = config.get('max_visible_toasts', 3)
         # 前端toast自动消失时间：严重报警（秒）

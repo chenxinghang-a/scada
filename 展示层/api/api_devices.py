@@ -132,6 +132,10 @@ def _pick_key_values(dev_cfg: dict[str, Any], latest: dict[str, Any],
 def _status_of(dev_id: str, status_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """把设备状态归一成拓扑图用的四个值。"""
     st = status_map.get(dev_id) or {}
+    if not st:
+        # 状态缺失（拉取失败/未登记）≠ 离线：采集侧故障时误报离线会让人
+        # 去现场查一台其实好好的设备。
+        return {'state': 'unknown', 'text': '未知'}
     if st.get('stopped'):
         return {'state': 'stopped', 'text': '停机'}
     if not st.get('connected'):
@@ -571,7 +575,9 @@ def _sanitize_text_field(value, field_label: str, *, max_len: int = 200) -> str:
         raise ValueError(f'{field_label} 必须是文本')
     if len(value) > max_len:
         raise ValueError(f'{field_label} 过长（最多 {max_len} 字符）')
-    if '<' in value or '>' in value:
+    # 只拒 '<'：没有左尖括号构不成标签；'>' 在「温度>80报警」这类
+    # 正常描述里到处都是。
+    if '<' in value:
         raise ValueError(f'{field_label} 不能包含HTML标签')
     return value
 
@@ -1226,6 +1232,11 @@ def inject_device_fault(device_id):
 
     fault_type = data.get('fault_type', 'sensor_drift')
     severity = data.get('severity', 0.5)
+    if isinstance(severity, bool) or not isinstance(severity, (int, float)):
+        return api_error('severity 必须是 0~1 之间的数值', 400)
+    severity = float(severity)
+    if not 0.0 <= severity <= 1.0:
+        return api_error('severity 必须在 0~1 之间', 400)
 
     device_manager = current_app.device_manager
 
@@ -1896,7 +1907,8 @@ def _get_simulation_initializer():
     """安全获取SimulationInitializer实例"""
     try:
         return getattr(current_app, 'simulation_initializer', None)
-    except Exception:
+    except Exception as e:      # noqa: BLE001 —— 装配异常不能被伪装成「未加载」
+        logger.error("读取 simulation_initializer 失败: %s", e, exc_info=True)
         return None
 
 

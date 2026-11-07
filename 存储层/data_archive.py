@@ -144,6 +144,9 @@ class DataArchive:
                 'original_count': 0,
                 'compressed_count': 0,
                 'compression_ratio': 0,
+                # 与非空返回保持同一结构，避免调用方 KeyError
+                'interval': interval,
+                'algorithm': algorithm,
                 'data': []
             }
         
@@ -199,8 +202,13 @@ class DataArchive:
         """
         normalized: List[Dict] = []
         for item in rows or []:
-            raw_ts = item.get('time_bucket', item.get('timestamp'))
-            raw_value = item.get('avg_value', item.get('value'))
+            # 键存在但值为 None 时 .get(k, 默认值) 不会回退，必须显式判断
+            raw_ts = item.get('time_bucket')
+            if raw_ts is None:
+                raw_ts = item.get('timestamp')
+            raw_value = item.get('avg_value')
+            if raw_value is None:
+                raw_value = item.get('value')
 
             if raw_ts is None or raw_value is None:
                 logger.debug(f"跳过分桶数据（缺时间或值）: {item!r}")
@@ -262,6 +270,8 @@ class DataArchive:
             '12hour': 43200,
             '1day': 86400,
         }
+        if interval not in interval_map:
+            logger.warning(f"未知压缩间隔: {interval!r}，回退为 3600 秒（1hour）")
         return interval_map.get(interval, 3600)
 
     def _group_by_interval(self, data: List[Dict], interval_seconds: int) -> Dict[int, List[Dict]]:
@@ -436,10 +446,13 @@ class DataArchive:
         
         for i in range(1, threshold - 1):
             # 计算当前桶的范围
-            bucket_start = int((i - 1) * len(points) / threshold)
-            bucket_end = int(i * len(points) / threshold)
-            next_bucket_start = int(i * len(points) / threshold)
-            next_bucket_end = int((i + 1) * len(points) / threshold)
+            # 选点桶必须与参考桶（下一桶）错开：原先 bucket 用 (i-1)*n/t，
+            # i=1 时会重复覆盖 points[0]，尾部两个桶则只在末尾补一个点，
+            # 最新的尖峰可能被整段丢弃。
+            bucket_start = int(i * len(points) / threshold)
+            bucket_end = int((i + 1) * len(points) / threshold)
+            next_bucket_start = int((i + 1) * len(points) / threshold)
+            next_bucket_end = int((i + 2) * len(points) / threshold)
             
             # 计算下一个桶的平均点
             next_bucket_points = points[next_bucket_start:next_bucket_end]
