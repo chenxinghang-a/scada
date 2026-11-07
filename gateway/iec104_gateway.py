@@ -339,6 +339,13 @@ class IEC104Client:
         except Exception as e:
             self.logger.error(f"连接失败: {e}")
             self.connected = False
+            # connect 抛错时 socket 已建好，必须关闭，否则每次重连漏 fd
+            if self.socket is not None:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
+                self.socket = None
             return False
 
     def disconnect(self):
@@ -355,6 +362,9 @@ class IEC104Client:
             except Exception as e:
                 # 关闭已失效的 socket 可能抛错，属预期内且无副作用
                 self.logger.debug("关闭socket失败 %s:%s: %s", self.host, self.port, e)
+        # 关闭后置空 socket、清半帧，避免后续发送打到失效 fd
+        self.socket = None
+        self._recv_buffer = b''
         self.connected = False
         self.logger.info("已断开连接")
 
@@ -365,7 +375,8 @@ class IEC104Client:
         frame = IEC104APCI.build_u_frame(control)
         with self._lock:
             if self.socket:
-                self.socket.send(frame)
+                # send 可能只写一部分，U 帧截断会导致握手失败
+                self.socket.sendall(frame)
 
     def _send_s_frame(self):
         """发送S帧确认（接收线程调用，不能死等发送锁）。"""

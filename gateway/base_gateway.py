@@ -229,7 +229,14 @@ class BaseGateway(ABC):
         # 会让整个网关不启动，另外 9 台的好数据一起没了。
         # 正确语义（工业现场）：能连上的先跑，连不上的标 fault 并在轮询里重连；
         # 只有**一台都没连上**才算这个网关起不来。
-        all_connected = self.connect()
+        try:
+            all_connected = self.connect()
+        except Exception as e:
+            # 设备连接抛错时 MQTT 线程可能已起来，必须回收
+            self.stats['start_time'] = None
+            self._disconnect_mqtt()
+            self._note_publish_failure(f"设备连接异常，网关未启动: {e}")
+            return False
         configured = [d.get('device_id') for d in self.devices_config if d.get('device_id')]
         connected = [d for d, ok in self.connected_devices.items() if ok]
         self.stats['devices_connected'] = len(connected)

@@ -603,7 +603,8 @@ class DNP3Client:
                     self.local_addr, self.remote_addr,
                     DNP3ObjectGroup.AI, variation=1)
                 if self.socket:
-                    self.socket.send(frame)
+                    # send 可能只写一部分，读请求截断会导致整轮无数据
+                    self.socket.sendall(frame)
             except Exception as e:
                 self.logger.error(f"读请求失败: {e}")
 
@@ -792,7 +793,8 @@ class DNP3Gateway(BaseGateway):
             for reg in device_config.get('registers', []):
                 name = reg.get('name', '')
                 index = reg.get('index', 0)
-                group_str = reg.get('group', 'ai').lower()
+                # group 写成数字/null 时 .lower() 会崩，一台点位配错拖垮整个网关
+                group_str = str(reg.get('group') or 'ai').lower()
                 group = group_map.get(group_str, DNP3ObjectGroup.AI)
                 if name:
                     reg_map[name] = (group, index)
@@ -891,7 +893,8 @@ class DNP3Gateway(BaseGateway):
         # round 370（BUG-079）：协议标签必须如实写 DNP3。
         # 复用 Modbus 转换器会把 protocol 标成 'ModbusTCP' —— 下游按协议
         # 分流/统计时，DNP3 设备全被算进 Modbus，现场排查"谁断了"完全失真。
-        telemetry.protocol = 'DNP3'
+        # DeviceTelemetry 字段是大写 Protocol；小写只是挂了个游离属性
+        telemetry.Protocol = ProtocolType.DNP3.value
         return telemetry
 
     def write_register(self, device_id: str, index: int, value: int) -> bool:

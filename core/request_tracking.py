@@ -40,7 +40,8 @@ def init_request_tracking(app: Flask):
         # 生成或提取 trace_id
         trace_id = request.headers.get('X-Trace-ID') or str(uuid.uuid4())[:16]
         g.trace_id = trace_id
-        g.request_start_time = time.time()
+        # 耗时是时长语义，必须用单调时钟；墙钟回拨会算出负数/几千秒
+        g.request_start_time = time.monotonic()
         g.request_id = f"{request.method}:{request.path}"
 
     @app.after_request
@@ -52,7 +53,7 @@ def init_request_tracking(app: Flask):
         # 记录响应时间
         start_time = getattr(g, 'request_start_time', None)
         if start_time:
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             response.headers['X-Response-Time'] = f"{duration:.3f}s"
 
             # 慢请求告警

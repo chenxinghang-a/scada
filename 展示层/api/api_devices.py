@@ -645,6 +645,10 @@ def add_device():
         # 获取设备状态（包含连接状态）
         device_status = current_app.device_manager.get_device_status(data['id'])
         if not collection_started:
+            # 审计必须与真实结果一致：配置已落盘但采集没起来
+            get_auth_manager().log_operation(
+                request.current_user['username'], 'add_device_collection_failed',
+                f"添加设备: {data['id']}（配置已落盘，采集任务未启动）")
             return jsonify({
                 'success': False,
                 'persisted': True,
@@ -747,6 +751,11 @@ def update_device(device_id):
 
     if not device_manager._save_config():
         logger.error("设备 %s 配置已应用到运行时，但写入配置文件失败", device_id)
+        # 运行时已换入新配置，旧连接必须断开重建，否则仍按旧 host/port 采。
+        try:
+            device_manager.disconnect_device(device_id)
+        except Exception as e:      # noqa: BLE001
+            logger.warning("设备 %s 配置未持久化，断开旧连接失败: %s", device_id, e)
         # 运行时已经变了，旧状态缓存必须作废。
         device_manager._status_cache.pop(device_id, None)
         device_manager._status_cache_time.pop(device_id, None)

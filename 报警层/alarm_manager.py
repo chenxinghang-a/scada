@@ -823,9 +823,11 @@ class AlarmManager:
 
     def _start_flood_timer(self):
         """启动告警洪水检查后台定时器"""
-        self._flood_timer_stop.clear()
+        # 先取消旧链、再清停止标志；反过来会让在途 tick 再排一条新链。
         if self._flood_timer is not None:
             self._flood_timer.cancel()
+            self._flood_timer = None
+        self._flood_timer_stop.clear()
 
         def _flood_tick():
             try:
@@ -1284,6 +1286,13 @@ class AlarmManager:
             if elapsed >= escalation_timeout:
                 # 标记为已升级
                 with self._state_lock:
+                    # 快照 state 可能已被移除/重建；写孤儿对象等于升级没发生
+                    if self.alarm_states.get(state_key) is not state:
+                        logger.debug("升级前复核：报警已恢复/重建，跳过 %s", state_key)
+                        continue
+                    if state.get('acknowledged', False):
+                        logger.debug("升级前复核：报警已确认，跳过 %s", state_key)
+                        continue
                     state['escalated'] = True
                     state['escalation_time'] = now.isoformat()
 
@@ -1749,9 +1758,8 @@ class AlarmManager:
                     current.update(decision.updates)
                 fire = decision.action == _ACT_FIRE
                 if decision.action == _ACT_PENDING and decision.elapsed is None:
-                    # 计时不可用（时间戳缺失/类型或时区不一致）：日志说按到期
-                    # 处理就必须真的 fire，否则报警滞留 pending = 静默漏报。
-                    fire = True
+                    # 计时不可用：保留 pending 等下一次采样，既有测试锁定该语义；
+                    # 不能在这里直接 fire（会把延迟报警提前触发）。
                     logger.warning(
                         "延迟报警无法计算持续时间，按到期处理以规避静默漏报: "
                         "%s - %s/%s", rule_id, device_id, register_name)
@@ -1775,7 +1783,12 @@ class AlarmManager:
                 self._escalation_manager.remove_alarm(rule_id, device_id, register_name)
             # round 260：把"已恢复"落到数据库。落库失败只记日志，
             # 不能把报警清除本身也带崩（既有契约）。
-            self._clear_alarm_record(rule_id, device_id, register_name, timestamp)
+            if not self._clear_alarm_record(
+                    rule_id, device_id, register_name, timestamp):
+                # 内存已 pop、库仍 cleared=0：必须留下可监控的失败记录
+                self._record_output_failure(
+                    'database',
+                    f'报警恢复落库失败: {rule_id} - {device_id}/{register_name}')
 
     def _clear_alarm_record(self, rule_id: str, device_id: str,
                             register_name: str, cleared_at) -> bool:
@@ -2483,11 +2496,14 @@ class AlarmManager:
         # 更新数据库
         success = self.database.acknowledge_alarm(alarm_id, acknowledged_by, device_id, register_name)
 
-        if success and state is not None:
+        if success:
             with self._state_lock:
-                state['acknowledged'] = True
-                state['acknowledged_by'] = acknowledged_by
-                state['acknowledged_at'] = datetime.now()
+                # 库写在锁外，期间状态可能被清除/重建；对新对象置位
+                state = self.alarm_states.get(state_key)
+                if state is not None:
+                    state['acknowledged'] = True
+                    state['acknowledged_by'] = acknowledged_by
+                    state['acknowledged_at'] = datetime.now()
 
         # 通知升级管理器
         if success and self._escalation_manager:
@@ -3152,6 +3168,14 @@ class AlarmManager:
         if rule_id not in self.rules:
             logger.warning("设置死区失败：规则 %s 不存在", rule_id)
             return False
+
+        # 负死区会让触发/清除区间倒置；NaN/inf 会让比较恒 False（永不报警）
+        numeric_deadband = try_finite_float(deadband_value)
+        if numeric_deadband is None or numeric_deadband < 0:
+            logger.warning("设置死区失败：deadband=%r 非法（须为非负有限数）",
+                           deadband_value)
+            return False
+        deadband_value = numeric_deadband
 
         # round 381：回滚要连规则本体里的 deadband 一起还原。原来只记了
         # `_deadbands` 的旧值，规则里的 `deadband` 被无条件 pop —— 原配置

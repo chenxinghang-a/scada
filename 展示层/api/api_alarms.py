@@ -739,9 +739,18 @@ def update_alarm_output_config():
             ao._modbus_client.close()
             ao._modbus_client = None
 
+    # 声光输出器未装配 / 含 relay_output 时运行时没有消费者，不能回“实时生效”
+    applied = alarm_manager.alarm_output is not None and 'relay_output' not in data
     get_auth_manager().log_operation(
-        request.current_user['username'], 'update_alarm_output_config', '更新报警输出配置')
-    return jsonify({'success': True, 'message': '报警输出配置已保存（实时生效）'})
+        request.current_user['username'], 'update_alarm_output_config',
+        f'更新报警输出配置（runtime_applied={applied}）')
+    return jsonify({
+        'success': True,
+        'runtime_applied': applied,
+        'message': ('报警输出配置已保存（实时生效）' if applied else
+                    '报警输出配置已保存，但运行时未生效：声光输出器未装配，或含 '
+                    'relay_output 段（当前无运行时消费者），装配/重启后才生效'),
+    })
 
 
 @alarms_bp.route('/broadcast/config', methods=['GET'])
@@ -839,9 +848,16 @@ def update_broadcast_config():
                 bs._mqtt_client = None
                 bs._mqtt_connected = False
 
+    applied = alarm_manager.broadcast_system is not None
     get_auth_manager().log_operation(
-        request.current_user['username'], 'update_broadcast_config', '更新广播系统配置')
-    return jsonify({'success': True, 'message': '广播系统配置已保存（实时生效）'})
+        request.current_user['username'], 'update_broadcast_config',
+        f'更新广播系统配置（runtime_applied={applied}）')
+    return jsonify({
+        'success': True,
+        'runtime_applied': applied,
+        'message': ('广播系统配置已保存（实时生效）' if applied else
+                    '广播系统配置已保存，但广播系统未装配，装配/重启后才生效'),
+    })
 
 
 # ==================== 报警去重配置API ====================

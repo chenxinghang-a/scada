@@ -67,8 +67,17 @@ class RESTDeviceClient:
         # 端点配置
         self.endpoints = config.get('endpoints', [])
 
-        # 轮询间隔
-        self.poll_interval = config.get('poll_interval', 10)
+        # 轮询间隔必须是正的有限数：0/负数/NaN 会让 Event.wait 立即返回，
+        # 轮询线程退化成空转打设备。
+        try:
+            interval = float(config.get('poll_interval', 10))
+        except (TypeError, ValueError):
+            interval = 10.0
+        if not (interval > 0) or interval == float('inf'):
+            logger.warning("[REST] %s: poll_interval=%r 非法，改用 10s",
+                           self.device_name, config.get('poll_interval'))
+            interval = 10.0
+        self.poll_interval = interval
 
         # 认证配置
         self.auth_type = config.get('auth_type', 'none')  # none/basic/bearer/api_key
@@ -204,6 +213,14 @@ class RESTDeviceClient:
             logger.error(f"REST设备连接失败: {e}")
             self.stats['last_error'] = str(e)
             self.connected = False
+            # 探针失败时关掉本次新建的 Session，否则每次重试泄漏一个连接池
+            self._running = False
+            if self._session is not None:
+                try:
+                    self._session.close()
+                except Exception as close_exc:      # noqa: BLE001
+                    logger.debug("关闭 REST 会话失败: %s", close_exc)
+                self._session = None
             return False
 
     def disconnect(self):
@@ -212,9 +229,13 @@ class RESTDeviceClient:
         stop_event = getattr(self, '_stop_event', None)
         if stop_event is not None:
             stop_event.set()      # 立刻唤醒 sleep 中的轮询线程
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5)
-        if self._session:
+        thread = self._thread
+        if thread and thread.is_alive():
+            # 请求超时可到几十秒，固定 join(5) 后线程往往仍在发请求；
+            # 此时 close() 会让在途请求撞上已关闭会话。
+            read_timeout = float(getattr(self, '_timeout', (3, 5))[1])
+            thread.join(timeout=max(5.0, read_timeout + 1.0))
+        if self._session is not None and (thread is None or not thread.is_alive()):
             self._session.close()
             self._session = None
         self.connected = False
@@ -310,10 +331,18 @@ class RESTDeviceClient:
             return False
 
         url = self.base_url.rstrip('/') + endpoint_config.get('path', '/')
-        body = endpoint_config.get('write_body', {'value': value})
-        if callable(body):
-            body = body(value)
         write_method = method or endpoint_config.get('write_method', 'POST')
+        # 回调式 write_body 原来在 try 之外执行：回调抛错会直接冒出 500
+        try:
+            body = endpoint_config.get('write_body', {'value': value})
+            if callable(body):
+                body = body(value)
+        except Exception as e:      # noqa: BLE001
+            self.stats['failed_requests'] = self.stats.get('failed_requests', 0) + 1
+            self.stats['last_error'] = f'生成写入载荷失败: {e}'
+            logger.error("REST 写入载荷生成失败 [%s]: %s",
+                         endpoint_config.get('path'), e)
+            return False
 
         def _do_write():
             resp = self._session.request(

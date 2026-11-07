@@ -847,7 +847,7 @@ class DeviceBehaviorSimulator:
         
         # ===== 控制命令识别 =====
         # 通用约定：地址100 = 启动/停止控制
-        if address == 100:
+        if address == 100 and reg_info is None:
             # 监测设备不受停机命令影响
             if self._is_monitoring_device and value == 0:
                 logger.info(f"[行为模拟] 监测设备 {self.device_name} 忽略停机命令")
@@ -866,7 +866,7 @@ class DeviceBehaviorSimulator:
             return
         
         # 通用约定：地址101 = 复位命令
-        if address == 101:
+        if address == 101 and reg_info is None:
             if value == 1:
                 self.active_faults.clear()
                 self.fault_timers.clear()
@@ -1066,7 +1066,8 @@ class DeviceBehaviorSimulator:
         # 永远写不进去 —— 表现为「模拟设备能读不能控」。
         # 这里做最后一步覆盖：写入值优先于模型算出来的值。
         if self._point_overrides:
-            for _name, _val in self._point_overrides.items():
+            # 协议线程会并发增删，先快照再遍历
+            for _name, _val in list(self._point_overrides.items()):
                 data[_name] = _val
 
         # 7. 触发回调
@@ -1899,6 +1900,8 @@ class DeviceBehaviorSimulator:
             'packing_status': self.state.value,
             'line_status': self.state.value,
             'running_status': self.state.value,
+            # status 只在停机字典里有，运行态会消失
+            'status': self.state.value,
             
             # 信号灯状态
             'red_light': 1 if self.state == DeviceState.FAULT else 0,
@@ -1988,6 +1991,14 @@ class DeviceBehaviorSimulator:
         from 采集层.recipe_simulator import RecipeSimulator
         recipe = RecipeSimulator.RECIPES.get(recipe_name)
         if recipe:
+            # 换配方前先停旧线程，否则旧线程继续按旧设定值改过程模型
+            _old_recipe = getattr(self, 'recipe_simulator', None)
+            if _old_recipe is not None:
+                try:
+                    _old_recipe.stop()
+                except Exception as e:
+                    logger.warning(
+                        f"[行为模拟] 设备 {self.device_name} 旧配方停止失败: {e}")
             self.recipe_simulator = RecipeSimulator(recipe, self)
             self.recipe_simulator.start()
             logger.info(f"[行为模拟] 设备 {self.device_name} 已启动配方: {recipe.name}")

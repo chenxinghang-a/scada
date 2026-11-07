@@ -378,11 +378,12 @@ class AlarmOutput:
 
         if level == 'critical':
             # 严重报警：红灯快闪 + 蜂鸣器常响
-            self.current_state.update({
-                'red': True, 'yellow': False, 'green': False,
-                'buzzer': True,
-                'pattern': AlarmLightPattern.FAST_FLASH
-            })
+            with self._lock:
+                self.current_state.update({
+                    'red': True, 'yellow': False, 'green': False,
+                    'buzzer': True,
+                    'pattern': AlarmLightPattern.FAST_FLASH
+                })
             # 先写入目标灯ON + 蜂鸣器ON（避免闪烁线程启动前的黑灯间隙）
             ok = self._write_all_do(red=True, yellow=False, green=False, buzzer=True)
             self._start_flash('red', 0.25)  # 250ms间隔=快闪
@@ -539,14 +540,15 @@ class AlarmOutput:
         # round 302：返回值不能丢 —— 这是调试/巡检接口，最需要「到底写没写进去」
         ok = self._write_all_do(r, y, g, b)
 
-        self.current_state.update({
-            'red': r, 'yellow': y, 'green': g, 'buzzer': b,
-            'pattern': AlarmLightPattern.STEADY,
-            'level': 'manual',
-            'message': '手动控制',
-            'since': datetime.now().isoformat(),
-            'acknowledged': False
-        })
+        with self._lock:
+            self.current_state.update({
+                'red': r, 'yellow': y, 'green': g, 'buzzer': b,
+                'pattern': AlarmLightPattern.STEADY,
+                'level': 'manual',
+                'message': '手动控制',
+                'since': datetime.now().isoformat(),
+                'acknowledged': False
+            })
 
         if duration > 0:
             # round 370（BUG-034）：**定时器必须纳管**。
@@ -577,9 +579,11 @@ class AlarmOutput:
 
     def _on_manual_timeout(self) -> None:
         """手动测试到时**只复位手动状态**，不覆盖正在进行的真实报警。"""
-        self._manual_timer = None
+        with self._lock:
+            self._manual_timer = None
+            manual_active = self.current_state.get('level') == 'manual'
         try:
-            if self.current_state.get('level') == 'manual':
+            if manual_active:
                 self.reset()
             else:
                 logger.info("手动测试计时器到期，但当前已有真实报警输出，"

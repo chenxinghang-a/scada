@@ -192,6 +192,13 @@ def enforce_once(database: Any, cfg: Optional[Dict[str, Any]] = None) -> Dict[st
 
 def _loop(database: Any, interval_hours: float, first_delay_sec: float,
           stop_event: threading.Event) -> None:
+    # interval_hours<=0 会让 max(1.0, interval_hours*3600) 退化成 1 秒一轮，
+    # 每轮都跑大表 DELETE，把 IO/写锁打满。
+    if not isinstance(interval_hours, (int, float)) or interval_hours <= 0:
+        logger.warning("保留策略调度间隔 %r 非法，回退默认 %d 小时",
+                       interval_hours, DEFAULT_INTERVAL_HOURS)
+        interval_hours = DEFAULT_INTERVAL_HOURS
+
     if first_delay_sec > 0 and stop_event.wait(first_delay_sec):
         return
     while not stop_event.is_set():

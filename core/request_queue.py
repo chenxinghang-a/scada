@@ -56,6 +56,9 @@ class RequestQueue:
 
     def __init__(self, name: str, max_workers: int = 2, max_queue_size: int = 10):
         self.name = name
+        # <=0 时一个工作线程都不启动，任务永远 PENDING 却回 202
+        if not isinstance(max_workers, int) or max_workers <= 0:
+            max_workers = 2
         self.max_workers = max_workers
         self.max_queue_size = max_queue_size
 

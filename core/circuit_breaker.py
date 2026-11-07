@@ -81,7 +81,12 @@ class CircuitBreaker:
         self.name = name
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
-        self.half_open_max = half_open_max
+        # <=0 会让半开第一条探测就满足 >=0，此后永久拒绝
+        from core.safe_numeric import try_int
+        _half_open_max = try_int(half_open_max)
+        self.half_open_max = (_half_open_max
+                              if _half_open_max is not None and _half_open_max > 0
+                              else 3)
         self.success_threshold = success_threshold
         self.excluded_exceptions = excluded_exceptions
 

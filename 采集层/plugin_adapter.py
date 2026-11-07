@@ -113,7 +113,8 @@ def _read_metadata(path: Path) -> dict[str, Any]:
     try:
         source = path.read_text(encoding='utf-8')
         tree = ast.parse(source, filename=str(path))
-    except (OSError, SyntaxError):
+    except (OSError, SyntaxError, ValueError):
+        # UnicodeDecodeError/空字节都是 ValueError，别让一个坏插件中断整轮发现
         return meta
 
     for node in tree.body:
@@ -301,6 +302,8 @@ class PluginAdapterClient:
                          self.device_id, self.stats['last_error'])
             return False
 
+        # 先回收旧实例，避免重复 connect 覆盖后泄漏插件的连接/线程
+        self._close_plugin()
         try:
             self._plugin = load_plugin(self.spec.plugin, self.spec.settings)
             starter = getattr(self._plugin, 'start', None) \
@@ -359,11 +362,19 @@ class PluginAdapterClient:
         if plugin is None:
             return
         closer = getattr(plugin, 'stop', None) or getattr(plugin, 'close', None)
-        if callable(closer):
-            try:
-                closer()
-            except Exception as exc:      # noqa: BLE001
-                logger.warning("关闭插件失败 device=%s: %s", self.device_id, exc)
+        if not callable(closer):
+            return
+        # disconnect 的 join 超时后轮询线程可能还在 read() 里用这个插件；
+        # 拿不到锁就跳过 stop，避免并发关闭。
+        if not self._plugin_lock.acquire(timeout=5):
+            logger.warning("插件仍被轮询线程占用，跳过关闭 device=%s", self.device_id)
+            return
+        try:
+            closer()
+        except Exception as exc:      # noqa: BLE001
+            logger.warning("关闭插件失败 device=%s: %s", self.device_id, exc)
+        finally:
+            self._plugin_lock.release()
 
     # ------------------------------------------------------------------
     # 读取与映射
@@ -375,12 +386,19 @@ class PluginAdapterClient:
                 mapped = self._read_mapped()
                 with self._lock:
                     self.latest_data = mapped
+                self.stats['consecutive_failures'] = 0
+                self.connected = True
                 self._notify(mapped)
             except Exception as exc:      # noqa: BLE001 —— 单轮失败不能停线程
                 self.stats['failed_reads'] += 1
                 self.stats['last_error'] = str(exc)
-                logger.warning("插件适配器读取失败 device=%s: %s",
-                               self.device_id, exc)
+                failures = self.stats.get('consecutive_failures', 0) + 1
+                self.stats['consecutive_failures'] = failures
+                if failures >= 3:
+                    # 连续失败说明链路已断，不能一直对外报 connected=True
+                    self.connected = False
+                logger.warning("插件适配器读取失败 device=%s: %s（连续 %d 次）",
+                               self.device_id, exc, failures)
             self._stop_event.wait(self.poll_interval)
 
     def _read_mapped(self) -> dict[str, dict[str, Any]]:

@@ -449,7 +449,16 @@ def adjust_device(device_id):
             'message': '安全模块不可用，已拒绝调节（无法执行急停/联锁/量程/回读校验）',
         }), 503
 
-    address = device_control._resolve_register_address(device_id, register_name)
+    try:
+        # 私有实现：改名/内部抛错不能漏成 500
+        address = device_control._resolve_register_address(device_id, register_name)
+    except Exception as e:      # noqa: BLE001
+        logger.error("解析点位地址失败: device=%s register=%s: %s",
+                     device_id, register_name, e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f'无法解析设备 {device_id} 的点位 {register_name!r} 地址，拒绝写入',
+        }), 503
     if address is None:
         return jsonify({
             'success': False,
@@ -890,10 +899,19 @@ def restore_interlock(rule_id):
     if rule_id not in interlocks:
         return api_error(f'联锁 {rule_id} 不存在', 404)
     was_bypassed = bool((interlocks.get(rule_id) or {}).get('bypassed'))
-    success = bool(device_control.restore_interlock(rule_id, operator))
+    try:
+        success = bool(device_control.restore_interlock(rule_id, operator))
+    except Exception as e:      # noqa: BLE001
+        logger.error("恢复联锁失败: rule=%s: %s", rule_id, e, exc_info=True)
+        get_auth_manager().log_operation(
+            operator, 'restore_interlock_failed',
+            f'联锁 {rule_id} 恢复异常（此前旁路={was_bypassed}）: {e}')
+        return jsonify({'success': False, 'message': f'联锁 {rule_id} 恢复异常'}), 500
+    # 审计跟着真实结果走，失败不能留成功语义的记录
     get_auth_manager().log_operation(
-        operator, 'restore_interlock',
-        f'联锁 {rule_id} 手动恢复（此前旁路={was_bypassed}）')
+        operator, 'restore_interlock' if success else 'restore_interlock_failed',
+        (f'联锁 {rule_id} 手动恢复（此前旁路={was_bypassed}）' if success
+         else f'联锁 {rule_id} 恢复失败（此前旁路={was_bypassed}）'))
     if not success:
         return jsonify({'success': False, 'message': '恢复失败'}), 500
     return jsonify({
