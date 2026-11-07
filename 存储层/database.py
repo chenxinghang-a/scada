@@ -1729,7 +1729,11 @@ class Database:
         archive_cutoff = (datetime.now() - timedelta(days=archive_days)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        delete_cutoff = datetime.now() - timedelta(days=delete_days)
+        # round 382：删除窗口必须整段落在已归档区间内。archive_cutoff 已
+        # 对齐当天 00:00，archive_days == delete_days 时 delete_cutoff 更晚，
+        # 那天 [00:00, now-Nd) 的原始采样会被删却从未进归档表。
+        delete_cutoff = min(datetime.now() - timedelta(days=delete_days),
+                            archive_cutoff)
 
         # round 352：**归档与删除必须分两个事务**。
         #

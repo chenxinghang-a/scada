@@ -100,6 +100,8 @@ class AlarmOutput:
 
         # Modbus客户端（延迟创建）
         self._modbus_client = None
+        #: 下一次取 client 前是否需要先 connect()（DO 写失败后置位）
+        self._modbus_needs_reconnect = False
         #: 状态锁 —— 只保护 `current_state` 这类内存字段，**绝不跨网络 I/O 持有**
         self._lock = threading.Lock()
         #: DO 写串行锁（round 286）。网络 I/O 只在这把锁里做，与状态锁分开：
@@ -163,6 +165,20 @@ class AlarmOutput:
                 logger.error("pymodbus未安装，报警输出硬件模式不可用")
                 return None
 
+        if getattr(self, '_modbus_needs_reconnect', False) and self._modbus_client is not None:
+            try:
+                if self._modbus_client.connect():
+                    self._modbus_needs_reconnect = False
+                else:
+                    raise ConnectionError('重连失败')
+            except Exception as e:      # noqa: BLE001
+                # 重连失败时**保留 client 引用**，只返回 None：下一次（熔断
+                # 冷却后）继续尝试 connect。丢掉引用会让“网关恢复后自动重连”
+                # 变成新建客户端，且会破坏熔断期间不碰 socket 的既有契约。
+                logger.error("报警输出 Modbus 重连失败（保留 client 待重试）: %s", e)
+                self._modbus_needs_reconnect = True
+                return None
+
         return self._modbus_client
 
     # ==================== DO 写失败熔断（round 286） ====================
@@ -183,6 +199,10 @@ class AlarmOutput:
     def _record_do_failure(self, detail: str) -> None:
         """记录一次 DO 写失败；连续失败达到阈值即打开熔断。"""
         self._fail_streak += 1
+        # round 382：标记“下次使用前要重连”，但**不丢弃 client** —— 熔断期间
+        # 一次 socket 都不该碰（既有契约）；冷却结束后由 _get_modbus_client
+        # 调 connect() 重连。否则网关重启后永远复用死 socket，声光永久哑掉。
+        self._modbus_needs_reconnect = True
         if self._fail_streak >= CIRCUIT_FAIL_THRESHOLD and self._circuit_open_until is None:
             self._circuit_open_until = time.monotonic() + CIRCUIT_OPEN_SECONDS
             logger.error(
@@ -569,6 +589,10 @@ class AlarmOutput:
 
     def _start_buzzer_pulse(self, on_time: float = 0.5, off_time: float = 0.5):
         """启动蜂鸣器脉冲线程（间歇响）"""
+        # round 382：先停旧线程。共享的 `_buzzer_running` 被重新置 True 时，
+        # 仍在 sleep 的旧线程会“复活”，两个线程交替翻转同一个 DO。
+        self._stop_buzzer()
+        self._buzzer_period = float(on_time) + float(off_time)
         self._buzzer_running = True
         self._buzzer_thread = threading.Thread(
             target=self._buzzer_pulse_loop, args=(on_time, off_time), daemon=True
@@ -579,7 +603,10 @@ class AlarmOutput:
         """停止蜂鸣器脉冲"""
         self._buzzer_running = False
         if self._buzzer_thread and self._buzzer_thread.is_alive():
-            self._buzzer_thread.join(timeout=1)
+            # join 必须覆盖一个完整脉冲周期，否则旧线程还在 sleep，下一次
+            # start 会与它并存。
+            self._buzzer_thread.join(
+                timeout=float(getattr(self, '_buzzer_period', 1.0)) + 1.0)
 
     def _buzzer_pulse_loop(self, on_time: float, off_time: float):
         """蜂鸣器脉冲循环（响-停-响-停...）"""

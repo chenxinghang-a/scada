@@ -164,7 +164,9 @@ def compute_backoff_interval(failures: int, base_interval: float) -> float:
     base = try_finite_float(base_interval)
     if base is None or base <= 0:
         base = 5.0
-    return float(min(max(base, 2 ** n), BACKOFF_CEILING_S))
+    # round 382：上限必须随基础间隔抬高。base=120s 时 min(...,60) 会把退避
+    # 压成 60s —— 比正常周期还频繁，和 round 264 是同一类错。
+    return float(min(max(base, 2 ** n), max(BACKOFF_CEILING_S, base)))
 SENSOR_STUCK_WINDOW_S = 300         # 传感器卡死窗口
 BATCH_MAX = 1000                    # 批处理最大条数（100设备场景下提高到1000）
 BATCH_TIMEOUT_S = 0.5               # 批处理超时
@@ -825,6 +827,13 @@ class DataCollector:
             logger.warning("数据采集器已在运行")
             return
 
+        # round 382：stop() 里 shutdown 过的池不可复用，再 submit 会抛
+        # RuntimeError 并被采集异常处理吞成 success=False —— 主备切回后
+        # 所有轮询设备永久静默停摆。start() 必须重建。
+        if getattr(self, '_pool', None) is None:
+            self._pool = ThreadPoolExecutor(max_workers=self._max_concurrent,
+                                            thread_name_prefix="collector")
+
         self.running = True
 
         # 新的一轮启动：清空「已取消」登记，否则上一轮删过的设备 id
@@ -880,9 +889,10 @@ class DataCollector:
                 timer.cancel()
             self.tasks.clear()
 
-        # 关闭线程池（等待正在执行的采集完成）
-        if hasattr(self, '_pool'):
-            self._pool.shutdown(wait=True)
+        # 关闭线程池（等待正在执行的采集完成）。关掉即报废，start() 重建。
+        pool, self._pool = getattr(self, '_pool', None), None
+        if pool is not None:
+            pool.shutdown(wait=True)
 
         # 排空剩余数据并入库（不丢弃）
         remaining = []
@@ -998,7 +1008,8 @@ class DataCollector:
 
         protocol = device_config.get('protocol', 'modbus_tcp')
         if protocol in ('opcua', 'mqtt'):
-            self._setup_push_device(device_id, device_config)
+            if not self._setup_push_device(device_id, device_config):
+                return False
         else:
             # round 308：同 start_all 的处理 —— 启动失败必须留痕
             if not self._start_device_collection(device_id, device_config):
@@ -1067,6 +1078,7 @@ class DataCollector:
         """删除设备的采集任务（设备被删除时调用）"""
         with self._tasks_lock:
             timer = self.tasks.pop(device_id, None)
+            getattr(self, '_push_callbacks', {}).pop(device_id, None)
             # 登记「已取消」：正在线程池里跑的那一轮结束后会走 _schedule_next，
             # 必须让它看到这个标记而不再复活（否则删了还在采，见 __init__ 注释）。
             self._mark_cancelled(device_id)
@@ -1141,6 +1153,16 @@ class DataCollector:
         with self._tasks_lock:
             running = set(self.tasks)
 
+        # round 382：推送型设备（OPC UA/MQTT）不建 Timer，永远不在 self.tasks
+        # 里 —— 每次 sync 都会把它们当“新增”重复 _setup_push_device，导致回调
+        # 叠加、重复 connect。用“客户端已连接”补进 running。
+        clients = getattr(manager, 'clients', None) or {}
+        for dev_id, cfg in devices.items():
+            if (cfg or {}).get('protocol') in ('opcua', 'mqtt'):
+                client = clients.get(dev_id)
+                if client is not None and getattr(client, 'connected', False):
+                    running.add(dev_id)
+
         to_start = sorted(desired - running)
         to_stop = sorted(running - desired)
         unchanged = sorted(desired & running)
@@ -1148,8 +1170,10 @@ class DataCollector:
         # round 369：配置热重载后协议可能已经变了（同一设备 id 改了 protocol），
         # 而 `_protocol_of()` 的缓存是「第一次见到就永久记住」。
         # 整表清空代价可忽略（只是指标标签），换来标签永远与配置一致。
+        # 同 id 只改 protocol 属于 unchanged，也必须清 —— 否则指标标签
+        # 永久停留在旧协议。整表很小，直接清空。
         cache = getattr(self, '_protocol_cache', None)
-        if cache is not None and (to_start or to_stop):
+        if cache is not None:
             cache.clear()
 
         for device_id in to_stop:
@@ -1269,13 +1293,28 @@ class DataCollector:
                 'unit': unit
             })
 
-        if hasattr(client, 'add_data_callback'):
+        # round 382：没有回调能力的客户端不能报“已连接”——在线但永远无数据；
+        # 重复启动会重复 append（各客户端都是 list.append，无去重）→ 同一
+        # 条推送入队 N 次。按设备只注册一次，回调登记表用于删除时清理。
+        if not hasattr(client, 'add_data_callback'):
+            logger.error("[%s] 设备 %s 客户端不支持数据回调，推送模式不会有任何数据",
+                         protocol.upper(), device_id)
+            return False
+
+        registered = getattr(self, '_push_callbacks', None)
+        if registered is None:
+            registered = self._push_callbacks = {}
+        if device_id not in registered:
             client.add_data_callback(on_data)
+            registered[device_id] = on_data
+        elif getattr(client, 'connected', False):
+            return True
 
         if client.connect():
             logger.info(f"[{protocol.upper()}] 设备 {device_id} 已连接（推送模式）")
-        else:
-            logger.error(f"[{protocol.upper()}] 设备 {device_id} 连接失败")
+            return True
+        logger.error(f"[{protocol.upper()}] 设备 {device_id} 连接失败")
+        return False
 
     def _start_device_collection(self, device_id: str,
                                  device_config: dict[str, Any]) -> bool:
@@ -2185,7 +2224,10 @@ class DataCollector:
                             logger.error(f"报警检查异常: {e}")
 
                 # === TDengine桥接（非阻塞） ===
-                if self.realtime_bridge:
+                # round 382：本批写库失败已重新入队，重试时会再送一遍；
+                # 非幂等下游必须等真正落库成功后再送，否则 TSDB 重复点/
+                # SPC 样本翻倍/OEE 重复计数。
+                if db_write_ok and self.realtime_bridge:
                     for data in batch:
                         try:
                             self.realtime_bridge.feed(
@@ -2201,7 +2243,7 @@ class DataCollector:
                             logger.error(f"TDengine桥接异常: {e}")
 
                 # === 智能层：扔进异步队列 ===
-                for data in batch:
+                for data in (batch if db_write_ok else ()):
                     try:
                         if not intel_queue.full():
                             intel_queue.put_nowait(data)
@@ -2362,8 +2404,11 @@ class DataCollector:
                     device_id, 0, energy_kwh=value, timestamp=timestamp,
                 )
             elif _has_keyword(name_lower, _power_kw):
+                # round 382：判据只能是**单位**。用名字里有没有 'w' 会把
+                # 'power'/'active_power' 全部误判成瓦特 → kW 值被 /1000。
+                unit_lower = str(data.get('unit') or '').strip().lower()
                 power_value = value
-                if 'w' in name_lower and 'kw' not in name_lower:
+                if unit_lower in ('w', 'watt', 'watts'):
                     power_value = value / 1000
                 self._safe_intel(
                     'energy_manager', self.energy_manager.feed_power_data,

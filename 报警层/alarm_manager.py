@@ -442,6 +442,9 @@ class AlarmManager:
         self._escalation_interval = 30  # 每30秒检查一次升级
         # 定时器停止标志：置位后 _tick 不再自我重排（防止永久泄漏）
         self._escalation_timer_stop = threading.Event()
+        #: 代际令牌：只有当前这一代 _tick 才允许重排。仅靠 stop 标志会出现
+        #: “旧 tick 在 finally 看到标志已清 → 又排一条链”的双链问题。
+        self._escalation_token: object | None = None
 
         # 告警洪水检查定时器
         self._flood_timer: threading.Timer | None = None
@@ -717,9 +720,12 @@ class AlarmManager:
 
     def _start_escalation_timer(self):
         """启动报警升级后台检查定时器"""
-        self._escalation_timer_stop.clear()
+        # 先撤旧链、再换令牌，最后清停止标志：在途 tick 的 finally 看到
+        # 令牌不匹配就不会再排新链。
         if self._escalation_timer is not None:
             self._escalation_timer.cancel()
+        token = self._escalation_token = object()
+        self._escalation_timer_stop.clear()
 
         def _tick():
             try:
@@ -728,7 +734,8 @@ class AlarmManager:
                 logger.error(f"报警升级定时检查异常: {e}")
             finally:
                 # 停止后不再重排，否则定时器会自我复活、永久泄漏
-                if not self._escalation_timer_stop.is_set():
+                if (not self._escalation_timer_stop.is_set()
+                        and self._escalation_token is token):
                     # 在**局部变量**上构造-设daemon-启动，最后才发布到 self。
                     # 原先三步都走 `self._escalation_timer`：本回调运行在定时器线程里，
                     # 而 stop_escalation_timer() / _start_escalation_timer() 会在别的线程
@@ -760,6 +767,7 @@ class AlarmManager:
     def stop_escalation_timer(self):
         """停止报警升级定时器（幂等；停止后不会自我复活）"""
         self._escalation_timer_stop.set()
+        self._escalation_token = None
         if self._escalation_timer is not None:
             self._escalation_timer.cancel()
             self._escalation_timer = None
@@ -1364,7 +1372,13 @@ class AlarmManager:
                 # 从规则配置中读取死区
                 deadband = rule_config.get('deadband', 0)
                 if deadband:
-                    new_deadbands[rule_id] = float(deadband)
+                    # round 382：一条规则的坏 deadband（如 '5%'）不能让整份
+                    # 配置加载失败 —— 外层 except 会让 self.rules 完全不更新。
+                    try:
+                        new_deadbands[rule_id] = float(deadband)
+                    except (TypeError, ValueError):
+                        logger.error("规则 %s 的 deadband=%r 非法，按 0 处理",
+                                     rule_id, deadband)
 
             removed = sorted(set(self.rules) - set(new_rules))
             with self._state_lock:

@@ -21,6 +21,23 @@ import paths
 logger = logging.getLogger(__name__)
 
 
+def _brief_items(items: Any) -> list[dict[str, str]]:
+    """把 registers/nodes/endpoints 归一成 name/unit 列表。
+
+    round 382：PUT 不校验这三个列表的元素类型，写成裸字符串时原来会在
+    `r.get(...)` 处 AttributeError —— 一台脏配置就能让 WS 批量状态推送
+    整批停摆。裸值退化成名称，不让单台设备拖垮全批。
+    """
+    out: list[dict[str, str]] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            out.append({'name': item.get('name', ''),
+                        'unit': item.get('unit', '')})
+        else:
+            out.append({'name': str(item).rsplit('/', 1)[-1], 'unit': ''})
+    return out
+
+
 def _device_stopped_state(device_id: str, client: Any) -> bool:
     """设备是否处于「单台停止 / 急停」状态。
 
@@ -210,7 +227,14 @@ class DeviceManager:
                     pool_cfg['max_lifetime_seconds'])
 
         # 加载设备配置
-        self.load_config()
+        # round 382：load_config() 返回 False（坏 YAML/顶层非映射）时不能
+        # 静默带 0 台设备启动 —— 健康检查会显示“正常”，而采集/联锁全空。
+        self.config_load_failed = False
+        if not self.load_config():
+            self.config_load_failed = True
+            logger.critical(
+                "设备配置加载失败（%s）：本次启动设备表为空，采集与联锁均无设备。"
+                "请修复后重启，或在线 POST /api/devices/reload", self.config_path)
 
     def _load_config_into(self, target: dict) -> bool:
         """把配置文件解析进 `target`（**不触碰 `self.devices`**）。
@@ -728,14 +752,14 @@ class DeviceManager:
             'protocol': device_config.get('protocol', 'modbus_tcp'),
             'host': device_config.get('host', device_config.get('endpoint', '')),
             'device_category': IDeviceManager.get_device_category(device_config),
-            'registers': [{'name': r.get('name', ''), 'unit': r.get('unit', '')} for r in regs],
-            'nodes': [{'name': n.get('name', ''), 'unit': n.get('unit', '')} for n in nodes],
+            'registers': _brief_items(regs),
+            'nodes': _brief_items(nodes),
             # round 370（BUG-021）：topics 允许裸字符串，直接 .get 会 AttributeError
             'topics': [{'name': (t.get('name', '') if isinstance(t, dict)
                                  else str(t).rsplit('/', 1)[-1]),
                         'unit': (t.get('unit', '') if isinstance(t, dict) else '')}
                        for t in topics],
-            'endpoints': [{'name': e.get('name', ''), 'unit': e.get('unit', '')} for e in endpoints],
+            'endpoints': _brief_items(endpoints),
         }
 
     def add_device(self, device_config: dict[str, Any]) -> bool:
@@ -776,6 +800,10 @@ class DeviceManager:
             # 「配置没存下来」+「这一轮重连整批跳过」，日志里只有一行异常。
             with self._lock:
                 self.devices[device_id] = device_config
+                # round 382：同名设备覆盖后必须作废旧状态缓存，否则 5 秒内
+                # 仍返回旧名称/旧连接状态，误导界面与写操作前置检查。
+                self._status_cache.pop(device_id, None)
+                self._status_cache_time.pop(device_id, None)
 
             # round 302：**落盘失败必须回滚并如实返回**。
             # 原来 `self._save_config()` 的返回值直接丢弃、紧接着 `return True`：

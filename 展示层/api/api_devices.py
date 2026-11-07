@@ -623,13 +623,23 @@ def add_device():
         get_auth_manager().log_operation(
             request.current_user['username'], 'add_device', f"添加设备: {data['id']}")
         # 设备存在 → 启动采集任务 → 数据开始入库
-        data_collector = getattr(current_app, 'data_collector', None)
-        if data_collector:
-            data_collector.start_device_task(data['id'], device_config)
+        # round 382：返回值必须检查。采集器未运行/定时器创建失败时，
+        # 设备配置已落盘但永远不采集，接口还回“添加成功”。
+        collection_started = _start_device_collection(data['id'])
         # 获取设备状态（包含连接状态）
         device_status = current_app.device_manager.get_device_status(data['id'])
+        if not collection_started:
+            return jsonify({
+                'success': False,
+                'persisted': True,
+                'collection_started': False,
+                'connected': device_status.get('connected', False),
+                'message': f"设备 {data['id']} 已写入配置，但**采集任务未启动**"
+                           "（不会产生数据，请检查采集器状态）",
+            }), 500
         return jsonify({
             'success': True,
+            'collection_started': True,
             'message': f"设备 {data['id']} 添加成功",
             'connected': device_status.get('connected', False),
             'device': device_status
@@ -648,6 +658,15 @@ def add_device():
         }), 400
 
 
+#: 这些字段一变，旧客户端/采集任务就可能仍按旧参数工作，必须断连重连。
+_RECONNECT_TRIGGER_KEYS = (
+    'protocol', 'host', 'port', 'slave_id', 'registers', 'adapter',
+    'poll_interval', 'endpoint', 'nodes', 'topics', 'base_url', 'endpoints',
+    'serial_port', 'baudrate', 'security_mode', 'username', 'password',
+    'network', 'pc',
+)
+
+
 @devices_bp.route('/devices/<device_id>', methods=['PUT'])
 @_require_engineer
 def update_device(device_id):
@@ -660,7 +679,11 @@ def update_device(device_id):
     if device_id not in device_manager.devices:
         return api_error(f'设备 {device_id} 不存在', 404)
 
-    device_config = device_manager.devices[device_id]
+    # round 382：在**副本**上改。原实现拿 devices 里的活对象原地赋值，
+    # custom 的 adapter 校验在字段写入之后才跑，一抛错就留下“内存半套新值、
+    # 磁盘仍是旧值”；落盘失败也没有回滚。
+    import copy
+    device_config = copy.deepcopy(device_manager.devices[device_id])
     protocol = data.get('protocol', device_config.get('protocol', 'modbus_tcp'))
 
     # 通用字段
@@ -696,10 +719,17 @@ def update_device(device_id):
     except ValueError as e:
         return api_error(str(e))
 
-    # 配置已在内存里生效，但**必须**确认真的落盘：写不进去时回「更新成功」
-    # 等于骗用户 —— 重启后改动消失，且现场无从察觉（本项目招牌病：静默假成功）。
+    # 全校验通过后才换入内存，然后落盘。写盘失败**保留运行时改动**：
+    # 响应会明确告知“已生效但未持久化”，调用方可重试；直接回滚会让
+    # 已经验证通过的变更莫名失效（既有契约见 test_device_config_persist_failure）。
+    with device_manager._lock:
+        device_manager.devices[device_id] = device_config
+
     if not device_manager._save_config():
         logger.error("设备 %s 配置已应用到运行时，但写入配置文件失败", device_id)
+        # 运行时已经变了，旧状态缓存必须作废。
+        device_manager._status_cache.pop(device_id, None)
+        device_manager._status_cache_time.pop(device_id, None)
         return jsonify({
             'success': False,
             'message': (
@@ -709,14 +739,20 @@ def update_device(device_id):
             'runtime_applied': True,
             'persisted': False,
         }), 500
+
+    # 名称/协议等字段变了，别让 5 秒状态缓存继续返回旧值。
+    device_manager._status_cache.pop(device_id, None)
+    device_manager._status_cache_time.pop(device_id, None)
     # BUG-056：**热更新必须真的"热"**。
     # ① 连接参数变了却继续用旧 client：`DeviceManager.clients` 是缓存，
     #    只有 `disconnect_device()` 会失效它。改完 host/port/protocol 仍是
     #    旧连接在采数（甚至写到已经换掉的 PLC 上）。
     # ② enabled / collection_interval 变了不同步采集任务：定时器还是旧周期，
     #    禁用设备照旧在采、改周期不生效，直到重启。
-    if any(k in data for k in ('protocol', 'host', 'port', 'slave_id',
-                               'registers', 'adapter', 'poll_interval')):
+    # round 382：触发断连的字段必须覆盖各协议的**连接/点位**字段。
+    # 原来只列了 modbus 那几项：改 OPC UA endpoint/nodes、MQTT topics、
+    # REST base_url/endpoints、RTU 串口后旧 client 继续采旧点位。
+    if any(k in data for k in _RECONNECT_TRIGGER_KEYS):
         try:
             device_manager.disconnect_device(device_id)
         except Exception as e:      # noqa: BLE001 —— 断开失败不影响配置已生效
@@ -856,6 +892,11 @@ def delete_device(device_id):
     # round 302：删除同样会因落盘失败而回滚（设备被放回内存）。
     # 保持 400（与 add 一致：该返回值也可能是「设备本就不存在」），
     # 但文案要说明「已恢复」——否则运维会以为设备真的删掉了。
+    # round 382：落盘失败时 remove_device 会把设备放回配置表，但采集任务
+    # 已在上面停掉 —— 不恢复就是“设备在、没人采、无任何告警”。
+    if data_collector and device_id in current_app.device_manager.devices:
+        if not _start_device_collection(device_id):
+            logger.error("设备 %s 删除失败已回滚，但采集任务恢复失败", device_id)
     return jsonify({
         'success': False,
         'persisted': False,
