@@ -184,7 +184,10 @@ def signature_required(f):
             }), 401
 
         # 获取请求体
-        body = request.get_data(as_text=True) if request.method in ('POST', 'PUT', 'PATCH') else ''
+        # DELETE 也在 full 签名范围内：排除 body 会让删除请求体失去完整性
+        # 保护，也会让按 get_signature_headers() 签名的 DELETE 永远验不过。
+        body = (request.get_data(as_text=True)
+                if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') else '')
 
         # 获取签名密钥 —— **必须先拿到密钥再谈验证**。
         # 原来缺密钥时直接 `return f(...)` 放行：全库从未向 app.config 注入过

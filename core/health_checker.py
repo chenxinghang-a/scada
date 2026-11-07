@@ -625,9 +625,14 @@ def _check_data_freshness(db, data_collector=None):
                 status = HealthStatus.UNKNOWN
         else:
             if isinstance(latest, str):
-                latest_dt = _dt.fromisoformat(latest.replace('Z', '+00:00').split('+')[0])
+                # 只剥 '+' 会漏掉 -05:00：aware 与 naive now 相减抛 TypeError，
+                # 一种时区写法就把健康检查打成红灯。
+                latest_dt = _dt.fromisoformat(
+                    latest.strip().replace('Z', '+00:00'))
             else:
                 latest_dt = latest
+            if latest_dt.tzinfo is not None:
+                latest_dt = latest_dt.astimezone().replace(tzinfo=None)
             age = (_dt.now() - latest_dt).total_seconds()
             details['latest_data_age_seconds'] = round(age, 1)
             details['latest_data_time'] = str(latest)

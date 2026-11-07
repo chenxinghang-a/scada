@@ -113,14 +113,18 @@ class TDengineClient:
     def _connect_rest(self) -> bool:
         """通过REST API连接"""
         try:
-            # 测试连接
-            response = self._execute_sql("SELECT server_version()")
-            if response:
-                self.logger.info(f"TDengine REST API连接成功: {self.host}:{self.port}")
-                # 创建数据库
+            # 首次部署库还不存在：带库名的 /rest/sql/{db} 探活会失败，
+            # 建库永远走不到。探活/建库都先走不带库名的端点。
+            base_url = f"http://{self.host}:{self.port}/rest/sql"
+            db_url, self.rest_url = self.rest_url, base_url
+            try:
+                if not self._execute_sql("SELECT server_version()"):
+                    return False
                 self._create_database()
-                return True
-            return False
+            finally:
+                self.rest_url = db_url
+            self.logger.info(f"TDengine REST API连接成功: {self.host}:{self.port}")
+            return True
         except Exception as e:
             self.logger.error(f"REST API连接失败: {e}")
             return False

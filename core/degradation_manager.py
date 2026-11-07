@@ -295,11 +295,15 @@ class DegradationManager:
     def _set_level(self, new_level: int, reason: str = ""):
         """设置降级等级（必须在锁内调用）"""
         old = self._level
+        # 先构造枚举再写 self._level：非法等级在构造时抛错，不会留下
+        # 被污染且无历史记录的当前等级。
+        old_name = DegradationLevel(old).name
+        new_name = DegradationLevel(new_level).name
         self._level = new_level
         entry = {
             'time': datetime.now().isoformat(),
-            'from': DegradationLevel(old).name,
-            'to': DegradationLevel(new_level).name,
+            'from': old_name,
+            'to': new_name,
             'reason': reason,
             'manual': self._manual_override,
         }

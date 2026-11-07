@@ -117,10 +117,13 @@ class QueryBuilder:
         """
         # `where()` 接受的是**表达式**（无法参数化），至少挡住
         # 语句分隔符与注释符：这两样一出现就说明不是一条条件，而是注入。
-        text = str(condition or '')
-        for marker in (';', '--', '/*', '*/'):
-            if marker in text:
-                raise ValueError(f'WHERE 条件包含非法片段 {marker!r}: {condition!r}')
+        # 黑名单挡不住 UNION / OR 1=1；改为只接受 `列 比较符 字面量`。
+        text = str(condition or '').strip()
+        if not re.match(
+                r"^[A-Za-z_]\w*\s*(?:=|==|!=|<>|>=|<=|>|<)\s*"
+                r"(?:'[^']*'|-?\d+(?:\.\d+)?)$", text):
+            raise ValueError(
+                f'WHERE 条件非法（只允许 `列 比较符 数字或单引号字符串`）: {condition!r}')
         self._where_clauses.append(text)
         return self
 
@@ -308,11 +311,13 @@ class QueryBuilder:
         if not columns:
             columns = ("ts", "value", "quality")
 
-        # BUG-087：与 select/select_agg 同口径校验列名（这里原来直接拼串）。
-        cols = ", ".join(_require_identifier(c, '列名') for c in columns)
+        # TDengine LAST() 只接受单列（或 *）；多列必须逐列包一层。
+        cols = ", ".join(
+            f"LAST({_require_identifier(c, '列名')})"
+            for c in (columns or ("*",)))
         where = (f" WHERE {' AND '.join(self._where_clauses)}"
                  if self._where_clauses else "")
-        return f"SELECT LAST({cols}) FROM {self._table}{where}"
+        return f"SELECT {cols} FROM {self._table}{where}"
 
     def build_first(self, *columns: str) -> str:
         """构建查询最早记录的SQL"""

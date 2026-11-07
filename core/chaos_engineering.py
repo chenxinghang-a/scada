@@ -368,7 +368,7 @@ class ChaosEngine:
 
             # 判定结果
             steady_passed = all(r.get('passed') for r in post_checks)
-            steps_passed = all(r.get('status') != 'error' for r in experiment.results)
+            steps_passed = all(r.get('status') == 'ok' for r in experiment.results)
 
             if steady_passed and steps_passed:
                 experiment.state = ExperimentState.PASSED

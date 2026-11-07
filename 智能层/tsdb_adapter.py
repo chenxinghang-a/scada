@@ -266,8 +266,17 @@ class TSDBAdapter:
                         "(device=%s, register=%s, ts=%r): %s",
                         device_id, register_name, timestamp_str, e)
                     continue
+            elif isinstance(timestamp_str, datetime):
+                timestamp = timestamp_str
             else:
-                timestamp = datetime.now()
+                # 数字 epoch/None/其它类型不许静默改写 now()，否则历史采样
+                # 被当成刚发生，SPC/预测维护/计费全部失真。
+                logger.warning(
+                    "tsdb_adapter: 时间戳类型不支持，跳过该条 "
+                    "(device=%s, register=%s, ts=%r, type=%s)",
+                    device_id, register_name, timestamp_str,
+                    type(timestamp_str).__name__)
+                continue
 
             # 预测性维护 — 喂入所有数值数据
             if self.predictive_maintenance:
@@ -298,7 +307,14 @@ class TSDBAdapter:
             if self.oee_calculator:
                 if register_name == 'running_status':
                     status_map = {0: 'stopped', 1: 'running', 2: 'fault', 3: 'idle'}
-                    status = status_map.get(int(float(value)), 'running')
+                    status = status_map.get(int(float(value)))
+                    if status is None:
+                        # 未知状态码不能兜底成 running，否则停机/故障设备
+                        # 被计为运行，OEE 可用率虚高。
+                        logger.warning(
+                            "tsdb_adapter: 未知 running_status 值，本条不记录状态 "
+                            "(device=%s, value=%r)", device_id, value)
+                        continue
                     self.oee_calculator.update_device_state(device_id, status)
                 elif register_name in ('product_count', 'good_count', 'total_count'):
                     if register_name == 'product_count':

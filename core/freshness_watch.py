@@ -132,7 +132,8 @@ def scan(database, *, now: datetime | None = None,
 
 def run_once(database, alarm_manager, *, now: datetime | None = None,
              threshold_seconds: float | None = None,
-             known_devices: set[str] | None = None) -> dict:
+             known_devices: set[str] | None = None,
+             device_intervals: dict[str, float] | None = None) -> dict:
     """扫一遍并对**状态变化**做报警/恢复（幂等：同一状态重复调用不会重复报警）。
 
     Args:
@@ -148,7 +149,9 @@ def run_once(database, alarm_manager, *, now: datetime | None = None,
     if threshold_seconds is None:
         threshold_seconds = stale_threshold_seconds(settings.get('default_interval', 5))
 
-    snapshot = scan(database, now=now, threshold_seconds=threshold_seconds)
+    # 逐设备阈值必须一路传下去；慢速设备按全局 30s 判会周期性误报失联。
+    snapshot = scan(database, now=now, threshold_seconds=threshold_seconds,
+                    device_intervals=device_intervals)
 
     # round 277：**已删除设备的"幽灵报警"**。
     # `scan()` 按 history_data 分组，设备删了历史还在 → 它仍会被判为"陈旧"，

@@ -80,6 +80,15 @@ class EnergyManager:
         self.config_path = paths.resolve(config_path)
         self._lock = threading.RLock()
 
+        # 先落默认值兜底：_load_config 解析失败时不会写这些属性，
+        # 而 __init__ 时不存在"当前配置"，后续访问会 AttributeError。
+        self.tariff = dict(DEFAULT_CONFIG['tariff'])
+        self.tariff_periods = {
+            k: [list(p) for p in v]
+            for k, v in DEFAULT_CONFIG['tariff_periods'].items()}
+        self.carbon_factor = DEFAULT_CONFIG['carbon_factor']
+        self.anomaly_config = dict(DEFAULT_CONFIG['anomaly'])
+
         # 加载配置（YAML文件 -> 默认值 -> 外部config覆盖）
         self._load_config(config)
 
@@ -292,8 +301,7 @@ class EnergyManager:
                                 'message': f'电价 {key} 必须为非负数，收到: {val}'
                             }
                         tariff = {**tariff, key: num}
-                self.tariff.update(tariff)
-                changes.append(f"电价: {self.tariff}")
+                # 只校验，不写内存；后续字段校验失败会直接 return。
 
             if tariff_periods is not None:
                 # 验证时段
@@ -322,8 +330,7 @@ class EnergyManager:
                                 'success': False,
                                 'message': f'时段范围错误: [{start},{end}]，小时范围0-24'
                             }
-                self.tariff_periods.update(tariff_periods)
-                changes.append(f"时段: {self.tariff_periods}")
+                # 同上：时段也只校验，不写内存。
 
             if carbon_factor is not None:
                 if isinstance(carbon_factor, bool):
@@ -342,6 +349,14 @@ class EnergyManager:
                     }
                 self.carbon_factor = factor
                 changes.append(f"碳排放因子: {factor}")
+
+            # 全部校验通过后才落内存，避免“接口失败、内存已改、磁盘旧值”。
+            if tariff is not None:
+                self.tariff.update(tariff)
+                changes.append(f"电价: {self.tariff}")
+            if tariff_periods is not None:
+                self.tariff_periods.update(tariff_periods)
+                changes.append(f"时段: {self.tariff_periods}")
 
             # 持久化：失败即回滚内存，与 update_anomaly_config 同口径
             if not self._save_config():

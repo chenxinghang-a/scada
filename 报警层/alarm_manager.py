@@ -1749,8 +1749,9 @@ class AlarmManager:
                     current.update(decision.updates)
                 fire = decision.action == _ACT_FIRE
                 if decision.action == _ACT_PENDING and decision.elapsed is None:
-                    # 计时不可用（时间戳缺失/类型或时区不一致）：按到期处理，
-                    # 宁可多报一次也不静默漏报 —— 但必须留痕
+                    # 计时不可用（时间戳缺失/类型或时区不一致）：日志说按到期
+                    # 处理就必须真的 fire，否则报警滞留 pending = 静默漏报。
+                    fire = True
                     logger.warning(
                         "延迟报警无法计算持续时间，按到期处理以规避静默漏报: "
                         "%s - %s/%s", rule_id, device_id, register_name)
@@ -2457,6 +2458,13 @@ class AlarmManager:
                 return False
             if len(matches) == 1:
                 device_id, register_name = matches[0][1], matches[0][2]
+            else:
+                # 内存里没有该 alarm_id 时，带空 device/register 调 DB 会
+                # 退化成按 alarm_id 全库批量确认，误伤多台同名报警。
+                logger.warning(
+                    "报警 %s 在内存中无匹配状态，确认时必须显式指定 device/register",
+                    alarm_id)
+                return False
 
         state_key = (alarm_id, device_id, register_name)
 

@@ -253,6 +253,11 @@ class ConnectionPool:
                     return conn.client
                 # 销毁不健康连接再创建新的
                 self._destroy_connection(key, conn)
+            if len(self._pool) >= self._dynamic_max:
+                logger.warning(
+                    f"连接池 {self._name}: get_or_create 时池已满 "
+                    f"(动态上限 {self._dynamic_max})，拒绝新建")
+                return None
             # round 370（BUG-065）：契约"不改变使用状态" → 新建也不占用
             return self._create_connection(key, mark_in_use=False)
 

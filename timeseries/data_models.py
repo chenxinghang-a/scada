@@ -266,7 +266,12 @@ def get_create_table_sql(table_name: str, stable_name: str, tags: dict[str, str]
         tags: 标签值 {tag_name: tag_value}
     """
     tag_values = ", ".join([f"'{_escape_sql_value(v)}'" for v in tags.values()])
-    return f"CREATE TABLE IF NOT EXISTS {table_name} USING {stable_name} TAGS ({tag_values})"
+    # 标识符无法参数化，公开 API 必须自己 fail-closed。
+    for _ident, _label in ((table_name, '子表名'), (stable_name, '超级表名')):
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', str(_ident or '')):
+            raise ValueError(f'{_label}非法: {_ident!r}（只允许字母/数字/下划线）')
+    return (f"CREATE TABLE IF NOT EXISTS {table_name} "
+            f"USING {stable_name} TAGS ({tag_values})")
 
 
 def get_telemetry_table_name(device_id: str, register_name: str) -> str:

@@ -359,7 +359,7 @@ class DNP3Parser:
         #   而 request_data() 的 except 把它吞掉 —— DNP3 从未真正发出过报文。
         # round 323：改用标准 CRC-16/DNP + 数据块 CRC（见 `build_dnp3_frame`）。
         #   原来 `sum(header) & 0xFFFF` 是假 CRC，真实从站会丢弃每一个帧。
-        control = 0xC0  # DIR + PRM
+        control = 0xC0  # DIR + PRM（既有测试锁定该帧格式）
         return build_dnp3_frame(control, destination, source, app_data)
 
     @staticmethod
@@ -375,9 +375,7 @@ class DNP3Parser:
         #   从站无法解析这条命令 —— **遥控实际发不出去**。
         obj_data = struct.pack('<BBBHHB',
                                DNP3ObjectGroup.BO, 1, 0x28,
-                               1,                # 数量 = 1 个对象
-                               index,            # 2 字节索引前缀
-                               value & 0x01)
+                               1, index, value & 0x01)
 
         app_data = struct.pack('BB', app_control, function_code) + obj_data
 

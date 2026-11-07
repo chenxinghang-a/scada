@@ -368,11 +368,19 @@ class IEC104Client:
                 self.socket.send(frame)
 
     def _send_s_frame(self):
-        """发送S帧确认"""
+        """发送S帧确认（接收线程调用，不能死等发送锁）。"""
         frame = IEC104APCI.build_s_frame(self.recv_seq)
-        with self._lock:
+        # _send_i_frame 持锁阻塞 sendall；接收线程等锁就没人 recv，对端也写不动。
+        if not self._lock.acquire(timeout=0.5):
+            self.logger.debug("S帧确认跳过：发送锁被占用（seq=%s）", self.recv_seq)
+            return
+        try:
             if self.socket:
                 self.socket.send(frame)
+        except OSError as e:
+            self.logger.debug("发送S帧失败: %s", e)
+        finally:
+            self._lock.release()
 
     def _send_i_frame(self, asdu: bytes) -> bool:
         """发送I帧。返回是否真的写到了套接字。

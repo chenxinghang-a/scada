@@ -289,17 +289,10 @@ class FINSClient(ByteOrderCapableDecoder):
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
 
-        # 解析响应数据
-        values = []
-        for i in range(count):
-            offset = i * 2
-            if offset + 2 <= len(resp):
-                val = struct.unpack('>H', resp[offset:offset + 2])[0]
-                values.append(val)
-            else:
-                values.append(0)
-
-        return values
+        # 既有契约：短响应按 0 补齐（测试锁定）；真实设备应依赖帧长校验。
+        return [struct.unpack('>H', resp[i * 2:i * 2 + 2])[0]
+                if i * 2 + 2 <= len(resp) else 0
+                for i in range(count)]
 
     def write_words(self, area: str, address: int, values: list[int]) -> bool:
         """
@@ -480,10 +473,11 @@ class FINSClient(ByteOrderCapableDecoder):
         return None
 
     def write_float32(self, area: str, address: int, value: float) -> bool:
-        """写入32位浮点数"""
-        raw = struct.pack('>f', value)
-        words = struct.unpack('>HH', raw)
-        return self.write_words(area, address, list(words))
+        """写入32位浮点数（按设备 byte_order 编码，与读取同源）。"""
+        from .base_client import encode_float32_registers
+        return self.write_words(
+            area, address,
+            encode_float32_registers(value, self._resolve_byte_order().value))
 
     def read_bits(self, area: str, address: int, bit: int, count: int) -> list[bool] | None:
         """
@@ -522,14 +516,9 @@ class FINSClient(ByteOrderCapableDecoder):
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
 
-        values = []
-        for i in range(count):
-            if i < len(resp):
-                values.append(resp[i] != 0)
-            else:
-                values.append(False)
-
-        return values
+        # 既有契约：短响应按 False 补齐（测试锁定）。
+        return [resp[i] != 0 if i < len(resp) else False
+                for i in range(count)]
 
     def write_bits(self, area: str, address: int, bit: int, values: list[bool]) -> bool:
         """写入位"""

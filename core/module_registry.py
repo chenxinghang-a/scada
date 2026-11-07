@@ -139,9 +139,14 @@ class ModuleRegistry:
                 logger.error(f"模块 '{name}' 未注册")
                 return False
 
-            if module_info.status == ModuleStatus.INITIALIZED:
+            if module_info.status in (ModuleStatus.INITIALIZED,
+                                      ModuleStatus.RUNNING):
                 logger.warning(f"模块 '{name}' 已初始化")
                 return True
+
+            if module_info.status == ModuleStatus.INITIALIZING:
+                logger.warning(f"模块 '{name}' 正在初始化中，跳过重复构造")
+                return False
 
             # 检查依赖
             for dep_name in module_info.dependencies:

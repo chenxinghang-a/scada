@@ -397,8 +397,17 @@ class SPCAnalyzer:
         r_ucl = d4 * r_bar
         r_lcl = max(0.0, d3 * r_bar)
 
-        # 判异检测
+        # 判异检测：X̄ 图 + R 图（R 控制限原来只算不判）。
         violations = self._check_violations(xbar_values, xbar_bar, xbar_ucl, xbar_lcl)
+        for i, r_val in enumerate(r_values):
+            if r_val > r_ucl or r_val < r_lcl:
+                violations.append({
+                    'rule': 1, 'chart': 'r',
+                    'description': (
+                        f'R图点{i+1}超出控制限[{round(r_lcl, 4)}, {round(r_ucl, 4)}]'),
+                    'value': round(r_val, 4), 'index': i,
+                    'span': 1, 'severity': 'critical',
+                })
 
         result = {
             'chart_type': 'X̄-R',
@@ -490,7 +499,17 @@ class SPCAnalyzer:
         s_ucl = b4 * s_bar
         s_lcl = max(0, b3 * s_bar)
 
+        # 判异检测：X̄ 图 + S 图（S 控制限原来只算不判）。
         violations = self._check_violations(xbar_values, xbar_bar, xbar_ucl, xbar_lcl)
+        for i, s_val in enumerate(s_values):
+            if s_val > s_ucl or s_val < s_lcl:
+                violations.append({
+                    'rule': 1, 'chart': 's',
+                    'description': (
+                        f'S图点{i+1}超出控制限[{round(s_lcl, 4)}, {round(s_ucl, 4)}]'),
+                    'value': round(s_val, 4), 'index': i,
+                    'span': 1, 'severity': 'critical',
+                })
 
         result = {
             'chart_type': 'X̄-S',

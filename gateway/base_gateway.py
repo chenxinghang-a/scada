@@ -282,11 +282,14 @@ class BaseGateway(ABC):
         if self._poll_thread and self._poll_thread.is_alive():
             self._poll_thread.join(timeout=5)
 
-        # 断开设备
-        self.disconnect()
-
-        # 断开MQTT
-        self._disconnect_mqtt()
+        # 断开设备；必须 try/finally，disconnect 抛异常也要清 MQTT。
+        try:
+            self.disconnect()
+        except Exception as e:
+            self.logger.error(f"断开设备时异常: {e}")
+            self.stats['errors'] += 1
+        finally:
+            self._disconnect_mqtt()
 
         self.logger.info(f"网关 {self.gateway_id} 已停止")
 

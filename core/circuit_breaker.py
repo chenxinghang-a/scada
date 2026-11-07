@@ -184,7 +184,13 @@ class CircuitBreaker:
         try:
             result = func(*args, **kwargs)
         except self.excluded_exceptions:
-            raise  # 业务异常不计入失败
+            # 业务异常不计入失败，但必须归还半开探测名额；否则累计到
+            # half_open_max 后永久拒绝，且 HALF_OPEN 没有超时能转出去。
+            with self._lock:
+                if (self._state == CircuitState.HALF_OPEN
+                        and self._half_open_calls > 0):
+                    self._half_open_calls -= 1
+            raise
         except Exception as e:
             self._on_failure(e)
             raise

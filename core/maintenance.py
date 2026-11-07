@@ -211,7 +211,18 @@ def build_maintenance_tasks(database=None, auth_manager=None, *,
                     known = set(device_manager.get_all_devices().keys())
                 except Exception as exc:      # noqa: BLE001
                     logger.debug("获取设备清单失败，按历史数据判断: %s", exc)
-            result = run_once(database, alarm_manager, known_devices=known)
+            # 逐设备采集周期也必须传，否则慢速设备按全局阈值误报"采集中断"。
+            intervals = {}
+            if device_manager is not None:
+                try:
+                    for did, dcfg in (device_manager.get_all_devices() or {}).items():
+                        if (isinstance(dcfg, dict)
+                                and dcfg.get('collection_interval') is not None):
+                            intervals[did] = dcfg['collection_interval']
+                except Exception as exc:      # noqa: BLE001
+                    logger.debug("获取设备采集周期失败，按全局阈值判断: %s", exc)
+            result = run_once(database, alarm_manager, known_devices=known,
+                              device_intervals=intervals)
             if result['raised'] or result['cleared'] or result.get('cleared_ghosts'):
                 logger.warning("采集新鲜度看门狗: 新失联 %s，恢复 %s，已删设备清理 %s",
                                result['raised'], result['cleared'],

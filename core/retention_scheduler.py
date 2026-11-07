@@ -120,9 +120,17 @@ def read_retention_config(config_path: Optional[str] = None) -> Optional[Dict[st
         logger.warning("database.retention 不是映射，忽略（本次不执行任何删除）")
         return None
 
-    if not section.get("enabled", False):
+    # YAML 里带引号的 "false"/"no"/"off" 是字符串真值，必须按字面量解析，
+    # 否则会误判为启用并批量删除历史数据。
+    enabled_raw = section.get("enabled", False)
+    if isinstance(enabled_raw, str):
+        enabled = enabled_raw.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        enabled = bool(enabled_raw)
+    if not enabled:
         logger.info(
-            "保留策略未启用（database.retention.enabled 不为真）—— 本次不执行任何删除。"
+            "保留策略未启用（database.retention.enabled=%r 不为真）—— 本次不执行任何删除。",
+            enabled_raw,
         )
         return None
 

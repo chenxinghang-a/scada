@@ -337,10 +337,13 @@ class HAManager:
         if ts is None:
             logger.warning("心跳时间戳非法（非有限数值），丢弃: %s", addr)
             return
-        if abs(time.time() - ts) > self.heartbeat_timeout:
+        # 新鲜度窗口只挡重放，不能复用心跳超时：墙钟偏差/NTP 回拨超过一个
+        # 超时窗口时合法心跳会被双向丢弃 → 各自判死 → 双主。
+        _max_clock_skew = max(self.heartbeat_timeout * 6.0, 60.0)
+        if abs(time.time() - ts) > _max_clock_skew:
             logger.warning(
                 "心跳时间戳不新鲜（偏差 %.1fs > %.1fs），丢弃: %s",
-                time.time() - ts, self.heartbeat_timeout, addr)
+                time.time() - ts, _max_clock_skew, addr)
             return
 
         peer_id = msg.get('node_id', 'unknown')
@@ -379,10 +382,14 @@ class HAManager:
             )
 
             # 如果自己是主，但收到更高优先级的主心跳，降级为备
+            # 同优先级也必须裁决；否则双方都按 priority 比不出胜负，长期双主。
             if (self.role == HARole.PRIMARY and
                 peer_role == HARole.PRIMARY and
-                peer_priority > self.priority):
-                logger.warning(f"收到更高优先级主节点 {peer_id}，降级为备")
+                not self._wins_election(peer_priority, peer_id)):
+                logger.warning(
+                    f"收到不亚于本节点的主节点 {peer_id}"
+                    f"（priority {peer_priority}/{self.priority}，"
+                    f"node_id {peer_id}/{self.node_id}），降级为备")
                 self._set_role(HARole.STANDBY)
                 self.state = HAState.PASSIVE
 

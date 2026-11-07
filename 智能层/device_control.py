@@ -363,10 +363,26 @@ class DeviceControlSafety:
         # 加载失败（文件不存在/全是坏规则）时新表保持为空 →
         # `_load_preset_interlocks` 会走"空规则"分支告警，
         # 而 `validate_write` 在真实设备模式下 fail-closed 拒绝写操作。
-        self._interlock_rules = {}
-        self._interlock_states = {}
-        self._load_preset_interlocks()
-        new_rules = self._interlock_rules
+        # 填表期间持锁：读者都持 `_lock`，写侧不持锁时仍会看到“边填边遍历”的中间态。
+        # 填充中途异常必须回滚，否则一次热重载就让运行中的联锁静默消失。
+        with self._lock:
+            self._interlock_rules = {}
+            self._interlock_states = {}
+            try:
+                self._load_preset_interlocks()
+            except Exception as e:      # noqa: BLE001
+                self._interlock_rules = old_rules
+                self._interlock_states = old_states
+                logger.error(
+                    '联锁热重载填充异常（%s: %s），已回滚到重载前的 %d 条',
+                    type(e).__name__, e, len(old_rules))
+                return {
+                    'added': [], 'removed': [], 'changed': [],
+                    'kept': sorted(old_rules), 'source': 'rollback',
+                    'error': (f'重载异常，已回滚到重载前的规则: '
+                              f'{type(e).__name__}: {e}'),
+                }
+            new_rules = self._interlock_rules
 
         # ===== 回滚保护（round 341）=====
         #
@@ -559,7 +575,9 @@ class DeviceControlSafety:
             # 条件类型不认识 → `matched` 永远 False，规则永不触发；
             # 动作类型不认识 → 条件会触发、审计记"已执行"，但什么都没做。
             # 两种都不能靠"运行期没报错"发现，必须在加载时拒绝并汇总告警。
-            cond_type = (rule.get('condition') or {}).get('type')
+            # condition 写成字符串/列表时，(x or {}) 仍是原值，.get 直接崩。
+            _cond = rule.get('condition')
+            cond_type = _cond.get('type') if isinstance(_cond, dict) else None
             if cond_type not in SUPPORTED_CONDITION_TYPES:
                 logger.error(
                     "忽略联锁规则 %s：condition.type=%r 不被支持（只支持 %s）—— "
@@ -567,7 +585,9 @@ class DeviceControlSafety:
                     sorted(SUPPORTED_CONDITION_TYPES))
                 rejected += 1
                 continue
-            act_type = (rule.get('action') or {}).get('type')
+            # 同 condition：action 非字典时 .get 直接崩，先判形态。
+            _act = rule.get('action')
+            act_type = _act.get('type') if isinstance(_act, dict) else None
             if act_type not in SUPPORTED_ACTION_TYPES:
                 logger.error(
                     "忽略联锁规则 %s：action.type=%r 不被支持（只支持 %s）—— "
@@ -984,10 +1004,21 @@ class DeviceControlSafety:
                                 f'批量{action}设备 {device_id}: {unsupported}')
                     continue
 
+                _pv = point['value']
+                if point['type'] == 'coil':
+                    # bool("0")/bool("false") 都是 True —— 配置里的字符串关闭
+                    # 会被下发成开启。按字面量解析。
+                    if isinstance(_pv, str):
+                        _pv = _pv.strip().lower() not in (
+                            '0', 'false', 'no', 'off', 'disabled', '')
+                    else:
+                        _pv = bool(_pv)
+                else:
+                    _pv = int(_pv)
                 write_res = self.write_with_verification(
                     device_id,
                     int(point['address']),
-                    bool(point['value']) if point['type'] == 'coil' else int(point['value']),
+                    _pv,
                     operator,
                     kind='coil' if point['type'] == 'coil' else 'register',
                     # 控制点位来自 devices 配置白名单，不套 write_limits
@@ -1491,6 +1522,20 @@ class DeviceControlSafety:
                          request.request_id, window)
             return
 
+        # 先把新定时器登记进 _bypass_timers，再激活旁路：旧定时器若在
+        # “激活→落库”这段窗口到期，会看到自己的 request_id 已被替换而放行。
+        timer = threading.Timer(window, self._auto_restore_bypass,
+                                args=[request.interlock_id, request.request_id])
+        timer.daemon = True
+        with self._bypass_lock:
+            stale = self._bypass_timers.pop(request.interlock_id, None)
+            self._bypass_timers[request.interlock_id] = (request.request_id, timer)
+        if stale is not None:
+            try:
+                stale[1].cancel()
+            except Exception:       # noqa: BLE001
+                logger.debug('取消旧旁路定时器失败: %s', request.interlock_id)
+
         with self._lock:
             self._interlock_bypass.add(request.interlock_id)
         with self._bypass_lock:
@@ -1498,15 +1543,6 @@ class DeviceControlSafety:
 
         # round 315：落库 —— 维护窗口内重启不能让旁路失效
         self._persist_bypasses()
-
-        # round 369：先取消同一条联锁上的旧定时器，再挂新的。
-        # 否则上一轮遗留的孤儿定时器到期后会**无条件**撤销这条新旁路。
-        self._cancel_bypass_timer(request.interlock_id)
-        timer = threading.Timer(window, self._auto_restore_bypass,
-                                args=[request.interlock_id, request.request_id])
-        timer.daemon = True
-        with self._bypass_lock:
-            self._bypass_timers[request.interlock_id] = (request.request_id, timer)
         timer.start()
         logger.info(f"旁路已激活: {request.interlock_id}, {window / 60:.0f}分钟后自动恢复")
 
@@ -1516,6 +1552,8 @@ class DeviceControlSafety:
         round 369：只恢复**自己那一次**旁路。同一联锁被重新申请旁路后，
         上一轮的定时器到期时必须放行（否则会把新旁路误撤销）。
         """
+        # 判定与撤销必须同一次持锁完成：中间放锁会让新旁路装好定时器后
+        # 被这里无条件 discard。
         with self._bypass_lock:
             current = self._bypass_timers.get(interlock_id)
             if current is not None and current[0] != request_id:
@@ -1524,10 +1562,8 @@ class DeviceControlSafety:
                     interlock_id, request_id, current[0])
                 return
             self._bypass_timers.pop(interlock_id, None)
-
-        with self._lock:
-            self._interlock_bypass.discard(interlock_id)
-        with self._bypass_lock:
+            with self._lock:
+                self._interlock_bypass.discard(interlock_id)
             self._active_bypasses.discard(interlock_id)
             req = self._bypass_requests.get(request_id)
             if req:
@@ -2703,12 +2739,22 @@ class DeviceControlSafety:
         logger.info("紧急停机已解除 by %s（恢复 %d 台，失败 %d 台）",
                     operator, len(restarted_devices), len(failed_devices))
 
+        # success 不能只看设备重启：声光塔复位失败时现场红灯/蜂鸣器可能
+        # 仍在动作，仍回“系统恢复正常”会让操作员把真实报警当误亮。
+        reset_problems: list[str] = []
+        if failed_devices:
+            reset_problems.append(
+                f'{len(failed_devices)} 台设备未能恢复启动，'
+                f'请现场确认：{"、".join(failed_devices)}')
+        if tower_reset is False:
+            reset_problems.append(
+                '声光报警塔复位失败（红灯/蜂鸣器可能仍在动作），请现场确认')
+        reset_ok = not reset_problems
+
         return {
-            # 有设备没起来就不能叫"系统恢复正常"
-            'success': not failed_devices,
-            'message': ('紧急停机已解除，系统恢复正常' if not failed_devices
-                        else f'紧急停机已解除，但 {len(failed_devices)} 台设备未能恢复启动，'
-                             f'请现场确认：{"、".join(failed_devices)}'),
+            'success': reset_ok,
+            'message': ('紧急停机已解除，系统恢复正常' if reset_ok
+                        else '紧急停机已解除，但 ' + '；'.join(reset_problems)),
             'operator': operator,
             'restarted_devices': restarted_devices,
             'failed_devices': failed_devices,

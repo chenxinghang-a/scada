@@ -408,8 +408,7 @@ class DynamicRateLimiter:
             new_limits = [
                 Limit(
                     limit_provider=new_limit,
-                    key_function=key_func,
-                    finalized=False,
+                    key_func=key_func,
                 ).bind(self._flask_limiter)
             ]
             self._flask_limiter.limit_manager.set_default_limits(new_limits)
