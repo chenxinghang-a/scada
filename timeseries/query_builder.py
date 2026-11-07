@@ -274,8 +274,9 @@ class QueryBuilder:
 
         # LIMIT子句
         limit_clause = ""
-        if self._limit is not None:
-            limit_clause = f"LIMIT {self._limit}"
+        if self._limit is not None or self._offset is not None:
+            # OFFSET 不能脱离 LIMIT：单独调用 offset() 原来会被静默丢弃。
+            limit_clause = f"LIMIT {self._limit if self._limit is not None else 10000}"
             if self._offset is not None:
                 limit_clause += f" OFFSET {self._offset}"
 
@@ -309,7 +310,9 @@ class QueryBuilder:
 
         # BUG-087：与 select/select_agg 同口径校验列名（这里原来直接拼串）。
         cols = ", ".join(_require_identifier(c, '列名') for c in columns)
-        return f"SELECT LAST({cols}) FROM {self._table}"
+        where = (f" WHERE {' AND '.join(self._where_clauses)}"
+                 if self._where_clauses else "")
+        return f"SELECT LAST({cols}) FROM {self._table}{where}"
 
     def build_first(self, *columns: str) -> str:
         """构建查询最早记录的SQL"""
@@ -317,7 +320,9 @@ class QueryBuilder:
             columns = ("ts", "value", "quality")
 
         cols = ", ".join(_require_identifier(c, '列名') for c in columns)
-        return f"SELECT FIRST({cols}) FROM {self._table}"
+        where = (f" WHERE {' AND '.join(self._where_clauses)}"
+                 if self._where_clauses else "")
+        return f"SELECT FIRST({cols}) FROM {self._table}{where}"
 
 
 class TelemetryQueryBuilder(QueryBuilder):

@@ -90,7 +90,7 @@ def acknowledge_alarm(alarm_id):
     # 只会以为界面卡了。这里与 `/alarm-output/reset` 对齐：如实分开报两件事。
     output_ok = manager.get_last_ack_output_ok() if success else True
     if not success:
-        return jsonify({'success': False, 'message': '确认失败'})
+        return api_error('确认失败（报警可能未落库或对应多条设备/点位）', 404)
     if not output_ok:
         return jsonify({
             'success': True,
@@ -148,12 +148,16 @@ def shelve_alarm(alarm_id):
     ok = manager.shelve_alarm(alarm_id, device_id, register_name, reason,
                               request.current_user['username'],
                               duration_minutes=int(duration))
+    if not ok:
+        # 失败先记失败审计，不能先写“旁路成功”再报错。
+        get_auth_manager().log_operation(
+            request.current_user['username'], 'alarm_shelve_failed',
+            f'旁路失败 {alarm_id} ({device_id}/{register_name})')
+        return api_error('旁路失败', 400)
+
     get_auth_manager().log_operation(
         request.current_user['username'], 'alarm_shelve',
         f'旁路报警 {alarm_id} ({device_id}/{register_name}) {int(duration)}分钟: {reason}')
-
-    if not ok:
-        return api_error('旁路失败', 400)
     return jsonify({
         'success': True,
         'message': f'报警 {alarm_id} 已旁路 {int(duration)} 分钟'
@@ -174,12 +178,15 @@ def unshelve_alarm(alarm_id):
         return api_error('缺少 device_id / register_name', 400)
 
     ok = current_app.alarm_manager.unshelve_alarm(alarm_id, device_id, register_name)
+    if not ok:
+        get_auth_manager().log_operation(
+            request.current_user['username'], 'alarm_unshelve_failed',
+            f'解除旁路失败 {alarm_id} ({device_id}/{register_name})')
+        return api_error(f'报警 {alarm_id} 当前不在旁路中', 404)
+
     get_auth_manager().log_operation(
         request.current_user['username'], 'alarm_unshelve',
         f'解除报警旁路 {alarm_id} ({device_id}/{register_name})')
-
-    if not ok:
-        return api_error(f'报警 {alarm_id} 当前不在旁路中', 404)
     return jsonify({'success': True, 'message': f'报警 {alarm_id} 旁路已解除'})
 
 

@@ -725,9 +725,11 @@ class AlarmOutput:
         不是**事实**），没有任何地方能看出 DO 写其实一直在失败。
         """
         with self._lock:
-            circuit_open = self._circuit_open_until is not None
+            # 冷却到期后必须走 _circuit_is_open() 清理状态；只看 until 非空
+            # 会让看板永久显示“熔断中/剩 0 秒”，下一次写 DO 才自愈。
+            circuit_open = self._circuit_is_open()
             remaining = 0.0
-            if circuit_open:
+            if circuit_open and self._circuit_open_until is not None:
                 remaining = max(0.0, self._circuit_open_until - time.monotonic())
             return {
                 'enabled': self.enabled,

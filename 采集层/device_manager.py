@@ -188,6 +188,8 @@ class DeviceManager:
         self.devices = {}  # device_id -> device_config
         self.clients = {}  # device_id -> protocol client (legacy, kept for backward compat)
         self._lock = threading.Lock()
+        #: 模式热切换互斥（不能复用 _lock：disconnect_all 会反复取它）
+        self._switch_lock = threading.Lock()
 
         # 设备状态缓存（TTL 5秒，避免频繁查询）
         self._status_cache: dict[str, dict] = {}
@@ -476,6 +478,12 @@ class DeviceManager:
         t.join(timeout=timeout)
         if t.is_alive():
             logger.warning(f"设备 {device_id} 连接超时 ({timeout}s)")
+            # 线程无法取消：把它可能刚建好的连接关掉，避免反复超时累积
+            # 无人管理的连接/线程。
+            try:
+                client.disconnect()
+            except Exception:       # noqa: BLE001
+                pass
             return False
         return result[0]
 
@@ -511,10 +519,17 @@ class DeviceManager:
                 and old_thread is not threading.current_thread()):
             old_thread.join(timeout=2)
         self._reconnect_thread = None
-        for device_id in list(self.clients.keys()):
-            self.disconnect_device(device_id)
+        # 锁内一次性摘空：锁外快照期间 get_client() 可能刚放进新客户端，
+        # 既不会被断开、又会被 clear() 丢掉唯一引用 → 泄漏的活连接。
+        with self._lock:
+            drained = list(self.clients.items())
+            self.clients.clear()
+        for device_id, client in drained:
+            try:
+                client.disconnect()
+            except Exception as e:      # noqa: BLE001
+                logger.debug("断开设备 %s 失败: %s", device_id, e)
         self._connection_pool.shutdown()
-        self.clients.clear()
 
     def start_reconnect_loop(self, interval: int = 30):
         """启动断线自动重连后台线程
@@ -561,8 +576,20 @@ class DeviceManager:
         logger.info(f"设备自动重连线程已启动（间隔{interval}秒）")
 
     def switch_simulation_mode(self, new_mode: bool) -> dict[str, Any]:
+        """模式热切换的并发保护壳（实现见 _switch_simulation_mode_impl）。"""
+        if not self._switch_lock.acquire(timeout=1):
+            return {'success': False,
+                    'message': '模式切换进行中，请稍后重试',
+                    'simulation_mode': self.simulation_mode,
+                    'reconnected': 0}
+        try:
+            return self._switch_simulation_mode_impl(new_mode)
+        finally:
+            self._switch_lock.release()
+
+    def _switch_simulation_mode_impl(self, new_mode: bool) -> dict[str, Any]:
         """
-        运行时切换模拟/真实模式（热切换，无需重启）
+        运行时切换模拟/真实模式（热切换，无需重启）—— 调用方须持 _switch_lock
 
         Args:
             new_mode: True=模拟模式, False=真实模式
@@ -913,7 +940,11 @@ class DeviceManager:
             config_file = paths.resolve(self.config_path)
             config_file.parent.mkdir(parents=True, exist_ok=True)
             # 原子写入：先写临时文件再 rename，防止崩溃时配置损坏
-            tmp_file = config_file.with_suffix('.tmp')
+            # 固定 .tmp 名会被并发写互相截断（锁只保护快照，dump 在锁外）；
+            # 加 pid+tid 让每次写入有独立临时文件。
+            import os
+            tmp_file = config_file.with_name(
+                f'{config_file.name}.{os.getpid()}.{threading.get_ident()}.tmp')
             with open(tmp_file, 'w', encoding='utf-8') as f:
                 yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
             tmp_file.replace(config_file)

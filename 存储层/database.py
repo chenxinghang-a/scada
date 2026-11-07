@@ -255,6 +255,9 @@ class Database:
             conn.execute('PRAGMA synchronous=NORMAL')
             conn.execute('PRAGMA cache_size=-32000')
             conn.execute('PRAGMA temp_store=MEMORY')
+            # mmap_size/cache_size 是**连接级**参数，必须设在真正工作的连接上；
+            # 只设在 _init_pragmas 的临时连接上等于没配。
+            conn.execute('PRAGMA mmap_size=268435456')
             self._local.connection = conn
 
         # 死锁检测：记录操作开始时间
@@ -2082,7 +2085,9 @@ class Database:
                 logger.warning("恢复前已保存当前库副本: %s", safety)
 
             # 3) 写到临时文件再原子替换 —— 替换失败时当前库仍然完好
-            staging = target.with_name(target.name + '.restoring')
+            # 固定 .restoring 名称会让并发恢复互相覆盖暂存文件，替换出混合库。
+            staging = target.with_name(
+                f'{target.name}.restoring-{os.getpid()}-{time.time_ns()}')
             shutil.copyfile(src, staging)
             # Windows 上偶发句柄未释放（杀毒/索引服务短暂持有），重试几次
             last_exc: Exception | None = None

@@ -2380,6 +2380,23 @@ class AlarmManager:
         Returns:
             bool: 确认是否成功
         """
+        # round 382：只给 alarm_id 时不能默默按全库更新（会误伤其它设备），
+        # 先在内存状态里按 alarm_id 解析；唯一命中才补全 device/register。
+        if not device_id or not register_name:
+            with self._state_lock:
+                matches = [
+                    key for key in self.alarm_states
+                    if key[0] == alarm_id
+                    and (not device_id or key[1] == device_id)
+                    and (not register_name or key[2] == register_name)
+                ]
+            if len(matches) > 1:
+                logger.warning("报警 %s 对应多个设备/点位，确认时必须显式指定: %s",
+                               alarm_id, matches[:5])
+                return False
+            if len(matches) == 1:
+                device_id, register_name = matches[0][1], matches[0][2]
+
         state_key = (alarm_id, device_id, register_name)
 
         # round 299：**先写库、成功再置内存**。
