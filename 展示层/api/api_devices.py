@@ -572,9 +572,9 @@ def _sanitize_text_field(value, field_label: str, *, max_len: int = 200) -> str:
 @_require_engineer
 def add_device():
     """添加新设备（支持所有协议）"""
-    data = request.get_json()
-    if not data:
-        return api_error('请提供设备配置')
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return api_error('请提供设备配置（JSON 对象）')
 
     # 基础必填字段
     for field in ('id', 'name'):
@@ -583,6 +583,8 @@ def add_device():
 
     # 设备ID格式验证（防止SQL注入和特殊字符）
     device_id = data.get('id', '')
+    if not isinstance(device_id, str):
+        return api_error('设备ID必须是字符串')
     if not device_id or not device_id.replace('_', '').replace('-', '').isalnum():
         return api_error('设备ID只能包含字母、数字、下划线和连字符')
 
@@ -671,9 +673,9 @@ _RECONNECT_TRIGGER_KEYS = (
 @_require_engineer
 def update_device(device_id):
     """更新设备配置（支持所有协议）"""
-    data = request.get_json()
-    if not data:
-        return api_error('请提供设备配置')
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return api_error('请提供设备配置（JSON 对象）')
 
     device_manager = current_app.device_manager
     if device_id not in device_manager.devices:
@@ -692,12 +694,16 @@ def update_device(device_id):
                     'protocol', 'device_class', 'electrical', 'autonomy'):
             if key in data:
                 if key == 'collection_interval':
-                    device_config[key] = safe_int(data[key], key)
+                    _ci = safe_int(data[key], key)
+                    if not 1 <= _ci <= 3600:
+                        raise ValueError('collection_interval 必须在 1~3600 秒之间')
+                    device_config[key] = _ci
                 elif key == 'enabled':
-                    # 布尔字段：字符串 "false"/"0" 也应视为 False
+                    # 布尔字段：字符串 "false"/"0"/"off" 都应视为 False
                     v = data[key]
                     if isinstance(v, str):
-                        v = v.lower() not in ('false', '0', 'no', '')
+                        v = v.strip().lower() not in (
+                            'false', '0', 'no', 'off', 'disabled', 'n', '')
                     device_config[key] = v
                 elif key in ('name', 'description'):
                     # round 331：与 POST 走**同一个**清洗出口。
@@ -1707,8 +1713,11 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         'electrical': data.get('electrical') or {},
         'autonomy': data.get('autonomy', 'automatic'),
         'enabled': data.get('enabled', True),
-        'collection_interval': safe_int(data.get('collection_interval', 5), 'collection_interval')
+        'collection_interval': safe_int(
+            data.get('collection_interval', 5), 'collection_interval')
     }
+    if not 1 <= config['collection_interval'] <= 3600:
+        raise ValueError('collection_interval 必须在 1~3600 秒之间')
 
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         config['host'] = data['host']

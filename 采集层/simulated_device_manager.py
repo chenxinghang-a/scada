@@ -17,7 +17,8 @@ from .interfaces import IDeviceManager, IDeviceClient
 from .base_client import encode_float32_registers, encode_int32_registers
 from core.safe_numeric import try_finite_float, try_int
 from core.engineering_units import to_raw
-from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
+from .simulated_client import is_device_stopped
+from . import simulated_client as _simulated_client
 from .simulated_client import set_estop_state, set_device_stopped
 from .enhanced_simulated_client import (
     EnhancedSimulatedModbusClient,
@@ -116,6 +117,7 @@ class SimulatedDeviceManager(IDeviceManager):
             return False
         except OSError as exc:
             logger.error("配置文件读取失败: %s — %s", self.config_path, exc)
+            self._load_failed_reason = 'read'
             return False
 
         if not isinstance(config, dict):
@@ -433,7 +435,8 @@ class SimulatedDeviceManager(IDeviceManager):
             except Exception as e:      # noqa: BLE001
                 logger.warning("[模拟] 调节前连接设备 %s 失败: %s", device_id, e)
 
-        address = try_int(target.get('address', 0))
+        # 缺 address 时不能退化成合法的 0 号寄存器。
+        address = try_int(target.get('address'))
         if address is None:
             return {'success': False, 'message': f'寄存器 {register_name} 地址非法'}
 
@@ -542,7 +545,7 @@ class SimulatedDeviceManager(IDeviceManager):
             'port': device_config.get('port'),
             'enabled': device_config.get('enabled', True),
             'connected': False,
-            'stopped': is_device_stopped(device_id) or _ESTOP_ACTIVE,
+            'stopped': is_device_stopped(device_id) or _simulated_client._ESTOP_ACTIVE,
             'device_category': IDeviceManager.get_device_category(device_config),
             # round 380：设备语义/铭牌/自主等级（界面编辑需要）
             'device_class': device_config.get('device_class', 'other'),
@@ -597,8 +600,8 @@ class SimulatedDeviceManager(IDeviceManager):
             'name': device_config.get('name', device_id),
             'zone': device_config.get('zone', ''),
             'connected': getattr(client, 'connected', False) if client else False,
-            'stopped': is_device_stopped(device_id) or _ESTOP_ACTIVE,
-            'status': 'fault' if (is_device_stopped(device_id) or _ESTOP_ACTIVE) else ('online' if (client and getattr(client, 'connected', False)) else 'offline'),
+            'stopped': is_device_stopped(device_id) or _simulated_client._ESTOP_ACTIVE,
+            'status': 'fault' if (is_device_stopped(device_id) or _simulated_client._ESTOP_ACTIVE) else ('online' if (client and getattr(client, 'connected', False)) else 'offline'),
             'protocol': device_config.get('protocol', 'modbus_tcp'),
             'host': device_config.get('host', device_config.get('endpoint', '')),
             'device_category': IDeviceManager.get_device_category(device_config),
@@ -661,6 +664,10 @@ class SimulatedDeviceManager(IDeviceManager):
             with self._lock:
                 removed = self.devices.pop(device_id, None)
                 self.clients.pop(device_id, None)
+            if removed is None:
+                # 保持幂等语义：删不存在的设备不算失败（既有契约）。
+                logger.warning("[模拟] 移除设备 %s：设备不存在", device_id)
+                return True
 
             # round 308：落盘失败要把设备放回去（与 add_device 同理）
             if not self._save_config():

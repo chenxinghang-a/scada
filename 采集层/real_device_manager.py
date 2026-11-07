@@ -602,7 +602,7 @@ class RealDeviceManager(IDeviceManager):
         registers = config.get('registers', [])
         target_reg = None
         for reg in registers:
-            if reg.get('name') == register_name:
+            if isinstance(reg, dict) and reg.get('name') == register_name:
                 target_reg = reg
                 break
 
@@ -617,7 +617,10 @@ class RealDeviceManager(IDeviceManager):
         if not client:
             return {'success': False, 'message': f'设备 {device_id} 未连接'}
 
-        address = target_reg['address']
+        address = try_int(target_reg.get('address'))
+        if address is None:
+            return {'success': False,
+                    'message': f'寄存器 {register_name} 地址非法'}
         data_type = target_reg.get('data_type', 'uint16')
         scale = target_reg.get('scale', 1.0)
         offset = target_reg.get('offset', 0)
@@ -929,6 +932,8 @@ class RealDeviceManager(IDeviceManager):
                 return False
 
             logger.info(f"[真实] 移除设备: {device_id}")
+            # 同名设备重建时不得继承旧的“已停止”状态。
+            self._stopped_devices.discard(device_id)
             notify_device_removed(device_id)      # round 312
             return True
         except Exception as e:

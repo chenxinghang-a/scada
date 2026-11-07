@@ -1142,10 +1142,11 @@ class DeviceBehaviorSimulator:
             
         elif self.state == DeviceState.MAINTENANCE:
             # 维护时恢复健康
-            self.health.mechanical_health = min(100, self.health.mechanical_health + 0.1)
-            self.health.electrical_health = min(100, self.health.electrical_health + 0.1)
-            self.health.thermal_health = min(100, self.health.thermal_health + 0.1)
-            self.health.vibration_health = min(100, self.health.vibration_health + 0.1)
+            _rec = 0.1 * dt
+            self.health.mechanical_health = min(100, self.health.mechanical_health + _rec)
+            self.health.electrical_health = min(100, self.health.electrical_health + _rec)
+            self.health.thermal_health = min(100, self.health.thermal_health + _rec)
+            self.health.vibration_health = min(100, self.health.vibration_health + _rec)
     
     def _check_fault_triggers(self):
         """检查是否触发新故障（允许并发，多种故障独立检查）"""
@@ -1511,12 +1512,12 @@ class DeviceBehaviorSimulator:
                 self._change_state(DeviceState.MAINTENANCE)
             
             # 运行很长时间后小概率转为空闲（模拟间歇性停机）
-            elif state_duration > 1800 and random.random() < 0.002:  # 30分钟后0.2%概率
+            elif state_duration > 1800 and random.random() < min(1.0, 0.002 * dt):
                 self._change_state(DeviceState.IDLE)
         
         elif self.state == DeviceState.IDLE:
             # 空闲一段时间后自动恢复运行（模拟自动调度）
-            if state_duration > 120 and random.random() < 0.02:  # 2分钟后2%概率
+            if state_duration > 120 and random.random() < min(1.0, 0.02 * dt):
                 self._change_state(DeviceState.RUNNING)
         
         elif self.state == DeviceState.STOPPED:
@@ -1527,7 +1528,7 @@ class DeviceBehaviorSimulator:
         elif self.state == DeviceState.FAULT:
             # 故障一段时间后尝试恢复或进入维护
             if state_duration > 300:  # 5分钟后
-                if random.random() < 0.4:  # 40%概率自动恢复
+                if random.random() < min(1.0, 0.4 * dt):  # 按步长缩放
                     self.active_faults.clear()
                     self.fault_timers.clear()
                     self.active_fault = FaultType.NONE
@@ -1539,7 +1540,7 @@ class DeviceBehaviorSimulator:
         elif self.state == DeviceState.MAINTENANCE:
             # 维护完成后恢复
             if state_duration > 600:  # 10分钟维护时间（原30分钟）
-                self.health.overall_score = 90  # 维护后恢复到90%
+                self.health.overall_score = 95  # 与四个 95 分量（权重和=1）自洽
                 self.health.mechanical_health = 95
                 self.health.electrical_health = 95
                 self.health.thermal_health = 95
@@ -1692,9 +1693,10 @@ class DeviceBehaviorSimulator:
                 'cushion_position': 0.0,
                 'barrel_temperature': round(ambient_temp, 2),
                 # 包装线（delta_dvp_01）
-                'label_count': round(self._shot_count, 0),
-                'palletizing_count': round(self._shot_count * 0.9, 0),
-                'reject_count': round(self._shot_count * 0.01, 0),
+                # 与运行态系数/类型保持一致：否则启停瞬间计数倒退或跳升。
+                'label_count': int(self._shot_count * 1.6),
+                'palletizing_count': int(self._shot_count * 0.4),
+                'reject_count': int(self._shot_count * 0.01),
                 'sealing_temperature': round(ambient_temp, 2),
                 # 继电器（relay_output_01）
                 'relay_1': 0, 'relay_2': 0, 'relay_3': 0,

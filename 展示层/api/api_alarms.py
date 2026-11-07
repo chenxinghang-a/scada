@@ -14,6 +14,16 @@ from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
 
+
+def _as_bool(v, default: bool = False) -> bool:
+    """配置/请求里的布尔值：`"false"`/`"off"` 不能被 `bool("false")` 当成真。"""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() not in (
+            'false', '0', 'no', 'off', 'disabled', '')
+    return default if v is None else bool(v)
+
 alarms_bp = Blueprint('api_alarms', __name__, url_prefix='/api')
 
 _require_auth = jwt_required
@@ -663,7 +673,7 @@ def update_alarm_output_config():
     alarm_output = config['alarm_output']
     
     if 'enabled' in data:
-        alarm_output['enabled'] = bool(data['enabled'])
+        alarm_output['enabled'] = _as_bool(data['enabled'])
     
     if 'signal_tower' in data:
         if 'signal_tower' not in alarm_output:
@@ -705,7 +715,7 @@ def update_alarm_output_config():
         # 判的是 `self.enabled`（构造期从 config 读一次），只改 YAML 不改它 ——
         # 界面上"关闭声光"保存成功，现场照样响（或反之）。
         if 'enabled' in data:
-            ao.enabled = bool(data['enabled'])
+            ao.enabled = _as_bool(data['enabled'])
             ao.config['enabled'] = ao.enabled
         tower_cfg = alarm_output.get('signal_tower', {})
         if 'host' in tower_cfg:
@@ -808,7 +818,7 @@ def update_broadcast_config():
     if alarm_manager.broadcast_system:
         bs = alarm_manager.broadcast_system
         if 'enabled' in data:
-            bs.enabled = bool(data['enabled'])
+            bs.enabled = _as_bool(data['enabled'])
         if 'areas' in data:
             bs.areas = data['areas']
         if 'default_area' in data:

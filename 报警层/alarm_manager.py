@@ -229,7 +229,9 @@ class AlarmFloodDetector:
         with self._lock:
             return {
                 'flood_active': self._flood_active,
-                'recent_count': len(self._timestamps),
+                'recent_count': sum(
+                    1 for t in self._timestamps
+                    if t > self._clock() - self.window),
                 'threshold': self.threshold,
                 'suppressed_count': self._suppressed_count,
                 'window': self.window,
@@ -432,6 +434,8 @@ class AlarmManager:
 
         # 告警升级管理器（多级升级，延迟到 load_config 后初始化）
         self._escalation_manager = None
+        #: 是否由配置装配过（防止无 escalation 段的重载清掉外部注入实例）
+        self._escalation_configured = False
 
         # 规则索引：(device_id, register_name) -> [(rule_id, rule_config), ...]
         self._rules_index: dict[tuple, list[tuple[str, dict]]] = {}
@@ -711,7 +715,9 @@ class AlarmManager:
                     config_file = Path(self.config_path)
                     if config_file.exists():
                         current_mtime = config_file.stat().st_mtime
-                        if current_mtime > self._config_mtime:
+                        # 用 != 而不是 >：git checkout/备份还原/同秒写入会把
+                        # mtime 变旧或不变，用 > 永远不会重载。
+                        if current_mtime != self._config_mtime:
                             logger.info(f"检测到报警配置文件变更，自动重载...")
                             self.load_config()
                             self._config_mtime = current_mtime
@@ -732,6 +738,12 @@ class AlarmManager:
         thread = self._config_watcher_thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
+            if thread.is_alive():
+                # 线程卡在 load_config（数据库慢）时不能丢引用，否则
+                # is_alive() 防重失效，会再起第二条 watcher。
+                logger.warning("配置热重载线程 %.1fs 未退出，保留引用避免重复启动",
+                               timeout)
+                return
         self._config_watcher_thread = None
         logger.info("报警配置文件热重载监控已停止")
 
@@ -1441,7 +1453,9 @@ class AlarmManager:
             # 加载去重配置
             dedup_cfg = config.get('dedup', {})
             if dedup_cfg:
-                self.dedup_config = AlarmDedupConfig(dedup_cfg)
+                # 走 update() 的 int/下限校验；构造函数会绕过 max(5)/max(30) 限幅。
+                self.dedup_config = AlarmDedupConfig()
+                self.dedup_config.update(dedup_cfg)
                 logger.info(f"加载去重配置: 冷却{self.dedup_config.emit_cooldown_seconds}s, "
                             f"确认抑制{self.dedup_config.acknowledge_suppress_seconds}s")
 
@@ -1453,6 +1467,7 @@ class AlarmManager:
             # 加载升级配置
             escalation_cfg = config.get('escalation', {})
             if escalation_cfg:
+                self._escalation_configured = True
                 self._escalation_timeout = escalation_cfg.get('timeout_seconds', 600)
                 logger.info(f"加载报警升级配置: 超时{self._escalation_timeout}s")
 
@@ -1499,6 +1514,13 @@ class AlarmManager:
                     # 生效的多级策略凭空消失），只留 warning。首次装配失败时
                     # 它本来就是 None，上层 check_escalation 会走单级兜底。
                     logger.warning(f"告警升级管理器装配失败（保留既有策略）: {e}")
+            elif self._escalation_configured:
+                # 段被删除 = 策略下线；仅当管理器确实由配置装配过才清，
+                # 避免清掉测试/外部注入的实例。
+                self._escalation_manager = None
+                self._escalation_configured = False
+                self._escalation_timeout = 600
+                logger.info("escalation 段已移除，升级策略下线")
 
         except Exception as e:
             logger.error(f"加载报警配置异常: {e}")
@@ -2277,18 +2299,17 @@ class AlarmManager:
         # alarms.yaml —— 把运行时事件混进去，等于让它们有机会变成持久化的
         # 僵尸规则（见 __init__ 里的详细说明）。
         with self._state_lock:
-            if alarm_id not in self._external_alarms:
-                self._external_alarms[alarm_id] = {
-                    'id': alarm_id,
-                    'name': message,
-                    'level': level,
-                    'device_id': device_id,
-                    'register_name': register_name,
-                    'condition': 'external',
-                    'threshold': 0,
-                    'enabled': True,
-                    'external': True,
-                }
+            # 同一外部事件再次触发时，名称/级别/点位要更新；
+            # 只写首次会让声光/广播/WS 一直用旧文案。
+            desc = self._external_alarms.get(alarm_id) or {
+                'condition': 'external', 'threshold': 0,
+                'enabled': True, 'external': True,
+            }
+            desc.update({
+                'id': alarm_id, 'name': message, 'level': level,
+                'device_id': device_id, 'register_name': register_name,
+            })
+            self._external_alarms[alarm_id] = desc
 
             state = self.alarm_states.get(state_key)
             if state is None:

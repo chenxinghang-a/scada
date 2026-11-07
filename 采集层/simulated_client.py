@@ -490,7 +490,8 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0,
 
     elif shape == 'status':
         # Per-register state transitions (each register has independent state)
-        _reg_key = id(rule)
+        # 按 设备:点位 隔离状态；id(rule) 会让共用全局规则的设备串扰。
+        _reg_key = noise_key or id(rule)
         if _reg_key not in _status_states:
             _status_states[_reg_key] = {'state': 1, 'timer': time.time()}
 
@@ -552,7 +553,7 @@ def _generate_data_common(
     device_stopped = is_device_stopped(device_id)
 
     for i, cfg in enumerate(configs):
-        name = cfg.get('name', cfg.get('node_id', cfg.get('topic', 'unknown')))
+        name = cfg.get('name') or cfg.get('node_id') or cfg.get('topic') or 'unknown'
         unit = cfg.get('unit', '')
 
         if device_stopped:
@@ -987,6 +988,13 @@ class SimulatedMQTTClient(PushClientInterface):
         self.stats['connected_since'] = datetime.now().isoformat()
         logger.info(f"[模拟] MQTT设备 {self.device_name} 连接成功")
 
+        try:
+            self._generate_data()
+        except Exception as e:      # noqa: BLE001
+            # 首次生成失败不能把 connect() 带崩：否则 connected=True 但
+            # 推送线程永远不会启动。
+            logger.error("[模拟] MQTT 首次生成失败（推送线程照常启动）: %s", e)
+
         for topic_cfg in self.topics_config:
             topic = topic_cfg.get('topic', '')
             if topic:
@@ -1094,7 +1102,10 @@ class SimulatedRESTClient(PushClientInterface):
         self.connected = True
         self.stats['connected_since'] = datetime.now().isoformat()
         logger.info(f"[模拟] REST设备 {self.device_name} 连接成功")
-        self._generate_data()
+        try:
+            self._generate_data()
+        except Exception as e:      # noqa: BLE001
+            logger.error("[模拟] REST 首次生成失败（后续读取会重试）: %s", e)
         return True
 
     def disconnect(self):

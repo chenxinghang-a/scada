@@ -864,16 +864,18 @@ class DataCollector:
         for device_id, device_config in devices.items():
             if device_config.get('enabled', True):
                 protocol = device_config.get('protocol', 'modbus_tcp')
-                proto_count[protocol] = proto_count.get(protocol, 0) + 1
 
                 if protocol in ('opcua', 'mqtt'):
-                    self._setup_push_device(device_id, device_config)
+                    started = self._setup_push_device(device_id, device_config)
                 else:
                     # round 308：采集任务启动失败不能静默 —— 设备"在配置里"但
                     # 永远不会产生数据，而 `protocols_active` 照样把它计入。
-                    if not self._start_device_collection(device_id, device_config):
-                        logger.error("设备 %s 的采集任务启动失败"
-                                     "（该设备不会产生数据，请检查协议与线程状态）", device_id)
+                    started = self._start_device_collection(device_id, device_config)
+                if started:
+                    proto_count[protocol] = proto_count.get(protocol, 0) + 1
+                else:
+                    logger.error("设备 %s 的采集任务启动失败"
+                                 "（该设备不会产生数据，请检查协议与线程状态）", device_id)
 
         with self._stats_lock:
             self.stats['protocols_active'] = proto_count
@@ -1392,6 +1394,12 @@ class DataCollector:
                     device_id, elapsed, interval)
             with self._tasks_lock:
                 if self.running and device_id not in self._cancelled_devices:
+                    # 退避/熔断路径也要回写实际间隔，否则故障设备的
+                    # get_stats()['device_intervals'] 永远显示旧值。
+                    _intervals = getattr(self, '_device_intervals', None)
+                    if _intervals is None:
+                        _intervals = self._device_intervals = {}
+                    _intervals[device_id] = interval
                     timer = threading.Timer(delay, collect_task)
                     timer.daemon = True
                     timer.start()
@@ -1703,6 +1711,8 @@ class DataCollector:
                 # 是死代码 —— 熔断器永不打开、已死的设备被全速轮询。
                 # Modbus采集内部自行计数成功/失败，此处不重复计数。
                 ok = self._collect_modbus(client, device_id, device_config, timestamp)
+                if not ok:
+                    _metric_error('modbus_read_failed')
                 with self._stats_lock:
                     self.stats['last_collection_time'] = timestamp
                 return ok
@@ -1912,7 +1922,9 @@ class DataCollector:
                 )
                 return None
             return round(numeric, 4)
-        except Exception:
+        except Exception as e:      # noqa: BLE001
+            logger.warning("寄存器解码失败 reg=%s: %s",
+                           register.get('name', '?'), e)
             return None
 
     def _collect_from_cache(self, client, device_id: str, timestamp) -> int:
@@ -2152,7 +2164,9 @@ class DataCollector:
 
                     # 更新跟踪状态（与其他访问 _last_values/_last_times 的路径共用
                     # 同一把 `_tracking_lock`；这两个键必须一起更新，不能只写一半）
-                    if value is not None and not (isinstance(value, float) and math.isnan(value)):
+                    if (value is not None
+                            and isinstance(value, (int, float))
+                            and math.isfinite(value)):
                         with self._tracking_lock:
                             # round 353：**`_last_times` 只在值变化时更新**。
                             #

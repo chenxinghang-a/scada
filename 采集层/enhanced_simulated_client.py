@@ -30,7 +30,8 @@ from .base_client import (
 from core.safe_numeric import try_finite_float
 from core.engineering_units import to_raw
 from .device_behavior_simulator import DeviceBehaviorSimulator, DeviceState, FaultType
-from .simulated_client import is_device_stopped, _ESTOP_ACTIVE
+from .simulated_client import is_device_stopped
+from . import simulated_client as _simulated_client
 from .modbus_client import ByteOrder
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ def _generate_enhanced_data(
         return False
 
     for cfg in configs:
-        name = cfg.get('name', cfg.get('node_id', cfg.get('topic', 'unknown')))
+        name = cfg.get('name') or cfg.get('node_id') or cfg.get('topic') or 'unknown'
         unit = cfg.get('unit', '')
 
         # 50 + (30*t)%100 会随墙钟每秒跳 30，且可能到 150；兜底用常量。
@@ -239,7 +240,8 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
 
         # 停机/E-STOP：机械归零，传感器保持环境值
         device_stopped = is_device_stopped(self.device_id)
-        estop_active = _ESTOP_ACTIVE
+        # 读模块属性而不是导入时冻结的值；set_estop_state 是重新绑定全局。
+        estop_active = _simulated_client._ESTOP_ACTIVE
         if device_stopped or estop_active:
             # round 369：**按点位宽度步进**。
             # 原来 `for i in range(count)` 遇到 float32 会追加 2 个字，

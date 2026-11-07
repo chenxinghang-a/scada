@@ -298,8 +298,9 @@ class MQTTClient:
     def disconnect(self):
         """断开MQTT连接"""
         try:
-            self.client.loop_stop()
+            # 先发 DISCONNECT 再停网络线程，否则报文发不出去。
             self.client.disconnect()
+            self.client.loop_stop()
             logger.info("MQTT连接已断开")
         except Exception as e:
             logger.error(f"MQTT断开失败: {e}")
@@ -402,8 +403,16 @@ class MQTTClient:
             else:
                 subscription_items = list(self._subscriptions.items())
             for topic, qos in subscription_items:
-                client.subscribe(topic, qos)
-                logger.info(f"自动订阅: {topic} (QoS {qos})")
+                subscribed = client.subscribe(topic, qos)
+                # paho 返回 (result, mid)；测试桩可能返回 None/MagicMock。
+                if isinstance(subscribed, tuple) and len(subscribed) == 2:
+                    result, _mid = subscribed
+                else:
+                    result = subscribed
+                if result == mqtt.MQTT_ERR_SUCCESS:
+                    logger.info(f"自动订阅: {topic} (QoS {qos})")
+                else:
+                    logger.error(f"自动订阅失败: {topic}, 错误码: {result}")
         else:
             logger.error(f"MQTT连接失败，返回码: {rc}")
 
@@ -439,8 +448,12 @@ class MQTTClient:
 
             try:
                 data = json.loads(payload)
-                self.stats['messages_parsed'] += 1
-                self._process_message(topic, data, retain=retain)
+                if not isinstance(data, dict):
+                    # 标量/数组 JSON 不对象报文，退回原始值解析（如 "12.5"）
+                    self._process_raw_message(topic, payload, retain=retain)
+                else:
+                    self.stats['messages_parsed'] += 1
+                    self._process_message(topic, data, retain=retain)
             except json.JSONDecodeError:
                 self._process_raw_message(topic, payload, retain=retain)
 
@@ -528,7 +541,11 @@ class MQTTClient:
         # 格式3: 嵌套数据格式
         elif 'device_id' in data and 'data' in data:
             device_id = data['device_id']
-            for register_name, raw in data['data'].items():
+            points_dict = data.get('data')
+            if not isinstance(points_dict, dict):
+                logger.warning("MQTT %s 的 data 字段不是对象，已跳过", topic)
+                return
+            for register_name, raw in points_dict.items():
                 value = try_finite_float(raw)
                 if value is not None:
                     self._notify_callbacks(device_id, register_name, value, '',
@@ -626,7 +643,7 @@ class MQTTClient:
             device_id = self._topic_device_id(topic)
             unit = meta.get('unit', '') or ''
             if '=' in payload:
-                parts = payload.split('=')
+                parts = payload.split('=', 1)   # 值里允许出现 '='（token/base64）
                 if len(parts) == 2:
                     # 配置里给了点位名就用配置的（主题末段常常是通道名，
                     # 不是点位名）；否则用报文里的键

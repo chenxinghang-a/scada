@@ -160,6 +160,8 @@ class Database:
         self._dbstats_lock = threading.Lock()
         self._dbstats_cache: dict[str, Any] | None = None
         self._dbstats_cache_at: float = 0.0
+        #: 统计世代：计算期间被 invalidate 过就不回写旧结果
+        self._dbstats_gen = 0
 
         # 上次膨胀告警时间（单调时钟），用于告警节流。
         #
@@ -305,13 +307,16 @@ class Database:
                 result = cursor.fetchone()
 
                 # 检查WAL状态
-                cursor.execute('PRAGMA wal_checkpoint')
-                wal_status = cursor.fetchone()
+                # PASSIVE 不等待读者；返回行 = (busy, log, checkpointed)，
+                # 第 0 列是 busy 标志，不是“checkpoint 状态”。
+                wal_status = cursor.execute(
+                    'PRAGMA wal_checkpoint(PASSIVE)').fetchone()
 
                 return {
                     'status': 'healthy',
                     'connection': 'ok',
-                    'wal_checkpoint': wal_status[0] if wal_status else 'unknown',
+                    'wal_checkpoint_busy': (bool(wal_status[0])
+                                            if wal_status else None),
                     'database_path': self.db_path,
                 }
         except Exception as e:
@@ -1487,11 +1492,15 @@ class Database:
             if cached is not None and (time.monotonic() - cached_at) < DB_STATS_CACHE_SECONDS:
                 return dict(cached)
 
+        gen = self._dbstats_gen
         stats = self._collect_database_stats()
 
         # 只有拿到**完整**结果才写缓存 —— 统计过程中抛异常时不该把半份数据
         # 留给下一轮读者（那会让"行数归零"这种假象活 30 秒）。
         with self._dbstats_lock:
+            if self._dbstats_gen != gen:
+                # 计算期间有删除/清理调用了 invalidate，别用旧结果覆盖新缓存。
+                return stats
             self._dbstats_cache = dict(stats)
             self._dbstats_cache_at = time.monotonic()
         return stats
@@ -1587,9 +1596,15 @@ class Database:
             无（只读 PRAGMA，不改库）。
             dbstat 需扫描整库页，大库上耗时与库大小成正比。
         """
-        file_size = Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0
+        def _size(path: Path) -> int:
+            try:
+                return path.stat().st_size
+            except OSError:
+                return 0
+
+        file_size = _size(Path(self.db_path))
         wal_path = Path(self.db_path + '-wal')
-        wal_size = wal_path.stat().st_size if wal_path.exists() else 0
+        wal_size = _size(wal_path)
 
         page_size = 0
         page_count = 0
@@ -1705,8 +1720,13 @@ class Database:
         """手动执行WAL checkpoint（将WAL数据合并到主数据库文件）"""
         try:
             with self.get_connection() as conn:
-                conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-            logger.info("WAL checkpoint 完成")
+                row = conn.execute(
+                    'PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+            if row and row[0]:
+                logger.warning(
+                    "WAL checkpoint 未完成（有读者占用，WAL 未截断）: busy=%s", row[0])
+            else:
+                logger.info("WAL checkpoint 完成")
         except Exception as e:
             logger.warning(f"WAL checkpoint 失败: {e}")
 
@@ -1858,6 +1878,7 @@ class Database:
                 conn.commit()  # 提交任何待处理事务，VACUUM不能在事务内执行
                 conn.execute('VACUUM')
             logger.info("数据库压缩完成")
+            self.invalidate_stats_cache()   # 空闲页已回收，膨胀指标必须重算
             return True
         except Exception as e:
             logger.error(f"数据库压缩失败: {e}")
@@ -2022,6 +2043,7 @@ class Database:
         if lock is None:
             return
         with lock:
+            self._dbstats_gen = getattr(self, '_dbstats_gen', 0) + 1
             self._dbstats_cache = None
             self._dbstats_cache_at = 0.0
 
