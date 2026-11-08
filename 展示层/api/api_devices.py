@@ -959,7 +959,12 @@ def disconnect_device(device_id):
     if not config:
         return jsonify({'success': False, 'message': f'设备 {device_id} 不存在'}), 404
 
-    device_manager.disconnect_device(device_id)
+    try:
+        device_manager.disconnect_device(device_id)
+    except Exception as e:      # noqa: BLE001
+        logger.error("设备 %s 断开连接失败: %s", device_id, e)
+        return jsonify({'success': False,
+                        'message': f'设备 {device_id} 断开失败: {e}'}), 500
     username = getattr(request, 'current_user', {}).get('username', 'system')
     get_auth_manager().log_operation(username, 'disconnect_device', f'断开设备: {device_id}')
     return jsonify({'success': True, 'message': f'设备 {device_id} 已断开'})
@@ -1166,7 +1171,12 @@ def test_device_connection(device_id):
         })
     except Exception as e:
         logger.error(f"连接测试失败: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': '连接测试失败，请检查设备配置', 'protocol': protocol})
+        return jsonify({
+            'success': False,
+            'message': f'连接测试失败（协议: {protocol}），请检查设备配置与网络',
+            'protocol': protocol,
+            'error': str(e),
+        }), 500
     finally:
         # round 382：mc/fins/custom、connect 返回 False、读取异常 —— 所有路径
         # 都必须在 finally 关闭，否则测试连接会泄漏 socket/订阅。
@@ -1235,9 +1245,9 @@ def get_device_behavior(device_id):
 @_require_engineer
 def inject_device_fault(device_id):
     """注入设备故障（测试用）"""
-    data = request.get_json()
-    if not data:
-        return api_error('请提供故障配置')
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return api_error('请提供故障配置（JSON 对象）')
 
     fault_type = data.get('fault_type', 'sensor_drift')
     severity = data.get('severity', 0.5)
@@ -1296,9 +1306,9 @@ def inject_device_fault(device_id):
 @_require_engineer
 def force_device_state(device_id):
     """强制设置设备状态（测试用）"""
-    data = request.get_json()
-    if not data:
-        return api_error('请提供状态配置')
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return api_error('请提供状态配置（JSON 对象）')
     
     state_name = data.get('state', 'RUNNING')
     
@@ -1740,7 +1750,11 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         'device_class': data.get('device_class', 'other'),
         'electrical': data.get('electrical') or {},
         'autonomy': data.get('autonomy', 'automatic'),
-        'enabled': data.get('enabled', True),
+        # POST 与 PUT 口径一致：字符串 "false" 不能被当成启用
+        'enabled': (data.get('enabled', True)
+                    if not isinstance(data.get('enabled', True), str)
+                    else data.get('enabled', True).strip().lower()
+                    not in ('false', '0', 'no', 'off', 'disabled', 'n', '')),
         'collection_interval': safe_int(
             data.get('collection_interval', 5), 'collection_interval')
     }
@@ -1953,9 +1967,10 @@ def get_preset_detail(preset_id):
 @_require_engineer
 def add_preset_device():
     """一键添加预设设备"""
-    data = request.get_json()
-    if not data:
-        return jsonify({'success': False, 'message': '请提供预设配置'}), 400
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return jsonify({'success': False,
+                        'message': '请提供预设配置（JSON 对象）'}), 400
 
     preset_id = data.get('preset_id')
     if not preset_id:
@@ -1997,13 +2012,15 @@ def add_preset_device():
 @_require_engineer
 def batch_add_presets():
     """批量添加预设设备"""
-    data = request.get_json()
-    if not data:
-        return jsonify({'success': False, 'message': '请提供预设列表'}), 400
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return jsonify({'success': False,
+                        'message': '请提供预设列表（JSON 对象）'}), 400
 
     preset_ids = data.get('preset_ids', [])
-    if not preset_ids:
-        return jsonify({'success': False, 'message': '缺少 preset_ids'}), 400
+    if not isinstance(preset_ids, list) or not preset_ids:
+        return jsonify({'success': False,
+                        'message': '缺少 preset_ids（必须是数组）'}), 400
 
     initializer = _get_simulation_initializer()
     if initializer is None:
@@ -2045,7 +2062,11 @@ def add_all_presets():
     if not presets:
         return jsonify({'success': False, 'message': '没有可用的预设设备配置，请检查 simulation_presets.yaml 文件'}), 400
 
-    all_preset_ids = [p['id'] for p in presets]
+    all_preset_ids = [p.get('id') for p in presets
+                      if isinstance(p, dict) and p.get('id')]
+    if not all_preset_ids:
+        return jsonify({'success': False,
+                        'message': '预设配置缺少 id 字段，无法批量添加'}), 400
     result = initializer.add_preset_batch(all_preset_ids)
     if result.get('success'):
         get_auth_manager().log_operation(

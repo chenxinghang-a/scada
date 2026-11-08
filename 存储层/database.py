@@ -564,12 +564,13 @@ class Database:
                 cursor.execute(sql)
                 logger.info(f"数据库迁移: 添加列 alarm_records.{col_name}")
             except Exception as e:
-                # 最常见原因是列已存在（预期内）；但也可能是磁盘/锁等真失败，
-                # 此时迁移没做成，故把错误原文一并记录以便区分
-                logger.debug(
-                    f"迁移列 alarm_records.{col_name} 未执行"
-                    f"（通常为列已存在，需排查时看此错误原文）: {e}"
-                )
+                if 'duplicate column' in str(e).lower():
+                    logger.debug(
+                        f"迁移列 alarm_records.{col_name} 已存在，跳过: {e}")
+                else:
+                    # 磁盘满/库锁/损坏等真失败：该列没加上，必须可见
+                    logger.warning(
+                        f"迁移列 alarm_records.{col_name} 失败，该列可能缺失: {e}")
 
     def _migrate_realtime_quality(self, cursor):
         """给 realtime_data 表补 ``quality`` 列（兼容旧数据库）。
@@ -684,6 +685,9 @@ class Database:
             # DDL 默认的 192(GOOD) 永久掩盖；批量路径早就写 quality，口径必须一致。
             q = try_int(quality)
             if q is None:
+                logger.warning(
+                    "insert_data 收到非数值质量码 %r（device=%r register=%r），按 192(GOOD) 落库",
+                    quality, device_id, register_name)
                 q = 192
             cursor.execute('''
                 INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp, quality, created_at)
@@ -1311,7 +1315,12 @@ class Database:
                 ORDER BY timestamp ASC
                 LIMIT ?
             ''', (limit,))
-            return [dict(row) for row in cursor.fetchall()]
+            rows = [dict(row) for row in cursor.fetchall()]
+            if limit and len(rows) >= limit:
+                logger.warning(
+                    "get_uncleared_alarms 命中上限 %d 条，可能有未恢复报警未恢复，请提高 limit",
+                    limit)
+            return rows
 
     def acknowledge_alarm(self, alarm_id: str, acknowledged_by: str,
                           device_id: str | None = None, register_name: str | None = None) -> bool:
@@ -1347,7 +1356,7 @@ class Database:
                 cursor.execute('''
                     UPDATE alarm_records
                     SET acknowledged = 1, acknowledged_at = ?, acknowledged_by = ?
-                    WHERE alarm_id = ? AND acknowledged = 0
+                    WHERE alarm_id = ? AND (acknowledged = 0 OR acknowledged IS NULL)
                       AND (cleared = 0 OR cleared IS NULL)
                 ''', (datetime.now(), acknowledged_by, alarm_id))
 
@@ -1487,7 +1496,8 @@ class Database:
                 self._dbstats_cache = None
                 self._dbstats_cache_at = 0.0
 
-            logger.info(f"清理旧数据: 实时数据 {realtime_deleted} 条, 历史数据 {history_deleted} 条")
+            # realtime_data 不按时间清理，日志不要报一个恒为 0 的“实时数据清理量”
+            logger.info(f"清理旧数据: 历史数据 {history_deleted} 条")
 
             return history_deleted
 
@@ -1555,11 +1565,13 @@ class Database:
             # 未确认报警统计（round 260：只算**仍然活跃**的 —— 已恢复的报警
             # 不该再算"当前未确认"，否则这个数只增不减）
             cursor.execute('SELECT COUNT(*) FROM alarm_records '
-                           'WHERE acknowledged = 0 AND cleared = 0')
+                           'WHERE (acknowledged = 0 OR acknowledged IS NULL) '
+                           'AND (cleared = 0 OR cleared IS NULL)')
             unacknowledged_count = cursor.fetchone()[0]
 
             # 当前活跃报警（未恢复，不论是否已确认）
-            cursor.execute('SELECT COUNT(*) FROM alarm_records WHERE cleared = 0')
+            cursor.execute('SELECT COUNT(*) FROM alarm_records '
+                           'WHERE (cleared = 0 OR cleared IS NULL)')
             active_alarm_count = cursor.fetchone()[0]
 
             # 归档数据统计
@@ -2032,7 +2044,8 @@ class Database:
             backup_path.mkdir(parents=True, exist_ok=True)
 
             # 生成备份文件名
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            # 精确到微秒：同一秒并发备份会写同一路径互相覆盖
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
             db_name = Path(self.db_path).stem
             backup_file = backup_path / f"{db_name}_{timestamp}.db"
 
@@ -2105,9 +2118,12 @@ class Database:
         from pathlib import Path
 
         src = Path(backup_file)
-        if not src.exists():
-            return False, f'备份文件不存在: {src}'
-        if src.stat().st_size == 0:
+        try:
+            src_size = src.stat().st_size
+        except OSError:
+            # exists() 与 stat() 分两步，文件在两者之间被删会抛未捕获异常
+            return False, f'备份文件不存在或不可读: {src}'
+        if src_size == 0:
             return False, f'备份文件是空的（0 字节）: {src}'
 
         # 1) 备份必须能打开、完整、且有本系统的表

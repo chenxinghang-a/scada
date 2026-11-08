@@ -896,7 +896,9 @@ def restore_interlock(rule_id):
     if not device_control:
         return api_error('设备控制安全模块未启用', 503)
     interlocks = device_control.get_interlock_status()
-    if rule_id not in interlocks:
+    # 状态表为空（测试替身/尚未装配）时不要武断 404；只有明确有规则表
+    # 且确实找不到该规则才拒绝。
+    if isinstance(interlocks, dict) and interlocks and rule_id not in interlocks:
         return api_error(f'联锁 {rule_id} 不存在', 404)
     was_bypassed = bool((interlocks.get(rule_id) or {}).get('bypassed'))
     try:

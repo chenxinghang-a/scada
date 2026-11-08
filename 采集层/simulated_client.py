@@ -495,17 +495,23 @@ def _generate_value(rule: dict[str, Any], t: float, phase_offset: float = 0.0,
         # 按 设备:点位 隔离状态；id(rule) 会让共用全局规则的设备串扰。
         _reg_key = noise_key or id(rule)
         if _reg_key not in _status_states:
-            _status_states[_reg_key] = {'state': 1, 'timer': time.time()}
+            _status_states[_reg_key] = {'state': 1, 'timer': time.time(),
+                                        'limit': random.uniform(60, 300)}
 
         st = _status_states[_reg_key]
+        if 'limit' not in st:
+            st['limit'] = (random.uniform(60, 300) if st['state'] == 1
+                           else random.uniform(5, 30))
         elapsed = time.time() - st['timer']
-        if st['state'] == 1 and elapsed > random.uniform(60, 300):
+        if st['state'] == 1 and elapsed > st['limit']:
             if random.random() < 0.1:
                 st['state'] = random.choice([0, 2, 3])
                 st['timer'] = time.time()
-        elif st['state'] != 1 and elapsed > random.uniform(5, 30):
+                st['limit'] = random.uniform(5, 30)
+        elif st['state'] != 1 and elapsed > st['limit']:
             st['state'] = 1
             st['timer'] = time.time()
+            st['limit'] = random.uniform(60, 300)
         value = st['state']
 
     elif shape == 'constant':
@@ -710,12 +716,14 @@ class SimulatedModbusClient(ModbusClientInterface):
         if rule is None:
             # 没有匹配规则，按寄存器读取数量猜测类型
             if count >= 4:
-                # float64: 返回4个寄存器
+                # float64: 4 个寄存器；count 更大时补足长度
                 raw = struct.pack('>d', float(random.uniform(0, 100)))
-                return [struct.unpack('>H', raw[i*2:(i+1)*2])[0] for i in range(4)]
+                words = [struct.unpack('>H', raw[i*2:(i+1)*2])[0] for i in range(4)]
+                return words + [random.randint(0, 1000) for _ in range(count - 4)]
             elif count >= 2:
-                # float32/int32/uint32: 返回2个寄存器（按配置字节序）
-                return encode_float32_registers(random.uniform(0, 100), self.byte_order)
+                words = encode_float32_registers(
+                    random.uniform(0, 100), self.byte_order)
+                return words + [random.randint(0, 1000) for _ in range(count - 2)]
             return [random.randint(0, 1000)]
 
         # 用地址做相位偏移，避免同类型寄存器曲线完全一致
@@ -724,7 +732,7 @@ class SimulatedModbusClient(ModbusClientInterface):
 
         # 根据data_type决定编码方式
         reg_type = self._register_types.get(address, {})
-        data_type = reg_type.get('data_type', 'uint16')
+        data_type = str(reg_type.get('data_type', 'uint16')).lower()
         scale = try_finite_float(reg_type.get('scale', 1.0)) or 1.0
         offset = try_finite_float(reg_type.get('offset', 0.0)) or 0.0
 
@@ -972,7 +980,7 @@ class SimulatedMQTTClient(PushClientInterface):
         # 预缓存规则
         self._rules_cache = {}
         for topic_cfg in self.topics_config:
-            name = topic_cfg.get('name', '')
+            name = topic_cfg.get('name') or topic_cfg.get('topic') or ''
             self._rules_cache[name] = _find_rule(name, topic_cfg.get('unit', ''), 'float32')
 
         self.stats: dict[str, Any] = {
@@ -1120,18 +1128,21 @@ class SimulatedRESTClient(PushClientInterface):
         return {k: dict(v) for k, v in list(self.latest_data.items())}
 
     def read_endpoint(self, endpoint_config: dict[str, Any]) -> Any:
-        self.stats['total_requests'] += 1
-        self.stats['successful_requests'] += 1
-        self.stats['last_request_time'] = datetime.now().isoformat()
-
         name = endpoint_config.get('name', 'unknown')
         t = time.time() - self.start_time
 
         rule = self._rules_cache.get(name)
         if rule:
-            return round(_generate_value(rule, t, hash(name) % 10 * 0.3, noise_key=f"{self.device_id}:{name}"), 2)
+            value = round(_generate_value(
+                rule, t, hash(name) % 10 * 0.3,
+                noise_key=f"{self.device_id}:{name}"), 2)
         else:
-            return round(50 + 30 * math.sin(t / 20) + random.gauss(0, 2), 2)
+            value = round(50 + 30 * math.sin(t / 20) + random.gauss(0, 2), 2)
+
+        self.stats['total_requests'] += 1
+        self.stats['successful_requests'] += 1
+        self.stats['last_request_time'] = datetime.now().isoformat()
+        return value
 
     def write_endpoint(self, endpoint_config: dict[str, Any], value: Any,
                        method: str | None = None) -> bool:

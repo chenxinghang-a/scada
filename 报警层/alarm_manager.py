@@ -67,11 +67,14 @@ class AlarmDedupConfig:
         # 是否启用去重（"false"/"0"/"off" 不能被当成 True）
         self.enabled: bool = _safe_bool(config.get('enabled', True))
         # 最大同时显示的报警数（前端）
-        self.max_visible_toasts: int = config.get('max_visible_toasts', 3)
+        self.max_visible_toasts: int = max(
+            1, min(10, _safe_int(config.get('max_visible_toasts', 3), 3)))
         # 前端toast自动消失时间：严重报警（秒）
-        self.critical_toast_duration: int = config.get('critical_toast_duration', 30)
+        self.critical_toast_duration: int = max(
+            5, _safe_int(config.get('critical_toast_duration', 30), 30))
         # 前端toast自动消失时间：普通警告（秒）
-        self.warning_toast_duration: int = config.get('warning_toast_duration', 10)
+        self.warning_toast_duration: int = max(
+            5, _safe_int(config.get('warning_toast_duration', 10), 10))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -86,17 +89,22 @@ class AlarmDedupConfig:
     def update(self, data: dict[str, Any]):
         """从字典更新配置"""
         if 'emit_cooldown_seconds' in data:
-            self.emit_cooldown_seconds = max(5, int(data['emit_cooldown_seconds']))
+            self.emit_cooldown_seconds = max(
+                5, _safe_int(data['emit_cooldown_seconds'], 300))
         if 'acknowledge_suppress_seconds' in data:
-            self.acknowledge_suppress_seconds = max(30, int(data['acknowledge_suppress_seconds']))
+            self.acknowledge_suppress_seconds = max(
+                30, _safe_int(data['acknowledge_suppress_seconds'], 600))
         if 'enabled' in data:
-            self.enabled = bool(data['enabled'])
+            self.enabled = _safe_bool(data['enabled'])
         if 'max_visible_toasts' in data:
-            self.max_visible_toasts = max(1, min(10, int(data['max_visible_toasts'])))
+            self.max_visible_toasts = max(
+                1, min(10, _safe_int(data['max_visible_toasts'], 3)))
         if 'critical_toast_duration' in data:
-            self.critical_toast_duration = max(5, int(data['critical_toast_duration']))
+            self.critical_toast_duration = max(
+                5, _safe_int(data['critical_toast_duration'], 30))
         if 'warning_toast_duration' in data:
-            self.warning_toast_duration = max(5, int(data['warning_toast_duration']))
+            self.warning_toast_duration = max(
+                5, _safe_int(data['warning_toast_duration'], 10))
 
 
 class AlarmShelveState:
@@ -236,7 +244,8 @@ class AlarmFloodDetector:
             cutoff = now - self.window
             recent = [t for t in self._timestamps if t > cutoff]
 
-            if len(recent) < self.threshold // 2:
+            # threshold<=1 时 //2 为 0，洪水态永不退出，低级别报警被永久抑制
+            if len(recent) < max(1, self.threshold // 2):
                 self._flood_active = False
                 duration = now - self._flood_start if self._flood_start else 0
                 logger.info(f"告警洪水结束: 持续{duration:.0f}秒, 抑制了{self._suppressed_count}条告警")
@@ -623,6 +632,9 @@ class AlarmManager:
                 result['restored'], result['expired'])
             if result['expired']:
                 self._persist_shelves()      # 清掉过期的，避免下次又数一遍
+        elif result['dropped']:
+            # 只丢弃非法行也要落库，否则坏行每次启动都被重复读取
+            self._persist_shelves()
         return result
 
     def _restore_active_alarms(self) -> int:
@@ -673,10 +685,19 @@ class AlarmManager:
             device_id = row.get('device_id')
             register_name = row.get('register_name')
             if not (alarm_id and device_id and register_name):
+                logger.warning(
+                    "恢复未恢复报警时跳过缺少 alarm_id/device_id/register_name 的行: %r",
+                    row)
                 continue
             key = (alarm_id, device_id, register_name)
 
-            ts = _to_dt(row.get('timestamp')) or datetime.now()
+            ts = _to_dt(row.get('timestamp'))
+            if ts is None:
+                # 静默用 now 会把首次触发时刻重置，升级计时被推后且无痕迹
+                logger.warning(
+                    "恢复报警 %s/%s/%s 的 timestamp 缺失或非法，首次触发时刻改用当前时间",
+                    alarm_id, device_id, register_name)
+                ts = datetime.now()
             last_ts = _to_dt(row.get('last_trigger_time')) or ts
             acked = bool(row.get('acknowledged'))
 
@@ -1972,9 +1993,10 @@ class AlarmManager:
         #
         # 正确语义：抑制"声光/广播/前端/邮件短信"这些**播报**通道，
         # 落库与统计照旧（ISA-18.2：抑制播报不得丢失记录）。
-        severity = rule_config.get('level', 'medium')
-        annunciate, flood_reason = self._flood_detector.record_alarm(severity)
+        # 洪水检测与报警级别必须用同一个缺省值
         alarm_level = rule_config.get('level', 'warning')
+        severity = alarm_level
+        annunciate, flood_reason = self._flood_detector.record_alarm(severity)
 
         alarm_message = rule_config.get('name', '未知报警')
         threshold = rule_config.get('threshold', 0)
@@ -2120,8 +2142,10 @@ class AlarmManager:
             else:
                 should_alarm = False
 
+        with self._output_error_lock:
+            total_failures = self._output_errors.get(channel, 0)
         logger.error("报警输出失败[%s]（累计%d次，连续%d次）: %s",
-                     channel, self._output_errors.get(channel, 0), consecutive, detail)
+                     channel, total_failures, consecutive, detail)
 
         if should_alarm:
             self._raise_channel_broken_alarm(channel, detail, consecutive)

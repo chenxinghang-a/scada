@@ -80,7 +80,9 @@ def _generate_enhanced_data(
         unit = cfg.get('unit', '')
 
         # 50 + (30*t)%100 会随墙钟每秒跳 30，且可能到 150；兜底用常量。
-        value = data.get(name, 50.0)
+        value = try_finite_float(data.get(name, 50.0))
+        if value is None:
+            value = 50.0
 
         entry = {
             'value': round(float(value), 2),
@@ -321,7 +323,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         if not reg_config:
             # 未知寄存器，返回随机值
             if count >= 2:
-                raw = struct.pack('>f', float(50 + 30 * time.time() % 100))
+                raw = struct.pack('>f', float(50.0 + 30.0 * (time.time() % 1.0)))
                 return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
             return [100]
         

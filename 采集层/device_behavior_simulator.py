@@ -930,7 +930,8 @@ class DeviceBehaviorSimulator:
                 # 阀门开度影响流量
                 # round 370（BUG-017）：必须用**工程值**，不是原始寄存器整数。
                 # scale=0.1 时写 500 代表 50%，原实现算成 500/100=5 → 截成 100%。
-                self.process_model.base_flow = 15.0 * (eng_value / 100.0)
+                valve_pct = max(0.0, min(100.0, eng_value))
+                self.process_model.base_flow = 15.0 * (valve_pct / 100.0)
                 logger.info(f"[行为模拟] 设备 {self.device_name} 阀门开度→{eng_value}%")
             
             # 继电器写入
@@ -1346,8 +1347,8 @@ class DeviceBehaviorSimulator:
         # ===== 液位 - 质量平衡（流入-流出积分） =====
         flow_balance = self._current_flow - self.process_model.base_flow
         self._current_level += flow_balance * 0.001 * dt
-        self._current_level = max(0, min(100, self._current_level))
-        self._current_level += random.gauss(0, 0.1)
+        self._current_level = max(
+            0, min(100, self._current_level + random.gauss(0, 0.1)))
 
         # ===== 累计能源和产量（用于stopped状态显示） =====
         if self.state == DeviceState.RUNNING:
@@ -1673,7 +1674,7 @@ class DeviceBehaviorSimulator:
                 'vibration_y': round(0.0 + random.gauss(0, 0.01), 3),
                 'vibration_z': round(0.0 + random.gauss(0, 0.01), 3),
                 'spindle_speed': 0.0, 'feed_rate': 0.0,
-                'shot_count': round(self._shot_count, 0),
+                'shot_count': int(self._shot_count),
                 'cycle_time': 0.0, 'injection_speed': 0.0,
                 'injection_force': 0.0, 'clamping_force': 0.0,
                 'green_light': 0, 'yellow_light': 1, 'red_light': 0,
@@ -1685,7 +1686,7 @@ class DeviceBehaviorSimulator:
                 'spray_pressure': round(ambient_pressure, 4),
                 'spray_speed': 0.0,
                 'coating_thickness': 0.0,
-                'painted_count': round(self._shot_count, 0),
+                'painted_count': int(self._shot_count * 0.6),
                 # 水处理（schneider_m340_01）
                 'ph_value': round(7.0 + random.gauss(0, 0.1), 2),
                 # 注：pump_speed 已在上面的通用键里定义过，重复的字典字面量键
@@ -1772,7 +1773,11 @@ class DeviceBehaviorSimulator:
         current_c = current_base * state_factor * (1 + random.gauss(0, 0.02)) + random.gauss(0, 0.5)
 
         # 有功功率 - 由V*I*cos(phi)计算
-        active_power = (voltage_a * current_a + voltage_b * current_b + voltage_c * current_c) * power_factor / 1000
+        # 电流含噪声可为负，先钳位；否则 P/Q 被钳成 0 而 S 仍为正
+        active_power = max(
+            0.0,
+            (voltage_a * current_a + voltage_b * current_b
+             + voltage_c * current_c) * power_factor / 1000)
 
         # 无功功率
         reactive_power = active_power * math.tan(math.acos(min(0.999, power_factor)))
@@ -1865,10 +1870,11 @@ class DeviceBehaviorSimulator:
             'reject_count': int(self._shot_count * 0.01),
             'painted_count': int(self._shot_count * 0.6),
             'batch_count': int(self._shot_count * 0.03),
-            'packaging_speed': int(120 * speed_ratio + random.gauss(0, 2)),
+            'packaging_speed': max(0, int(120 * speed_ratio + random.gauss(0, 2))),
             'conveyor_speed': round(12 * speed_ratio + random.gauss(0, 0.3), 2),
             'spray_speed': round(8 * speed_ratio + random.gauss(0, 0.2), 2),
-            'injection_speed': round(80 * speed_ratio + random.gauss(0, 1), 2),
+            'injection_speed': round(
+                max(0.0, 80 * speed_ratio + random.gauss(0, 1)), 2),
             
             # 环境参数
             'humidity': round(62 + 10 * math.sin(t / 600) + random.gauss(0, 1.5), 2),
