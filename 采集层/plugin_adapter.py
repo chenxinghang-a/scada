@@ -142,6 +142,26 @@ def _read_metadata(path: Path) -> dict[str, Any]:
     return meta
 
 
+def _declares_entry_point(path: Path) -> bool:
+    """AST 判断插件是否声明 Adapter 类或 create_adapter（不执行代码）。"""
+    try:
+        tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+    except (OSError, SyntaxError, ValueError):
+        return False
+    entries = {'Adapter', 'create_adapter'}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name in entries:
+            return True
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name in entries:
+                return True
+        if isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id in entries
+                   for t in node.targets):
+                return True
+    return False
+
+
 def discover_plugins() -> list[dict[str, Any]]:
     """列出插件目录里可用的适配器（不导入、不执行，单个坏文件不影响其它）。"""
     base = get_plugin_dir()
@@ -156,14 +176,16 @@ def discover_plugins() -> list[dict[str, Any]]:
         if not _NAME_RE.fullmatch(name):
             continue
         info = _read_metadata(path)
+        # 目录里的 .py 不等于可用插件：没有入口声明的标为不可用
+        available = _declares_entry_point(path)
         plugins.append({
             'name': name,
             'version': info['version'],
             'description': info['description'],
             'author': info['author'],
             'settings_schema': info['settings_schema'],
-            'available': True,
-            'error': None,
+            'available': available,
+            'error': None if available else '未声明 Adapter 类或 create_adapter()',
         })
     return plugins
 

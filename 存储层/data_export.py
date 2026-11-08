@@ -126,7 +126,8 @@ class DataExport:
 
         # 生成文件名
         if not filename:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            # 精确到微秒，同秒并发导出不再互相覆盖
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
             filename = f'export_{timestamp}.csv'
 
         try:
@@ -186,7 +187,7 @@ class DataExport:
 
         # 生成文件名
         if not filename:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
             filename = f'export_{timestamp}.xlsx'
 
         try:
@@ -224,7 +225,7 @@ class DataExport:
 
         # 生成文件名
         if not filename:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
             filename = f'export_{timestamp}.json'
 
         try:
@@ -313,7 +314,7 @@ class DataExport:
             return None
 
         # 生成文件名
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         filename = f'{device_id}_{timestamp}'
 
         # 根据格式导出
@@ -372,7 +373,7 @@ class DataExport:
             return None
 
         # 生成文件名
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         filename = f'alarms_{timestamp}'
 
         # 根据格式导出

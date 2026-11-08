@@ -213,9 +213,11 @@ class QueryBuilder:
 
     def limit(self, count: int) -> 'QueryBuilder':
         """设置返回记录数限制"""
-        self._limit = int(count)
-        if self._limit < 0:
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError(f'LIMIT 必须是整数: {count!r}')
+        if count < 0:
             raise ValueError(f'LIMIT 不能为负: {count!r}')
+        self._limit = count
         return self
 
     def offset(self, count: int) -> 'QueryBuilder':
