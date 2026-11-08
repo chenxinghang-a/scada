@@ -44,7 +44,8 @@ def get_alarms():
     limit = clamp_limit(request.args.get('limit', 100, type=int), default=100, maximum=10000)
 
     if acknowledged is not None:
-        acknowledged = acknowledged.lower() == 'true'
+        # yes/1/on 也要当 True，不能只认字面 "true"
+        acknowledged = _as_bool(acknowledged, False)
 
     data = current_app.database.get_alarm_records(
         device_id=device_id, alarm_level=alarm_level,
@@ -87,6 +88,9 @@ def get_active_alarms():
 def acknowledge_alarm(alarm_id):
     """确认报警（需要 admin/engineer/operator 角色）"""
     data = request.get_json() or {}
+    # device_id 与 register_name 必须成对，避免退化成按 alarm_id 全局确认
+    if bool(data.get('device_id')) != bool(data.get('register_name')):
+        return api_error('device_id 与 register_name 必须同时提供', 400)
     manager = current_app.alarm_manager
     success = bool(manager.acknowledge_alarm(
         alarm_id=alarm_id,
@@ -611,6 +615,10 @@ def update_notification():
             manager._setup_notification(config.get('notification', {}) or {})
         except Exception as e:      # noqa: BLE001
             logger.error("通知配置已落盘，但重建通知器失败（重启后生效）: %s", e)
+            # 配置已落盘，审计不能因运行时重建失败而缺失
+            get_auth_manager().log_operation(
+                request.current_user['username'], 'update_notification',
+                '更新通知设置（运行时通知器重建失败，需重启生效）')
             return jsonify({
                 'success': True,
                 'message': '通知设置已保存，但运行时通知器重建失败，请重启后确认',
@@ -891,11 +899,13 @@ def update_dedup_config():
 
     alarm_manager = current_app.alarm_manager
     updated_config = alarm_manager.update_dedup_config(data)
+    if not isinstance(updated_config, dict):
+        updated_config = {}
 
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_dedup_config',
-        f'更新去重配置: emit_cooldown={updated_config["emit_cooldown_seconds"]}s, '
-        f'ack_suppress={updated_config["acknowledge_suppress_seconds"]}s')
+        f'更新去重配置: emit_cooldown={updated_config.get("emit_cooldown_seconds")}s, '
+        f'ack_suppress={updated_config.get("acknowledge_suppress_seconds")}s')
     return jsonify({'success': True, 'config': updated_config, 'message': '去重配置已更新'})
 
 

@@ -482,6 +482,7 @@ def _map_flat_payload(payload: Any, spec: AdapterSpec) -> dict[str, dict[str, An
     mapped: dict[str, dict[str, Any]] = {}
     for name, raw in payload.items():
         if not isinstance(name, str) or not name:
+            logger.warning("插件 %r 返回非法点位名 %r，已跳过", spec.plugin, name)
             continue
         unit = ''
         if isinstance(raw, Mapping) and 'value' in raw:
@@ -497,8 +498,11 @@ def _map_flat_payload(payload: Any, spec: AdapterSpec) -> dict[str, dict[str, An
             elif isinstance(raw, str):
                 value = raw
             else:
-                raise AdapterDataError(
-                    f'插件点位 {name} 的值 {raw!r} 既不是有限数值也不是字符串')
+                # 单点类型非法不该毁掉整批读数；全部无效时由下方统一报错
+                logger.warning(
+                    "插件 %r 点位 %s 的值 %r 既不是有限数值也不是字符串，已跳过",
+                    spec.plugin, name, raw)
+                continue
 
         mapped[name] = {
             'value': value,

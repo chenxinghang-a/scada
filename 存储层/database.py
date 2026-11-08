@@ -2128,7 +2128,10 @@ class Database:
 
         # 1) 备份必须能打开、完整、且有本系统的表
         try:
-            probe = sqlite3.connect(f'file:{src.as_posix()}?mode=ro', uri=True)
+            # 路径必须转义：含 ? / # / % 时会把 mode=ro 截断成路径的一部分
+            _escaped = (src.as_posix().replace('%', '%25')
+                        .replace('?', '%3F').replace('#', '%23'))
+            probe = sqlite3.connect(f'file:{_escaped}?mode=ro', uri=True)
             try:
                 check = probe.execute('PRAGMA integrity_check').fetchone()[0]
                 if check != 'ok':

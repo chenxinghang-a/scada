@@ -157,21 +157,26 @@ class S7Gateway(BaseGateway):
         rack = device_config.get('rack', 0)
         slot = device_config.get('slot', 1)
 
+        client = None
         try:
             client = snap7.client.Client()
             client.connect(host, rack, slot)
 
-            # 验证连接
             if client.get_connected():
                 self.logger.info(f"S7连接成功: {host} (rack={rack}, slot={slot})")
                 return client
-            else:
-                self.logger.error(f"S7连接失败: {host}")
-                return None
+            self.logger.error(f"S7连接失败: {host}")
 
         except Exception as e:
             self.logger.error(f"S7连接异常: {host} - {e}")
-            return None
+
+        # 连接失败/异常：关闭已创建客户端，避免 snap7 原生 socket 泄漏
+        if client is not None:
+            try:
+                client.disconnect()
+            except Exception as e:
+                self.logger.debug("清理S7客户端失败: %s", e)
+        return None
 
     def read_device_data(self, device_id: str) -> dict[str, float] | None:
         """
@@ -200,7 +205,11 @@ class S7Gateway(BaseGateway):
 
             # BUG-084：DBX 布尔量要按位读。原来 `float(data[0])` 把整个字节
             # 当值 —— 同字节其它位为 1 时读出 128.0，联锁判据完全错。
-            bit_offset = reg_config.get('bit', reg_config.get('bit_offset', 0))
+            bit_offset = reg_config.get('bit')
+            if bit_offset is None:
+                bit_offset = reg_config.get('bit_offset')
+            if bit_offset is None:
+                bit_offset = 0
 
             try:
                 value = self._read_register(client, db_number, offset, data_type,
@@ -237,7 +246,10 @@ class S7Gateway(BaseGateway):
                 'byte': 1,    # uint8
                 'bool': 1,    # bool
             }
-            size = type_sizes.get(data_type, 4)
+            if data_type not in type_sizes:
+                self.logger.error(f"不支持的S7数据类型: {data_type}")
+                return None
+            size = type_sizes[data_type]
 
             # 读取DB数据
             data = client.db_read(db_number, offset, size)
@@ -281,8 +293,8 @@ class S7Gateway(BaseGateway):
         if not device_config:
             return False
 
-        # 关闭旧连接
-        old_client = self._clients.get(device_id)
+        # 关闭旧连接，先摘除：新建失败时不能把已断开的旧客户端留在缓存
+        old_client = self._clients.pop(device_id, None)
         if old_client:
             try:
                 old_client.disconnect()

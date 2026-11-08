@@ -334,9 +334,9 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                 value = 0
 
         # 应用缩放和偏移
-        scale = reg_config.get('scale', 1.0)
-        offset = reg_config.get('offset', 0) or 0
-        raw_value = to_raw(value, scale or 1.0, offset or 0.0)
+        scale = try_finite_float(reg_config.get('scale', 1.0))
+        offset = try_finite_float(reg_config.get('offset', 0)) or 0.0
+        raw_value = to_raw(value, scale if scale else 1.0, offset)
         
         # 根据数据类型编码
         data_type = reg_config.get('data_type', 'uint16')

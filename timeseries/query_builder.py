@@ -103,9 +103,10 @@ class QueryBuilder:
         if func_name not in _AGG_FUNCS:
             raise ValueError(f'不支持的聚合函数: {func!r}')
         col = _require_identifier(column, '聚合列名')
-        alias = alias or f"{func_name.lower()}_{col}"
-        self._aggregate_funcs[_require_identifier(alias, '别名')] = (
-            f"{func_name}({col})")
+        alias_key = _require_identifier(alias or f"{func_name.lower()}_{col}", '别名')
+        if alias_key in self._aggregate_funcs:
+            raise ValueError(f'重复的聚合别名: {alias_key!r}')
+        self._aggregate_funcs[alias_key] = f"{func_name}({col})"
         return self
 
     def where(self, condition: str) -> 'QueryBuilder':
@@ -140,6 +141,8 @@ class QueryBuilder:
             start: 开始时间
             end: 结束时间
         """
+        if start > end:
+            raise ValueError(f'时间范围非法: start={start} 晚于 end={end}')
         start_ts = start.strftime('%Y-%m-%d %H:%M:%S')
         end_ts = end.strftime('%Y-%m-%d %H:%M:%S')
         self._where_clauses.append(f"ts >= '{start_ts}'")
@@ -153,17 +156,33 @@ class QueryBuilder:
 
     def where_value_gt(self, value: float) -> 'QueryBuilder':
         """添加值大于条件"""
-        self._where_clauses.append(f"value > {value}")
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f'比较值非法: {value!r}')
+        if num != num or num in (float('inf'), float('-inf')):
+            raise ValueError(f'比较值非法: {value!r}')
+        self._where_clauses.append(f"value > {num}")
         return self
 
     def where_value_lt(self, value: float) -> 'QueryBuilder':
         """添加值小于条件"""
-        self._where_clauses.append(f"value < {value}")
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f'比较值非法: {value!r}')
+        if num != num or num in (float('inf'), float('-inf')):
+            raise ValueError(f'比较值非法: {value!r}')
+        self._where_clauses.append(f"value < {num}")
         return self
 
     def where_quality(self, quality: int = 192) -> 'QueryBuilder':
         """添加数据质量条件"""
-        self._where_clauses.append(f"quality = {quality}")
+        try:
+            code = int(quality)
+        except (TypeError, ValueError):
+            raise ValueError(f'质量码非法: {quality!r}')
+        self._where_clauses.append(f"quality = {code}")
         return self
 
     def group_by(self, *columns: str) -> 'QueryBuilder':
@@ -223,6 +242,8 @@ class QueryBuilder:
             mode = str(fill).strip().upper()
             if mode not in _FILL_MODES:
                 raise ValueError(f'非法填充方式: {fill!r}')
+            if mode == 'VALUE':
+                raise ValueError('FILL(VALUE) 缺少填充值，当前实现不支持')
             self._fill = mode
         return self
 

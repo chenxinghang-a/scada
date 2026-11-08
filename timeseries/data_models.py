@@ -98,6 +98,7 @@ class AlarmRecord:
         ack = 1 if self.acknowledged else 0
         # 防SQL注入：转义反斜杠、单引号、空字节
         msg = self.message.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
+        msg = msg[:512].rstrip("\\")
         level = self.level.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
         alarm_type = self.alarm_type.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
         return f"('{ts}', '{level}', '{alarm_type}', '{msg}', {self.value}, {self.threshold}, {ack})"

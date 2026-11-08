@@ -762,7 +762,15 @@ class AlarmOutput:
 
     def disconnect(self):
         """断开连接（复位输出后断开Modbus）"""
-        self.reset()
-        if self._modbus_client:
-            self._modbus_client.close()
-            self._modbus_client = None
+        # reset 抛异常也必须关闭 Modbus，否则 disconnect 变成“连接没断成”
+        try:
+            self.reset()
+        except Exception as e:      # noqa: BLE001
+            logger.error("断开前复位声光输出失败: %s", e)
+        finally:
+            if self._modbus_client:
+                try:
+                    self._modbus_client.close()
+                except Exception as e:      # noqa: BLE001
+                    logger.debug("关闭 Modbus 客户端失败: %s", e)
+                self._modbus_client = None

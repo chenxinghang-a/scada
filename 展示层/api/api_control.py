@@ -662,10 +662,12 @@ def write_endpoint(device_id):
     try:
         if method == 'PUT' and hasattr(client, 'put_endpoint'):
             result = client.put_endpoint(endpoint_config, {'value': value})
-            success = (result or {}).get('success', False)
+            success = (bool(result.get('success'))
+                       if isinstance(result, dict) else bool(result))
         elif method == 'POST' and hasattr(client, 'post_endpoint'):
             result = client.post_endpoint(endpoint_config, {'value': value})
-            success = (result or {}).get('success', False)
+            success = (bool(result.get('success'))
+                       if isinstance(result, dict) else bool(result))
         elif hasattr(client, 'write_endpoint'):
             # round 331：**按签名探测**，不硬编码调用形式。
             # 内置的三个客户端现在都有 `method` 形参，但外部插件、旧实现、
@@ -952,8 +954,14 @@ def create_bypass_request():
     if interlock_id not in device_control.get_interlock_status():
         return api_error(f'联锁 {interlock_id} 不存在', 404)
 
-    request_id = device_control.request_bypass(
-        interlock_id, operator, reason, int(timeout_minutes))
+    try:
+        request_id = device_control.request_bypass(
+            interlock_id, operator, reason, int(timeout_minutes))
+    except Exception as e:      # noqa: BLE001
+        logger.error("创建旁路审批单失败: %s", e, exc_info=True)
+        return api_error(f'旁路申请创建失败: {e}', 500)
+    if not request_id:
+        return api_error('旁路申请创建失败', 500)
     return jsonify({
         'success': True,
         'request_id': request_id,
@@ -976,8 +984,13 @@ def approve_bypass_request():
     if not device_control:
         return api_error('设备控制安全模块未启用', 503)
 
-    success, message = device_control.approve_bypass(request_id, approver)
-    return jsonify({'success': success, 'message': message}), (200 if success else 400)
+    result = device_control.approve_bypass(request_id, approver)
+    if not isinstance(result, (tuple, list)) or len(result) != 2:
+        logger.error("approve_bypass 返回格式异常: request_id=%s result=%r",
+                     request_id, result)
+        return api_error('审批失败（安全模块返回异常）', 500)
+    success, message = result
+    return jsonify({'success': bool(success), 'message': message}), (200 if success else 400)
 
 
 @control_bp.route('/control/interlocks/bypass-reject', methods=['POST'])
@@ -1195,14 +1208,14 @@ def list_recipes():
 
 def _get_behavior_simulator(device_id: Optional[str]):
     """获取设备行为模拟器实例"""
-    device_manager = getattr(current_app, 'device_manager', None)
-    if not device_manager:
-        return None
-
-    # 模拟模式下查找行为模拟器
+    # 模拟模式下先查行为模拟器，不依赖 device_manager 是否已装配
     simulators = getattr(current_app, '_behavior_simulators', {})
     if device_id and device_id in simulators:
         return simulators[device_id]
+
+    device_manager = getattr(current_app, 'device_manager', None)
+    if not device_manager:
+        return None
 
     # 尝试从设备管理器获取
     if device_id:

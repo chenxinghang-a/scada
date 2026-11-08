@@ -47,12 +47,14 @@ GATEWAY_TYPES: dict[str, Any] = {
 
 def setup_logging(log_level: str = "INFO"):
     """配置日志"""
+    # 日志目录走 paths.LOG_DIR 并先建目录，FileHandler 不会自建父目录
+    paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=getattr(logging, log_level.upper()),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(str(paths.resolve('logs/gateway.log')), encoding='utf-8')
+            logging.FileHandler(str(paths.LOG_DIR / 'gateway.log'), encoding='utf-8')
         ]
     )
 
@@ -60,7 +62,7 @@ def setup_logging(log_level: str = "INFO"):
 def load_config(config_path: str) -> dict[str, Any]:
     """加载配置文件"""
     with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+        return yaml.safe_load(f) or {}
 
 
 def create_gateway(gateway_type: str, config: dict[str, Any]):
@@ -88,7 +90,8 @@ def select_gateway_configs(config: dict[str, Any], gateway_type: str,
     改为「只读筛选 + 返回副本」，两个问题一起消失。
     """
     entries = config.get('gateways')
-    if entries:
+    # 空列表是“声明了但没配”，不该落进单条目老格式；只有 None 才回退
+    if entries is not None:
         if run_all:
             return [e for e in entries if isinstance(e, dict) and e.get('type')]
         return [e for e in entries
@@ -145,7 +148,8 @@ def main():
     parser.add_argument('--type', '--protocol', dest='type', type=str, default='modbus',
                         choices=sorted(GATEWAY_TYPES),
                         help='网关类型（--protocol 为兼容别名）')
-    parser.add_argument('--config', type=str, default='gateway/config.yaml',
+    parser.add_argument('--config', type=str,
+                        default=str(paths.resolve('gateway/config.yaml')),
                         help='配置文件路径')
     parser.add_argument('--all', action='store_true',
                         help='启动所有配置的网关')
@@ -193,7 +197,8 @@ def main():
                 gateways.append(gateway)
             except Exception as e:
                 logger.error(f"创建{args.type}网关失败: {e}")
-                sys.exit(1)
+                # 单条失败不阻断其余；一条都没建出来时由下方统一退出码 1
+                continue
 
     if not gateways:
         logger.error("没有可用的网关配置")
@@ -214,7 +219,12 @@ def main():
     def signal_handler(signum, frame):
         logger.info("接收到停止信号，正在关闭...")
         for gateway in gateways:
-            gateway.stop()
+            # 单个网关 stop 抛异常不能中断循环，否则其余永不停止
+            try:
+                gateway.stop()
+            except Exception as e:      # noqa: BLE001
+                logger.error("停止网关 %s 异常: %s",
+                             getattr(gateway, 'gateway_id', gateway), e)
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)

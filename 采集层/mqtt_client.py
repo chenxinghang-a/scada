@@ -357,23 +357,27 @@ class MQTTClient:
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息（与其他协议客户端接口统一）"""
+        with self._lock:
+            subscriptions = list(self._subscriptions.keys())
         return {
             'device_id': self.device_id,
             'device_name': self.device_name,
             'connected': self.connected,
             'broker': f'{self.broker_host}:{self.broker_port}',
             'client_id': self.client_id,
-            'subscriptions': list(self._subscriptions.keys()),
+            'subscriptions': subscriptions,
             **self.stats
         }
 
     def get_status(self) -> dict[str, Any]:
         """获取客户端状态"""
+        with self._lock:
+            subscriptions = list(self._subscriptions.keys())
         return {
             'connected': self.connected,
             'broker': f'{self.broker_host}:{self.broker_port}',
             'client_id': self.client_id,
-            'subscriptions': list(self._subscriptions.keys()),
+            'subscriptions': subscriptions,
             'stats': self.stats.copy()
         }
 
@@ -687,7 +691,9 @@ class MQTTClient:
             with lock:
                 self.latest_data[register_name] = payload
 
-        for callback in self._data_callbacks:
+        with self._lock:
+            callbacks = list(self._data_callbacks)
+        for callback in callbacks:
             try:
                 callback(device_id, register_name, value, unit)
             except Exception as e:
