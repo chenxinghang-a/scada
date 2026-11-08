@@ -130,6 +130,7 @@ class DataExport:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
             filename = f'export_{timestamp}.csv'
 
+        tmp_path = None
         try:
             filepath = self._resolve_target(filename)
             # round 369：**汇总全部行的键，而不是只看首行**。
@@ -145,7 +146,9 @@ class DataExport:
                         seen.add(key)
                         fieldnames.append(key)
 
-            with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
+            # 先写临时文件再原子替换：中途异常不会留下半截 CSV 被当成完整导出
+            tmp_path = filepath.with_name(filepath.name + '.tmp')
+            with open(tmp_path, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames,
                                         extrasaction='ignore')
                 # round 381：列名也可能来自 extra_json 的动态键，同样要中和
@@ -153,12 +156,18 @@ class DataExport:
                 writer.writerow({k: _sanitize_cell(k) for k in fieldnames})
                 # 逐格中和公式前缀（CWE-1236），见 _sanitize_cell 的说明
                 writer.writerows(_sanitize_rows(data))
+            tmp_path.replace(filepath)
 
             logger.info(f"CSV导出成功: {filepath}")
             return str(filepath)
 
         except Exception as e:
             logger.error(f"CSV导出失败: {e}")
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             # 保持既有契约：失败返回空串（调用方按 falsy 判断）
             return ""
 

@@ -1597,11 +1597,23 @@ class DataCollector:
                 # round 264：5 秒缓存也是时长 → 单调时钟（墙钟回拨会让缓存
                 # 永远不刷新，拿着几小时前的健康分去决定采集频率）
                 now = time.monotonic()
-                if not hasattr(self, '_health_cache') or now - getattr(self, '_health_cache_ts', 0) > 5:
-                    self._health_cache = self.predictive_maintenance.get_health_scores()
-                    self._health_cache_ts = now
+                # 多设备并发采集：缓存读写与刷新必须同锁，否则会拿到半更新快照
+                lock = getattr(self, '_tracking_lock', None)
+                if lock is not None:
+                    with lock:
+                        if (not hasattr(self, '_health_cache')
+                                or now - getattr(self, '_health_cache_ts', 0) > 5):
+                            self._health_cache = self.predictive_maintenance.get_health_scores()
+                            self._health_cache_ts = now
+                        _health_snapshot = dict(self._health_cache)
+                else:
+                    if (not hasattr(self, '_health_cache')
+                            or now - getattr(self, '_health_cache_ts', 0) > 5):
+                        self._health_cache = self.predictive_maintenance.get_health_scores()
+                        self._health_cache_ts = now
+                    _health_snapshot = dict(self._health_cache)
                 device_health = [
-                    s for s in self._health_cache.values()
+                    s for s in _health_snapshot.values()
                     if s.get('device_id') == device_id
                 ]
                 if device_health:
