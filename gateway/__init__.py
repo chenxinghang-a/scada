@@ -29,19 +29,40 @@ from .thing_model import (
     MetricValue
 )
 
+import logging
+
 from .base_gateway import BaseGateway
 from .modbus_gateway import ModbusGateway
-from .s7_gateway import S7Gateway
-from .opcua_gateway import OPCUAGateway
-from .iec104_gateway import IEC104Gateway
-from .dnp3_gateway import DNP3Gateway
-from .mqtt_subscriber import MQTTSubscriber, MQTTDataDistributor
+
+_logger = logging.getLogger(__name__)
+
+
+def _optional_gateway(module: str, name: str):
+    """可选协议依赖缺失时不让整个 gateway 包导入失败。"""
+    try:
+        mod = __import__(f'{__name__}.{module}', fromlist=[name])
+        return getattr(mod, name)
+    except Exception as e:      # noqa: BLE001 —— 缺依赖/协议栈异常都降级
+        _logger.warning("协议网关 %s 不可用（导入失败）: %s", name, e)
+        return None
+
+
+S7Gateway = _optional_gateway('s7_gateway', 'S7Gateway')
+OPCUAGateway = _optional_gateway('opcua_gateway', 'OPCUAGateway')
+IEC104Gateway = _optional_gateway('iec104_gateway', 'IEC104Gateway')
+DNP3Gateway = _optional_gateway('dnp3_gateway', 'DNP3Gateway')
+try:
+    from .mqtt_subscriber import MQTTSubscriber, MQTTDataDistributor
+except Exception as e:      # noqa: BLE001
+    _logger.warning("MQTT 订阅器不可用（导入失败）: %s", e)
+    MQTTSubscriber = MQTTDataDistributor = None
 
 # 版本号唯一真源：项目根目录 VERSION 文件
 try:
     from pathlib import Path as _Path
     __version__ = (_Path(__file__).resolve().parent.parent / 'VERSION').read_text(encoding='utf-8').strip()
-except Exception:
+except Exception as e:      # noqa: BLE001
+    _logger.warning("读取 VERSION 失败，版本号降级为 0.0.0: %s", e)
     __version__ = "0.0.0"
 __author__ = "Industrial SCADA Team"
 

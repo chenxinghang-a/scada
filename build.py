@@ -47,7 +47,12 @@ def build():
     print(f"  输出: {dist_dir.relative_to(PROJECT_ROOT)}")
     print("=" * 50)
 
-    subprocess.run([sys.executable, '-m', 'pip', 'install', 'pyinstaller', '-q'])
+    # 安装失败必须中止：继续往下跑只会在 PyInstaller 阶段报一个无关错误
+    install = subprocess.run(
+        [sys.executable, '-m', 'pip', 'install', 'pyinstaller', '-q'])
+    if install.returncode != 0:
+        print(f"\n依赖安装失败（pip returncode={install.returncode}）")
+        raise SystemExit(1)
 
     print("\n打包中...")
 
@@ -108,7 +113,9 @@ def build():
         print(f"  双击 SCADA.exe 自动开浏览器")
         print(f"{'=' * 50}")
     else:
-        print("\n打包失败")
+        print(f"\n打包失败（PyInstaller returncode={result.returncode}）")
+        # CI 靠退出码判成败；只打印文字会让失败流水线显示绿色
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':
