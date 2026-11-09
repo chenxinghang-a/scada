@@ -1,5 +1,5 @@
 devices:
-- auth_password: ${DEVICE_REST_ADMIN_PASSWORD}
+- auth_password: CHANGE_ME
   auth_type: basic
   auth_username: admin
   base_url: http://192.168.1.52
@@ -503,7 +503,7 @@ devices:
   host: 192.168.1.200
   id: vibration_sensor_01
   name: MQTT振动监测节点
-  password: ${MQTT_SCADA_PASSWORD}
+  password: CHANGE_ME
   port: 1883
   protocol: mqtt
   topics:
@@ -536,7 +536,7 @@ devices:
   host: 192.168.1.200
   id: water_quality_01
   name: MQTT水质监测终端
-  password: ${MQTT_SCADA_PASSWORD}
+  password: CHANGE_ME
   port: 1883
   protocol: mqtt
   topics:
@@ -567,7 +567,7 @@ devices:
     unit: °C
   username: scada
   vendor: 自研物联网节点
-- auth_token: ${MES_API_TOKEN}
+- auth_token: CHANGE_ME
   auth_type: bearer
   base_url: http://192.168.1.250:8080
   collection_interval: 30
@@ -605,7 +605,7 @@ devices:
   poll_interval: 30
   protocol: rest
   vendor: 自研MES系统
-- auth_password: ${EMS_API_PASSWORD}
+- auth_password: CHANGE_ME
   auth_type: basic
   auth_username: scada
   base_url: http://192.168.1.251:8080

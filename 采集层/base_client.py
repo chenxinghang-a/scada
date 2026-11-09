@@ -48,15 +48,15 @@ def decode_float64_registers(registers: list[int],
                              byte_order: str = 'ABCD') -> float:
     """按字节序解码 float64（4 个寄存器）。
 
-    口径说明（round 370 复核 BUG-013）：64 位 BADC 在本项目里定义为
-    **字交换**（``[w1, w0, w3, w2]``），与 32 位 BADC 的「字内字节交换」
-    不同 —— 这是既有编解码约定，`tests/test_mc_fins_collector_adapter.py`
-    的 `_encode_float64` 按此实现。审计报告按"字内字节交换"推断，
-    与项目约定不符；改它会破坏与现网 BADC 设备的往返一致性，故保持原样。
+    口径：**BADC 一律是「每个 16 位字内部字节交换」**，与 32 位
+    （`reorder_32_words` / `ModbusClient._combine_regs`）以及 uint32 完全一致。
+    原实现把 64 位 BADC 写成字交换 ``[w1, w0, w3, w2]`` —— 那等价于 CDAB，
+    BADC 设备解出的 double 全错，且与同文件的 32 位语义自相矛盾。
     """
     order = str(getattr(byte_order, 'value', byte_order) or 'ABCD').upper()
     if order == 'BADC':
-        words = [registers[1], registers[0], registers[3], registers[2]]
+        words = [_swap16(registers[0]), _swap16(registers[1]),
+                 _swap16(registers[2]), _swap16(registers[3])]
     elif order == 'CDAB':
         words = [registers[2], registers[3], registers[0], registers[1]]
     elif order == 'DCBA':

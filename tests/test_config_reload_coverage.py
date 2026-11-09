@@ -66,6 +66,11 @@ COVERAGE: dict[str, tuple[str, str]] = {
         'watch',
         '同 devices.yaml —— `SimulatedDeviceManager(config_path=...)` 指向它',
     ),
+    'device_template_library.yaml': (
+        'watch',
+        '`core/device_templates.load_custom_templates()` 每次按需读取、不缓存，'
+        '改完下一次调用即生效（工厂自定义型号模板库）',
+    ),
     'simulation_profiles.yaml': (
         'restart',
         '`采集层/simulation_profiles.py::_load_profiles()` 按 mtime 缓存，'

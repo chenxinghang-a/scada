@@ -91,8 +91,6 @@ DOCUMENTATION_ONLY: dict[str, str] = {
     'presets[].simulation_params.noise_levels.':
         '同 base_values：按变量名查表的噪声幅度映射表'
         '（core/simulation_initializer.py:361）。',
-    'system.yaml:system.author':
-        '台账元数据（配置作者），供交接与审计署名，无代码消费方。',
 }
 
 

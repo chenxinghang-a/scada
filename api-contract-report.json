@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-11-07T03:34:51+00:00",
+  "generated_at": "2026-11-09T11:16:08+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -53,7 +53,7 @@
       "source_path": "/alarm-output/acknowledge",
       "backend_path": "/api/alarm-output/acknowledge",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:216",
+      "detail": "精确匹配 api_alarms.py:256",
       "source_file": "alarms.ts",
       "source_line": 182
     },
@@ -63,7 +63,7 @@
       "source_path": "/alarm-output/config",
       "backend_path": "/api/alarm-output/config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:609",
+      "detail": "精确匹配 api_alarms.py:657",
       "source_file": "alarms.ts",
       "source_line": 211
     },
@@ -73,7 +73,7 @@
       "source_path": "/alarm-output/config",
       "backend_path": "/api/alarm-output/config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:622",
+      "detail": "精确匹配 api_alarms.py:670",
       "source_file": "alarms.ts",
       "source_line": 215
     },
@@ -83,7 +83,7 @@
       "source_path": "/alarm-output/manual",
       "backend_path": "/api/alarm-output/manual",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:271",
+      "detail": "精确匹配 api_alarms.py:311",
       "source_file": "alarms.ts",
       "source_line": 190
     },
@@ -93,7 +93,7 @@
       "source_path": "/alarm-output/reset",
       "backend_path": "/api/alarm-output/reset",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:244",
+      "detail": "精确匹配 api_alarms.py:284",
       "source_file": "alarms.ts",
       "source_line": 186
     },
@@ -103,7 +103,7 @@
       "source_path": "/alarm-output/status",
       "backend_path": "/api/alarm-output/status",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:196",
+      "detail": "精确匹配 api_alarms.py:236",
       "source_file": "alarms.ts",
       "source_line": 178
     },
@@ -113,7 +113,7 @@
       "source_path": "/alarm-rules",
       "backend_path": "/api/alarm-rules",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:374",
+      "detail": "精确匹配 api_alarms.py:414",
       "source_file": "alarms.ts",
       "source_line": 157
     },
@@ -123,7 +123,7 @@
       "source_path": "/alarm-rules",
       "backend_path": "/api/alarm-rules",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:383",
+      "detail": "精确匹配 api_alarms.py:423",
       "source_file": "alarms.ts",
       "source_line": 161
     },
@@ -133,7 +133,7 @@
       "source_path": "/alarm-rules/:id",
       "backend_path": "/api/alarm-rules/<rule_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_alarms.py:508",
+      "detail": "结构匹配（参数名归一）api_alarms.py:550",
       "source_file": "alarms.ts",
       "source_line": 169
     },
@@ -143,7 +143,7 @@
       "source_path": "/alarm-rules/:id",
       "backend_path": "/api/alarm-rules/<rule_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_alarms.py:430",
+      "detail": "结构匹配（参数名归一）api_alarms.py:471",
       "source_file": "alarms.ts",
       "source_line": 165
     },
@@ -153,7 +153,7 @@
       "source_path": "/alarm-rules/notification",
       "backend_path": "/api/alarm-rules/notification",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:562",
+      "detail": "精确匹配 api_alarms.py:605",
       "source_file": "alarms.ts",
       "source_line": 207
     },
@@ -163,7 +163,7 @@
       "source_path": "/alarms",
       "backend_path": "/api/alarms",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:26",
+      "detail": "精确匹配 api_alarms.py:50",
       "source_file": "alarms.ts",
       "source_line": 99
     },
@@ -173,7 +173,7 @@
       "source_path": "/alarms/:id/acknowledge",
       "backend_path": "/api/alarms/<alarm_id>/acknowledge",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_alarms.py:73",
+      "detail": "结构匹配（参数名归一）api_alarms.py:102",
       "source_file": "alarms.ts",
       "source_line": 116
     },
@@ -183,7 +183,7 @@
       "source_path": "/alarms/active",
       "backend_path": "/api/alarms/active",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:65",
+      "detail": "精确匹配 api_alarms.py:94",
       "source_file": "alarms.ts",
       "source_line": 106
     },
@@ -193,7 +193,7 @@
       "source_path": "/alarms/dedup-config",
       "backend_path": "/api/alarms/dedup-config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:840",
+      "detail": "精确匹配 api_alarms.py:906",
       "source_file": "alarms.ts",
       "source_line": 148
     },
@@ -203,7 +203,7 @@
       "source_path": "/alarms/dedup-config",
       "backend_path": "/api/alarms/dedup-config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:849",
+      "detail": "精确匹配 api_alarms.py:915",
       "source_file": "alarms.ts",
       "source_line": 152
     },
@@ -213,7 +213,7 @@
       "source_path": "/alarms/flood-status",
       "backend_path": "/api/alarms/flood-status",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:831",
+      "detail": "精确匹配 api_alarms.py:897",
       "source_file": "alarms.ts",
       "source_line": 144
     },
@@ -223,7 +223,7 @@
       "source_path": "/alarms/statistics",
       "backend_path": "/api/alarms/statistics",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:186",
+      "detail": "精确匹配 api_alarms.py:226",
       "source_file": "alarms.ts",
       "source_line": 126
     },
@@ -353,7 +353,7 @@
       "source_path": "/broadcast/areas",
       "backend_path": "/api/broadcast/areas",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:349",
+      "detail": "精确匹配 api_alarms.py:389",
       "source_file": "alarms.ts",
       "source_line": 195
     },
@@ -363,7 +363,7 @@
       "source_path": "/broadcast/config",
       "backend_path": "/api/broadcast/config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:729",
+      "detail": "精确匹配 api_alarms.py:787",
       "source_file": "alarms.ts",
       "source_line": 219
     },
@@ -373,7 +373,7 @@
       "source_path": "/broadcast/config",
       "backend_path": "/api/broadcast/config",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:750",
+      "detail": "精确匹配 api_alarms.py:808",
       "source_file": "alarms.ts",
       "source_line": 223
     },
@@ -383,7 +383,7 @@
       "source_path": "/broadcast/history",
       "backend_path": "/api/broadcast/history",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:360",
+      "detail": "精确匹配 api_alarms.py:400",
       "source_file": "alarms.ts",
       "source_line": 199
     },
@@ -393,7 +393,7 @@
       "source_path": "/broadcast/speak",
       "backend_path": "/api/broadcast/speak",
       "status": "match",
-      "detail": "精确匹配 api_alarms.py:312",
+      "detail": "精确匹配 api_alarms.py:352",
       "source_file": "alarms.ts",
       "source_line": 203
     },
@@ -423,7 +423,7 @@
       "source_path": "/control/audit",
       "backend_path": "/api/control/audit",
       "status": "match",
-      "detail": "精确匹配 api_control.py:1026",
+      "detail": "精确匹配 api_control.py:1080",
       "source_file": "control.ts",
       "source_line": 86
     },
@@ -433,7 +433,7 @@
       "source_path": "/control/batch",
       "backend_path": "/api/control/batch",
       "status": "match",
-      "detail": "精确匹配 api_control.py:985",
+      "detail": "精确匹配 api_control.py:1039",
       "source_file": "control.ts",
       "source_line": 72
     },
@@ -443,7 +443,7 @@
       "source_path": "/control/estop",
       "backend_path": "/api/control/estop",
       "status": "match",
-      "detail": "精确匹配 api_control.py:723",
+      "detail": "精确匹配 api_control.py:741",
       "source_file": "control.ts",
       "source_line": 11
     },
@@ -453,7 +453,7 @@
       "source_path": "/control/estop/reset",
       "backend_path": "/api/control/estop/reset",
       "status": "match",
-      "detail": "精确匹配 api_control.py:742",
+      "detail": "精确匹配 api_control.py:760",
       "source_file": "control.ts",
       "source_line": 15
     },
@@ -463,7 +463,7 @@
       "source_path": "/control/estop/status",
       "backend_path": "/api/control/estop/status",
       "status": "match",
-      "detail": "精确匹配 api_control.py:764",
+      "detail": "精确匹配 api_control.py:782",
       "source_file": "control.ts",
       "source_line": 19
     },
@@ -473,7 +473,7 @@
       "source_path": "/control/health",
       "backend_path": "/api/control/health",
       "status": "match",
-      "detail": "精确匹配 api_control.py:975",
+      "detail": "精确匹配 api_control.py:1029",
       "source_file": "control.ts",
       "source_line": 77
     },
@@ -483,7 +483,7 @@
       "source_path": "/control/interlocks",
       "backend_path": "/api/control/interlocks",
       "status": "match",
-      "detail": "精确匹配 api_control.py:774",
+      "detail": "精确匹配 api_control.py:792",
       "source_file": "control.ts",
       "source_line": 24
     },
@@ -493,7 +493,7 @@
       "source_path": "/control/interlocks/:ruleId/bypass",
       "backend_path": "/api/control/interlocks/<rule_id>/bypass",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_control.py:815",
+      "detail": "结构匹配（参数名归一）api_control.py:833",
       "source_file": "control.ts",
       "source_line": 28
     },
@@ -503,7 +503,7 @@
       "source_path": "/control/interlocks/:ruleId/restore",
       "backend_path": "/api/control/interlocks/<rule_id>/restore",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_control.py:875",
+      "detail": "结构匹配（参数名归一）api_control.py:893",
       "source_file": "control.ts",
       "source_line": 32
     },
@@ -513,7 +513,7 @@
       "source_path": "/control/interlocks/bypass-approve",
       "backend_path": "/api/control/interlocks/bypass-approve",
       "status": "match",
-      "detail": "精确匹配 api_control.py:924",
+      "detail": "精确匹配 api_control.py:973",
       "source_file": "control.ts",
       "source_line": 41
     },
@@ -523,7 +523,7 @@
       "source_path": "/control/interlocks/bypass-pending",
       "backend_path": "/api/control/interlocks/bypass-pending",
       "status": "match",
-      "detail": "精确匹配 api_control.py:963",
+      "detail": "精确匹配 api_control.py:1017",
       "source_file": "control.ts",
       "source_line": 49
     },
@@ -533,7 +533,7 @@
       "source_path": "/control/interlocks/bypass-reject",
       "backend_path": "/api/control/interlocks/bypass-reject",
       "status": "match",
-      "detail": "精确匹配 api_control.py:943",
+      "detail": "精确匹配 api_control.py:997",
       "source_file": "control.ts",
       "source_line": 45
     },
@@ -543,7 +543,7 @@
       "source_path": "/control/interlocks/bypass-request",
       "backend_path": "/api/control/interlocks/bypass-request",
       "status": "match",
-      "detail": "精确匹配 api_control.py:887",
+      "detail": "精确匹配 api_control.py:930",
       "source_file": "control.ts",
       "source_line": 37
     },
@@ -553,7 +553,7 @@
       "source_path": "/control/logs",
       "backend_path": "/api/control/logs",
       "status": "match",
-      "detail": "精确匹配 api_control.py:698",
+      "detail": "精确匹配 api_control.py:716",
       "source_file": "control.ts",
       "source_line": 82
     },
@@ -563,7 +563,7 @@
       "source_path": "/control/recipe/list",
       "backend_path": "/api/control/recipe/list",
       "status": "match",
-      "detail": "精确匹配 api_control.py:1131",
+      "detail": "精确匹配 api_control.py:1192",
       "source_file": "control.ts",
       "source_line": 91
     },
@@ -573,7 +573,7 @@
       "source_path": "/control/recipe/start",
       "backend_path": "/api/control/recipe/start",
       "status": "match",
-      "detail": "精确匹配 api_control.py:1050",
+      "detail": "精确匹配 api_control.py:1104",
       "source_file": "control.ts",
       "source_line": 95
     },
@@ -583,7 +583,7 @@
       "source_path": "/control/recipe/status",
       "backend_path": "/api/control/recipe/status",
       "status": "match",
-      "detail": "精确匹配 api_control.py:1115",
+      "detail": "精确匹配 api_control.py:1176",
       "source_file": "control.ts",
       "source_line": 105
     },
@@ -593,7 +593,7 @@
       "source_path": "/control/recipe/stop",
       "backend_path": "/api/control/recipe/stop",
       "status": "match",
-      "detail": "精确匹配 api_control.py:1088",
+      "detail": "精确匹配 api_control.py:1142",
       "source_file": "control.ts",
       "source_line": 101
     },
@@ -603,7 +603,7 @@
       "source_path": "/control/status",
       "backend_path": "/api/control/status",
       "status": "match",
-      "detail": "精确匹配 api_control.py:1038",
+      "detail": "精确匹配 api_control.py:1092",
       "source_file": "control.ts",
       "source_line": 6
     },
@@ -683,7 +683,7 @@
       "source_path": "/devices",
       "backend_path": "/api/devices",
       "status": "match",
-      "detail": "精确匹配 api_devices.py:571",
+      "detail": "精确匹配 api_devices.py:589",
       "source_file": "devices.ts",
       "source_line": 45
     },
@@ -713,7 +713,7 @@
       "source_path": "/devices/:deviceId/write-endpoint",
       "backend_path": "/api/devices/<device_id>/write-endpoint",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_control.py:496",
+      "detail": "结构匹配（参数名归一）api_control.py:506",
       "source_file": "control.ts",
       "source_line": 67
     },
@@ -733,7 +733,7 @@
       "source_path": "/devices/:id",
       "backend_path": "/api/devices/<device_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:846",
+      "detail": "结构匹配（参数名归一）api_devices.py:879",
       "source_file": "devices.ts",
       "source_line": 53
     },
@@ -743,7 +743,7 @@
       "source_path": "/devices/:id",
       "backend_path": "/api/devices/<device_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:531",
+      "detail": "结构匹配（参数名归一）api_devices.py:547",
       "source_file": "devices.ts",
       "source_line": 41
     },
@@ -753,7 +753,7 @@
       "source_path": "/devices/:id",
       "backend_path": "/api/devices/<device_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:670",
+      "detail": "结构匹配（参数名归一）api_devices.py:694",
       "source_file": "devices.ts",
       "source_line": 49
     },
@@ -763,7 +763,7 @@
       "source_path": "/devices/:id/behavior",
       "backend_path": "/api/devices/<device_id>/behavior",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:1168",
+      "detail": "结构匹配（参数名归一）api_devices.py:1211",
       "source_file": "devices.ts",
       "source_line": 113
     },
@@ -773,7 +773,7 @@
       "source_path": "/devices/:id/connect",
       "backend_path": "/api/devices/<device_id>/connect",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:908",
+      "detail": "结构匹配（参数名归一）api_devices.py:941",
       "source_file": "devices.ts",
       "source_line": 61
     },
@@ -783,7 +783,7 @@
       "source_path": "/devices/:id/disconnect",
       "backend_path": "/api/devices/<device_id>/disconnect",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:924",
+      "detail": "结构匹配（参数名归一）api_devices.py:957",
       "source_file": "devices.ts",
       "source_line": 65
     },
@@ -793,7 +793,7 @@
       "source_path": "/devices/:id/force-state",
       "backend_path": "/api/devices/<device_id>/force-state",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:1261",
+      "detail": "结构匹配（参数名归一）api_devices.py:1309",
       "source_file": "devices.ts",
       "source_line": 109
     },
@@ -803,7 +803,7 @@
       "source_path": "/devices/:id/inject-fault",
       "backend_path": "/api/devices/<device_id>/inject-fault",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:1205",
+      "detail": "结构匹配（参数名归一）api_devices.py:1248",
       "source_file": "devices.ts",
       "source_line": 105
     },
@@ -813,7 +813,7 @@
       "source_path": "/devices/:id/start",
       "backend_path": "/api/devices/<device_id>/start",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:976",
+      "detail": "结构匹配（参数名归一）api_devices.py:1014",
       "source_file": "devices.ts",
       "source_line": 69
     },
@@ -823,7 +823,7 @@
       "source_path": "/devices/:id/stop",
       "backend_path": "/api/devices/<device_id>/stop",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:939",
+      "detail": "结构匹配（参数名归一）api_devices.py:977",
       "source_file": "devices.ts",
       "source_line": 73
     },
@@ -833,7 +833,7 @@
       "source_path": "/devices/:id/test",
       "backend_path": "/api/devices/<device_id>/test",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:1083",
+      "detail": "结构匹配（参数名归一）api_devices.py:1121",
       "source_file": "devices.ts",
       "source_line": 57
     },
@@ -843,7 +843,7 @@
       "source_path": "/devices/presets",
       "backend_path": "/api/devices/presets",
       "status": "match",
-      "detail": "精确匹配 api_devices.py:1886",
+      "detail": "精确匹配 api_devices.py:1942",
       "source_file": "devices.ts",
       "source_line": 85
     },
@@ -853,7 +853,7 @@
       "source_path": "/devices/presets/:presetId",
       "backend_path": "/api/devices/presets/<preset_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_devices.py:1899",
+      "detail": "结构匹配（参数名归一）api_devices.py:1955",
       "source_file": "devices.ts",
       "source_line": 93
     },
@@ -863,7 +863,7 @@
       "source_path": "/devices/presets/add",
       "backend_path": "/api/devices/presets/add",
       "status": "match",
-      "detail": "精确匹配 api_devices.py:1914",
+      "detail": "精确匹配 api_devices.py:1970",
       "source_file": "devices.ts",
       "source_line": 89
     },
@@ -873,7 +873,7 @@
       "source_path": "/devices/presets/add-all",
       "backend_path": "/api/devices/presets/add-all",
       "status": "match",
-      "detail": "精确匹配 api_devices.py:1998",
+      "detail": "精确匹配 api_devices.py:2057",
       "source_file": "devices.ts",
       "source_line": 101
     },
@@ -883,7 +883,7 @@
       "source_path": "/devices/presets/batch-add",
       "backend_path": "/api/devices/presets/batch-add",
       "status": "match",
-      "detail": "精确匹配 api_devices.py:1958",
+      "detail": "精确匹配 api_devices.py:2015",
       "source_file": "devices.ts",
       "source_line": 97
     },
@@ -893,7 +893,7 @@
       "source_path": "/devices/protocols",
       "backend_path": "/api/devices/protocols",
       "status": "match",
-      "detail": "精确匹配 api_devices.py:1151",
+      "detail": "精确匹配 api_devices.py:1194",
       "source_file": "devices.ts",
       "source_line": 77
     },
@@ -903,7 +903,7 @@
       "source_path": "/devices/templates",
       "backend_path": "/api/devices/templates",
       "status": "match",
-      "detail": "精确匹配 api_devices.py:1315",
+      "detail": "精确匹配 api_devices.py:1363",
       "source_file": "devices.ts",
       "source_line": 81
     },
@@ -1043,7 +1043,7 @@
       "source_path": "/industry40/devices/status",
       "backend_path": "/api/industry40/devices/status",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:591",
+      "detail": "精确匹配 api_industry40.py:599",
       "source_file": "industry40.ts",
       "source_line": 427
     },
@@ -1053,7 +1053,7 @@
       "source_path": "/industry40/edge/log",
       "backend_path": "/api/industry40/edge/log",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:571",
+      "detail": "精确匹配 api_industry40.py:579",
       "source_file": "industry40.ts",
       "source_line": 422
     },
@@ -1063,7 +1063,7 @@
       "source_path": "/industry40/edge/rules",
       "backend_path": "/api/industry40/edge/rules",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:554",
+      "detail": "精确匹配 api_industry40.py:562",
       "source_file": "industry40.ts",
       "source_line": 419
     },
@@ -1073,7 +1073,7 @@
       "source_path": "/industry40/edge/status",
       "backend_path": "/api/industry40/edge/status",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:537",
+      "detail": "精确匹配 api_industry40.py:545",
       "source_file": "industry40.ts",
       "source_line": 416
     },
@@ -1083,7 +1083,7 @@
       "source_path": "/industry40/energy",
       "backend_path": "/api/industry40/energy",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:364",
+      "detail": "精确匹配 api_industry40.py:372",
       "source_file": "industry40.ts",
       "source_line": 386
     },
@@ -1093,7 +1093,7 @@
       "source_path": "/industry40/energy/anomaly-config",
       "backend_path": "/api/industry40/energy/anomaly-config",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:494",
+      "detail": "精确匹配 api_industry40.py:502",
       "source_file": "industry40.ts",
       "source_line": 408
     },
@@ -1103,7 +1103,7 @@
       "source_path": "/industry40/energy/anomaly-config",
       "backend_path": "/api/industry40/energy/anomaly-config",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:510",
+      "detail": "精确匹配 api_industry40.py:518",
       "source_file": "industry40.ts",
       "source_line": 411
     },
@@ -1113,7 +1113,7 @@
       "source_path": "/industry40/energy/carbon",
       "backend_path": "/api/industry40/energy/carbon",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:398",
+      "detail": "精确匹配 api_industry40.py:406",
       "source_file": "industry40.ts",
       "source_line": 392
     },
@@ -1123,7 +1123,7 @@
       "source_path": "/industry40/energy/cost",
       "backend_path": "/api/industry40/energy/cost",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:381",
+      "detail": "精确匹配 api_industry40.py:389",
       "source_file": "industry40.ts",
       "source_line": 389
     },
@@ -1133,7 +1133,7 @@
       "source_path": "/industry40/energy/power",
       "backend_path": "/api/industry40/energy/power",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:415",
+      "detail": "精确匹配 api_industry40.py:423",
       "source_file": "industry40.ts",
       "source_line": 395
     },
@@ -1143,7 +1143,7 @@
       "source_path": "/industry40/energy/tariff",
       "backend_path": "/api/industry40/energy/tariff",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:437",
+      "detail": "精确匹配 api_industry40.py:445",
       "source_file": "industry40.ts",
       "source_line": 398
     },
@@ -1153,7 +1153,7 @@
       "source_path": "/industry40/energy/tariff",
       "backend_path": "/api/industry40/energy/tariff",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:454",
+      "detail": "精确匹配 api_industry40.py:462",
       "source_file": "industry40.ts",
       "source_line": 405
     },
@@ -1163,7 +1163,7 @@
       "source_path": "/industry40/health",
       "backend_path": "/api/industry40/health",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:198",
+      "detail": "精确匹配 api_industry40.py:206",
       "source_file": "industry40.ts",
       "source_line": 340
     },
@@ -1173,7 +1173,7 @@
       "source_path": "/industry40/health/:deviceId",
       "backend_path": "/api/industry40/health/<device_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:222",
+      "detail": "结构匹配（参数名归一）api_industry40.py:230",
       "source_file": "industry40.ts",
       "source_line": 343
     },
@@ -1183,7 +1183,7 @@
       "source_path": "/industry40/maintenance-alerts",
       "backend_path": "/api/industry40/maintenance-alerts",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:244",
+      "detail": "精确匹配 api_industry40.py:252",
       "source_file": "industry40.ts",
       "source_line": 346
     },
@@ -1193,7 +1193,7 @@
       "source_path": "/industry40/oee",
       "backend_path": "/api/industry40/oee",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:281",
+      "detail": "精确匹配 api_industry40.py:289",
       "source_file": "industry40.ts",
       "source_line": 367
     },
@@ -1203,7 +1203,7 @@
       "source_path": "/industry40/oee/:deviceId",
       "backend_path": "/api/industry40/oee/<device_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:298",
+      "detail": "结构匹配（参数名归一）api_industry40.py:306",
       "source_file": "industry40.ts",
       "source_line": 370
     },
@@ -1213,7 +1213,7 @@
       "source_path": "/industry40/overview",
       "backend_path": "/api/industry40/overview",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:739",
+      "detail": "精确匹配 api_industry40.py:750",
       "source_file": "industry40.ts",
       "source_line": 335
     },
@@ -1223,7 +1223,7 @@
       "source_path": "/industry40/spc/:deviceId/:registerName",
       "backend_path": "/api/industry40/spc/<device_id>/<register_name>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:320",
+      "detail": "结构匹配（参数名归一）api_industry40.py:328",
       "source_file": "industry40.ts",
       "source_line": 375
     },
@@ -1233,7 +1233,7 @@
       "source_path": "/industry40/spc/violations",
       "backend_path": "/api/industry40/spc/violations",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:343",
+      "detail": "精确匹配 api_industry40.py:351",
       "source_file": "industry40.ts",
       "source_line": 381
     },
@@ -1243,7 +1243,7 @@
       "source_path": "/industry40/trend/:deviceId/:registerName",
       "backend_path": "/api/industry40/trend/<device_id>/<register_name>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:262",
+      "detail": "结构匹配（参数名归一）api_industry40.py:270",
       "source_file": "industry40.ts",
       "source_line": 351
     },
@@ -1253,7 +1253,7 @@
       "source_path": "/industry40/vibration",
       "backend_path": "/api/industry40/vibration",
       "status": "match",
-      "detail": "精确匹配 api_industry40.py:657",
+      "detail": "精确匹配 api_industry40.py:665",
       "source_file": "industry40.ts",
       "source_line": 432
     },
@@ -1263,7 +1263,7 @@
       "source_path": "/industry40/vibration/:deviceId",
       "backend_path": "/api/industry40/vibration/<device_id>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:676",
+      "detail": "结构匹配（参数名归一）api_industry40.py:684",
       "source_file": "industry40.ts",
       "source_line": 435
     },
@@ -1273,7 +1273,7 @@
       "source_path": "/industry40/vibration/:deviceId/bearing",
       "backend_path": "/api/industry40/vibration/<device_id>/bearing",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:716",
+      "detail": "结构匹配（参数名归一）api_industry40.py:724",
       "source_file": "industry40.ts",
       "source_line": 441
     },
@@ -1283,7 +1283,7 @@
       "source_path": "/industry40/vibration/:deviceId/spectrum",
       "backend_path": "/api/industry40/vibration/<device_id>/spectrum",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_industry40.py:696",
+      "detail": "结构匹配（参数名归一）api_industry40.py:704",
       "source_file": "industry40.ts",
       "source_line": 438
     },
@@ -1393,43 +1393,43 @@
       "method": "POST",
       "backend_path": "/api/alarms/<alarm_id>/shelve",
       "source_file": "api_alarms.py",
-      "source_line": 121
+      "source_line": 153
     },
     {
       "method": "POST",
       "backend_path": "/api/alarms/<alarm_id>/unshelve",
       "source_file": "api_alarms.py",
-      "source_line": 164
+      "source_line": 201
     },
     {
       "method": "GET",
       "backend_path": "/api/alarms/escalation/rules",
       "source_file": "api_alarms.py",
-      "source_line": 922
+      "source_line": 990
     },
     {
       "method": "PUT",
       "backend_path": "/api/alarms/escalation/rules",
       "source_file": "api_alarms.py",
-      "source_line": 931
+      "source_line": 999
     },
     {
       "method": "GET",
       "backend_path": "/api/alarms/escalation/status",
       "source_file": "api_alarms.py",
-      "source_line": 913
+      "source_line": 981
     },
     {
       "method": "GET",
       "backend_path": "/api/alarms/shelved",
       "source_file": "api_alarms.py",
-      "source_line": 113
+      "source_line": 145
     },
     {
       "method": "GET",
       "backend_path": "/api/control/interlocks/load-summary",
       "source_file": "api_control.py",
-      "source_line": 784
+      "source_line": 802
     },
     {
       "method": "GET",
@@ -1453,7 +1453,7 @@
       "method": "GET",
       "backend_path": "/api/devices/<device_id>/adapter-config",
       "source_file": "api_devices.py",
-      "source_line": 504
+      "source_line": 520
     },
     {
       "method": "GET",
@@ -1483,25 +1483,25 @@
       "method": "GET",
       "backend_path": "/api/devices/adapters",
       "source_file": "api_devices.py",
-      "source_line": 464
+      "source_line": 480
     },
     {
       "method": "POST",
       "backend_path": "/api/devices/adapters/reload",
       "source_file": "api_devices.py",
-      "source_line": 478
+      "source_line": 494
     },
     {
       "method": "POST",
       "backend_path": "/api/devices/reload",
       "source_file": "api_devices.py",
-      "source_line": 774
+      "source_line": 807
     },
     {
       "method": "GET",
       "backend_path": "/api/devices/topology",
       "source_file": "api_devices.py",
-      "source_line": 305
+      "source_line": 315
     },
     {
       "method": "GET",
@@ -1549,31 +1549,31 @@
       "method": "GET",
       "backend_path": "/api/industry40/freshness",
       "source_file": "api_industry40.py",
-      "source_line": 617
+      "source_line": 625
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/audit",
       "source_file": "api_ops.py",
-      "source_line": 546
+      "source_line": 547
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/cleanup/backups",
       "source_file": "api_ops.py",
-      "source_line": 468
+      "source_line": 469
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/cleanup/history",
       "source_file": "api_ops.py",
-      "source_line": 421
+      "source_line": 422
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/cleanup/logs",
       "source_file": "api_ops.py",
-      "source_line": 493
+      "source_line": 494
     },
     {
       "method": "GET",
@@ -1597,61 +1597,61 @@
       "method": "PUT",
       "backend_path": "/api/ops/config/<key>",
       "source_file": "api_ops.py",
-      "source_line": 214
+      "source_line": 215
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/config/history",
       "source_file": "api_ops.py",
-      "source_line": 253
+      "source_line": 254
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/db/analyze",
       "source_file": "api_ops.py",
-      "source_line": 368
+      "source_line": 369
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/db/integrity",
       "source_file": "api_ops.py",
-      "source_line": 388
+      "source_line": 389
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/db/reindex",
       "source_file": "api_ops.py",
-      "source_line": 346
+      "source_line": 347
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/db/tables",
       "source_file": "api_ops.py",
-      "source_line": 402
+      "source_line": 403
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/db/vacuum",
       "source_file": "api_ops.py",
-      "source_line": 324
+      "source_line": 325
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/diagnostics/export",
       "source_file": "api_ops.py",
-      "source_line": 521
+      "source_line": 522
     },
     {
       "method": "GET",
       "backend_path": "/api/ops/maintenance/tasks",
       "source_file": "api_ops.py",
-      "source_line": 562
+      "source_line": 563
     },
     {
       "method": "POST",
       "backend_path": "/api/ops/maintenance/tasks/<name>/run",
       "source_file": "api_ops.py",
-      "source_line": 578
+      "source_line": 579
     },
     {
       "method": "GET",
