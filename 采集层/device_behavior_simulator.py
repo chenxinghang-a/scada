@@ -292,6 +292,16 @@ class DeviceBehaviorSimulator:
         # ===== 按本设备的基准量放大物理极限（见方法注释）=====
         self._calibrate_limits()
 
+        # 配置已生效，运行态当前值必须跟着基准走：`_current_*` 在 __init__ 前段
+        # 是按**默认 ProcessModel** 初始化的，不同步会让首批采样与设备基准不一致
+        #（例如锅炉前几秒仍按 50°C 输出，而不是配置的 155°C）。
+        pm = self.process_model
+        self._current_temp = pm.base_temperature
+        self._current_pressure = pm.base_pressure
+        self._current_flow = pm.base_flow
+        self._current_level = pm.base_level
+        self._current_power_kw = pm.base_power_kw
+
         device_role = "监测" if self._is_monitoring_device else "工作"
         logger.info(f"[行为模拟] 设备 {self.device_name} 初始化完成, 角色: {device_role}, 参数: {len(self._device_param_names)} 个")
 
@@ -736,6 +746,7 @@ class DeviceBehaviorSimulator:
         # 但 base_values 是**配置值**不是测量值 —— 配置 55°C 而默认 50°C，
         # 差 5 < 20 → **配置被静默忽略**，模拟器一直按 50°C 跑。
         # 配置值应当无条件生效，差异大小与「是否生效」无关。
+        _temp_seen = False
         for name, value in base_values.items():
             got = try_finite_float(value)
             if got is None:
@@ -745,9 +756,11 @@ class DeviceBehaviorSimulator:
                 continue
             name_lower = name.lower()
             if 'temperature' in name_lower or 'temp' in name_lower:
-                # 取第一个温度参数作为基础温度
-                self.process_model.base_temperature = got
-                self._current_temp = got
+                # 取**第一个**温度参数（与注释一致）：多个温度键时后者不再覆盖
+                if not _temp_seen:
+                    self.process_model.base_temperature = got
+                    self._current_temp = got
+                    _temp_seen = True
             elif 'pressure' in name_lower and 'spray' not in name_lower:
                 self.process_model.base_pressure = got
                 self._current_pressure = got
@@ -926,9 +939,18 @@ class DeviceBehaviorSimulator:
             # 加热器开关
             elif 'heater' in name_lower and ('enable' in name_lower or 'switch' in name_lower):
                 if value == 0:
-                    # 关闭加热→温度下降
-                    self.process_model.base_temperature = max(20, self.process_model.base_temperature - 30)
+                    # 关闭加热→温度下降（记住关闭前基准，重开时恢复）
+                    self._temp_before_heater_off = self.process_model.base_temperature
+                    self.process_model.base_temperature = max(
+                        20, self.process_model.base_temperature - 30)
                     logger.info(f"[行为模拟] 设备 {self.device_name} 加热关闭")
+                else:
+                    # 原来没有恢复分支：关一次加热后基准温度永久低 30°C
+                    restore = getattr(self, '_temp_before_heater_off', None)
+                    if restore is not None:
+                        self.process_model.base_temperature = restore
+                    logger.info(f"[行为模拟] 设备 {self.device_name} 加热开启，"
+                                f"基准温度恢复 {self.process_model.base_temperature}")
             
             # 泵开关
             elif 'pump' in name_lower and ('enable' in name_lower or 'switch' in name_lower):
@@ -1100,6 +1122,7 @@ class DeviceBehaviorSimulator:
                 logger.error(f"[行为模拟] 回调异常: {e}")
         
         self._last_update = current_time
+        self._last_output = dict(data)
         return data
     
     def _apply_recipe_setpoints(self, dt: float):
@@ -1133,17 +1156,17 @@ class DeviceBehaviorSimulator:
             self.health.operating_hours += hours
 
             # 机械磨损（缓慢）
-            self.health.mechanical_health -= 0.001 * hours
+            self.health.mechanical_health = max(0.0, self.health.mechanical_health - 0.001 * hours)
 
             # 电气退化
-            self.health.electrical_health -= 0.0005 * hours
+            self.health.electrical_health = max(0.0, self.health.electrical_health - 0.0005 * hours)
 
             # 热退化（与温度相关）
             temp_factor = max(0, (self._current_temp - 80) / 100)
-            self.health.thermal_health -= 0.002 * temp_factor * hours
+            self.health.thermal_health = max(0.0, self.health.thermal_health - 0.002 * temp_factor * hours)
 
             # 振动退化
-            self.health.vibration_health -= 0.0008 * hours
+            self.health.vibration_health = max(0.0, self.health.vibration_health - 0.0008 * hours)
 
             # 计算总体健康
             self.health.overall_score = (
@@ -1470,7 +1493,8 @@ class DeviceBehaviorSimulator:
                 alpha = 1 - math.exp(-self._dt / 10)  # 10秒时间常数
                 self._motor_current += (wear_current_target - self._motor_current) * alpha
 
-                wear_vib_target = self._vibration + 3 * severity
+                # 目标用绝对值（基准振动 1.5 + 严重度），不叠加当前值
+                wear_vib_target = 1.5 + 3 * severity
                 wear_vib_target = min(self.VIBRATION_MAX, wear_vib_target)
                 alpha_vib = 1 - math.exp(-self._dt / 8)
                 self._vibration += (wear_vib_target - self._vibration) * alpha_vib
@@ -1994,6 +2018,18 @@ class DeviceBehaviorSimulator:
         
         return all_params
     
+    def get_latest_output(self) -> Dict[str, Any]:
+        """最近一次更新周期生成的输出（只读快照）。
+
+        与现算的区别：现算会绕过外部写入覆盖、与缓存不一致，且带副作用。
+        尚未跑过任何周期时退回现算一次（并缓存）。
+        """
+        cached = getattr(self, '_last_output', None)
+        if cached is None:
+            cached = dict(self._generate_output_data())
+            self._last_output = dict(cached)
+        return dict(cached)
+
     def get_status(self) -> Dict[str, Any]:
         """获取设备状态（含所有活跃故障）"""
         return {
@@ -2126,25 +2162,39 @@ class MultiDeviceSimulator:
     def stop(self):
         """停止所有模拟器"""
         self._running = False
-        
+
         with self._lock:
             for simulator in self.simulators.values():
                 simulator.stop()
-        
+
+        # 等待更新线程真正退出：否则它可能在本方法返回后继续回调一轮，
+        # 调用方已经关掉下游（DB/WS）就会看到"停止后还有数据"。
+        thread = self._update_thread
+        if thread is not None and thread.is_alive() \
+                and thread is not threading.current_thread():
+            thread.join(timeout=5.0)
+            if thread.is_alive():
+                logger.warning("[多设备模拟器] 更新线程 5s 内未退出")
+
         logger.info("[多设备模拟器] 已停止")
-    
+
     def _update_loop(self):
-        """更新循环"""
+        """更新循环（时间步长取真实经过时间）"""
+        last = time.monotonic()
         while self._running:
             try:
-                self._update_all()
+                now = time.monotonic()
+                dt = max(0.0, now - last)
+                last = now
+                self._update_all(dt)
                 time.sleep(self._update_interval)
             except Exception as e:
                 logger.error(f"[多设备模拟器] 更新异常: {e}")
+                last = time.monotonic()
                 time.sleep(1)
     
-    def _update_all(self):
-        """更新所有设备"""
+    def _update_all(self, dt: Optional[float] = None):
+        """更新所有设备（``dt`` 为真实经过时间，缺省沿用配置间隔）。"""
         # round 381：**锁内只取快照，回调必须在锁外调**。
         # `self._lock` 是普通 Lock（非可重入），而回调里若查状态/删设备
         # （get_device_status / remove_device）会再次申请同一把锁 → 自死锁，
@@ -2155,7 +2205,10 @@ class MultiDeviceSimulator:
 
         for device_id, simulator in devices:
             try:
-                data = simulator.update(self._update_interval)
+                # 时间步长必须用真实经过时间：固定值会在处理耗时/异常退避后
+                # 与实际时间脱节（累计运行小时、能量积分都会算错）。
+                data = simulator.update(
+                    dt if dt is not None and dt > 0 else self._update_interval)
                 if data:
                     for callback in callbacks:
                         try:
@@ -2190,5 +2243,7 @@ class MultiDeviceSimulator:
         with self._lock:
             simulator = self.simulators.get(device_id)
             if simulator:
-                return simulator._generate_output_data()
+                # 直接调用 `_generate_output_data()` 会现算一份：绕过外部写入覆盖、
+                # 与更新周期缓存不一致，且每次调用都推进内部计数。
+                return simulator.get_latest_output()
             return None
