@@ -18,6 +18,8 @@ import time
 import logging
 from typing import Any
 
+from core.safe_numeric import try_finite_float
+
 from .base_gateway import BaseGateway
 from .thing_model import (
     DeviceTelemetry, ThingModelConverter,
@@ -684,12 +686,20 @@ class IEC104Gateway(BaseGateway):
             # 单个坏点（value 缺失/None/非数字）不能让整台设备的读取崩掉：
             # 跳过该点并记账，其余点位照常返回。
             try:
-                result[register_name] = float(info['value'])
-            except (KeyError, TypeError, ValueError) as e:
+                value = try_finite_float(info['value'])
+            except (KeyError, TypeError) as e:
                 self.logger.warning(
-                    "IEC104 点位值非法，已跳过 device=%s register=%s ioa=%s info=%r: %s",
-                    device_id, register_name, ioa, info, e)
+                    "IEC104 点位值缺失/非法，已跳过 device=%s register=%s ioa=%s: %s",
+                    device_id, register_name, ioa, e)
                 self._note_read_failure(device_id, register_name, f"值非法: {e}")
+                continue
+            if value is None:
+                self.logger.warning(
+                    "IEC104 点位值非有限数值，已跳过 device=%s register=%s ioa=%s info=%r",
+                    device_id, register_name, ioa, info)
+                self._note_read_failure(device_id, register_name, "值非有限数值")
+                continue
+            result[register_name] = value
 
         return result if result else None
 

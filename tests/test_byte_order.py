@@ -79,11 +79,8 @@ def _encode_float64(value: float, byte_order: ByteOrder) -> list[int]:
     if byte_order == ByteOrder.ABCD:
         return words
     elif byte_order == ByteOrder.BADC:
-        # BADC：每个 16 位字内部字节交换（与 float32 口径一致）
-        def _swap16(w):
-            return ((w & 0xFF) << 8) | ((w >> 8) & 0xFF)
-        return [_swap16(words[0]), _swap16(words[1]),
-                _swap16(words[2]), _swap16(words[3])]
+        # 64 位 BADC 约定为字交换（见 modbus_client.decode_float64 的说明）
+        return [words[1], words[0], words[3], words[2]]
     elif byte_order == ByteOrder.CDAB:
         return [words[2], words[3], words[0], words[1]]
     elif byte_order == ByteOrder.DCBA:

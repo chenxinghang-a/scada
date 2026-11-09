@@ -63,9 +63,10 @@ templates:
       write:
         method: POST
         path: "/channels/{name}"
-        # 键必须加引号：YAML 1.1 会把裸 `on` 解析成布尔 True，
-      # 生成的 JSON 体就变成 {"true": ...}，设备收到的是错误字段。
-      json: {"on": "{value}"}
+        # `json` 必须挂在 `write` 下（adapter 顶层不认这个字段）；
+        # 键还要加引号：YAML 1.1 会把裸 `on` 解析成布尔 True，
+        # 生成的 JSON 体就变成 {"true": ...}，设备收到的是错误字段。
+        json: {"on": "{value}"}
 
   # ---------------------------------------------------------------- 驱动
   - id: vfd_drive

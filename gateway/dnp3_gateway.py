@@ -451,10 +451,19 @@ class DNP3Parser:
                 # 取够本对象头声明的点数。同一响应里**允许有多个对象头**
                 # （典型：AI + BI 一起回），剩余字节是下一个对象头，
                 # 直接 break 会把后半截数据整段静默丢弃。
-                if offset < len(data):
-                    more, err = DNP3Parser._parse_object_header(data[offset:])
+                remainder = data[offset:]
+                _KNOWN_GROUPS = {
+                    DNP3ObjectGroup.BI, DNP3ObjectGroup.DBI,
+                    DNP3ObjectGroup.BO, DNP3ObjectGroup.AI,
+                    DNP3ObjectGroup.AO, DNP3ObjectGroup.CA,
+                    DNP3ObjectGroup.AI32,
+                }
+                if len(remainder) >= 3 and remainder[0] in _KNOWN_GROUPS:
+                    more, err = DNP3Parser.parse_response_ex(remainder)
                     objects.extend(more)
                     return objects, err
+                # 尾部零散字节（补齐/厂商私有）：不能当对象头，也不该
+                # 让整帧变"解析失败"——直接忽略。
                 break
             idx = start + len(objects)       # **协议索引**，不是数组位置
             if group in (DNP3ObjectGroup.AI, DNP3ObjectGroup.AI16):

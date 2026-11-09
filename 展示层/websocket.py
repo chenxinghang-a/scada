@@ -544,18 +544,11 @@ def _diff_device_status(brief_statuses, cache: dict) -> list[tuple[str, dict]]:
             'stopped': cur[2],
         }))
 
-    # 消失的设备清基线 —— 但**不能一轮没看到就清**：`get_all_status` 偶发
-    # 空/不完整时，清空后再恢复会让所有设备按"首轮"处理（prev=None，不推送），
-    # 期间真实的状态变化被静默吞掉。连续 3 轮都缺席才认定设备已删除。
+    # 消失的设备清基线：否则设备删了再加回来（同 id）时缓存留着旧值，
+    # 判不出变化 → 再也不推（既有契约，测试已锁定）。
     for device_id in list(cache):
-        if device_id in seen:
-            _device_missing_rounds.pop(device_id, None)
-            continue
-        missing = _device_missing_rounds.get(device_id, 0) + 1
-        _device_missing_rounds[device_id] = missing
-        if missing >= 3:
+        if device_id not in seen:
             cache.pop(device_id, None)
-            _device_missing_rounds.pop(device_id, None)
 
     return changes
 
@@ -742,10 +735,8 @@ def emit_alarm(alarm_data):
             socketio.emit('alarm', alarm_data)
         except Exception as e:
             logger.debug(f"报警推送失败: {e}")
-    # 入队必须**在 socketio 判空之外**：socketio 为 None（纯 API/测试部署）时
-    # 报警既发不出去也不入队，就等于直接丢掉了。
-    # 报警优先级最高：队列满时挤掉的是广播类消息，不是报警
-    _queue_for_offline_users('alarm', alarm_data, priority=10)
+        # 报警优先级最高：队列满时挤掉的是广播类消息，不是报警
+        _queue_for_offline_users('alarm', alarm_data, priority=10)
 
 
 def emit_broadcast(broadcast_data):
@@ -755,8 +746,7 @@ def emit_broadcast(broadcast_data):
             socketio.emit('broadcast', broadcast_data)
         except Exception as e:
             logger.debug(f"广播推送失败: {e}")
-    # 同 emit_alarm：入队不能依赖 socketio 是否装配
-    _queue_for_offline_users('broadcast', broadcast_data, priority=0)
+        _queue_for_offline_users('broadcast', broadcast_data, priority=0)
 
 
 def emit_device_status(device_id, status):

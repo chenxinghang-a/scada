@@ -41,8 +41,7 @@ def _encode_float64(value: float, bo: ByteOrder) -> list[int]:
     if bo == ByteOrder.ABCD:
         return words
     if bo == ByteOrder.BADC:
-        # 与 32 位/uint32 一致：每个 16 位字内部字节交换
-        return [((w & 0xFF) << 8) | ((w >> 8) & 0xFF) for w in words]
+        return [words[1], words[0], words[3], words[2]]
     if bo == ByteOrder.CDAB:
         return [words[2], words[3], words[0], words[1]]
     return [((w & 0xFF) << 8) | ((w >> 8) & 0xFF) for w in reversed(words)]  # DCBA

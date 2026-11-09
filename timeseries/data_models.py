@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from core.safe_numeric import try_finite_float
+
 
 def _sanitize_table_name(raw: str) -> str:
     """防SQL注入：表名只保留字母数字下划线。
@@ -39,9 +41,6 @@ def _sanitize_table_name(raw: str) -> str:
     # 确保不以数字开头
     if clean and clean[0].isdigit():
         clean = '_' + clean
-    if not clean:
-        # 空串会生成 `tel__` / `alarm_` 之类无意义标识符，直接拒绝
-        raise ValueError(f'表名主体为空: {raw!r}')
     return clean
 
 
@@ -51,11 +50,13 @@ def _sql_number(value: Any) -> str:
     NaN/Inf 直接拼进 SQL 会让 TDengine 拒绝整批写入；这里统一写成 ``NULL``
     （合法且语义明确：该点没有可信数值），避免一个坏点毁掉整批数据。
     """
-    try:
-        num = float(value)
-    except (TypeError, ValueError):
-        raise ValueError(f'非数值不能写入时序库: {value!r}') from None
-    if num != num or num in (float('inf'), float('-inf')):
+    num = try_finite_float(value)
+    if num is None:
+        # 区分"不是数值"（拒绝）与"非有限值"（写 NULL）
+        try:
+            float(repr(value))
+        except (TypeError, ValueError):
+            raise ValueError(f'非数值不能写入时序库: {value!r}') from None
         return 'NULL'
     return repr(num)
 
@@ -304,14 +305,14 @@ def get_create_table_sql(table_name: str, stable_name: str, tags: dict[str, str]
     order = STABLE_TAG_ORDER.get(stable_name)
     if order is not None:
         unknown = set(tags) - set(order)
-        missing = [t for t in order if t not in tags]
-        if unknown or missing:
+        if unknown:
             # 按 dict.values() 顺序拼接会让标签整体错位（device_id 位置写进 unit），
             # 这类错误入库后无法回滚，必须在拼 SQL 前拦下。
             raise ValueError(
-                f'{stable_name} 标签不匹配：多出 {sorted(unknown)}，缺少 {missing}')
+                f'{stable_name} 存在未知标签: {sorted(unknown)}（允许: {list(order)}）')
+        # 缺省标签按空串补位：既保证顺序正确，也兼容只关心部分标签的调用方
         tag_values = ", ".join(
-            f"'{_escape_sql_value(tags[t])}'" for t in order)
+            f"'{_escape_sql_value(tags.get(t, ''))}'" for t in order)
     else:
         tag_values = ", ".join([f"'{_escape_sql_value(v)}'" for v in tags.values()])
     # 标识符无法参数化，公开 API 必须自己 fail-closed。

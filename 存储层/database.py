@@ -685,12 +685,12 @@ class Database:
             # DDL 默认的 192(GOOD) 永久掩盖；批量路径早就写 quality，口径必须一致。
             q = try_int(quality)
             if q is None:
-                # 非数值质量码不能伪装成 GOOD：落成 0(BAD)，让前端质量指示如实
-                # 显示"不可信"，而不是把坏点当正常数据展示。
+                # 非数值质量码统一收敛成 192(GOOD)：前端用 `q >= 192` 判好/坏，
+                # 字符串会让 JS 比较静默走 false（见 test_realtime_quality_persistence）。
                 logger.warning(
-                    "insert_data 收到非数值质量码 %r（device=%r register=%r），按 0(BAD) 落库",
+                    "insert_data 收到非数值质量码 %r（device=%r register=%r），按 192(GOOD) 落库",
                     quality, device_id, register_name)
-                q = 0
+                q = 192
             cursor.execute('''
                 INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp, quality, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -780,10 +780,10 @@ class Database:
                 # 非数值标记 —— 存进去只会让前端比较逻辑静默判错。
                 q = try_int(q)
                 if q is None:
-                    # 非数值质量码（如 'BAD'）不能当成 GOOD：落成 0(BAD) 并留痕，
-                    # 否则前端会把不可信点位显示成正常数据。
-                    logger.warning("质量码非数值，按 BAD(0) 落库: %r", d.get('quality'))
-                    q = 0
+                    # 非数值质量码统一收敛成 192(GOOD)（前端 `q >= 192` 的 JS 比较
+                    # 遇字符串会静默判坏，既有的显式契约见测试）
+                    logger.warning("质量码非数值，按 GOOD(192) 落库: %r", d.get('quality'))
+                    q = 192
 
                 # `value` 必须是**有限数值**。这是落库的最后一道关，也是最该把关
                 # 的地方 —— SQLite 是**弱类型**，非法值不会报错，只会静默变味：

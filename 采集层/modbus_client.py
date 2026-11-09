@@ -1227,13 +1227,12 @@ class ModbusClient:
         if self.byte_order == ByteOrder.ABCD:
             raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
         elif self.byte_order == ByteOrder.BADC:
-            # BADC = **每个 16 位字内部字节交换**（与 decode_float32 的
-            # `_combine_regs` 同一口径）。原实现只交换相邻寄存器
-            # （r1,r0,r3,r2），等价于 CDAB —— BADC 设备解出的 double 全错。
-            def _swap16(w):
-                return ((w & 0xFF) << 8) | ((w >> 8) & 0xFF)
-            raw = struct.pack('>HHHH', _swap16(registers[0]), _swap16(registers[1]),
-                              _swap16(registers[2]), _swap16(registers[3]))
+            # 64 位 BADC 在本项目约定为**字交换**（[w1,w0,w3,w2]），与 float32 的
+            # 「字内字节交换」不同 —— 64 位下四种命名的行业定义不统一，
+            # 该映射已在 tests/test_modbus_client_decode.py 钉住，待现场确认后
+            # 才能改动（改错会让读数整体错位）。
+            raw = struct.pack('>HHHH', registers[1], registers[0],
+                              registers[3], registers[2])
         elif self.byte_order == ByteOrder.CDAB:
             raw = struct.pack('>HHHH', registers[2], registers[3], registers[0], registers[1])
         elif self.byte_order == ByteOrder.DCBA:

@@ -25,9 +25,8 @@ def _sample_count(item: Dict) -> int:
     raw = item.get('count')
     if raw is None:
         return 1
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
+    value = try_int(raw)
+    if value is None:
         return 1
     return value if value >= 0 else 0
 

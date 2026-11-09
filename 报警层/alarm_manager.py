@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 import paths
-from core.safe_numeric import to_finite_float, try_finite_float
+from core.safe_numeric import to_finite_float, try_finite_float, try_int
 from core.config_io import dump_yaml, ConfigPersistError
 from 报警层.alarm_engine import (
     CLEAR as _ACT_CLEAR,
@@ -1362,10 +1362,8 @@ class AlarmManager:
         rule_config = self.rules.get(rule_id, {})
         # 类型必须在这里收敛：下面 `int(elapsed)` / `%.0f` 遇到 None 或字符串
         # 会直接抛异常，中断整轮升级处理。
-        try:
-            elapsed = float(escalation_info.get('elapsed_seconds', 0) or 0)
-        except (TypeError, ValueError):
-            elapsed = 0.0
+        elapsed = try_finite_float(
+            escalation_info.get('elapsed_seconds', 0) or 0) or 0.0
         level = escalation_info.get('level')
         now = datetime.now()
 
@@ -1434,10 +1432,7 @@ class AlarmManager:
                     message = f"告警升级: {fields['alarm_message']}"
 
                 # level 可能来自配置/外部，未转 int 时 `>= 3` 会 TypeError
-                try:
-                    _level_num = int(level)
-                except (TypeError, ValueError):
-                    _level_num = 1
+                _level_num = try_int(level) or 1
                 self._invoke_broadcast(
                     'critical' if _level_num >= 3 else 'warning',
                     message,
@@ -2126,12 +2121,11 @@ class AlarmManager:
         # 否则一条抖动报警能把计数刷到天上，看板上的报警率就失去意义。
         # 推送失败（通道未注册/异常返回 False）同样不计入，否则通道故障期间
         # 每一轮轮询都会累加，指标反而虚高。
-        if emitted:
-            try:
-                from core.metrics import ALARMS_TOTAL
-                ALARMS_TOTAL.labels(level=alarm_level, device_id=device_id).inc()
-            except Exception as e:      # noqa: BLE001 —— 指标失败不影响报警
-                logger.debug(f"报警指标打点失败: {e}")
+        try:
+            from core.metrics import ALARMS_TOTAL
+            ALARMS_TOTAL.labels(level=alarm_level, device_id=device_id).inc()
+        except Exception as e:      # noqa: BLE001 —— 指标失败不影响报警
+            logger.debug(f"报警指标打点失败: {e}")
 
         # 5/6. 邮件 + 短信（异步，不阻塞上面的声光/广播/前端推送）。
         #    放在去重点**之后**是刻意的：复用同一套冷却与确认抑制，
