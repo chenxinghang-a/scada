@@ -311,7 +311,7 @@ class AlarmEscalationManager:
             # 半夜把值班电话打起来，而现场早就正常了。
             with self._lock:
                 live = self._states.get(key)
-                if live is None or live.acknowledged:
+                if live is None or live is not state or live.acknowledged:
                     logger.debug("升级前复核：报警已恢复/已确认，跳过 %s", key)
                     continue
             self._do_escalation(key, state, target_level)
@@ -328,6 +328,9 @@ class AlarmEscalationManager:
             return
 
         with self._lock:
+            if self._states.get(key) is not state or state.acknowledged:
+                logger.debug('升级加锁后复核：报警已确认/已恢复/已重建，跳过 %s', key)
+                return
             state.current_level = target_level
             state.last_escalation_time = time.time()
 

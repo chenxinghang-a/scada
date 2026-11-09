@@ -710,7 +710,8 @@ class AlarmManager:
                     'register_name': register_name,
                     'first_trigger_time': ts,
                     'last_trigger_time': last_ts,
-                    'trigger_count': row.get('trigger_count') or 1,
+                    'trigger_count': (1 if row.get('trigger_count') is None
+                                     else _safe_int(row.get('trigger_count'), 1)),
                     'confirmed': True,      # 已经在库里，说明条件成立过
                     'acknowledged': acked,
                     'pending': False,
@@ -1619,7 +1620,7 @@ class AlarmManager:
         # 采集停了、点位改配了、设备删了，旁路就**永不过期**，
         # 而日志里白纸黑字写着「时长: 30分钟」。清理是全库级别的事，
         # 不该挂在某一个点位的判定路径上。
-        now_ts = time.monotonic()
+        now_ts = self._clock()
         if now_ts - self._last_shelf_cleanup > 60:
             self._cleanup_expired_shelves()
             self._last_shelf_cleanup = now_ts

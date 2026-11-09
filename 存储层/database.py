@@ -210,15 +210,11 @@ class Database:
     def _cleanup_stale_locks(self):
         """清理崩溃后遗留的数据库锁文件（stale lock）"""
         import os
-        lock_files = [self.db_path + '-wal', self.db_path + '-shm']
-        for lf in lock_files:
+        # WAL/SHM 是否存活由 SQLite 字节范围锁决定；open(r+b) 探测不到，
+        # 也不应在这里删。只做存在性提示。
+        for lf in (self.db_path + '-wal', self.db_path + '-shm'):
             if os.path.exists(lf):
-                try:
-                    # 尝试以独占方式打开，检测是否被其他进程锁定
-                    with open(lf, 'r+b') as f:
-                        pass  # 能打开说明没有活跃锁
-                except (PermissionError, OSError):
-                    logger.warning(f"数据库锁文件可能被其他进程占用: {lf}")
+                logger.debug(f"检测到遗留 WAL/SHM 文件（可能仍有活跃连接）: {lf}")
 
     def _init_pragmas(self):
         """初始化全局 PRAGMA（只需执行一次）"""
@@ -266,14 +262,17 @@ class Database:
         conn = getattr(self._local, 'connection', None)
         if conn is None:
             conn = sqlite3.connect(self.db_path, timeout=30)
-            conn.row_factory = sqlite3.Row
-            conn.execute('PRAGMA busy_timeout=30000')
-            conn.execute('PRAGMA synchronous=NORMAL')
-            conn.execute('PRAGMA cache_size=-32000')
-            conn.execute('PRAGMA temp_store=MEMORY')
-            # mmap_size/cache_size 是**连接级**参数，必须设在真正工作的连接上；
-            # 只设在 _init_pragmas 的临时连接上等于没配。
-            conn.execute('PRAGMA mmap_size=268435456')
+            try:
+                conn.row_factory = sqlite3.Row
+                conn.execute('PRAGMA busy_timeout=30000')
+                conn.execute('PRAGMA synchronous=NORMAL')
+                conn.execute('PRAGMA cache_size=-32000')
+                conn.execute('PRAGMA temp_store=MEMORY')
+                conn.execute('PRAGMA mmap_size=268435456')
+            except Exception:
+                # PRAGMA 失败时连接既没入 _local 也没关闭
+                conn.close()
+                raise
             self._local.connection = conn
 
         # 死锁检测：记录操作开始时间
@@ -589,11 +588,11 @@ class Database:
             cursor.execute('ALTER TABLE realtime_data ADD COLUMN quality INTEGER DEFAULT 192')
             logger.info("数据库迁移: 添加列 realtime_data.quality")
         except Exception as e:
-            # 列已存在属预期；其他错误原文保留以便排查
-            logger.debug(
-                f"迁移列 realtime_data.quality 未执行"
-                f"（通常为列已存在，需排查时看此错误原文）: {e}"
-            )
+            if 'duplicate column' in str(e).lower():
+                logger.debug(f"迁移列 realtime_data.quality 已存在，跳过: {e}")
+            else:
+                logger.warning(
+                    f"迁移列 realtime_data.quality 失败，该列可能缺失: {e}")
 
     def _migrate_realtime_unique(self, cursor):
         """确保 ``realtime_data`` 有 ``(device_id, register_name)`` 唯一约束。
@@ -2160,6 +2159,15 @@ class Database:
             if safety_copy and target.exists():
                 stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 safety = target.with_name(f'{target.stem}.pre-restore-{stamp}{target.suffix}')
+                # 反复恢复会无限堆积安全副本，只保留最近 3 份
+                for _stale in sorted(
+                        target.parent.glob(
+                            f'{target.stem}.pre-restore-*{target.suffix}'),
+                        key=lambda p: p.stat().st_mtime, reverse=True)[3:]:
+                    try:
+                        _stale.unlink()
+                    except OSError:
+                        pass
                 # ⚠️ `with sqlite3.connect(...)` **不会关闭连接**（只提交事务），
                 #    Windows 上留着句柄会让后面的 os.replace 报 WinError 5。
                 live = sqlite3.connect(str(target))
@@ -2210,8 +2218,10 @@ class Database:
     def _cleanup_old_backups(self, backup_dir: Path, db_name: str, keep: int = 7):
         """清理旧备份文件"""
         try:
+            # 库名含 []*? 时直接拼 glob 会匹配到别的文件
+            import glob
             backups = sorted(
-                backup_dir.glob(f"{db_name}_*.db"),
+                backup_dir.glob(f"{glob.escape(db_name)}_*.db"),
                 key=lambda f: f.stat().st_mtime,
                 reverse=True
             )

@@ -138,15 +138,15 @@ class MQTTToTSDBService:
         self.running = False
         self._stop_event.set()
 
-        # 刷新剩余数据
-        self._flush_buffers()
+        # 先停订阅，否则 flush 与 stop 之间到达的数据会滞留在缓冲区被丢弃
+        self.subscriber.stop()
 
         # 等待刷新线程结束
         if self._flush_thread and self._flush_thread.is_alive():
             self._flush_thread.join(timeout=5)
 
-        # 停止MQTT订阅
-        self.subscriber.stop()
+        # 订阅已停，最后再刷一次
+        self._flush_buffers()
 
         # 断开TDengine
         self.tdengine.disconnect()
@@ -251,7 +251,8 @@ class MQTTToTSDBService:
             # round 298：写失败必须回填并计数（原来返回值被丢弃，
             # 失败时 except 分支永远不进 —— 数据在 clear() 之后彻底消失）
             if self.tdengine.write_telemetry_batch(records):
-                self.stats['telemetry_written'] += len(records)
+                with self._buffer_lock:
+                    self.stats['telemetry_written'] += len(records)
             else:
                 # round 321：**写失败必须回填**。
                 # round 298 只补了"计数"（原来返回值被丢弃、except 永远不进），
@@ -264,6 +265,10 @@ class MQTTToTSDBService:
                 self.logger.warning(
                     "遥测批量写入失败（%d 条），已回填缓冲区重试", len(records))
                 with self._buffer_lock:
+                    maxlen = self._telemetry_buffer.maxlen
+                    if maxlen is not None:
+                        self.stats['telemetry_dropped'] += max(
+                            0, len(self._telemetry_buffer) + len(records) - maxlen)
                     self._telemetry_buffer.extend(records)
             self.logger.debug(f"写入 {len(records)} 条遥测数据")
         except Exception as e:
@@ -298,6 +303,10 @@ class MQTTToTSDBService:
                 self.logger.warning(
                     "报警写入失败 %d 条，已回填缓冲区重试", len(failed))
                 with self._buffer_lock:
+                    maxlen = self._alarm_buffer.maxlen
+                    if maxlen is not None:
+                        self.stats['alarms_dropped'] += max(
+                            0, len(self._alarm_buffer) + len(failed) - maxlen)
                     self._alarm_buffer.extend(failed)
             self.logger.debug(f"写入 {len(records)} 条报警数据")
         except Exception as e:

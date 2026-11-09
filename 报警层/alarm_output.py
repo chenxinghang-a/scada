@@ -394,11 +394,12 @@ class AlarmOutput:
 
         elif level == 'warning':
             # 警告：黄灯慢闪 + 蜂鸣器脉冲（响0.3s停0.7s）
-            self.current_state.update({
-                'red': False, 'yellow': True, 'green': False,
-                'buzzer': True,
-                'pattern': AlarmLightPattern.SLOW_FLASH
-            })
+            with self._lock:
+                self.current_state.update({
+                    'red': False, 'yellow': True, 'green': False,
+                    'buzzer': True,
+                    'pattern': AlarmLightPattern.SLOW_FLASH
+                })
             # 先写入目标灯ON（避免闪烁线程启动前的黑灯间隙）
             ok = self._write_all_do(red=False, yellow=True, green=False, buzzer=False)
             self._start_flash('yellow', 0.5)  # 500ms间隔=慢闪
@@ -410,11 +411,12 @@ class AlarmOutput:
 
         else:
             # 信息级：只记日志，绿灯保持
-            self.current_state.update({
-                'red': False, 'yellow': False, 'green': True,
-                'buzzer': False,
-                'pattern': AlarmLightPattern.STEADY
-            })
+            with self._lock:
+                self.current_state.update({
+                    'red': False, 'yellow': False, 'green': True,
+                    'buzzer': False,
+                    'pattern': AlarmLightPattern.STEADY
+                })
             ok = self._write_all_do(red=False, yellow=False, green=True, buzzer=False)
 
             log_msg = f"【信息】🟢 {message} (设备: {device_id})"

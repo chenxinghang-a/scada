@@ -1740,8 +1740,10 @@ class DataCollector:
                 ok = self._collect_modbus(client, device_id, device_config, timestamp)
                 if not ok:
                     _metric_error('modbus_read_failed')
-                with self._stats_lock:
-                    self.stats['last_collection_time'] = timestamp
+                else:
+                    # 失败也刷新会让离线几小时的设备显示刚采过，掩盖故障
+                    with self._stats_lock:
+                        self.stats['last_collection_time'] = timestamp
                 return ok
             elif protocol in ('rest', 'opcua', 'mqtt', 'custom'):
                 # REST/OPC-UA/MQTT/自定义适配器都是缓存型协议，统一从缓存采集。
@@ -2163,7 +2165,8 @@ class DataCollector:
                             device_info = self.device_manager.get_device_status(device_id)
                             device_status = 'unknown'
                             if isinstance(device_info, dict):
-                                if not device_info.get('connected', True):
+                                # 缺 connected 字段不能当作在线，否则质量评估偏乐观
+                                if not device_info.get('connected', False):
                                     device_status = 'offline'
                                 elif device_info.get('stopped'):
                                     device_status = 'stopped'
@@ -2347,6 +2350,15 @@ class DataCollector:
             except Exception as e:
                 if self.running:
                     logger.error(f"批量数据处理异常: {e}")
+                    # 已从队列取出的批次不能凭空丢：重新入队或显式计数
+                    _rc = self._requeue_failed_batch(batch)
+                    if _rc['retried']:
+                        self._inc_stat('requeued_exception', _rc['retried'])
+                    if _rc['dropped']:
+                        self._inc_stat('dropped_exception', _rc['dropped'])
+                    if _rc['requeue_full']:
+                        self._inc_stat('requeue_full_exception',
+                                       _rc['requeue_full'])
 
     def _requeue_failed_batch(self, batch: list[Dict[str, Any]]) -> Dict[str, int]:
         """写库失败后把整批重新入队，返回 ``{'retried','dropped','requeue_full'}``。
@@ -2603,11 +2615,11 @@ class DataCollector:
             opened_at = cb.get('opened_at')
             failures = int(failure_counts.get(device_id, 0) or 0)
             entry: dict[str, Any] = {
-                'state': 'open' if opened_at else 'closed',
+                'state': 'open' if opened_at is not None else 'closed',
                 'consecutive_failures': failures,
                 'threshold': CIRCUIT_BREAKER_THRESHOLD,
             }
-            if opened_at:
+            if opened_at is not None:
                 elapsed = max(0.0, now - opened_at)
                 # `opened_at` 对外保持"墙钟时刻"的语义（前端/接口契约），
                 # 内部计时用单调值；老状态没有 wall 字段时退回单调值。
@@ -2699,7 +2711,12 @@ class DataCollector:
         # `_device_intervals` 原来只写不读 —— 降级后运维想确认「到底降频了没有」
         # 在界面上找不到任何依据，只能靠猜。
         # 用 getattr 兜底：部分测试会绕过 __init__ 构造采集器。
-        intervals = dict(getattr(self, '_device_intervals', None) or {})
+        _iv_lock = getattr(self, '_tracking_lock', None)
+        if _iv_lock is None:
+            intervals = dict(getattr(self, '_device_intervals', None) or {})
+        else:
+            with _iv_lock:
+                intervals = dict(getattr(self, '_device_intervals', None) or {})
         if intervals:
             stats['device_intervals'] = intervals
         # round 289：「已取消」登记的规模。
