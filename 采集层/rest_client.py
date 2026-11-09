@@ -18,7 +18,7 @@ from typing import Any, Callable
 from datetime import datetime
 
 from core.circuit_breaker import get_circuit_breaker, CircuitBreakerOpenError
-from core.safe_numeric import try_int
+from core.safe_numeric import try_finite_float, try_int
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +69,8 @@ class RESTDeviceClient:
 
         # 轮询间隔必须是正的有限数：0/负数/NaN 会让 Event.wait 立即返回，
         # 轮询线程退化成空转打设备。
-        try:
-            interval = float(config.get('poll_interval', 10))
-        except (TypeError, ValueError):
-            interval = 10.0
-        if not (interval > 0) or interval == float('inf'):
+        interval = try_finite_float(config.get('poll_interval', 10))
+        if interval is None or not (interval > 0):
             logger.warning("[REST] %s: poll_interval=%r 非法，改用 10s",
                            self.device_name, config.get('poll_interval'))
             interval = 10.0

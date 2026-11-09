@@ -34,7 +34,11 @@ sys.path.insert(0, str(ROOT / "tools"))
 from wiring_analysis import MARKER_RE, analyse, analyse_strict  # noqa: E402
 
 # 静态分析看不见接线方式的模块（登记时必须写理由）。
-ALLOWLIST: dict[str, str] = {}
+ALLOWLIST: dict[str, str] = {
+    '扩展.adapters.example_mock':
+        '示例插件：由用户拷到 扩展/adapters 后按文件名动态加载（字符串接线），'
+        '静态 import 图看不到调用方；本身不参与生产接线。',
+}
 
 #: 「**只靠 `__main__` 才可达**」的模块登记表（2026-10-13 新增）。
 #:
@@ -49,6 +53,13 @@ ENTRY_TOOLS: dict[str, str] = {
     "core.generate_certs": "CLI 工具：手动运行生成自签证书，不被 run.py 引用",
     "gateway.run_gateway": "网关独立部署入口：按设计以独立进程运行（`python -m gateway.run_gateway`）",
     "gateway.integration_example": "示例：演示网关组合，供人阅读 / 手动运行",
+    # 以下协议实现按配置 type 动态装配（`gateway/run_gateway.py` 里
+    # `_build_gateway()` 按字符串取类），静态 import 图看不到调用方。
+    "gateway.dnp3_gateway": "协议实现：由 run_gateway 按 gateways[].type 动态装配",
+    "gateway.iec104_gateway": "协议实现：由 run_gateway 按 gateways[].type 动态装配",
+    "gateway.opcua_gateway": "协议实现：由 run_gateway 按 gateways[].type 动态装配",
+    "gateway.s7_gateway": "协议实现：由 run_gateway 按 gateways[].type 动态装配",
+    "扩展.adapters.example_mock": "示例插件：演示自定义适配器写法，供人阅读 / 手动加载",
     "timeseries.integration_example": "示例：演示 MQTT→TDengine 链路，供人阅读 / 手动运行",
     "timeseries.mqtt_to_tsdb": (
         "⚠️ **生产零调用**：只被 timeseries/integration_example.py 导入。"

@@ -947,10 +947,18 @@ class DataCollector:
                     f"下次启动将恢复这 {len(remaining)} 条数据（不丢弃）"
                 )
 
-        if flushed and drained:
-            # 只确认本次真的处理过的批次；无参调用会连“队列满时只剩磁盘副本”
-            # 的记录一起删掉（从未入库）。
-            self.data_queue.clear_persistence(remaining)
+        # 结构上必须是「if flushed: 里面才 clear_persistence」——
+        # tests/test_shutdown_data_preservation.py 用它做静态守卫。
+        if flushed:
+            if drained:
+                # 只确认本次真的处理过的批次；无参调用会连“队列满时只剩磁盘副本”
+                # 的记录一起删掉（从未入库）。
+                self.data_queue.clear_persistence(remaining)
+            else:
+                logger.warning(
+                    "处理线程未退出，已保留持久化文件供下次启动恢复: "
+                    f"{getattr(self.data_queue, '_persist_file', '(未知路径)')}"
+                )
         else:
             logger.warning(
                 "存在未能入库的数据，已保留持久化文件供下次启动恢复: "

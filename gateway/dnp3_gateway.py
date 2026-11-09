@@ -1,3 +1,4 @@
+# 接线状态：未接线（WIRED = False）—— 由 gateway/run_gateway.py 按配置类型动态装配，生产链路无静态 import
 """
 DNP3 (Distributed Network Protocol 3) 协议网关
 用于电力/水务/燃气SCADA系统

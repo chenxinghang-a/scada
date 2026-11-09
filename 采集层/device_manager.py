@@ -498,8 +498,8 @@ class DeviceManager:
             # 无人管理的连接/线程。
             try:
                 client.disconnect()
-            except Exception:       # noqa: BLE001
-                pass
+            except Exception as _e:      # noqa: BLE001 —— 清理失败需留痕
+                logger.warning("关闭超时线程创建的连接失败: %s", _e, exc_info=True)
             return False
         return result[0]
 

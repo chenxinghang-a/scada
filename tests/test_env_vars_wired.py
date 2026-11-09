@@ -404,6 +404,11 @@ def _probe(env_overrides: dict[str, str]) -> dict:
     ):
         env.pop(key, None)
     env.update(env_overrides)
+    # 子进程 stdout 默认走本地代码页（Windows 上是 cp936）：探针打印含中文的
+    # 路径（如 `配置`）时会被替换成 U+FFFD，断言就成了"路径被改坏"。
+    # 强制子进程 UTF-8，与父进程读取用的 encoding='utf-8' 对齐。
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
 
     probe_file = BACKEND_ROOT / "tests" / "_env_probe_tmp.py"
     probe_file.write_text(_PROBE, encoding="utf-8")

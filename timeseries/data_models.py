@@ -52,12 +52,13 @@ def _sql_number(value: Any) -> str:
     """
     num = try_finite_float(value)
     if num is None:
-        # 区分"不是数值"（拒绝）与"非有限值"（写 NULL）
-        try:
-            float(repr(value))
-        except (TypeError, ValueError):
-            raise ValueError(f'非数值不能写入时序库: {value!r}') from None
-        return 'NULL'
+        # 区分「不是数值」（拒绝）与「非有限值」（NaN/Inf → 写 NULL）。
+        # 不用 float() 试错：`float('inf')` 不抛异常，试不出来。
+        if isinstance(value, bool):
+            return repr(int(value))
+        if isinstance(value, (int, float)):
+            return 'NULL'
+        raise ValueError(f'非数值不能写入时序库: {value!r}')
     return repr(num)
 
 

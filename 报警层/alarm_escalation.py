@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 
+from core.safe_numeric import try_finite_float
+
 from core.safe_numeric import require_positive_int
 
 logger = logging.getLogger(__name__)
@@ -179,10 +181,9 @@ class AlarmEscalationManager:
 
         # round 381：0 会忙循环打满 CPU，负数/非数值会在 _check_loop 的
         # sleep 处抛错并静默杀死升级线程（此后永不升级）。
-        try:
-            _interval = float(config.get('check_interval', 30))
-        except (TypeError, ValueError):
-            raise ValueError('escalation.check_interval 必须是正数，得到 '
+        _interval = try_finite_float(config.get('check_interval', 30))
+        if _interval is None:
+            raise ValueError('escalation.check_interval 必须是有限正数，得到 '
                              f'{config.get("check_interval")!r}')
         if _interval <= 0:
             raise ValueError(f'escalation.check_interval 必须 > 0，得到 {_interval}')

@@ -37,12 +37,17 @@ logger = logging.getLogger(__name__)
 
 
 def _safe_int(value: Any, default: int) -> int:
-    """配置值转 int：非法值告警并沿用 default。"""
-    try:
-        return int(value)
-    except (TypeError, ValueError):
+    """配置值转 int：非法值告警并沿用 default。
+
+    走 `try_int` 而不是裸 `int()`：YAML 的 `.inf` 是合法字面量，
+    `int(float('inf'))` 抛的是 **OverflowError**，只接 TypeError/ValueError
+    会让它直接冒出配置加载。
+    """
+    parsed = try_int(value)
+    if parsed is None:
         logger.warning("配置值 %r 不是合法整数，沿用 %r", value, default)
         return default
+    return parsed
 
 
 def _safe_bool(value: Any) -> bool:
@@ -1480,11 +1485,12 @@ class AlarmManager:
                 if deadband:
                     # round 382：一条规则的坏 deadband（如 '5%'）不能让整份
                     # 配置加载失败 —— 外层 except 会让 self.rules 完全不更新。
-                    try:
-                        new_deadbands[rule_id] = float(deadband)
-                    except (TypeError, ValueError):
+                    _db = try_finite_float(deadband)
+                    if _db is None:
                         logger.error("规则 %s 的 deadband=%r 非法，按 0 处理",
                                      rule_id, deadband)
+                    else:
+                        new_deadbands[rule_id] = _db
 
             removed = sorted(set(self.rules) - set(new_rules))
             with self._state_lock:
@@ -2047,8 +2053,10 @@ class AlarmManager:
                 try:
                     self._escalation_manager.remove_alarm(
                         rule_id, device_id, register_name)
-                except Exception:       # noqa: BLE001
-                    pass
+                except Exception as _e:  # noqa: BLE001 —— 撤销失败也要可见
+                    logger.warning(
+                        "落库失败后撤销升级跟踪失败（该报警可能仍会升级）: %s",
+                        _e, exc_info=True)
 
         if annunciate:
             logger.warning(f"报警触发: {alarm_message} - {device_id}/{register_name} = {value}")

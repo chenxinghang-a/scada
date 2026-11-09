@@ -1,3 +1,4 @@
+# 接线状态：未接线（WIRED = False）—— 由 gateway/run_gateway.py 按配置类型动态装配，生产链路无静态 import
 """
 IEC 60870-5-104 (DL/T 634.5104) 协议网关
 国标SCADA通信协议 - 遥测、遥信、遥控、遥调
@@ -345,8 +346,8 @@ class IEC104Client:
             if self.socket is not None:
                 try:
                     self.socket.close()
-                except Exception:
-                    pass
+                except Exception as _e:      # noqa: BLE001 —— 关闭失败需留痕
+                    self.logger.debug("关闭连接 socket 失败: %s", _e, exc_info=True)
                 self.socket = None
             return False
 

@@ -242,8 +242,8 @@ class Database:
             if 'conn' in locals():
                 try:
                     conn.close()
-                except Exception:       # noqa: BLE001
-                    pass
+                except Exception as _e:      # noqa: BLE001 —— 关闭失败需留痕
+                    logger.debug("关闭半初始化连接失败: %s", _e, exc_info=True)
             raise
 
     @contextmanager
@@ -300,8 +300,8 @@ class Database:
                     # 连接已不可信：丢弃，下次 get_connection 重建。
                     try:
                         conn.close()
-                    except Exception:       # noqa: BLE001
-                        pass
+                    except Exception as _e:      # noqa: BLE001
+                        logger.debug("丢弃不可信连接时关闭失败: %s", _e, exc_info=True)
                     self._local.connection = None
             raise e
 
@@ -328,6 +328,7 @@ class Database:
                     'database_path': self.db_path,
                 }
         except Exception as e:
+            logger.warning("数据库健康检查失败: %s", e, exc_info=True)
             return {
                 'status': 'unhealthy',
                 'error': str(e),

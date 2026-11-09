@@ -23,6 +23,8 @@ TDengine查询构建器
 import re
 from datetime import datetime
 
+from core.safe_numeric import try_finite_float, try_int
+
 
 def _escape_value(val: str) -> str:
     """防SQL注入：转义字符串值"""
@@ -185,31 +187,24 @@ class QueryBuilder:
 
     def where_value_gt(self, value: float) -> 'QueryBuilder':
         """添加值大于条件"""
-        try:
-            num = float(value)
-        except (TypeError, ValueError):
-            raise ValueError(f'比较值非法: {value!r}')
-        if num != num or num in (float('inf'), float('-inf')):
+        num = try_finite_float(value)
+        if num is None:
             raise ValueError(f'比较值非法: {value!r}')
         self._where_clauses.append(f"value > {num}")
         return self
 
     def where_value_lt(self, value: float) -> 'QueryBuilder':
         """添加值小于条件"""
-        try:
-            num = float(value)
-        except (TypeError, ValueError):
-            raise ValueError(f'比较值非法: {value!r}')
-        if num != num or num in (float('inf'), float('-inf')):
+        num = try_finite_float(value)
+        if num is None:
             raise ValueError(f'比较值非法: {value!r}')
         self._where_clauses.append(f"value < {num}")
         return self
 
     def where_quality(self, quality: int = 192) -> 'QueryBuilder':
         """添加数据质量条件"""
-        try:
-            code = int(quality)
-        except (TypeError, ValueError):
+        code = try_int(quality)
+        if code is None:
             raise ValueError(f'质量码非法: {quality!r}')
         self._where_clauses.append(f"quality = {code}")
         return self
