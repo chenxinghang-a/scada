@@ -141,6 +141,12 @@ class S7Gateway(BaseGateway):
         for device_id, client in clients.items():
             try:
                 client.disconnect()
+                destroy = getattr(client, 'destroy', None)
+                if callable(destroy):
+                    try:
+                        destroy()
+                    except Exception as e:
+                        self.logger.debug("释放S7客户端失败: %s", e)
                 self.logger.info(f"S7设备 {device_id} 已断开")
             except Exception as e:
                 self.logger.error(f"S7设备 {device_id} 断开异常: {e}")

@@ -467,7 +467,8 @@ def adjust_device(device_id):
         }), 400
 
     # 幂等性检查（round 369）：调节也是物理写入，重复提交会连续改设定值。
-    write_key = f"{device_id}:adjust:{register_name}:{value}"
+    # 幂等键带操作员：不同人发同一目标值不能被当成重复提交吞掉
+    write_key = f"{operator}:{device_id}:adjust:{register_name}:{value}"
     early = _idempotency_begin(write_key)
     if early is not None:
         return early

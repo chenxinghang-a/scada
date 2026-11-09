@@ -347,10 +347,13 @@ class QueryBuilder:
         if not columns:
             columns = ("ts", "value", "quality")
 
-        cols = ", ".join(_require_identifier(c, '列名') for c in columns)
+        # FIRST() 与 LAST() 一样只接受单列
+        cols = ", ".join(
+            f"FIRST({_require_identifier(c, '列名')})"
+            for c in (columns or ("*",)))
         where = (f" WHERE {' AND '.join(self._where_clauses)}"
                  if self._where_clauses else "")
-        return f"SELECT FIRST({cols}) FROM {self._table}{where}"
+        return f"SELECT {cols} FROM {self._table}{where}"
 
 
 class TelemetryQueryBuilder(QueryBuilder):

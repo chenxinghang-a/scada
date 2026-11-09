@@ -1452,11 +1452,14 @@ class DataCollector:
                 return True  # 已处理
 
             # 冷却期结束 → 半开试探
+            probe_future = None
             try:
                 probe_future = self._pool.submit(_run_collection)
                 probe_ok = probe_future.result(timeout=15)
             except Exception as e:
                 logger.debug(f"设备 {device_id} 试探读异常: {e}")
+                if probe_future is not None:
+                    probe_future.cancel()   # 超时后任务仍在跑，必须撤销
                 probe_ok = False
 
             if probe_ok:
@@ -1480,11 +1483,14 @@ class DataCollector:
         def _handle_normal_collection():
             """正常采集路径：提交到线程池 + 失败退避"""
             cycle_started = time.monotonic()
+            future = None
             try:
                 future = self._pool.submit(_run_collection)
                 success = future.result(timeout=30)
             except Exception as e:
                 logger.debug(f"设备 {device_id} 线程池采集异常: {e}")
+                if future is not None:
+                    future.cancel()   # 超时后任务仍在跑，会重复入队
                 success = False
 
             if not self.running:
@@ -1502,10 +1508,11 @@ class DataCollector:
                     failures = self._failure_counts.get(device_id, 0) + 1
                     self._failure_counts[device_id] = failures
                 if failures >= CIRCUIT_BREAKER_THRESHOLD:
-                    self._circuit_state[device_id] = {
-                        'opened_at': time.monotonic(),      # 窗口计时
-                        'opened_at_wall': time.time(),      # 展示用
-                    }
+                    with self._tracking_lock:
+                        self._circuit_state[device_id] = {
+                            'opened_at': time.monotonic(),      # 窗口计时
+                            'opened_at_wall': time.time(),      # 展示用
+                        }
                     interval = CIRCUIT_BREAKER_COOLDOWN_S
                     logger.warning(f"设备 {device_id} 连续失败 {failures} 次，断路器打开，{CIRCUIT_BREAKER_COOLDOWN_S}s 后重试")
                 else:

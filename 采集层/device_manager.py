@@ -573,7 +573,8 @@ class DeviceManager:
                                 logger.info(f"自动重连设备: {device_id}")
                                 client.connect()
                             except Exception as e:
-                                logger.debug(f"自动重连失败 {device_id}: {e}")
+                                logger.warning(f"自动重连失败 {device_id}: {e}")
+                                self._reconnect_stop.wait(min(interval, 300))
                 except Exception as e:
                     logger.error(f"重连循环异常: {e}")
                 # 用 Event.wait 而不是 sleep：disconnect_all 能立刻唤醒，

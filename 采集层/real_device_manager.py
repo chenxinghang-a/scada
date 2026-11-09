@@ -339,20 +339,23 @@ class RealDeviceManager(IDeviceManager):
         return create_protocol_client(config)
 
     def get_client(self, device_id: str) -> IDeviceClient | None:
-        """获取设备客户端（懒创建）"""
-        if device_id not in self.clients:
+        """获取设备客户端（懒创建，检查-创建原子）"""
+        client = self.clients.get(device_id)
+        if client is not None:
+            return client
+        with self._lock:
+            client = self.clients.get(device_id)
+            if client is not None:
+                return client
             device_config = self.devices.get(device_id)
             if not device_config:
                 logger.error(f"设备 {device_id} 配置不存在")
                 return None
-
             client = self._create_real_client(device_config)
             if client is None:
                 return None
-
             self.clients[device_id] = client
-
-        return self.clients[device_id]
+            return client
 
     def _should_skip_connect(self, device_id: str) -> bool:
         """检查设备是否在退避期内，应该跳过重试"""
