@@ -672,6 +672,11 @@ class DeviceBehaviorSimulator:
                 if raw is None:
                     raw = out.get(source)
                 if raw is None:
+                    # 派生源可能是在 `_sim_order` 里**声明得更晚**的点位：
+                    # 本周期 out 还没有它，用上一周期的结果兜底（模拟量允许一
+                    # 个周期的滞后），否则该点位永远算不出来。
+                    raw = (getattr(self, '_last_sim_output', None) or {}).get(source)
+                if raw is None:
                     # 聚合名 → 具体列名（current → current_a 等）
                     for alias in _SIM_SOURCE_ALIASES.get(source, ()):
                         raw = base.get(alias)
@@ -689,6 +694,8 @@ class DeviceBehaviorSimulator:
 
             out[name] = self._finalize_sim(name, value, spec)
 
+        # 供下一周期解析「声明顺序在后的派生源」（见上面 _last_sim_output 的用法）
+        self._last_sim_output = dict(out)
         return out
 
     @staticmethod
@@ -748,8 +755,15 @@ class DeviceBehaviorSimulator:
                 self.process_model.base_flow = got
                 self._current_flow = got
             elif 'level' in name_lower:
-                # 配置可能给百分比（0-100）或工程量（如 mm）；>100 视为工程量
-                level_pct = got / 300 * 100 if got > 100 else got
+                # 配置可能给百分比（0-100）或工程量（如 mm）；>100 视为工程量。
+                # 量程不能写死 300：别的量程设备（如 1000mm 罐）会被算成 33%。
+                _level_range = try_finite_float(
+                    sim_params.get('level_range')
+                    or (self.device_config.get('simulation') or {}).get('level_range')
+                    or 300)
+                if _level_range is None or _level_range <= 0:
+                    _level_range = 300.0
+                level_pct = got / _level_range * 100 if got > 100 else got
                 self.process_model.base_level = level_pct
                 self._current_level = level_pct
     
@@ -919,11 +933,17 @@ class DeviceBehaviorSimulator:
             # 泵开关
             elif 'pump' in name_lower and ('enable' in name_lower or 'switch' in name_lower):
                 if value == 0:
-                    # 关闭泵→流量归零
+                    # 关闭泵→流量归零（先记住关闭前的基准，供恢复用）
+                    self._flow_before_pump_off = self.process_model.base_flow
                     self.process_model.base_flow = 0
                     logger.info(f"[行为模拟] 设备 {self.device_name} 泵关闭")
                 else:
-                    self.process_model.base_flow = 15.0  # 恢复默认流量
+                    # 恢复关闭前的基准流量；写死 15.0 会覆盖配置基准与真实工况
+                    restore = getattr(self, '_flow_before_pump_off', None)
+                    if restore is not None:
+                        self.process_model.base_flow = restore
+                    logger.info(f"[行为模拟] 设备 {self.device_name} 泵开启，"
+                                f"流量恢复 {self.process_model.base_flow}")
             
             # 阀门开度
             elif 'valve' in name_lower:
@@ -1067,8 +1087,9 @@ class DeviceBehaviorSimulator:
         # 永远写不进去 —— 表现为「模拟设备能读不能控」。
         # 这里做最后一步覆盖：写入值优先于模型算出来的值。
         if self._point_overrides:
-            # 协议线程会并发增删，先快照再遍历
-            for _name, _val in list(self._point_overrides.items()):
+            # 协议线程会并发增删：`list(d.items())` 仍是在迭代中拷贝，可能抛
+            # "dictionary changed size during iteration"；`dict(d)` 是整体拷贝。
+            for _name, _val in dict(self._point_overrides).items():
                 data[_name] = _val
 
         # 7. 触发回调
@@ -1270,7 +1291,8 @@ class DeviceBehaviorSimulator:
         if self.state == DeviceState.RUNNING:
             target_temp += 20 * math.sin(t / 300)
             # 偶发扰动：指数衰减尖峰（自限幅，不会累积）
-            if random.random() < 0.001:
+            # 概率必须按步长缩放，否则更新频率越高触发越频繁（同函数其它分支已这么做）
+            if random.random() < min(1.0, 0.001 * self._dt):
                 self._temp_spike = random.uniform(10, 30)
                 logger.debug(f"[扰动] {self.device_name} 温度尖峰 +{self._temp_spike:.1f}°C")
             if self._temp_spike > 0.1:
@@ -1441,7 +1463,9 @@ class DeviceBehaviorSimulator:
 
             elif fault_type == FaultType.MOTOR_WEAR:
                 # 电机磨损：电流增加、振动增加（一阶惯性逼近目标，有界）
-                wear_current_target = self._motor_current * (1 + 0.2 * severity)
+                # 目标必须挂在**基准值**上：用当前值逐帧重算会变成指数复合增长，
+                # 几秒内就顶到 CURRENT_MAX（"磨损"变成"瞬间过流"）。
+                wear_current_target = self.process_model.base_current * (1 + 0.2 * severity)
                 wear_current_target = min(self.CURRENT_MAX, wear_current_target)
                 alpha = 1 - math.exp(-self._dt / 10)  # 10秒时间常数
                 self._motor_current += (wear_current_target - self._motor_current) * alpha
@@ -1474,7 +1498,8 @@ class DeviceBehaviorSimulator:
                 self.active_faults[fault_type] + growth_rate * self._dt))
 
             # 通信故障会自行恢复（间歇性）
-            if fault_type == FaultType.COMMUNICATION and random.random() < 0.01:
+            if (fault_type == FaultType.COMMUNICATION
+                    and random.random() < min(1.0, 0.01 * self._dt)):
                 del self.active_faults[fault_type]
                 del self.fault_timers[fault_type]
                 logger.info(f"[行为模拟] 设备 {self.device_name} 通信故障自行恢复")
@@ -1857,9 +1882,10 @@ class DeviceBehaviorSimulator:
             'motor_speed': round(self._motor_speed, 2),
             'motor_current': round(max(0, self._motor_current), 2),
             'torque': round(self._motor_current * 0.9 + random.gauss(0, 0.3), 2),
-            'vibration_x': round(self._vibration + random.gauss(0, 0.1), 2),
-            'vibration_y': round(self._vibration + random.gauss(0, 0.1), 2),
-            'vibration_z': round(self._vibration + random.gauss(0, 0.1), 2),
+            # 噪声可把 0 附近的值推成负数，振动幅值没有负的
+            'vibration_x': round(max(0.0, self._vibration + random.gauss(0, 0.1)), 2),
+            'vibration_y': round(max(0.0, self._vibration + random.gauss(0, 0.1)), 2),
+            'vibration_z': round(max(0.0, self._vibration + random.gauss(0, 0.1)), 2),
             'clamping_force': round(1500 * load_ratio + random.gauss(0, 20), 2),
             
             # 生产参数 - 与电机速度和负载关联（物理一致性）

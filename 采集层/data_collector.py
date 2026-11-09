@@ -825,7 +825,9 @@ class DataCollector:
             # quality 是 BAD（合成数据），计进去会让"采集速率"看起来正常，
             # 而实际设备已经失联。那正是最需要看出来的场景。
             try:
-                if item.get('quality') != 'BAD':
+                # 'simulated' 是断路器冷却期的兜底假数据（见 _generate_fallback_data），
+                # 与 'BAD' 一样不能计入采集速率 —— 否则设备失联时看板"采集正常"。
+                if item.get('quality') not in ('BAD', 'simulated'):
                     from core.metrics import DATA_COLLECTED
                     DATA_COLLECTED.labels(
                         device_id=item.get('device_id', 'unknown'),
