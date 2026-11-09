@@ -50,7 +50,9 @@ def _device_stopped_state(device_id: str, client: Any) -> bool:
         if is_device_stopped(device_id):
             return True
     except Exception as e:      # noqa: BLE001 —— 状态查询不该因导入/实现差异失败
-        logger.debug("读取停机标志失败 %s: %s", device_id, e)
+        # fail-safe：读不到停机标志时按已停机处理，不能把未知当运行中
+        logger.error("读取停机标志失败 %s: %s —— 本台按已停机处理", device_id, e)
+        return True
     return bool(getattr(client, 'stopped', False))
 
 
@@ -293,6 +295,11 @@ class DeviceManager:
                     continue
                 device_id = device_config.get('id')
                 if device_id:
+                    if device_id in target:
+                        logger.warning(
+                            "设备 id 重复，后一条覆盖前一条: %s  %r → %r",
+                            device_id, target[device_id].get('name'),
+                            device_config.get('name'))
                     target[device_id] = device_config
                     protocol = device_config.get('protocol', 'modbus_tcp')
                     logger.info(f"加载设备配置: {device_id} [{protocol}] - {device_config.get('name')}")
@@ -476,7 +483,6 @@ class DeviceManager:
         client = self.get_client(device_id)
         if not client:
             return False
-        import threading
         result = [False]
         def _do_connect():
             try:

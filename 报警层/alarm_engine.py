@@ -98,9 +98,18 @@ def evaluate_condition(rule_config: dict, value: float, *,
     if condition in ('in_range', 'out_of_range'):
         low = rule_config.get('threshold_min')
         high = rule_config.get('threshold_max')
-        if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
+        # bool 是 int 子类，NaN/inf 也是合法 float，都不能当区间边界
+        if isinstance(low, bool) or isinstance(high, bool):
             return False
-        low, high = float(low), float(high)
+        low, high = try_finite_float(low), try_finite_float(high)
+        if low is None or high is None:
+            return False
+        _db = normalize_deadband(deadband)
+        if active and _db > 0:
+            # 区间条件同样要迟滞：退出才放宽 deadband
+            if condition == 'in_range':
+                return (low - _db) <= value <= (high + _db)
+            return value < (low - _db) or value > (high + _db)
         if condition == 'in_range':
             return low <= value <= high
         return value < low or value > high
@@ -119,7 +128,10 @@ def evaluate_condition(rule_config: dict, value: float, *,
     if condition in ('less_equal', 'lte'):
         return value <= (threshold + db) if active else value <= threshold
     if condition in ('equal_to', 'equal', 'eq'):
-        return abs(value - threshold) <= db if db > 0 else value == threshold
+        if active and db > 0:
+            # 死区只用于保持；触发必须精确命中阈值
+            return abs(value - threshold) <= db
+        return value == threshold
     if condition in ('not_equal_to', 'not_equal', 'ne'):
         return abs(value - threshold) > db if db > 0 else value != threshold
     if condition == 'in_range':
@@ -181,7 +193,9 @@ def decide(rule_config: dict, state: dict | None, value: Any,
     deadband = normalize_deadband(rule_config.get('deadband', 0))
 
     active = bool(state) and state.get('alarm_id') is not None
-    triggered = evaluate_condition(rule_config, numeric, active=active,
+    # pending 还没真正报警，必须按精确阈值判恢复，不能套死区
+    hysteresis = active and not state.get('pending')
+    triggered = evaluate_condition(rule_config, numeric, active=hysteresis,
                                    deadband=deadband)
 
     if not triggered:
@@ -207,7 +221,8 @@ def decide(rule_config: dict, state: dict | None, value: Any,
             'last_trigger_time': timestamp,
             'trigger_count': 1,
             'pending': False,
-            'confirmed': False,
+            # 零延迟立即成立，必须已确认；否则只有 UPDATE 分支，永远不补置
+            'confirmed': True,
             'last_value': numeric,
         }, reason='立即触发')
 
@@ -220,11 +235,16 @@ def decide(rule_config: dict, state: dict | None, value: Any,
             # 停在 pending —— 即"配了 delay 的规则永不报警"。这里按到期处理
             # （fail-open，宁可多报一次也不静默漏报），由调用方记 warning。
             elapsed = delay
+        if elapsed < 0:
+            # 时间戳回退会让 elapsed 永远 < delay，报警永久 pending
+            elapsed = 0.0
         if elapsed >= delay:
             return Decision(FIRE, {
                 'pending': False,
                 'confirmed': True,
-                'first_trigger_time': timestamp,
+                # 保留真正首次触发时刻，不能覆盖成当前时间
+                'first_trigger_time': (state.get('first_trigger_time')
+                                       or timestamp),
                 'last_trigger_time': timestamp,
                 'last_value': numeric,
             }, elapsed=elapsed, reason='延迟到期')

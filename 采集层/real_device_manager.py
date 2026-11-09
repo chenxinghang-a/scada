@@ -482,12 +482,20 @@ class RealDeviceManager(IDeviceManager):
             if not hasattr(client, 'write_single_coil'):
                 logger.error("[真实] 客户端不支持线圈写入（点位类型 coil）—— 拒绝跨类型退回写寄存器")
                 return False
-            return bool(client.write_single_coil(address, bool(value)))
+            try:
+                return bool(client.write_single_coil(address, bool(value)))
+            except NotImplementedError:
+                logger.error("[真实] 客户端 write_single_coil 未实现 —— 拒绝跨类型退回")
+                return False
 
         if not hasattr(client, 'write_single_register'):
             logger.error("[真实] 客户端不支持寄存器写入（点位类型 register）—— 拒绝跨类型退回写线圈")
             return False
-        return bool(client.write_single_register(address, int(value)))
+        try:
+            return bool(client.write_single_register(address, int(value)))
+        except NotImplementedError:
+            logger.error("[真实] 客户端 write_single_register 未实现 —— 拒绝跨类型退回")
+            return False
 
     def stop_device(self, device_id: str, write: bool = True) -> bool:
         """停止指定设备（仅限机械类设备）。
@@ -742,13 +750,13 @@ class RealDeviceManager(IDeviceManager):
         Args:
             interval: 扫描间隔（秒），默认 30。
         """
-        if self._reconnect_running:
-            logger.debug("[真实] 重连循环已在运行，跳过重复启动")
-            return
-
+        with self._lock:
+            if self._reconnect_running:
+                logger.debug("[真实] 重连循环已在运行，跳过重复启动")
+                return
+            self._reconnect_running = True
         self._reconnect_interval = interval
         self._reconnect_stop_event.clear()
-        self._reconnect_running = True
 
         def _loop() -> None:
             while self._reconnect_running and not self._reconnect_stop_event.is_set():
@@ -910,6 +918,14 @@ class RealDeviceManager(IDeviceManager):
                     self.clients.pop(device_id, None)
                 logger.error("[真实] 添加设备失败：配置落盘失败，已回滚 %s", device_id)
                 return False
+
+            # 新增设备也登记原始表，避免落盘时 ${VAR} 占位符丢失
+            with self._lock:
+                raw_devices = [d for d in getattr(self, '_raw_devices', [])
+                               if not (isinstance(d, dict)
+                                       and d.get('id') == device_id)]
+                raw_devices.append(dict(device_config))
+                self._raw_devices = raw_devices
 
             logger.info(f"[真实] 添加设备: {device_id} [{protocol}]")
             return True
