@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from datetime import datetime
 from typing import Any, Callable
@@ -86,6 +87,8 @@ class CustomAdapterClient:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._session: requests.Session | None = None
+        #: requests.Session 非线程安全：轮询线程与 write_point 必须串行使用
+        self._session_lock = threading.Lock()
         self._timeout = _DEFAULT_TIMEOUT
 
         self._circuit_breaker = get_circuit_breaker(
@@ -116,7 +119,13 @@ class CustomAdapterClient:
                          self.device_id, self.stats['last_error'])
             return False
 
+        if self.connected and self._session is not None:
+            return True
+
         try:
+            # 重复 connect 时旧会话必须先关：否则每次重连泄漏一个连接池，
+            # 旧池里的 keep-alive 连接还挂在 Broker/网关侧。
+            self._close_session()
             self._session = requests.Session()
             # 现场接口在内网：不能被服务器上的 HTTP_PROXY 劫持
             self._session.trust_env = False
@@ -158,10 +167,17 @@ class CustomAdapterClient:
         """停止轮询并关闭会话（幂等）。"""
         self._stop_event.set()
         thread = self._thread
-        self._thread = None
         if thread is not None and thread.is_alive() \
                 and thread is not threading.current_thread():
             thread.join(timeout=5)
+            if thread.is_alive():
+                # 不能把引用丢掉：线程仍可能在使用 session，重连会起第二条轮询线程
+                logger.error(
+                    "自定义适配器轮询线程 5s 内未退出 device=%s，保留引用避免双轮询",
+                    self.device_id)
+                self.connected = False
+                return
+        self._thread = None
         self._close_session()
         self.connected = False
         logger.info("自定义适配器已断开: %s", self.device_id)
@@ -224,7 +240,10 @@ class CustomAdapterClient:
             if headers:
                 kwargs['headers'] = headers
 
-            response = self._session.request(request.method, url, **kwargs)
+            # requests.Session 不是线程安全的：轮询线程与 write_point 会并发
+            # 使用同一个连接池，必须串行化（代价是写请求排在采集请求之后）。
+            with self._session_lock:
+                response = self._session.request(request.method, url, **kwargs)
             response.raise_for_status()
             try:
                 return response.json()
@@ -268,6 +287,9 @@ class CustomAdapterClient:
     def write_point(self, name: str, value: Any) -> bool:
         """按 `adapter.write` 回写一个点位；未配置 write 时返回 False。"""
         if self._session is None or not self.connected or self.spec is None:
+            # 拒绝写入与通信失败必须可区分（否则调用方只能猜）
+            logger.warning("自定义适配器未连接，拒绝写入 %s/%s=%r（connected=%s）",
+                           self.device_id, name, value, self.connected)
             return False
         if self.spec.write is None:
             logger.warning("设备 %s 未配置 adapter.write，拒绝写入 %s",
@@ -325,7 +347,8 @@ class CustomAdapterClient:
             try:
                 session.close()
             except Exception as exc:      # noqa: BLE001
-                logger.debug("关闭自定义适配器会话失败: %s", exc)
+                # 关闭失败意味着连接池/socket 残留，必须可见
+                logger.warning("关闭自定义适配器会话失败: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -333,10 +356,13 @@ class CustomAdapterClient:
 # ---------------------------------------------------------------------------
 
 def _fill_text(text: str, context: dict[str, Any]) -> str:
-    result = str(text)
-    for key, value in context.items():
-        result = result.replace('{' + key + '}', str(value))
-    return result
+    # 单次扫描：逐项 str.replace 会把「值里含 {其它占位符}」再替换一遍
+    # （例如 name='{value}'），造成串值。re.sub 的回调保证只替换原始文本。
+    pattern = re.compile(r'\{(' + '|'.join(
+        re.escape(k) for k in context) + r')\}') if context else None
+    if pattern is None:
+        return str(text)
+    return pattern.sub(lambda m: str(context[m.group(1)]), str(text))
 
 
 def _fill_obj(obj: Any, context: dict[str, Any]) -> Any:

@@ -359,6 +359,10 @@ def write_coil(device_id):
 
     operator = request.current_user['username']
 
+    # 设备存在性/连通性交由安全层（device_control.write_with_verification）
+    # 校验：它按 device_manager + 实际客户端判定，且测试/嵌入式部署可能
+    # 没有装配 device_manager，这里硬判 404 会把合法写入挡掉。
+
     try:
         address = safe_int(address, 'address')
     except ValueError as e:

@@ -861,10 +861,19 @@ class Database:
             # 而设备列表里根本没有这台设备，运维无从处理（点确认也只能确认一条幽灵）。
             # 不物理删除：留着可追溯「这台设备在删除前报过什么」，
             # 只标记为已清除，让它不再被当成活跃报警恢复。
+            # acknowledged 也要一起置位：只置 cleared=1 时，这些行仍满足
+            # `acknowledged = 0 AND cleared IS NULL` 之外的口径吗？——统计用的是
+            # `(acknowledged=0 OR NULL) AND (cleared=0 OR NULL)`，置 cleared 后
+            # 已排出活跃口径；但「未确认」若按 acknowledged 单独统计仍会命中。
+            # 一并置位并留痕，避免已删设备的报警继续被算作待确认。
             cursor.execute(
-                'UPDATE alarm_records SET cleared = 1, cleared_at = ? '
+                'UPDATE alarm_records '
+                'SET cleared = 1, cleared_at = ?, '
+                '    acknowledged = 1, acknowledged_at = ?, '
+                '    acknowledged_by = COALESCE(acknowledged_by, ?) '
                 'WHERE device_id = ? AND (cleared = 0 OR cleared IS NULL)',
-                (datetime.now(), device_id))
+                (datetime.now(), datetime.now(),
+                 'system(device_deleted)', device_id))
 
             logger.info(f"已清除设备 {device_id} 的数据库数据（含未恢复报警）")
         # round 370（BUG-038）：行数变了，30 秒 TTL 的统计缓存必须失效

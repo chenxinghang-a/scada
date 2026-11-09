@@ -537,8 +537,12 @@ def update_alarm_rule(rule_id):
 
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_alarm_rule',
-        f"更新报警规则: {rule_id}" + ("（改绑点位/禁用，已收尾旧活跃报警）" if rebind else "")
-        + (f"（连带收尾 {retired} 条活跃报警）" if retired else ""))
+        f"更新报警规则: {rule_id}"
+        # 只在**真的收尾了**才写“已收尾”：rebind 但本来就没有活跃报警时，
+        # 原来的固定文案会让日志谎称处理过（审计不可自证）。
+        + (f"（改绑点位/禁用，连带收尾 {retired} 条活跃报警）"
+           if rebind and retired else
+           ("（改绑点位/禁用，无活跃报警需收尾）" if rebind else "")))
     return jsonify({
         'success': True,
         'message': f'规则 {rule_id} 已更新' + (f'，已收尾 {retired} 条活跃报警' if retired else ''),

@@ -46,14 +46,10 @@ ALLOWED_UNLOCKED_ITERATION: dict[tuple[str, str, str], str] = {
     (
         "采集层/device_behavior_simulator.py",
         "DeviceBehaviorSimulator",
-        "_point_overrides",
-    ): "仿真器本身不持锁：所有写入（hub.write_point）与读取（hub._tick_once）"
-       "都在 `DeviceDataHub._lock` 内串行（round 373 已把 write_point 的 setter 收进锁）。",
-    (
-        "采集层/device_behavior_simulator.py",
-        "DeviceBehaviorSimulator",
         "active_faults",
-    ): "同上：故障注入/复位走 hub 的写寄存器路径，与 tick 同锁。",
+    ): "仿真器本身不持锁：所有写入（hub.write_point）与读取（hub._tick_once）"
+       "都在 `DeviceDataHub._lock` 内串行（round 373 已把 write_point 的 setter 收进锁）；"
+       "故障注入/复位同样走 hub 的写寄存器路径，与 tick 同锁。",
     (
         "模拟服务端/opcua_server.py",
         "OpcuaSimServer",

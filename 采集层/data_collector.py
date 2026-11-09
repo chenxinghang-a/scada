@@ -761,6 +761,12 @@ class DataCollector:
         """线程安全地增加统计计数"""
         with self._stats_lock:
             self.stats[key] = self.stats.get(key, 0) + amount
+            # 采集次数总账跟着成功/失败计数走：原先只有批量写库成功路径
+            # 累加 total_collections，写库持续失败时它恒为 0 ——
+            # 看板显示"采集了 0 次"而 successful/failed 都在涨。
+            if key in ('successful_collections', 'failed_collections'):
+                self.stats['total_collections'] = (
+                    self.stats.get('total_collections', 0) + amount)
 
     def _protocol_of(self, device_id: str) -> str:
         """设备协议（带缓存）。指标标签用，避免每次读数都查设备配置。
@@ -2345,14 +2351,9 @@ class DataCollector:
                     # 本批取走」的新数据一起抹掉（崩溃即真丢）。
                     self.data_queue.clear_persistence(batch)
 
-                with self._stats_lock:
-                    # 不再往 self.stats 里写 'queue_size'：它是**派生量**，
-                    # 由 get_stats() 实时算（qsize()）。写进来只会把实时值覆盖掉
-                    # （`**self.stats` 展开在后面）—— 见 __init__ 里的说明。
-                    # 重试批次不再累加，否则 total_collections 随重试次数虚增。
-                    _fresh = sum(1 for d in batch if not d.get('_db_retry'))
-                    self.stats['total_collections'] = (
-                        self.stats.get('total_collections', 0) + _fresh)
+                # total_collections 由 `_inc_stat('successful_collections')`
+                # 统一累加（口径 = 采集次数）；这里不再按批内条数重复累加，
+                # 否则重试批次会让它虚增。
 
             except Exception as e:
                 if self.running:

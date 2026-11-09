@@ -179,12 +179,18 @@ class S7Gateway(BaseGateway):
         except Exception as e:
             self.logger.error(f"S7连接异常: {host} - {e}")
 
-        # 连接失败/异常：关闭已创建客户端，避免 snap7 原生 socket 泄漏
+        # 连接失败/异常：关闭已创建客户端，避免 snap7 原生 socket 泄漏。
+        # 除了 disconnect 还要 destroy —— snap7 的原生句柄不在 Python 对象里，
+        # 只靠 GC 回收不到。
         if client is not None:
-            try:
-                client.disconnect()
-            except Exception as e:
-                self.logger.debug("清理S7客户端失败: %s", e)
+            for step in ('disconnect', 'destroy'):
+                fn = getattr(client, step, None)
+                if not callable(fn):
+                    continue
+                try:
+                    fn()
+                except Exception as e:      # noqa: BLE001 —— 清理尽力而为
+                    self.logger.warning("清理S7客户端(%s)失败: %s", step, e)
         return None
 
     def read_device_data(self, device_id: str) -> dict[str, float] | None:

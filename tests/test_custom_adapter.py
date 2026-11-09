@@ -333,7 +333,8 @@ class TestApiDeviceValidation:
     def test_validate_accepts_good_adapter(self):
         from 展示层.api.api_devices import _validate_protocol_fields
 
-        _validate_protocol_fields('custom', _adapter())   # 不抛即通过
+        # 契约：合法配置返回 None（不抛异常）
+        assert _validate_protocol_fields('custom', _adapter()) is None
 
     def test_validate_rejects_bad_adapter_with_reason(self):
         from 展示层.api.api_devices import _validate_protocol_fields
