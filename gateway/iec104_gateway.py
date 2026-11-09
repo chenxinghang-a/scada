@@ -681,7 +681,15 @@ class IEC104Gateway(BaseGateway):
 
         for ioa, info in data.items():
             register_name = reverse_map.get(ioa, f"ioa_{ioa}")
-            result[register_name] = float(info['value'])
+            # 单个坏点（value 缺失/None/非数字）不能让整台设备的读取崩掉：
+            # 跳过该点并记账，其余点位照常返回。
+            try:
+                result[register_name] = float(info['value'])
+            except (KeyError, TypeError, ValueError) as e:
+                self.logger.warning(
+                    "IEC104 点位值非法，已跳过 device=%s register=%s ioa=%s info=%r: %s",
+                    device_id, register_name, ioa, info, e)
+                self._note_read_failure(device_id, register_name, f"值非法: {e}")
 
         return result if result else None
 

@@ -39,7 +39,25 @@ def _sanitize_table_name(raw: str) -> str:
     # 确保不以数字开头
     if clean and clean[0].isdigit():
         clean = '_' + clean
+    if not clean:
+        # 空串会生成 `tel__` / `alarm_` 之类无意义标识符，直接拒绝
+        raise ValueError(f'表名主体为空: {raw!r}')
     return clean
+
+
+def _sql_number(value: Any) -> str:
+    """把数值安全地转成 SQL 字面量。
+
+    NaN/Inf 直接拼进 SQL 会让 TDengine 拒绝整批写入；这里统一写成 ``NULL``
+    （合法且语义明确：该点没有可信数值），避免一个坏点毁掉整批数据。
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'非数值不能写入时序库: {value!r}') from None
+    if num != num or num in (float('inf'), float('-inf')):
+        return 'NULL'
+    return repr(num)
 
 
 @dataclass
@@ -61,7 +79,8 @@ class TelemetryRecord:
     def to_sql_values(self) -> str:
         """转换为SQL VALUES格式"""
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        return f"('{ts}', {self.value}, {self.quality})"
+        return (f"('{ts}', {_sql_number(self.value)}, "
+                f"{int(self.quality)})")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,7 +120,8 @@ class AlarmRecord:
         msg = msg[:512].rstrip("\\")
         level = self.level.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
         alarm_type = self.alarm_type.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
-        return f"('{ts}', '{level}', '{alarm_type}', '{msg}', {self.value}, {self.threshold}, {ack})"
+        return (f"('{ts}', '{level}', '{alarm_type}', '{msg}', "
+                f"{_sql_number(self.value)}, {_sql_number(self.threshold)}, {ack})")
 
 
 @dataclass
@@ -124,9 +144,11 @@ class OEERecord:
 
     def to_sql_values(self) -> str:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        return (f"('{ts}', {self.availability}, {self.performance}, "
-                f"{self.quality_rate}, {self.oee}, {self.total_count}, "
-                f"{self.good_count}, {self.run_time}, {self.downtime})")
+        return (f"('{ts}', {_sql_number(self.availability)}, {_sql_number(self.performance)}, "
+                f"{_sql_number(self.quality_rate)}, {_sql_number(self.oee)}, "
+                f"{int(self.total_count)}, "
+                f"{int(self.good_count)}, {_sql_number(self.run_time)}, "
+                f"{_sql_number(self.downtime)})")
 
 
 @dataclass
@@ -146,8 +168,9 @@ class EnergyRecord:
 
     def to_sql_values(self) -> str:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        return (f"('{ts}', {self.power}, {self.energy}, "
-                f"{self.voltage}, {self.current}, {self.power_factor})")
+        return (f"('{ts}', {_sql_number(self.power)}, {_sql_number(self.energy)}, "
+                f"{_sql_number(self.voltage)}, {_sql_number(self.current)}, "
+                f"{_sql_number(self.power_factor)})")
 
 
 @dataclass
@@ -168,8 +191,10 @@ class PredictiveRecord:
     def to_sql_values(self) -> str:
         ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         trend = _escape_sql_value(self.trend)
-        return (f"('{ts}', {self.health_score}, {self.failure_probability}, "
-                f"{self.remaining_life}, {self.anomaly_score}, '{trend}')")
+        return (f"('{ts}', {_sql_number(self.health_score)}, "
+                f"{_sql_number(self.failure_probability)}, "
+                f"{_sql_number(self.remaining_life)}, "
+                f"{_sql_number(self.anomaly_score)}, '{trend}')")
 
 
 # TDengine超级表定义
@@ -257,6 +282,16 @@ def _escape_sql_value(val: str) -> str:
     return str(val).replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
 
 
+#: 各超级表的 TAG 定义顺序（TAGS(...) 必须按此顺序给值，否则标签错位）
+STABLE_TAG_ORDER = {
+    'device_telemetry': ('device_id', 'register_name', 'unit', 'protocol', 'gateway_id'),
+    'alarm_records': ('device_id', 'alarm_id'),
+    'oee_records': ('device_id',),
+    'energy_records': ('device_id',),
+    'predictive_records': ('device_id',),
+}
+
+
 def get_create_table_sql(table_name: str, stable_name: str, tags: dict[str, str]) -> str:
     """
     生成创建子表的SQL
@@ -266,7 +301,19 @@ def get_create_table_sql(table_name: str, stable_name: str, tags: dict[str, str]
         stable_name: 超级表名称
         tags: 标签值 {tag_name: tag_value}
     """
-    tag_values = ", ".join([f"'{_escape_sql_value(v)}'" for v in tags.values()])
+    order = STABLE_TAG_ORDER.get(stable_name)
+    if order is not None:
+        unknown = set(tags) - set(order)
+        missing = [t for t in order if t not in tags]
+        if unknown or missing:
+            # 按 dict.values() 顺序拼接会让标签整体错位（device_id 位置写进 unit），
+            # 这类错误入库后无法回滚，必须在拼 SQL 前拦下。
+            raise ValueError(
+                f'{stable_name} 标签不匹配：多出 {sorted(unknown)}，缺少 {missing}')
+        tag_values = ", ".join(
+            f"'{_escape_sql_value(tags[t])}'" for t in order)
+    else:
+        tag_values = ", ".join([f"'{_escape_sql_value(v)}'" for v in tags.values()])
     # 标识符无法参数化，公开 API 必须自己 fail-closed。
     for _ident, _label in ((table_name, '子表名'), (stable_name, '超级表名')):
         if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', str(_ident or '')):

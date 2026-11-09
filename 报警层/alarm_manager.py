@@ -503,13 +503,16 @@ class AlarmManager:
             logger.debug("读取报警配置文件修改时间失败（文件可能尚不存在）%s: %s",
                          self.config_path, e)
         self._config_watcher_running = True
-        self._start_config_watcher()
 
         # round 314：从库里恢复"条件尚未恢复"的报警（必须在 load_config 之后，
         # 因为升级管理器是在 load_config 里创建的）
         self._restore_active_alarms()
         # round 316：屏蔽也要跨重启保持（维护窗口内重启不该让报警重新刷屏）
         self._restore_shelves()
+
+        # 热重载线程必须**等恢复完成后再启动**：先起 watcher 的话，配置重载
+        # 可能在建库恢复途中并发改写 rules/alarm_states（恢复出的状态被覆盖）。
+        self._start_config_watcher()
 
         # 启动报警升级自动检查定时器
         self._start_escalation_timer()
@@ -1357,7 +1360,12 @@ class AlarmManager:
         register_name = escalation_info.get('register_name')
         rule_id = escalation_info.get('alarm_id')
         rule_config = self.rules.get(rule_id, {})
-        elapsed = escalation_info.get('elapsed_seconds', 0)
+        # 类型必须在这里收敛：下面 `int(elapsed)` / `%.0f` 遇到 None 或字符串
+        # 会直接抛异常，中断整轮升级处理。
+        try:
+            elapsed = float(escalation_info.get('elapsed_seconds', 0) or 0)
+        except (TypeError, ValueError):
+            elapsed = 0.0
         level = escalation_info.get('level')
         now = datetime.now()
 
@@ -1425,8 +1433,13 @@ class AlarmManager:
                 else:
                     message = f"告警升级: {fields['alarm_message']}"
 
+                # level 可能来自配置/外部，未转 int 时 `>= 3` 会 TypeError
+                try:
+                    _level_num = int(level)
+                except (TypeError, ValueError):
+                    _level_num = 1
                 self._invoke_broadcast(
-                    'critical' if level >= 3 else 'warning',
+                    'critical' if _level_num >= 3 else 'warning',
                     message,
                     escalation_info.get('device_id'),
                     'all')
@@ -1782,8 +1795,10 @@ class AlarmManager:
                 if decision.action == _ACT_PENDING and decision.elapsed is None:
                     # 计时不可用：保留 pending 等下一次采样，既有测试锁定该语义；
                     # 不能在这里直接 fire（会把延迟报警提前触发）。
+                    # 行为与日志必须一致：这里**没有** fire，只是保留 pending
+                    # 等下一次采样重算（既避免误触发，也避免日志谎称已按到期处理）。
                     logger.warning(
-                        "延迟报警无法计算持续时间，按到期处理以规避静默漏报: "
+                        "延迟报警无法计算持续时间，保留 pending 待下次采样重算: "
                         "%s - %s/%s", rule_id, device_id, register_name)
                 elif decision.action == _ACT_FIRE and decision.reason == '延迟到期':
                     logger.info("延迟报警到期触发: %s - %s/%s (持续%.1fs)",
@@ -2102,17 +2117,21 @@ class AlarmManager:
         # 这条报警的弹窗/语音就永久错过 —— 接下来 300 秒内同 key 一律被
         # `dedup_cooldown` 压掉，而运维只看到 `errors['websocket']` 涨了一个
         # 没人看的计数，界面显示"没有新报警"。
-        if self._emit_websocket_alarm(alarm_payload):
+        emitted = self._emit_websocket_alarm(alarm_payload)
+        if emitted:
             self._record_emit(rule_id, device_id, register_name)
 
         # Prometheus：报警总数（round 253）。放在去重点**之后**、与推送同一位置，
         # 所以它统计的是「真正推出去的报警」—— 被冷却/确认抑制掉的重复报警不计入，
         # 否则一条抖动报警能把计数刷到天上，看板上的报警率就失去意义。
-        try:
-            from core.metrics import ALARMS_TOTAL
-            ALARMS_TOTAL.labels(level=alarm_level, device_id=device_id).inc()
-        except Exception as e:      # noqa: BLE001 —— 指标失败不影响报警
-            logger.debug(f"报警指标打点失败: {e}")
+        # 推送失败（通道未注册/异常返回 False）同样不计入，否则通道故障期间
+        # 每一轮轮询都会累加，指标反而虚高。
+        if emitted:
+            try:
+                from core.metrics import ALARMS_TOTAL
+                ALARMS_TOTAL.labels(level=alarm_level, device_id=device_id).inc()
+            except Exception as e:      # noqa: BLE001 —— 指标失败不影响报警
+                logger.debug(f"报警指标打点失败: {e}")
 
         # 5/6. 邮件 + 短信（异步，不阻塞上面的声光/广播/前端推送）。
         #    放在去重点**之后**是刻意的：复用同一套冷却与确认抑制，
@@ -2547,7 +2566,11 @@ class AlarmManager:
                 started = state.get('first_trigger_time') if state else None
                 if isinstance(started, datetime):
                     elapsed = max(0.0, (datetime.now() - started).total_seconds())
-                    level = (self.rules.get(alarm_id) or {}).get('level', 'warning')
+                    # 外部事件不在 self.rules 里，只查 rules 会让它们恒以
+                    # 'warning' 打点（升级/外部报警的级别信息丢失）。
+                    level = ((self.rules.get(alarm_id) or {}).get('level')
+                             or (self._external_alarms.get(alarm_id) or {}).get('level')
+                             or 'warning')
                     ALARM_DURATION.labels(level=level).observe(elapsed)
             except Exception as e:      # noqa: BLE001 —— 指标失败不影响确认
                 logger.debug(f"报警确认指标打点失败: {e}")

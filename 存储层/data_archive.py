@@ -16,6 +16,40 @@ from core.safe_numeric import to_finite_float, try_finite_float, try_int
 logger = logging.getLogger(__name__)
 
 
+def _sample_count(item: Dict) -> int:
+    """取桶内样本数；缺失按 1，非法按 1，合法的 0 保留为 0。
+
+    原实现统一写 `int(item.get('count') or 1)`：`count=0` 是合法值，
+    被 `or` 吞成 1，会把样本总数系统性抬高。
+    """
+    raw = item.get('count')
+    if raw is None:
+        return 1
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return value if value >= 0 else 0
+
+
+def _weighted_mean(items: List[Dict]) -> float:
+    """按桶内样本数加权求均值。
+
+    桶里装的是 1 分钟聚合值，各桶采样数可能不同（设备断线/采样抖动），
+    等权平均会让采样稀疏的时段被过度放大。
+    """
+    total = 0.0
+    weight = 0
+    for item in items:
+        value = item.get('value')
+        if value is None:
+            continue
+        w = max(_sample_count(item), 1)
+        total += float(value) * w
+        weight += w
+    return total / weight if weight else 0.0
+
+
 class DataArchive:
     """
     数据归档类
@@ -74,6 +108,13 @@ class DataArchive:
         Side Effects:
             写入 ``history_archive``，删除 ``history_data`` 中的过期行。
         """
+        # retention_days=0/负数会让 cutoff 落在当下或未来 → 全量归档并删除，
+        # 必须在进入数据库层之前拦下（fail-closed）。
+        if isinstance(retention_days, bool) or not isinstance(retention_days, int):
+            raise ValueError(f'retention_days 必须是正整数: {retention_days!r}')
+        if retention_days <= 0:
+            raise ValueError(f'retention_days 必须为正数: {retention_days!r}')
+
         logger.info(f"开始归档 {retention_days} 天前的数据...")
 
         cutoff_date = datetime.now() - timedelta(days=retention_days)
@@ -85,8 +126,13 @@ class DataArchive:
             archive_days=retention_days, delete_days=retention_days
         )
 
-        moved_count = result.get('archived', 0)
-        deleted_count = result.get('deleted_history', 0)
+        # 契约字段缺失说明归档根本没执行 —— 不能默认成 0 当成"成功但没数据"
+        missing = [k for k in ('archived', 'deleted_history') if k not in result]
+        if missing:
+            raise RuntimeError(
+                f"归档结果缺少字段 {missing}，无法确认归档是否执行: {result!r}")
+        moved_count = result['archived']
+        deleted_count = result['deleted_history']
 
         logger.info(f"数据归档完成: 归档 {moved_count} 条聚合行到 {ARCHIVE_TABLE}，"
                     f"删除 {deleted_count} 条旧数据")
@@ -271,8 +317,11 @@ class DataArchive:
             '1day': 86400,
         }
         if interval not in interval_map:
-            logger.warning(f"未知压缩间隔: {interval!r}，回退为 3600 秒（1hour）")
-        return interval_map.get(interval, 3600)
+            # 静默回退到 1 小时会让分桶粒度与调用方以为的完全不同，
+            # 且图表聚合结果"看起来正常"——直接拒绝更安全。
+            raise ValueError(
+                f'未知压缩间隔: {interval!r}，可选: {", ".join(interval_map)}')
+        return interval_map[interval]
 
     def _group_by_interval(self, data: List[Dict], interval_seconds: int) -> Dict[int, List[Dict]]:
         """
@@ -318,7 +367,7 @@ class DataArchive:
             values = [item['value'] for item in items if item.get('value') is not None]
 
             if values:
-                avg_value = sum(values) / len(values)
+                avg_value = _weighted_mean(items)
                 timestamp = datetime.fromtimestamp(bucket_key)
 
                 result.append({
@@ -327,7 +376,7 @@ class DataArchive:
                     'unit': items[0].get('unit', ''),
                     # round 370（BUG-036）：样本数应是各 1 分钟桶真实采样数之和，
                     # 不是"有几个 1 分钟桶"（1 小时归档会把 60 条采样记成 1）。
-                    'count': sum(int(item.get('count') or 1) for item in items),
+                    'count': sum(_sample_count(item) for item in items),
                 })
         
         return result
@@ -360,7 +409,7 @@ class DataArchive:
                     'timestamp': timestamp.isoformat(),
                     'value': round(max_value, 4),
                     'unit': items[0].get('unit', ''),
-                    'count': sum(int(item.get('count') or 1) for item in items),
+                    'count': sum(_sample_count(item) for item in items),
                 })
         
         return result
@@ -393,7 +442,7 @@ class DataArchive:
                     'timestamp': timestamp.isoformat(),
                     'value': round(min_value, 4),
                     'unit': items[0].get('unit', ''),
-                    'count': sum(int(item.get('count') or 1) for item in items),
+                    'count': sum(_sample_count(item) for item in items),
                 })
         
         return result
@@ -423,14 +472,14 @@ class DataArchive:
         for bucket_key, items in sorted_buckets:
             values = [item['value'] for item in items if item.get('value') is not None]
             if values:
-                avg_value = sum(values) / len(values)
+                avg_value = _weighted_mean(items)
                 timestamp = datetime.fromtimestamp(bucket_key)
                 points.append({
                     'timestamp': timestamp,
                     'value': avg_value,
                     'unit': items[0].get('unit', ''),
                     # BUG-036：同样不能把桶数当样本数（LTTB 路径）。
-                    'count': sum(int(i.get('count') or 1) for i in items)
+                    'count': sum(_sample_count(i) for i in items)
                 })
         
         if len(points) <= threshold:
@@ -510,7 +559,8 @@ class DataArchive:
             values = [item['value'] for item in items if item.get('value') is not None]
             
             if values:
-                avg_value = sum(values) / len(values)
+                # 按样本数加权：各 1 分钟桶的采样数可能不同，等权平均会偏
+                avg_value = _weighted_mean(items)
                 # BUG-036：桶里装的是 **1 分钟预聚合一**，`item['value']` 本身
                 # 已经是均值。对均值求 max/min 会把尖峰削平（桶内 100℃、
                 # 均值 95℃ → 归档 max 记成 95℃）。必须优先取桶内真实极值。
@@ -518,10 +568,14 @@ class DataArchive:
                                  if v is not None] or values)
                 min_value = min([v for v in (i.get('min_value') for i in items)
                                  if v is not None] or values)
-                
-                # 计算标准差
-                if len(values) > 1:
-                    variance = sum((v - avg_value) ** 2 for v in values) / (len(values) - 1)
+
+                # 加权样本方差（权重=桶内采样数）；只有 1 个样本时为 0
+                pairs = [(float(i['value']), max(_sample_count(i), 1))
+                         for i in items if i.get('value') is not None]
+                total_weight = sum(w for _, w in pairs)
+                if len(pairs) > 1 and total_weight > 1:
+                    variance = sum(w * (v - avg_value) ** 2 for v, w in pairs) / (
+                        total_weight - 1)
                     std_dev = math.sqrt(variance)
                 else:
                     std_dev = 0
@@ -537,7 +591,7 @@ class DataArchive:
                     # BUG-036：`len(values)` 是**桶数**，不是样本数。
                     # 一个 1 分钟桶代表几十个采样点，归档后 sample_count
                     # 会缩水到 1/N，下游按样本量算的统计全部失真。
-                    'count': sum(int(i.get('count') or 1) for i in items),
+                    'count': sum(_sample_count(i) for i in items),
                     'unit': items[0].get('unit', '')
                 })
         

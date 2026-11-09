@@ -71,6 +71,9 @@ class MQTTToTSDBService:
         self._telemetry_buffer: deque[Any] = deque(maxlen=10000)
         self._alarm_buffer: deque[Any] = deque(maxlen=1000)
         self._buffer_lock = threading.Lock()
+        #: 统计计数在「MQTT 回调线程 / 刷新线程 / 主线程」三处自增，
+        #: `+=` 不是原子操作，必须串行化，否则会静默丢计数。
+        self._stats_lock = threading.Lock()
 
         # 运行状态
         self.running = False
@@ -98,18 +101,23 @@ class MQTTToTSDBService:
         self.subscriber.on_telemetry = self._on_telemetry
         self.subscriber.on_alarm = self._on_alarm
 
-    def start(self):
-        """启动服务"""
+    def start(self) -> bool:
+        """启动服务。
+
+        Returns:
+            bool: 真的起来了（TDengine 连上 + 订阅/刷新线程已启动）才为 True。
+            原先失败只打日志返回 None，调用方无从得知启动失败。
+        """
         if self.running:
             self.logger.warning("服务已在运行")
-            return
+            return True
 
         self.logger.info("启动MQTT到TDengine数据写入服务...")
 
         # 连接TDengine
         if not self.tdengine.connect():
-            self.logger.error("TDengine连接失败")
-            return
+            self.logger.error("TDengine连接失败，服务未启动")
+            return False
 
         # 初始化表
         self.tdengine.init_tables()
@@ -128,6 +136,7 @@ class MQTTToTSDBService:
         self._flush_thread.start()
 
         self.logger.info("服务已启动")
+        return True
 
     def stop(self):
         """停止服务"""
@@ -156,7 +165,7 @@ class MQTTToTSDBService:
     def _on_telemetry(self, telemetry: DeviceTelemetry):
         """处理遥测数据"""
         try:
-            self.stats['telemetry_received'] += 1
+            self._bump('telemetry_received', 1)
 
             # 转换为TDengine记录
             timestamp = datetime.fromtimestamp(telemetry.Timestamp)
@@ -178,7 +187,7 @@ class MQTTToTSDBService:
                     # 以前没人知道丢了多少 —— 这里显式计数。
                     if (self._telemetry_buffer.maxlen is not None
                             and len(self._telemetry_buffer) >= self._telemetry_buffer.maxlen):
-                        self.stats['telemetry_dropped'] += 1
+                        self._bump('telemetry_dropped', 1)
                     self._telemetry_buffer.append(record)
 
             # 检查是否需要刷新
@@ -187,12 +196,12 @@ class MQTTToTSDBService:
 
         except Exception as e:
             self.logger.error(f"处理遥测数据异常: {e}")
-            self.stats['errors'] += 1
+            self._bump('errors', 1)
 
     def _on_alarm(self, alarm: AlarmMessage):
         """处理报警数据"""
         try:
-            self.stats['alarms_received'] += 1
+            self._bump('alarms_received', 1)
 
             record = AlarmRecord(
                 alarm_id=alarm.AlarmID,
@@ -209,7 +218,7 @@ class MQTTToTSDBService:
             with self._buffer_lock:
                 if (self._alarm_buffer.maxlen is not None
                         and len(self._alarm_buffer) >= self._alarm_buffer.maxlen):
-                    self.stats['alarms_dropped'] += 1
+                    self._bump('alarms_dropped', 1)
                 self._alarm_buffer.append(record)
 
             # 报警立即写入
@@ -217,7 +226,7 @@ class MQTTToTSDBService:
 
         except Exception as e:
             self.logger.error(f"处理报警数据异常: {e}")
-            self.stats['errors'] += 1
+            self._bump('errors', 1)
 
     def _flush_loop(self):
         """定时刷新循环"""
@@ -228,7 +237,7 @@ class MQTTToTSDBService:
                     self._flush_buffers()
             except Exception as e:
                 self.logger.error(f"刷新异常: {e}")
-                self.stats['errors'] += 1
+                self._bump('errors', 1)
 
     def _flush_buffers(self):
         """刷新所有缓冲区"""
@@ -252,7 +261,7 @@ class MQTTToTSDBService:
             # 失败时 except 分支永远不进 —— 数据在 clear() 之后彻底消失）
             if self.tdengine.write_telemetry_batch(records):
                 with self._buffer_lock:
-                    self.stats['telemetry_written'] += len(records)
+                    self._bump('telemetry_written', len(records))
             else:
                 # round 321：**写失败必须回填**。
                 # round 298 只补了"计数"（原来返回值被丢弃、except 永远不进），
@@ -260,23 +269,29 @@ class MQTTToTSDBService:
                 # 注释写着"写失败必须回填并计数"，代码只做了后一半。
                 # 后果：TDengine 短暂不可用（重启/网络抖动）期间，
                 # 每 5 秒一批数据**静默消失**，而统计里只有 errors 涨。
-                self.stats['errors'] += len(records)
-                self.stats['telemetry_requeued'] += len(records)
+                self._bump('errors', len(records))
+                self._bump('telemetry_requeued', len(records))
                 self.logger.warning(
                     "遥测批量写入失败（%d 条），已回填缓冲区重试", len(records))
                 with self._buffer_lock:
                     maxlen = self._telemetry_buffer.maxlen
                     if maxlen is not None:
-                        self.stats['telemetry_dropped'] += max(
-                            0, len(self._telemetry_buffer) + len(records) - maxlen)
+                        self._bump('telemetry_dropped', max(
+                            0, len(self._telemetry_buffer) + len(records) - maxlen))
                     self._telemetry_buffer.extend(records)
+                return
             self.logger.debug(f"写入 {len(records)} 条遥测数据")
         except Exception as e:
             self.logger.error(f"写入遥测数据失败: {e}")
-            self.stats['errors'] += 1
+            self._bump('errors', 1)
+            self._bump('telemetry_requeued', len(records))
 
             # 将失败的数据放回缓冲区
             with self._buffer_lock:
+                maxlen = self._telemetry_buffer.maxlen
+                if maxlen is not None:
+                    self._bump('telemetry_dropped', max(
+                        0, len(self._telemetry_buffer) + len(records) - maxlen))
                 self._telemetry_buffer.extend(records)
 
     def _flush_alarms(self):
@@ -292,36 +307,47 @@ class MQTTToTSDBService:
             failed = []
             for record in records:
                 if not self.tdengine.write_alarm(record):
-                    self.stats['errors'] += 1
+                    self._bump('errors', 1)
                     failed.append(record)
                     continue
-                self.stats['alarms_written'] += 1
+                self._bump('alarms_written', 1)
             if failed:
                 # round 321：报警比遥测更不能丢 —— 写失败的必须回填。
                 # 原来 `continue` 直接把这条丢了（报警丢了等于"没发生过"）。
-                self.stats['alarms_requeued'] += len(failed)
+                self._bump('alarms_requeued', len(failed))
                 self.logger.warning(
                     "报警写入失败 %d 条，已回填缓冲区重试", len(failed))
                 with self._buffer_lock:
                     maxlen = self._alarm_buffer.maxlen
                     if maxlen is not None:
-                        self.stats['alarms_dropped'] += max(
-                            0, len(self._alarm_buffer) + len(failed) - maxlen)
+                        self._bump('alarms_dropped', max(
+                            0, len(self._alarm_buffer) + len(failed) - maxlen))
                     self._alarm_buffer.extend(failed)
+                return
             self.logger.debug(f"写入 {len(records)} 条报警数据")
         except Exception as e:
             # round 381：records 已在 283-284 行从缓冲区 clear，这里不回填
             # 就整批永久丢失（报警丢了等于“没发生过”）。
             self.logger.error("写入报警数据失败（%d 条），已回填缓冲区: %s",
                               len(records), e)
-            self.stats['errors'] += 1
-            self.stats['alarms_requeued'] += len(records)
+            self._bump('errors', 1)
+            self._bump('alarms_requeued', len(records))
             with self._buffer_lock:
+                maxlen = self._alarm_buffer.maxlen
+                if maxlen is not None:
+                    self._bump('alarms_dropped', max(
+                        0, len(self._alarm_buffer) + len(records) - maxlen))
                 self._alarm_buffer.extend(records)
+
+    def _bump(self, key: str, amount: int = 1) -> None:
+        """线程安全地累加统计计数。"""
+        with self._stats_lock:
+            self.stats[key] += amount
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
-        stats = self.stats.copy()
+        with self._stats_lock:
+            stats = self.stats.copy()
         stats['running'] = self.running
         stats['telemetry_buffer_size'] = len(self._telemetry_buffer)
         stats['alarm_buffer_size'] = len(self._alarm_buffer)
@@ -361,8 +387,11 @@ class OEEDataWriter:
             # 而不是抛异常，原来这里只 catch 异常，TDengine 挂了也静默。
             if not self.tdengine.write_oee(record):
                 self.logger.error("写入OEE数据失败：TDengine 写入返回 False")
+                return False
+            return True
         except Exception as e:
             self.logger.error(f"写入OEE数据失败: {e}")
+            return False
 
 
 class EnergyDataWriter:
@@ -392,8 +421,11 @@ class EnergyDataWriter:
         try:
             if not self.tdengine.write_energy(record):
                 self.logger.error("写入能源数据失败：TDengine 写入返回 False")
+                return False
+            return True
         except Exception as e:
             self.logger.error(f"写入能源数据失败: {e}")
+            return False
 
 
 class PredictiveDataWriter:

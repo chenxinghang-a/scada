@@ -897,8 +897,6 @@ class DeviceManager:
             with self._lock:
                 removed = self.devices.pop(device_id, None)
                 self.clients.pop(device_id, None)
-            self._connection_pool.remove(device_id)
-
             # round 302：落盘失败要把设备**放回去**，并如实返回 False。
             # 否则「删掉了但文件里还在」—— 重启后设备回来，运维以为见鬼；
             # 而接口当时回的是「已删除」。
@@ -908,6 +906,14 @@ class DeviceManager:
                         self.devices[device_id] = removed
                 logger.error("移除设备失败：配置落盘失败，已回滚 %s", device_id)
                 return False
+
+            # 连接池清理放在落盘成功之后：原先它排在内存表已删之后，一旦
+            # 抛异常会被外层吞成 False，而设备已从 devices/clients 移除且未落盘
+            # —— 重启后设备"复活"，运行态与磁盘不一致。
+            try:
+                self._connection_pool.remove(device_id)
+            except Exception as e:      # noqa: BLE001 —— 池清理失败不该让删除失败
+                logger.warning("清理设备 %s 的连接池条目失败: %s", device_id, e)
 
             # round 310：**状态缓存必须一起清**。`_status_cache` / `_status_cache_time`
             # 以 device_id 为 key、TTL 5 秒，但删除设备时从不清 ——

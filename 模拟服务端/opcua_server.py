@@ -125,8 +125,12 @@ class OpcuaSimServer:
         if thread and thread.is_alive():
             thread.join(timeout=10.0)
             if thread.is_alive():
-                # 不静默：线程卡住说明服务器没正常关闭，端口可能仍被占用
-                logger.warning("OPC UA 模拟服务端线程 10s 内未退出")
+                # 线程仍活着、端口可能仍被占用：**保留引用**，否则
+                # start() 会因为 _thread 为 None 再起一个线程抢同一端口
+                # （两个 asyncio 事件循环同时对同一 endpoint 调 start_server）。
+                logger.error(
+                    "OPC UA 模拟服务端线程 10s 内未退出，保留线程引用以阻止重复启动")
+                return
         self._thread = None
         self._server = None
 

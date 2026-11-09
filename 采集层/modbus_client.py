@@ -1227,7 +1227,13 @@ class ModbusClient:
         if self.byte_order == ByteOrder.ABCD:
             raw = struct.pack('>HHHH', registers[0], registers[1], registers[2], registers[3])
         elif self.byte_order == ByteOrder.BADC:
-            raw = struct.pack('>HHHH', registers[1], registers[0], registers[3], registers[2])
+            # BADC = **每个 16 位字内部字节交换**（与 decode_float32 的
+            # `_combine_regs` 同一口径）。原实现只交换相邻寄存器
+            # （r1,r0,r3,r2），等价于 CDAB —— BADC 设备解出的 double 全错。
+            def _swap16(w):
+                return ((w & 0xFF) << 8) | ((w >> 8) & 0xFF)
+            raw = struct.pack('>HHHH', _swap16(registers[0]), _swap16(registers[1]),
+                              _swap16(registers[2]), _swap16(registers[3]))
         elif self.byte_order == ByteOrder.CDAB:
             raw = struct.pack('>HHHH', registers[2], registers[3], registers[0], registers[1])
         elif self.byte_order == ByteOrder.DCBA:

@@ -113,6 +113,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             return
 
         body: dict[str, Any] = {}
+        has_value = False
         missing: list[str] = []
         for endpoint in endpoints:
             name = endpoint.get('name') or path
@@ -120,6 +121,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             if value is None:
                 missing.append(name)
                 continue
+            has_value = True
             built = build_nested(endpoint.get('json_path', ''), value)
             if isinstance(built, dict):
                 deep_merge(body, built)
@@ -129,7 +131,9 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 body = built  # type: ignore[assignment]
                 break
 
-        if not body and missing:
+        # 用 has_value 而不是 `not body`：合法值可能就是 0/False/"" ，
+        # 按真值判断会把它们当成"没读到"并回 503，丢掉有效数据。
+        if not has_value and missing:
             # 200 + null 会让客户端把「点位不存在」当成正常数据入库，
             # 用 503 让 RESTDeviceClient 明确计一次失败。
             self._send_json(503, {
@@ -163,7 +167,25 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         if len(path) > 1:
             path = path.rstrip('/')
 
-        length = try_int(self.headers.get('Content-Length')) or 0
+        transfer_encoding = (self.headers.get('Transfer-Encoding') or '').lower()
+        if 'chunked' in transfer_encoding:
+            # 未实现 chunked 解码：不读请求体会让 keep-alive 后续请求错位，
+            # 明确 501 并让客户端重建连接。
+            self.close_connection = True
+            self._send_json(501, {
+                'error': 'chunked_not_supported',
+                'device_id': self.server.device_id,
+            })
+            return
+        length = try_int(self.headers.get('Content-Length'))
+        if length is None or length < 0:
+            # 没有长度就无法定位请求体边界；继续按 0 读会让下一个请求解析错位
+            self.close_connection = True
+            self._send_json(411, {
+                'error': 'length_required',
+                'device_id': self.server.device_id,
+            })
+            return
         raw = self.rfile.read(length) if length > 0 else b''
         try:
             payload: Any = json.loads(raw.decode('utf-8')) if raw else {}
@@ -242,6 +264,8 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                     cur = cur[part]
                 if cur is not None:
                     return cur
+                # json_path 命中了但值是 null：继续尝试点位名/单键写法，
+                # 不能直接返回 None 把请求判成"没给值"。
             if name in payload:
                 return payload[name]
             if len(payload) == 1:
@@ -364,7 +388,8 @@ class RestSimGateway:
         sim = cfg.get('sim_endpoint')
         if isinstance(sim, dict):
             port = sim.get('port')
-            if isinstance(port, int) and 0 < port < 65536:
+            if (isinstance(port, int) and not isinstance(port, bool)
+                    and 0 < port < 65536):
                 host = str(sim.get('host') or self.host)
                 return host, port
             logger.warning("REST 设备 %s 的 sim_endpoint.port=%r 非法，退回自动分配",
@@ -397,5 +422,8 @@ class RestSimGateway:
             endpoint['method'] = method
             if not path.startswith('/'):
                 path = '/' + path
+            # 请求侧会 rstrip('/')，配置侧不去尾斜杠会导致恒 404
+            if len(path) > 1:
+                path = path.rstrip('/')
             routes.setdefault(path, []).append(endpoint)
         return routes

@@ -304,10 +304,16 @@ class TDengineClient:
         })
 
         # 构造INSERT语句 (sanitize table name, escape timestamp)
+        # 数值/质量码统一交给 to_sql_values 校验：NaN/Inf/字符串会让整条
+        # INSERT 变成非法 SQL（或成为注入点），必须在拼接前拦下。
         safe_table = self._sanitize_identifier(table_name)
-        ts = record.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        safe_ts = self._escape_value(ts)
-        sql = f"INSERT INTO {safe_table} VALUES ('{safe_ts}', {record.value}, {record.quality})"
+        try:
+            values = record.to_sql_values()
+        except ValueError as e:
+            self.logger.error("遥测数据非法，拒绝写入（%s）: %s", table_name, e)
+            self.stats['errors'] += 1
+            return False
+        sql = f"INSERT INTO {safe_table} VALUES {values}"
 
         result = self._execute_sql(sql)
         if result:
@@ -367,9 +373,15 @@ class TDengineClient:
             safe_table = self._sanitize_identifier(table_name)
             values = []
             for record in table_records:
-                ts = record.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                safe_ts = self._escape_value(ts)
-                values.append(f"('{safe_ts}', {record.value}, {record.quality})")
+                try:
+                    values.append(record.to_sql_values())
+                except ValueError as e:
+                    # 单条坏数据不能连坐整批：跳过并记账，其余照常写
+                    all_ok = False
+                    self.stats['errors'] += 1
+                    self.logger.error("遥测数据非法，已跳过（%s）: %s", table_name, e)
+            if not values:
+                continue
 
             sql = f"INSERT INTO {safe_table} VALUES {', '.join(values)}"
             result = self._execute_sql(sql)

@@ -1221,8 +1221,11 @@ def _get_behavior_simulator(device_id: Optional[str]):
     # 尝试从设备管理器获取
     if device_id:
         client = device_manager.get_client(device_id)
-        if client and hasattr(client, 'behavior_simulator'):
-            return client.behavior_simulator
+        # `hasattr` 对值为 None 的属性同样返回 True —— 只判属性存在会把
+        # “有属性但没装配”当成命中，直接返回 None，永远走不到下面的兜底。
+        simulator = getattr(client, 'behavior_simulator', None)
+        if simulator is not None:
+            return simulator
 
     # 仅在**未指定设备**（单机演示）时才回退。显式传了 device_id 却查不到，
     # 必须返回 None → 上层 404，不能把配方下发到任意设备上。

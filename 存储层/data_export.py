@@ -109,7 +109,8 @@ class DataExport:
             raise ValueError(f'导出路径越界: {filename!r}')
         return target
 
-    def export_csv(self, data: list[dict[str, Any]], filename: str | None = None) -> str:
+    def export_csv(self, data: list[dict[str, Any]],
+                   filename: str | None = None) -> str | None:
         """
         导出CSV格式
 
@@ -168,8 +169,9 @@ class DataExport:
                     tmp_path.unlink(missing_ok=True)
                 except OSError:
                     pass
-            # 保持既有契约：失败返回空串（调用方按 falsy 判断）
-            return ""
+            # 失败返回 None —— 与"无数据返回 None"统一，不再用空串表示失败
+            # （空串与"导出了个空文件"无法区分）。
+            return None
 
     def export_excel(self, data: list[dict[str, Any]], filename: str | None = None,
                      sheet_name: str = 'Sheet1') -> str:
@@ -289,6 +291,11 @@ class DataExport:
         registers = database.get_device_registers(device_id)
         # 没有寄存器信息时，用 None 查询全部（此时无法补 register_name）
         targets: list[str | None] = registers if registers else [None]
+        if not registers:
+            # 明确告警：这种导出**没有 register_name 列**，多寄存器设备的数据
+            # 会混在一起、无法区分归属。
+            logger.warning(
+                "设备 %s 查不到寄存器列表，导出结果将不含 register_name 列", device_id)
 
         for register_name in targets:
             offset = 0

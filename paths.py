@@ -158,8 +158,16 @@ def setup():
 
 
 def get_db_path(mode: str = 'simulated') -> str:
-    """获取数据库路径"""
-    return str(DB_PATHS.get(mode, DB_PATHS['default']))
+    """获取数据库路径。
+
+    未知/拼错的模式**直接报错**：原先静默回退到 ``DB_PATHS['default']``
+    （陈旧的 ``scada.db``），诊断工具会把另一个库的"正常"当成结论，
+    比报错危险得多。
+    """
+    if mode not in DB_PATHS:
+        raise ValueError(
+            f"未知库模式: {mode!r}，可选: {', '.join(sorted(DB_PATHS))}")
+    return str(DB_PATHS[mode])
 
 
 def resolve_cli_db_mode(mode: str | None = None) -> str:
@@ -183,9 +191,16 @@ def resolve_cli_db_mode(mode: str | None = None) -> str:
     让操作者一眼看见「这次分析的是哪个库」。
     """
     if mode:
+        if mode not in DB_PATHS:
+            raise ValueError(
+                f"未知库模式: {mode!r}，可选: {', '.join(sorted(DB_PATHS))}")
         return mode
     env = os.environ.get('SCADA_DB_MODE')
     if env:
+        if env not in DB_PATHS:
+            raise ValueError(
+                f"环境变量 SCADA_DB_MODE={env!r} 不是合法库模式，"
+                f"可选: {', '.join(sorted(DB_PATHS))}")
         return env
     return 'simulated'
 

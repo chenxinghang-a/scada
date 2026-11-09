@@ -175,12 +175,14 @@ def _replay_offline_messages(username: str, send=None) -> dict:
             # 它们已经被 dequeue 出来，直接丢就真没了 —— 而它们多半是报警。
             rest = messages[idx:]
             requeue_failed = 0
+            requeued = 0
             for m in rest:
                 try:
                     # BUG-064：priority 必须原样带回（to_dict 已补该字段），
                     # 否则紧急报警重入队后被降级成 0，队列满时先被丢弃。
-                    offline_queue.enqueue(username, m.get('event'), m.get('data'),
-                                          priority=m.get('priority', 0))
+                    ok = offline_queue.enqueue(
+                        username, m.get('event'), m.get('data'),
+                        priority=m.get('priority', 0))
                 except Exception as re_err:
                     # 重新入队失败 = 这条消息真的没了（多半是报警），必须留痕
                     requeue_failed += 1
@@ -188,7 +190,16 @@ def _replay_offline_messages(username: str, send=None) -> dict:
                         "离线消息重新入队失败 user=%s event=%s: %s",
                         username, m.get('event'), re_err,
                     )
-            result['requeued'] = len(rest) - requeue_failed
+                    continue
+                if ok:
+                    requeued += 1
+                else:
+                    # 队列满被拒（返回 False）同样是真丢了，不能计入 requeued
+                    requeue_failed += 1
+                    logger.warning(
+                        "离线消息重新入队被拒（队列满） user=%s event=%s",
+                        username, m.get('event'))
+            result['requeued'] = requeued
             result['requeue_failed'] = requeue_failed
             logger.warning(
                 "离线消息补发中断 user=%s 已发=%d 重新入队=%d: %s",
@@ -402,7 +413,13 @@ def init_socketio(app, database, data_collector):
         join_room(f'device_{device_id}')
 
         # 发送最新数据（字典格式：{register_name: {device_id, register_name, value, ...}}）
-        latest_data = database.get_latest_data(device_id)
+        # 数据库异常不能逃出事件处理器：客户端会一直等不到回应，服务端只留堆栈。
+        try:
+            latest_data = database.get_latest_data(device_id)
+        except Exception as e:      # noqa: BLE001
+            logger.error("订阅时读取设备 %s 最新数据失败: %s", device_id, e)
+            emit('error', {'message': f'读取设备 {device_id} 最新数据失败'})
+            return
         if latest_data:
             emit('data_update', latest_data)
 
@@ -427,6 +444,8 @@ def init_socketio(app, database, data_collector):
 
 # 模块级停止事件，供外部调用 stop_data_push_thread()
 _push_stop_event = None
+#: 当前推送线程（重启时要 join 旧线程，见 start_data_push_thread）
+_push_thread: threading.Thread | None = None
 
 
 def _count_clients(rooms: dict | None) -> int:
@@ -442,9 +461,24 @@ def _count_clients(rooms: dict | None) -> int:
     """
     if not rooms:
         return 0
+
+    # python-socketio ≥5 的 manager.rooms 形状是
+    #   `{sid: {namespace: {room, ...}}}`
+    # 键是**会话 id**，因此客户端数 = 顶层键数。老版本是
+    #   `{room: {sid}}`
+    # 两种结构必须都认：只按其中一种取（如 `.get('/')`）会恒得到 0，
+    # 自适应频率失效、device_status 永不推送。
+    sample = next(iter(rooms.values()), None)
+    if isinstance(sample, dict) and sample and all(
+            isinstance(k, str) and (k == '' or k.startswith('/')) for k in sample):
+        return len(rooms)
+
     sids: set[str] = set()
     for members in rooms.values():
         if not members:
+            continue
+        if isinstance(members, dict):
+            sids.update(members.keys())
             continue
         try:
             sids.update(members)
@@ -457,6 +491,8 @@ def _count_clients(rooms: dict | None) -> int:
 #
 # 模块级是为了「跨轮次记住基线」；测试直接重置这个 dict 即可。
 _device_status_cache: dict[str, tuple] = {}
+#: 设备连续缺席轮数（连续 3 轮才清基线，防"偶发空列表"清空缓存）
+_device_missing_rounds: dict[str, int] = {}
 
 
 def _diff_device_status(brief_statuses, cache: dict) -> list[tuple[str, dict]]:
@@ -508,9 +544,18 @@ def _diff_device_status(brief_statuses, cache: dict) -> list[tuple[str, dict]]:
             'stopped': cur[2],
         }))
 
+    # 消失的设备清基线 —— 但**不能一轮没看到就清**：`get_all_status` 偶发
+    # 空/不完整时，清空后再恢复会让所有设备按"首轮"处理（prev=None，不推送），
+    # 期间真实的状态变化被静默吞掉。连续 3 轮都缺席才认定设备已删除。
     for device_id in list(cache):
-        if device_id not in seen:
-            del cache[device_id]
+        if device_id in seen:
+            _device_missing_rounds.pop(device_id, None)
+            continue
+        missing = _device_missing_rounds.get(device_id, 0) + 1
+        _device_missing_rounds[device_id] = missing
+        if missing >= 3:
+            cache.pop(device_id, None)
+            _device_missing_rounds.pop(device_id, None)
 
     return changes
 
@@ -567,10 +612,17 @@ def _base_push_interval() -> float:
 
 def start_data_push_thread(database, data_collector):
     """启动数据推送线程（优化版：单次查询 + 状态缓存 + 异常保护）"""
-    global _push_stop_event
-    # 如果已有线程在运行，先停止
+    global _push_stop_event, _push_thread
+    # 如果已有线程在运行，先停止**并等它真的退出**：
+    # 只 set 事件不 join，旧线程会与新的并行跑完当前这一轮 ——
+    # 重复 emit、重复查库，并并发读写 _device_status_cache。
     if _push_stop_event is not None:
         _push_stop_event.set()
+        old = _push_thread
+        if old is not None and old.is_alive() and old is not threading.current_thread():
+            old.join(timeout=2.0)
+            if old.is_alive():
+                logger.warning("旧数据推送线程 2s 内未退出，可能与新线程并行一轮")
 
     # ⚠️ 必须把事件**捕获成本地变量**再交给线程，不能让线程每轮去读模块全局。
     # 原实现 `while not _push_stop_event.is_set()` 读的是全局名字（迟绑定）：
@@ -599,7 +651,8 @@ def start_data_push_thread(database, data_collector):
                 BASE_INTERVAL = _base_push_interval()
 
                 # 根据连接客户端数调整推送频率
-                client_count = _count_clients(socketio.server.manager.rooms.get('/', {}))
+                client_count = _count_clients(
+                    getattr(socketio.server.manager, 'rooms', None) or {})
                 if client_count == 0:
                     push_interval = MAX_INTERVAL  # 无客户端时降低频率
                 elif client_count > 20:
@@ -643,14 +696,17 @@ def start_data_push_thread(database, data_collector):
                         'database_stats': database.get_database_stats()
                     }
                     _last_status_time = now
-
-                if _cached_status:
-                    try:
-                        status_payload = (compress_message(_cached_status)
-                                          if _all_clients_support_compression() else _cached_status)
-                        socketio.emit('system_status', status_payload)
-                    except Exception as e:
-                        logger.debug(f"推送系统状态失败: {e}")
+                    # emit 必须在节流块**内**：放外面会每轮都把同一份
+                    # 带旧 timestamp 的状态广播一遍，节流形同虚设。
+                    if _cached_status:
+                        try:
+                            status_payload = (
+                                compress_message(_cached_status)
+                                if _all_clients_support_compression()
+                                else _cached_status)
+                            socketio.emit('system_status', status_payload)
+                        except Exception as e:
+                            logger.debug(f"推送系统状态失败: {e}")
 
                 stop_event.wait(push_interval)
 
@@ -660,6 +716,7 @@ def start_data_push_thread(database, data_collector):
 
     thread = threading.Thread(target=push_data, daemon=True)
     thread.start()
+    _push_thread = thread
     logger.info("数据推送线程已启动")
     # 返回线程对象：调用方/测试要能**精确**拿到这一次起的线程。
     # 否则只能靠 `threading.enumerate()` 差集去猜，而差集里可能混进别的线程
@@ -670,10 +727,11 @@ def start_data_push_thread(database, data_collector):
 
 def stop_data_push_thread():
     """停止数据推送线程"""
-    global _push_stop_event
+    global _push_stop_event, _push_thread
     if _push_stop_event is not None:
         _push_stop_event.set()
         _push_stop_event = None
+        _push_thread = None
         logger.info("数据推送线程已停止")
 
 
@@ -684,8 +742,10 @@ def emit_alarm(alarm_data):
             socketio.emit('alarm', alarm_data)
         except Exception as e:
             logger.debug(f"报警推送失败: {e}")
-        # 报警优先级最高：队列满时挤掉的是广播类消息，不是报警
-        _queue_for_offline_users('alarm', alarm_data, priority=10)
+    # 入队必须**在 socketio 判空之外**：socketio 为 None（纯 API/测试部署）时
+    # 报警既发不出去也不入队，就等于直接丢掉了。
+    # 报警优先级最高：队列满时挤掉的是广播类消息，不是报警
+    _queue_for_offline_users('alarm', alarm_data, priority=10)
 
 
 def emit_broadcast(broadcast_data):
@@ -695,7 +755,8 @@ def emit_broadcast(broadcast_data):
             socketio.emit('broadcast', broadcast_data)
         except Exception as e:
             logger.debug(f"广播推送失败: {e}")
-        _queue_for_offline_users('broadcast', broadcast_data, priority=0)
+    # 同 emit_alarm：入队不能依赖 socketio 是否装配
+    _queue_for_offline_users('broadcast', broadcast_data, priority=0)
 
 
 def emit_device_status(device_id, status):

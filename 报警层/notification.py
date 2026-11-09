@@ -122,7 +122,11 @@ class Notification:
             bool: 发送是否成功
         """
         # 构建邮件内容
-        subject = f"[{alarm_data.get('level', 'warning').upper()}] {alarm_data.get('message', '报警通知')}"
+        # CR/LF 必须中和：报警消息来自设备/规则配置，带换行时可能被解释成
+        # 额外邮件头（头注入）。
+        _raw_subject = (f"[{alarm_data.get('level', 'warning').upper()}] "
+                        f"{alarm_data.get('message', '报警通知')}")
+        subject = _raw_subject.replace('\r', ' ').replace('\n', ' ')
 
         message = f"""
         <html>

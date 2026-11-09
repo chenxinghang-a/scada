@@ -47,51 +47,55 @@ def demonstrate_basic_usage():
         logger.info("启动TDengine: docker run -d --name tdengine -p 6041:6041 tdengine/tdengine")
         return
 
-    # 3. 初始化表
-    logger.info("初始化表结构...")
-    client.init_tables()
+    try:
+        # 3. 初始化表
+        logger.info("初始化表结构...")
+        client.init_tables()
 
-    # 4. 写入测试数据
-    logger.info("写入测试数据...")
-    from timeseries.data_models import TelemetryRecord
+        # 4. 写入测试数据
+        logger.info("写入测试数据...")
+        from timeseries.data_models import TelemetryRecord
 
-    for i in range(10):
-        record = TelemetryRecord(
-            device_id="CNC_001",
-            register_name="temperature",
-            timestamp=datetime.now() - timedelta(minutes=i),
-            value=25.0 + i * 0.5,
-            quality=192,
-            unit="°C",
-            protocol="ModbusTCP",
-            gateway_id="gateway_01"
+        for i in range(10):
+            record = TelemetryRecord(
+                device_id="CNC_001",
+                register_name="temperature",
+                timestamp=datetime.now() - timedelta(minutes=i),
+                value=25.0 + i * 0.5,
+                quality=192,
+                unit="°C",
+                protocol="ModbusTCP",
+                gateway_id="gateway_01"
+            )
+            client.write_telemetry(record)
+
+        logger.info("写入完成")
+
+        # 5. 查询数据
+        logger.info("查询数据...")
+        end_time = datetime.now()
+        start_time = end_time - timedelta(hours=1)
+
+        data = client.query_telemetry("CNC_001", "temperature", start_time, end_time)
+        logger.info(f"查询到 {len(data)} 条记录")
+
+        for record in data[:5]:  # 只显示前5条
+            logger.info(f"  {record['timestamp']}: {record['value']}")
+
+        # 6. 查询聚合数据
+        logger.info("查询聚合数据...")
+        agg_data = client.query_telemetry_agg(
+            "CNC_001", "temperature",
+            start_time, end_time,
+            interval="5m"
         )
-        client.write_telemetry(record)
+        logger.info(f"聚合结果: {len(agg_data)} 条")
 
-    logger.info("写入完成")
-
-    # 5. 查询数据
-    logger.info("查询数据...")
-    end_time = datetime.now()
-    start_time = end_time - timedelta(hours=1)
-
-    data = client.query_telemetry("CNC_001", "temperature", start_time, end_time)
-    logger.info(f"查询到 {len(data)} 条记录")
-
-    for record in data[:5]:  # 只显示前5条
-        logger.info(f"  {record['timestamp']}: {record['value']}")
-
-    # 6. 查询聚合数据
-    logger.info("查询聚合数据...")
-    agg_data = client.query_telemetry_agg(
-        "CNC_001", "temperature",
-        start_time, end_time,
-        interval="5m"
-    )
-    logger.info(f"聚合结果: {len(agg_data)} 条")
-
-    # 7. 打印统计
-    logger.info(f"统计信息: {client.get_stats()}")
+        # 7. 打印统计
+        logger.info(f"统计信息: {client.get_stats()}")
+    finally:
+        # 连接/线程必须回收，示例进程退出后否则会留下悬挂的 HTTP 会话
+        client.disconnect()
 
 
 def demonstrate_mqtt_integration():
@@ -114,6 +118,10 @@ def demonstrate_mqtt_integration():
     # 3. 启动服务
     logger.info("启动服务...")
     service.start()
+    if not getattr(service, 'running', False):
+        logger.error("服务启动失败（TDengine/MQTT 未就绪），退出示例")
+        tdengine.disconnect()
+        return
 
     logger.info("=" * 50)
     logger.info("服务已启动")
@@ -130,7 +138,9 @@ def demonstrate_mqtt_integration():
     except KeyboardInterrupt:
         logger.info("正在停止...")
     finally:
+        # 先停服务（内部会停订阅、刷缓冲），再放掉 TDengine 连接
         service.stop()
+        tdengine.disconnect()
 
 
 def demonstrate_query_builder():
@@ -191,49 +201,67 @@ def demonstrate_business_integration():
         logger.error("TDengine连接失败")
         return
 
-    # 创建业务写入器
-    oee_writer = OEEDataWriter(tdengine)
-    energy_writer = EnergyDataWriter(tdengine)
+    try:
+        # 表不存在时写入会静默失败，必须先建表
+        logger.info("初始化表结构...")
+        tdengine.init_tables()
 
-    # 模拟OEE计算结果
-    logger.info("写入OEE数据...")
-    oee_writer.write_oee(
-        device_id="CNC_001",
-        availability=0.95,
-        performance=0.98,
-        quality_rate=0.99,
-        oee=0.92,
-        total_count=1000,
-        good_count=990,
-        run_time=28800,
-        downtime=1440
-    )
+        # 创建业务写入器
+        oee_writer = OEEDataWriter(tdengine)
+        energy_writer = EnergyDataWriter(tdengine)
 
-    # 模拟能源数据
-    logger.info("写入能源数据...")
-    energy_writer.write_energy(
-        device_id="CNC_001",
-        power=15.5,
-        energy=1234.5,
-        voltage=220.0,
-        current=70.5,
-        power_factor=0.95
-    )
+        # 模拟OEE计算结果
+        logger.info("写入OEE数据...")
+        if not oee_writer.write_oee(
+            device_id="CNC_001",
+            availability=0.95,
+            performance=0.98,
+            quality_rate=0.99,
+            oee=0.92,
+            total_count=1000,
+            good_count=990,
+            run_time=28800,
+            downtime=1440
+        ):
+            logger.error("OEE 写入失败")
 
-    logger.info("写入完成")
+        # 模拟能源数据
+        logger.info("写入能源数据...")
+        if not energy_writer.write_energy(
+            device_id="CNC_001",
+            power=15.5,
+            energy=1234.5,
+            voltage=220.0,
+            current=70.5,
+            power_factor=0.95
+        ):
+            logger.error("能源数据写入失败")
 
-    # 查询OEE数据
-    logger.info("查询OEE数据...")
-    end_time = datetime.now()
-    start_time = end_time - timedelta(hours=1)
+        logger.info("写入完成")
 
-    oee_data = tdengine.query_oee("CNC_001", start_time, end_time)
-    logger.info(f"OEE数据: {len(oee_data)} 条")
+        # 查询OEE数据
+        logger.info("查询OEE数据...")
+        end_time = datetime.now()
+        start_time = end_time - timedelta(hours=1)
 
-    # 查询能源数据
-    logger.info("查询能源数据...")
-    energy_data = tdengine.query_energy("CNC_001", start_time, end_time, interval="1h")
-    logger.info(f"能源数据: {len(energy_data)} 条")
+        try:
+            oee_data = tdengine.query_oee("CNC_001", start_time, end_time)
+        except Exception as e:
+            logger.error("OEE 查询失败: %s", e)
+        else:
+            logger.info(f"OEE数据: {len(oee_data)} 条")
+
+        # 查询能源数据
+        logger.info("查询能源数据...")
+        try:
+            energy_data = tdengine.query_energy(
+                "CNC_001", start_time, end_time, interval="1h")
+        except Exception as e:
+            logger.error("能源查询失败: %s", e)
+        else:
+            logger.info(f"能源数据: {len(energy_data)} 条")
+    finally:
+        tdengine.disconnect()
 
 
 def show_architecture():

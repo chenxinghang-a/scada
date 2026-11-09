@@ -179,6 +179,9 @@ def _layout_line(line: dict[str, Any], devices: list[dict[str, Any]],
     # 没写 stage（或写了个不在骨架里的工序）的设备不能丢 —— 丢了就是
     # 「设备存在但图上找不到」，比放错位置更难查。挂到最后一列并标记。
     if orphan and stages:
+        # 标记出来，图上与前端才能区分"确实属于最后一道工序"与"stage 缺失/拼错"
+        for d in orphan:
+            d['stage_unknown'] = True
         by_stage[stages[-1]].extend(orphan)
 
     # 去掉空列后重新编号
@@ -217,6 +220,7 @@ def _layout_line(line: dict[str, Any], devices: list[dict[str, Any]],
                 'device_id': dev_id,
                 'name': d.get('name', dev_id),
                 'stage': stage_name,
+                'stage_unknown': bool(d.get('stage_unknown')),
                 'role': d.get('role', 'equipment'),
                 'layer': 'process',
                 'protocol': d.get('protocol', 'modbus_tcp'),
@@ -2071,7 +2075,7 @@ def add_all_presets():
     if result.get('success'):
         get_auth_manager().log_operation(
             request.current_user['username'], 'add_all_presets',
-            f"添加全部预设: {result['message']}")
+            f"添加全部预设: {result.get('message', '')}")
         failed = []
         for r in result.get('results', []):
             if r.get('success') and r.get('device_id'):

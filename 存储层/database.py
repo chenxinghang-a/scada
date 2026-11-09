@@ -313,17 +313,18 @@ class Database:
                 cursor.execute('SELECT 1')
                 result = cursor.fetchone()
 
-                # 检查WAL状态
-                # PASSIVE 不等待读者；返回行 = (busy, log, checkpointed)，
-                # 第 0 列是 busy 标志，不是“checkpoint 状态”。
-                wal_status = cursor.execute(
-                    'PRAGMA wal_checkpoint(PASSIVE)').fetchone()
+                # 这里**不执行** wal_checkpoint：健康检查被 3~10 秒级轮询，
+                # PASSIVE checkpoint 虽不阻塞读者，但仍会真实回写页面、与
+                # 采集写入抢 I/O。只报告 WAL 体积，是否 checkpoint 由写入路径
+                # 的 wal_autocheckpoint 决定。
+                import os
+                wal_path = f"{self.db_path}-wal"
+                wal_size = os.path.getsize(wal_path) if os.path.exists(wal_path) else 0
 
                 return {
                     'status': 'healthy',
                     'connection': 'ok',
-                    'wal_checkpoint_busy': (bool(wal_status[0])
-                                            if wal_status else None),
+                    'wal_size_bytes': wal_size,
                     'database_path': self.db_path,
                 }
         except Exception as e:
@@ -684,10 +685,12 @@ class Database:
             # DDL 默认的 192(GOOD) 永久掩盖；批量路径早就写 quality，口径必须一致。
             q = try_int(quality)
             if q is None:
+                # 非数值质量码不能伪装成 GOOD：落成 0(BAD)，让前端质量指示如实
+                # 显示"不可信"，而不是把坏点当正常数据展示。
                 logger.warning(
-                    "insert_data 收到非数值质量码 %r（device=%r register=%r），按 192(GOOD) 落库",
+                    "insert_data 收到非数值质量码 %r（device=%r register=%r），按 0(BAD) 落库",
                     quality, device_id, register_name)
-                q = 192
+                q = 0
             cursor.execute('''
                 INSERT INTO realtime_data (device_id, register_name, value, unit, timestamp, quality, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -777,10 +780,10 @@ class Database:
                 # 非数值标记 —— 存进去只会让前端比较逻辑静默判错。
                 q = try_int(q)
                 if q is None:
-                    # 非数值质量码（如 'BAD'）不能静默当成 GOOD，至少留痕
-                    logger.debug("质量码非数值，按 GOOD(192) 落库: %r",
-                                 d.get('quality'))
-                    q = 192
+                    # 非数值质量码（如 'BAD'）不能当成 GOOD：落成 0(BAD) 并留痕，
+                    # 否则前端会把不可信点位显示成正常数据。
+                    logger.warning("质量码非数值，按 BAD(0) 落库: %r", d.get('quality'))
+                    q = 0
 
                 # `value` 必须是**有限数值**。这是落库的最后一道关，也是最该把关
                 # 的地方 —— SQLite 是**弱类型**，非法值不会报错，只会静默变味：
@@ -2183,7 +2186,13 @@ class Database:
             # 固定 .restoring 名称会让并发恢复互相覆盖暂存文件，替换出混合库。
             staging = target.with_name(
                 f'{target.name}.restoring-{os.getpid()}-{time.time_ns()}')
+            # 备份若带有未 checkpoint 的 -wal，必须一并恢复：只拷主文件会丢掉
+            # WAL 里尚未回写的数据（表现为"恢复到备份之前的旧状态"）。
+            wal_src = Path(str(src) + '-wal')
+            has_wal = wal_src.is_file() and wal_src.stat().st_size > 0
             shutil.copyfile(src, staging)
+            if has_wal:
+                shutil.copyfile(wal_src, str(staging) + '-wal')
             # Windows 上偶发句柄未释放（杀毒/索引服务短暂持有），重试几次
             last_exc: Exception | None = None
             for attempt in range(5):
@@ -2201,9 +2210,20 @@ class Database:
                     pass
                 raise last_exc
 
+            if has_wal:
+                # 主文件替换成功后，把随备份搬来的 WAL 落到目标文件名下，
+                # 让 SQLite 下次打开时正常重放（而不是丢掉这段数据）。
+                target_wal = Path(str(target) + '-wal')
+                if target_wal.exists():
+                    target_wal.unlink()
+                os.replace(str(staging) + '-wal', str(target_wal))
+
             # 4) 清掉残留的 WAL/SHM/**journal**：旧热日志会在下次打开时
             # 回滚刚恢复的页，属不可逆数据损坏路径。
-            for suffix in ('-wal', '-shm', '-journal'):
+            # 备份自带 -wal 时它已一并恢复，不能再删。
+            suffixes = (('-shm', '-journal') if has_wal
+                        else ('-wal', '-shm', '-journal'))
+            for suffix in suffixes:
                 stale = Path(str(target) + suffix)
                 if stale.exists():
                     stale.unlink()

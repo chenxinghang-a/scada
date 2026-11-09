@@ -93,7 +93,9 @@ class TestParseInterval:
         assert archive._parse_interval('1day') == 86400
 
     def test_parse_unknown(self, archive):
-        assert archive._parse_interval('unknown') == 3600
+        # 审计 SCADA-0067：未知间隔不再静默回退 1 小时（错误分桶粒度不会被告警暴露）
+        with pytest.raises(ValueError):
+            archive._parse_interval('unknown')
 
 
 class TestGroupByInterval:
@@ -336,7 +338,8 @@ class TestExportCSV:
         data = [{'a': 1}]
         with patch('builtins.open', side_effect=PermissionError("denied")):
             result = exporter.export_csv(data, 'test.csv')
-            assert result == ""
+            # 审计 SCADA-0073：失败返回 None，与"无数据"统一语义
+            assert result is None
 
 
 class TestExportExcel:

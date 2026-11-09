@@ -65,6 +65,10 @@ class _HubRegisterBlock(ModbusSequentialDataBlock):
         return self._hub.read_registers(self._device_id, address - 1, count)
 
     def setValues(self, address: int, values: list[int]) -> int | None:
+        # FC6 单寄存器写在某些 pymodbus 版本里传的是**标量**，
+        # `list(3)` 会 TypeError —— 统一归一成列表。
+        if not isinstance(values, (list, tuple)):
+            values = [values]
         if not self._hub.write_registers(self._device_id, address - 1, list(values)):
             # 地址没登记 → 必须让主站收到 0x02。回一个"成功"的回显会让
             # 上位机以为真的写进去了（现场最常见的假成功）。
@@ -84,6 +88,9 @@ class _HubCoilBlock(ModbusSequentialDataBlock):
         return self._hub.read_coils(self._device_id, address - 1, count)
 
     def setValues(self, address: int, values: list[bool]) -> int | None:
+        # FC5 单线圈写同样可能是标量，enumerate(True) 会 TypeError
+        if not isinstance(values, (list, tuple)):
+            values = [values]
         ok = True
         for offset, value in enumerate(values):
             if not self._hub.write_coil(self._device_id, address - 1 + offset, bool(value)):
@@ -123,6 +130,8 @@ class ModbusSlavePool:
         # 普通 Lock 在同一线程里二次获取会**永久死锁** —— 表现为"启动失败后
         # 进程既不退出也不报错"，端口一直占着（实测踩到过）。
         self._lock = threading.RLock()
+        #: stop() 期间置位：正在启动中的 _start_one 看到它就不再登记从站
+        self._stopping = threading.Event()
 
     # ------------------------------------------------------------------
     # 对外接口
@@ -134,6 +143,7 @@ class ModbusSlavePool:
             if self._thread is not None and self._thread.is_alive():
                 return dict(self._ports)
 
+            self._stopping.clear()
             targets = self._targets()
             if not targets:
                 logger.error('[从站池] 没有可服务的 modbus_tcp 设备，未启动任何从站')
@@ -150,7 +160,13 @@ class ModbusSlavePool:
                     future = asyncio.run_coroutine_threadsafe(
                         self._start_one(device_id, device, port), loop
                     )
-                    future.result(timeout=15)
+                    try:
+                        future.result(timeout=15)
+                    except Exception:
+                        # 超时/失败时协程可能仍在跑：不取消的话它迟到后照样
+                        # listen 并占住端口，stop() 又看不到它（未进 _servers）。
+                        future.cancel()
+                        raise
                     self._ports[device_id] = port
             except Exception:
                 # 起了一半就失败：必须把已经起来的收掉，否则端口泄漏，
@@ -159,13 +175,14 @@ class ModbusSlavePool:
                 self.stop()
                 raise
 
-            logger.info('[从站池] 已启动 %d 台从站（端口 %d-%d）',
-                        len(self._ports), self._base_port,
-                        self._base_port + max(len(self._ports) - 1, 0))
+            logger.info('[从站池] 已启动 %d 台从站（端口: %s）',
+                        len(self._ports),
+                        ', '.join(str(p) for p in sorted(set(self._ports.values()))))
             return dict(self._ports)
 
     def stop(self) -> None:
         """关闭全部从站并释放端口（幂等，可在 atexit 里安全调用）。"""
+        self._stopping.set()
         with self._lock:
             loop = self._loop
             servers = list(self._servers.values())
@@ -196,7 +213,8 @@ class ModbusSlavePool:
 
     def ports(self) -> dict[str, int]:
         """{device_id: port}（未启动时为空）。"""
-        return dict(self._ports)
+        with self._lock:
+            return dict(self._ports)
 
     # ------------------------------------------------------------------
     # 内部
@@ -231,6 +249,14 @@ class ModbusSlavePool:
             sim = device.get('sim_endpoint')
             fixed_port = sim.get('port') if isinstance(sim, dict) else None
             if isinstance(fixed_port, int) and 0 < fixed_port < 65536:
+                used = {p for _d, _dev, p in targets}
+                if fixed_port in used:
+                    # 两台设备配同一端口 → 第二台必然 listen 失败，
+                    # 而 start() 会回收整池。明确拒绝重复，保住其余从站。
+                    logger.error(
+                        '[从站池] 设备 %s 的 sim_endpoint.port=%d 与其它设备重复，跳过该设备',
+                        device_id, fixed_port)
+                    continue
                 targets.append((device_id, device, fixed_port))
                 port = max(port, fixed_port + 1)
                 continue
@@ -278,16 +304,31 @@ class ModbusSlavePool:
             hr=_HubRegisterBlock(self._hub, device_id),
         )
         server_context = ModbusServerContext(slaves={slave_id: context}, single=False)
-        server = ModbusTcpServer(server_context, address=('127.0.0.1', port))
+        # 监听地址取设备的 sim_endpoint.host（缺省 127.0.0.1）：
+        # 写死回环地址时远程主站根本连不上，而配置里明明写了 host。
+        sim = device.get('sim_endpoint')
+        host = '127.0.0.1'
+        if isinstance(sim, dict) and sim.get('host'):
+            host = str(sim['host'])
+        server = ModbusTcpServer(server_context, address=(host, port))
 
         listening = await server.listen()
         if not listening:
             # listen() 内部吞掉 OSError 只返回 False，不自己抛 —— 不在这里
             # 转成异常的话，start() 会返回一个"有端口但没监听"的假结果。
-            raise OSError(f'从站 {device_id} 无法监听 127.0.0.1:{port}（端口被占用？）')
+            raise OSError(f'从站 {device_id} 无法监听 {host}:{port}（端口被占用？）')
+
+        if self._stopping.is_set():
+            # stop() 已经跑过一轮：此时登记会留下一个无人管理的从站（端口泄漏）
+            logger.warning('[从站池] 启动途中收到停止请求，撤销 %s:%d', host, port)
+            try:
+                await server.shutdown()
+            except Exception as e:      # noqa: BLE001
+                logger.warning('[从站池] 撤销从站失败 %s:%d: %s', host, port, e)
+            raise RuntimeError(f'从站池已停止，放弃启动 {device_id}')
 
         self._servers[device_id] = server
-        logger.info('[从站池] %s 监听 127.0.0.1:%d (slave_id=%d)', device_id, port, slave_id)
+        logger.info('[从站池] %s 监听 %s:%d (slave_id=%d)', device_id, host, port, slave_id)
 
     def _run_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """事件循环线程入口。"""

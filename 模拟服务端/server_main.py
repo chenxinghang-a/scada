@@ -57,7 +57,9 @@ logger = logging.getLogger(__name__)
 
 #: 已启动的服务端（进程内单例）。重复 start 会复用，避免端口占用。
 _STARTED: dict[str, Any] = {}
-_LOCK = threading.Lock()
+# RLock：信号处理里 stop_all() 可能在 start_all() 持锁期间重入（同线程），
+# 普通 Lock 会直接死锁。
+_LOCK = threading.RLock()
 
 
 def _endpoint_port(hub: DeviceDataHub, protocol: str) -> int:
@@ -100,17 +102,24 @@ def start_all(config_path: str | None = None,
         summary: dict[str, Any] = {'errors': [], '_objs': {}}
 
         hub = DeviceDataHub(path, tick=tick)
-        hub.start()
-        summary['hub'] = hub
+        summary['hub'] = hub          # 先登记：hub.start() 抛错时 stop_all 也能收尾
+        try:
+            hub.start()
+        except Exception:
+            logger.exception('数据中枢启动失败')
+            stop_all()
+            raise
         summary['devices'] = len(hub.devices)
         logger.info('数据中枢已启动：%d 台设备', len(hub.devices))
 
         # ---- Modbus：每台设备一个真从站 ----
         try:
             pool = ModbusSlavePool(hub)
+            # 先登记再 start：start() 中途失败（端口占用）时已绑定的从站
+            # 只能靠 stop_all 回收，而 stop_all 只认 `_objs`
+            summary['_objs']['modbus'] = pool
             ports = pool.start()
             summary['modbus'] = ports
-            summary['_objs']['modbus'] = pool
             logger.info('Modbus 从站池：%d 个从站，端口 %s..%s',
                         len(ports), min(ports.values()) if ports else '-',
                         max(ports.values()) if ports else '-')
@@ -123,8 +132,8 @@ def start_all(config_path: str | None = None,
         if opcua_port:
             try:
                 opcua = OpcuaSimServer(hub, port=opcua_port)
+                summary['_objs']['opcua'] = opcua      # 先登记，失败也能回收
                 summary['opcua'] = opcua.start()
-                summary['_objs']['opcua'] = opcua
                 if not summary['opcua']:
                     summary['errors'].append('OPC UA: start() 返回 False')
             except Exception as exc:      # noqa: BLE001
@@ -137,8 +146,8 @@ def start_all(config_path: str | None = None,
         if rest_port:
             try:
                 gateway = RestSimGateway(hub, base_port=rest_port)
+                summary['_objs']['rest'] = gateway     # 先登记，失败也能回收
                 summary['rest'] = gateway.start()
-                summary['_objs']['rest'] = gateway
                 logger.info('REST 网关：%d 个', len(summary['rest']))
             except Exception as exc:      # noqa: BLE001
                 summary['rest'] = {}
@@ -150,8 +159,8 @@ def start_all(config_path: str | None = None,
         if mqtt_port:
             try:
                 broker = MqttSimBroker(hub, port=mqtt_port)
+                summary['_objs']['mqtt'] = broker      # 先登记，失败也能回收
                 summary['mqtt'] = broker.start()
-                summary['_objs']['mqtt'] = broker
                 if not summary['mqtt']:
                     summary['errors'].append('MQTT: start() 返回 False')
             except Exception as exc:      # noqa: BLE001

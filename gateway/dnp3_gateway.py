@@ -448,7 +448,14 @@ class DNP3Parser:
         objects: list[dict] = []
         while offset < len(data):
             if declared is not None and len(objects) >= declared:
-                break                        # 已取够声明的点数，多余字节不再当对象
+                # 取够本对象头声明的点数。同一响应里**允许有多个对象头**
+                # （典型：AI + BI 一起回），剩余字节是下一个对象头，
+                # 直接 break 会把后半截数据整段静默丢弃。
+                if offset < len(data):
+                    more, err = DNP3Parser._parse_object_header(data[offset:])
+                    objects.extend(more)
+                    return objects, err
+                break
             idx = start + len(objects)       # **协议索引**，不是数组位置
             if group in (DNP3ObjectGroup.AI, DNP3ObjectGroup.AI16):
                 if offset + 3 <= len(data):

@@ -150,9 +150,9 @@ def get_runtime_config():
 def update_runtime_config():
     """更新运行时配置"""
     try:
-        data = request.get_json()
-        if not data:
-            return error_response("请求体不能为空", 400)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not data:
+            return error_response("请求体必须是非空 JSON 对象", 400)
 
         # SECURITY: 从JWT获取操作者，不信任客户端传入
         operator = request.current_user.get('username', 'unknown')
@@ -197,9 +197,10 @@ def update_runtime_config():
 def get_config_key(key):
     """获取单个配置值"""
     try:
-        value = runtime_config_manager.get(key)
-        if value is None:
+        # 合法值可能就是 None，不能用 `value is None` 判存在性
+        if key not in (runtime_config_manager.get_all() or {}):
             return error_response(f"配置项 {key} 不存在", 404)
+        value = runtime_config_manager.get(key)
         return success_response({
             'key': key,
             'value': value,
@@ -217,9 +218,9 @@ def get_config_key(key):
 def set_config_key(key):
     """设置单个配置值"""
     try:
-        data = request.get_json()
-        if not data or 'value' not in data:
-            return error_response("value 字段必填", 400)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or 'value' not in data:
+            return error_response("value 字段必填（请求体须为 JSON 对象）", 400)
 
         # SECURITY: 从JWT获取操作者，不信任客户端传入
         operator = request.current_user.get('username', 'unknown')

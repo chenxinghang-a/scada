@@ -115,7 +115,11 @@ def _freshness(records, feature: str = None) -> dict:
     # 2) 数据年龄
     items = []
     if isinstance(records, dict):
-        items = [v for v in records.values() if isinstance(v, dict)]
+        # 扁平单条记录（如单设备健康）本身带 updated_at，不能被当成"容器"
+        if 'updated_at' in records or 'timestamp' in records:
+            items = [records]
+        else:
+            items = [v for v in records.values() if isinstance(v, dict)]
     elif isinstance(records, list):
         items = [v for v in records if isinstance(v, dict)]
 
@@ -128,7 +132,11 @@ def _freshness(records, feature: str = None) -> dict:
             if isinstance(raw, (int, float)):
                 ts = datetime.fromtimestamp(raw)
             else:
-                ts = datetime.fromisoformat(str(raw))
+                # 末尾 Z 在 3.11 以下不被 fromisoformat 识别；带时区的值必须
+                # 先归一成"本地 naive"，否则与 datetime.now() 相减抛 TypeError。
+                ts = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+                if ts.tzinfo is not None:
+                    ts = ts.astimezone().replace(tzinfo=None)
         except Exception as e:      # noqa: BLE001 —— 单条时间戳坏了不影响其它
             # 必须留痕：坏时间戳被静默跳过会让"数据年龄"算错（少一条候选），
             # 而这条记录本来可能是最新的那条。
@@ -471,9 +479,9 @@ def update_energy_tariff():
         if err:
             return err
         
-        data = request.get_json()
-        if not data:
-            return error_response("请提供配置数据", 400)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not data:
+            return error_response("请提供配置数据（JSON 对象）", 400)
         
         result = em.update_tariff(
             tariff=data.get('tariff'),
@@ -517,9 +525,9 @@ def update_energy_anomaly_config():
         if err:
             return err
         
-        data = request.get_json()
-        if not data:
-            return error_response("请提供配置数据", 400)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not data:
+            return error_response("请提供配置数据（JSON 对象）", 400)
         
         result = em.update_anomaly_config(data)
         
@@ -723,6 +731,9 @@ def check_bearing_fault(device_id):
             return err
 
         rpm = request.args.get('rpm', 1500, type=float)
+        # 转速必须为正：0/负数代入轴承故障频率公式得到无意义结果
+        if rpm is None or not (0 < rpm <= 100000):
+            return error_response('rpm 必须是 0~100000 之间的正数', 400)
         result = va.check_bearing_fault(device_id, rpm)
         if result is None:
             return error_response(f"设备 '{device_id}' 无振动数据", 404)
@@ -776,9 +787,13 @@ def get_industry40_overview():
             try:
                 scores = pm.get_health_scores()
                 if scores:
-                    avg_health = sum(
-                        s.get('health_score', 0) for s in scores.values()
-                    ) / len(scores)
+                    # 缺字段/None 不能当 0 计入（会把均值拉低甚至 TypeError）
+                    vals = [s.get('health_score') for s in scores.values()
+                            if isinstance(s, dict)
+                            and isinstance(s.get('health_score'), (int, float))]
+                    if not vals:
+                        raise ValueError('健康分全部缺失，无法计算平均分')
+                    avg_health = sum(vals) / len(vals)
                     alerts = pm.get_maintenance_alerts(5)
                     result['predictive_maintenance'] = {
                         'status': 'available',
@@ -796,9 +811,13 @@ def get_industry40_overview():
             try:
                 all_oee = oee_calc.get_all_oee()
                 if all_oee:
-                    avg_oee = sum(
-                        o.get('oee_percent', 0) for o in all_oee.values()
-                    ) / len(all_oee)
+                    # 同上：缺字段/None 不能按 0 参与平均
+                    oee_vals = [o.get('oee_percent') for o in all_oee.values()
+                                if isinstance(o, dict)
+                                and isinstance(o.get('oee_percent'), (int, float))]
+                    if not oee_vals:
+                        raise ValueError('OEE 值全部缺失，无法计算平均 OEE')
+                    avg_oee = sum(oee_vals) / len(oee_vals)
                     result['oee'] = {
                         'status': 'available',
                         'device_count': len(all_oee),

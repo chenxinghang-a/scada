@@ -114,7 +114,9 @@ class BroadcastSystem:
         # 广播历史（内存保留最近200条）
         self._history: list[dict[str, Any]] = []
         self._max_history = 200
-        self._lock = threading.Lock()
+        # RLock：`_circuit_is_open()` 既被外部直接调用，也会在 `get_status()`
+        # 持锁期间被调用（可重入才不会自锁）。
+        self._lock = threading.RLock()
 
         # 广播回调（用于前端同步显示）
         self._callbacks: list[Callable[..., Any]] = []
@@ -193,9 +195,15 @@ class BroadcastSystem:
         """
         template_key = f'alarm_{level}'
         template = self.preset_templates.get(template_key, '{message}')
-        text = template.format(area=area or self.default_area,
-                               message=message,
-                               device_id=device_id)
+        # 模板缺占位符/多写了字段都会 KeyError/IndexError，整条报警广播就没了
+        try:
+            text = template.format(area=area or self.default_area,
+                                   message=message,
+                                   device_id=device_id)
+        except (KeyError, IndexError, ValueError) as e:
+            logger.warning("报警广播模板 %s 格式化失败（%s），按原文播报",
+                           template_key, e)
+            text = f"{message}"
         return self.speak(text=text, level=level, area=area, source='alarm')
 
     def speak_preset(self, template_key: str,
@@ -235,6 +243,9 @@ class BroadcastSystem:
     # ==================== 历史与状态 ====================
     def get_history(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._lock:
+            if limit <= 0:
+                # `_history[-0:]` 返回**全部**历史，与"取 0 条"语义相反
+                return []
             return list(reversed(self._history[-limit:]))
 
     def get_status(self) -> dict[str, Any]:
@@ -251,7 +262,7 @@ class BroadcastSystem:
         return {
             'enabled': self.enabled,
             'simulation': self.simulation,
-            'areas': self.areas,
+            'areas': list(self.areas),
             'mqtt_connected': self._mqtt_connected,
             'history_count': len(self._history),
             #: MQTT 通道健康度（round 287）—— 此前只有 `mqtt_connected`，
@@ -275,15 +286,16 @@ class BroadcastSystem:
 
     def _circuit_is_open(self) -> bool:
         """熔断是否打开（期间不连接、不发布）。"""
-        until = self._circuit_open_until
-        if until is None:
-            return False
-        if time.monotonic() >= until:
-            self._circuit_open_until = None
-            logger.info("广播通道熔断到期，恢复尝试（此前连续失败 %d 次）",
-                        self._fail_streak)
-            return False
-        return True
+        with self._lock:
+            until = self._circuit_open_until
+            if until is None:
+                return False
+            if time.monotonic() >= until:
+                self._circuit_open_until = None
+                logger.info("广播通道熔断到期，恢复尝试（此前连续失败 %d 次）",
+                            self._fail_streak)
+                return False
+            return True
 
     def _record_publish_failure(self, detail: str) -> None:
         # round 369：计数与熔断窗口是共享状态，读写都要在锁内
@@ -400,19 +412,37 @@ class BroadcastSystem:
             self._mqtt_client.on_disconnect = on_disconnect
             self._mqtt_client.connect(broker, port, keepalive=60)
             self._mqtt_client.loop_start()
+            # `connect()` 只完成 TCP 握手，CONNACK 由 loop 线程异步回调。
+            # 立刻返回会让紧接着的第一次发布撞上 `_mqtt_connected=False`，
+            # 被误判成"通道故障"并累计熔断计数 —— 这里最多等 2 秒。
+            deadline = time.monotonic() + 2.0
+            while (not self._mqtt_connected and time.monotonic() < deadline
+                   and self._mqtt_client is not None):
+                time.sleep(0.02)
         except Exception as e:
             logger.error(f"广播MQTT连接失败: {e}")
+            # 连接失败的 client 必须丢弃：否则 `_mqtt_client is not None`
+            # 会让后续发布永远复用它，Broker 恢复后也不会重连。
+            self._discard_mqtt_client()
+
+    def _discard_mqtt_client(self):
+        """丢弃当前 MQTT 客户端（尽力关闭，不抛异常）。"""
+        client, self._mqtt_client = self._mqtt_client, None
+        self._mqtt_connected = False
+        if client is None:
+            return
+        for step in ('loop_stop', 'disconnect'):
+            fn = getattr(client, step, None)
+            if not callable(fn):
+                continue
+            try:
+                fn()
+            except Exception as e:      # noqa: BLE001 —— 清理尽力而为
+                logger.debug("关闭广播MQTT客户端 %s 失败: %s", step, e)
 
     def disconnect(self):
         """断开连接"""
         if self._mqtt_client:
-            try:
-                self._mqtt_client.loop_stop()
-                self._mqtt_client.disconnect()
-            except Exception as e:
-                # 关闭已失效的MQTT客户端可能抛错，属预期内且无副作用
-                # （引用随后被置空，不会继续使用）
-                logger.debug("关闭广播MQTT客户端失败: %s", e)
-            self._mqtt_client = None
-            self._mqtt_connected = False
+            # loop_stop 抛错不能跳过 disconnect（否则网络线程/socket 泄漏）
+            self._discard_mqtt_client()
         logger.info("广播系统已断开")

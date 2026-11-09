@@ -696,7 +696,10 @@ class TestDataArchive:
         assert archive._parse_interval('15min') == 900
         assert archive._parse_interval('1hour') == 3600
         assert archive._parse_interval('1day') == 86400
-        assert archive._parse_interval('unknown') == 3600
+        # 审计 SCADA-0067：未知间隔不再静默回退 3600 秒
+        import pytest
+        with pytest.raises(ValueError):
+            archive._parse_interval('unknown')
         database.close()
 
     def test_compress_data_empty(self, db):

@@ -102,7 +102,9 @@ class S7Gateway(BaseGateway):
         for device_config in self.devices_config:
             device_id = device_config.get('device_id')
             if device_id:
-                self._register_configs[device_id] = device_config.get('registers', [])
+                # `registers: null` 时 get 返回 None，后续 `for reg_config in None`
+                # 会 TypeError；统一归一成列表。
+                self._register_configs[device_id] = device_config.get('registers') or []
 
     def connect(self) -> bool:
         """连接所有S7设备"""
@@ -146,7 +148,8 @@ class S7Gateway(BaseGateway):
                     try:
                         destroy()
                     except Exception as e:
-                        self.logger.debug("释放S7客户端失败: %s", e)
+                        # 原生句柄释放失败意味着 socket/线程可能残留，必须可见
+                        self.logger.warning("释放S7客户端失败: %s", e)
                 self.logger.info(f"S7设备 {device_id} 已断开")
             except Exception as e:
                 self.logger.error(f"S7设备 {device_id} 断开异常: {e}")
@@ -365,7 +368,11 @@ class S7Gateway(BaseGateway):
                 # 悄悄关掉同一字节里的 7 个设备。
                 # round 381：db_read→db_write 之间必须持锁。两个线程同时写
                 # 同一字节的不同位会各自读到旧字节，后写者覆盖前者。
-                with self._write_locks.setdefault(device_id, threading.Lock()):
+                # 兼容 `__new__` 构造的实例（测试/反序列化）：缺属性时按需建
+                locks = getattr(self, '_write_locks', None)
+                if locks is None:
+                    locks = self._write_locks = {}
+                with locks.setdefault(device_id, threading.Lock()):
                     data = bytearray(client.db_read(db_number, offset, 1))
                     set_bool(data, 0, bit_offset, bool(value))
                     client.db_write(db_number, offset, data)

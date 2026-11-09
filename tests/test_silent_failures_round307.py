@@ -69,7 +69,8 @@ def test_shelve_rejects_zero_duration(client, auth_headers, app):
 
     assert resp.status_code == 400
     msg = resp.get_json().get('error', '')
-    assert '永久静默' in msg or '正数' in msg, msg
+    # 文案已明确为「必须 ≥ 1（分钟）」（比"永久静默"更能指导操作员）
+    assert '≥ 1' in msg or '永久静默' in msg or '正数' in msg, msg
     mgr.shelve_alarm.assert_not_called()
 
 

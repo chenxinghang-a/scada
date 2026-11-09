@@ -39,6 +39,16 @@ _AGG_FUNCS = {
     'SPREAD', 'STDDEV', 'PERCENTILE', 'APERCENTILE', 'LEASTSQUARES',
     'HISTOGRAM', 'ELAPSED', 'DIFF', 'DERIVATIVE', 'IRATE', 'MAVG',
 }
+#: 需要额外参数才能构成合法 SQL 的聚合函数 → 必填参数个数
+#: 例如 PERCENTILE(col, 95)、HISTOGRAM(col, 10)、LEASTSQUARES(col, 0, 1, 1)，
+#: 直接拼成 FUNC(col) 会被 TDengine 当作语法错误。
+_AGG_EXTRA_PARAMS = {
+    'PERCENTILE': 1,
+    'APERCENTILE': 1,
+    'HISTOGRAM': 1,
+    'MAVG': 1,
+    'LEASTSQUARES': 3,
+}
 _DIRECTIONS = {'ASC', 'DESC'}
 _FILL_MODES = {'NULL', 'PREV', 'LINEAR', 'NONE', 'VALUE'}
 _INTERVAL_RE = re.compile(r'^\d{1,6}[smhdwn]$', re.IGNORECASE)
@@ -90,14 +100,17 @@ class QueryBuilder:
             _require_identifier(c, '列名') for c in columns)
         return self
 
-    def select_agg(self, func: str, column: str, alias: str | None = None) -> 'QueryBuilder':
+    def select_agg(self, func: str, column: str, alias: str | None = None,
+                   params: list[float] | None = None) -> 'QueryBuilder':
         """
         选择聚合列
 
         Args:
-            func: 聚合函数 (AVG, MAX, MIN, SUM, COUNT, FIRST, LAST, TOP, BOTTOM)
+            func: 聚合函数 (AVG, MAX, MIN, SUM, COUNT, FIRST, LAST, TOP, BOTTOM ...)
             column: 列名
             alias: 别名
+            params: 额外参数（PERCENTILE/HISTOGRAM/MAVG 需 1 个，
+                LEASTSQUARES 需 3 个），缺失/多余都直接报错，不生成非法 SQL。
         """
         func_name = str(func or '').strip().upper()
         if func_name not in _AGG_FUNCS:
@@ -106,7 +119,23 @@ class QueryBuilder:
         alias_key = _require_identifier(alias or f"{func_name.lower()}_{col}", '别名')
         if alias_key in self._aggregate_funcs:
             raise ValueError(f'重复的聚合别名: {alias_key!r}')
-        self._aggregate_funcs[alias_key] = f"{func_name}({col})"
+
+        need = _AGG_EXTRA_PARAMS.get(func_name, 0)
+        extra = list(params or [])
+        if need:
+            if len(extra) != need:
+                raise ValueError(
+                    f'{func_name} 需要 {need} 个附加参数，实际收到 {len(extra)} 个')
+            for p in extra:
+                if isinstance(p, bool) or not isinstance(p, (int, float)):
+                    raise ValueError(f'{func_name} 附加参数必须是数值: {p!r}')
+            expr = f"{func_name}({col}, " + ", ".join(repr(float(p)) for p in extra) + ")"
+        else:
+            if extra:
+                raise ValueError(f'{func_name} 不接受附加参数: {extra!r}')
+            expr = f"{func_name}({col})"
+
+        self._aggregate_funcs[alias_key] = expr
         return self
 
     def where(self, condition: str) -> 'QueryBuilder':

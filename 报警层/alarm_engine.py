@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from core.safe_numeric import try_finite_float
+from core.safe_numeric import try_finite_float, try_int
 
 #: 动作常量
 FIRE = 'fire'          # 真正产生报警（推送/声光/落库）
@@ -262,7 +262,9 @@ def decide(rule_config: dict, state: dict | None, value: Any,
         # 抖动抑制的效果也就无法验证。
         # 活跃期的采样点数另存 `sample_count`：它有自己的一类消费方
         # （波形密度、稳定性评估），不该和「触发了几次」共用一个字段。
-        'sample_count': int(state.get('sample_count') or 0) + 1,
+        # 状态里的 sample_count 可能被外部写成非数值 —— int() 会抛 ValueError
+        # 并中断整条报警检查，这里按 0 兜底。
+        'sample_count': (try_int(state.get('sample_count')) or 0) + 1,
         'last_value': numeric,
     }, reason='持续报警')
 

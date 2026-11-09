@@ -4,6 +4,7 @@
 """
 
 import logging
+import threading
 from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
@@ -13,6 +14,19 @@ from core.safe_numeric import try_finite_float
 from core.service_response import module_unavailable_response
 
 logger = logging.getLogger(__name__)
+
+#: `配置/alarms.yaml` 的读-改-写必须串行。多个写接口并发时，
+#: 后保存者会用自己读到的旧快照覆盖前者刚写入的内容（丢更新）。
+_ALARM_CONFIG_LOCK = threading.RLock()
+
+
+def _serialize_alarm_config(fn):
+    """把「读 YAML → 改 → 写 YAML」整段串行化（只用于写接口）。"""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _ALARM_CONFIG_LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 def _as_bool(v, default: bool = False) -> bool:
@@ -57,6 +71,7 @@ def get_alarms():
     # 界面上看着有这功能，实际一条都不生效。
     manager = getattr(current_app, 'alarm_manager', None)
     if manager is not None and data:
+        shelved = None
         try:
             shelved = {
                 (a.get('alarm_id'), a.get('device_id'), a.get('register_name')):
@@ -64,11 +79,14 @@ def get_alarms():
                 for a in manager.get_active_alarms()
             }
         except Exception as e:      # noqa: BLE001 —— 合并失败不影响查历史
-            logger.debug("合并旁路状态失败: %s", e)
-            shelved = {}
-        for rec in data:
-            key = (rec.get('alarm_id'), rec.get('device_id'), rec.get('register_name'))
-            rec['shelved'] = shelved.get(key, False)
+            # 失败时**不能**把全部记录标成 False：那会让「已旁路」筛选与状态
+            # 显示全部失真（看起来一条都没旁路）。保留 None = 状态未知。
+            logger.warning("合并旁路状态失败，本次不提供 shelved 字段: %s", e)
+        if shelved is not None:
+            for rec in data:
+                key = (rec.get('alarm_id'), rec.get('device_id'),
+                       rec.get('register_name'))
+                rec['shelved'] = shelved.get(key, False)
 
     return jsonify({'alarms': data})
 
@@ -405,6 +423,7 @@ def get_alarm_rules():
 @alarms_bp.route('/alarm-rules', methods=['POST'])
 @_require_engineer
 @api_error_handler
+@_serialize_alarm_config
 def add_alarm_rule():
     """添加报警规则"""
     data = request.get_json()
@@ -452,6 +471,7 @@ def add_alarm_rule():
 @alarms_bp.route('/alarm-rules/<rule_id>', methods=['PUT'])
 @_require_engineer
 @api_error_handler
+@_serialize_alarm_config
 def update_alarm_rule(rule_id):
     """更新报警规则"""
     data = request.get_json()
@@ -530,6 +550,7 @@ def update_alarm_rule(rule_id):
 @alarms_bp.route('/alarm-rules/<rule_id>', methods=['DELETE'])
 @_require_engineer
 @api_error_handler
+@_serialize_alarm_config
 def delete_alarm_rule(rule_id):
     """删除报警规则"""
     config = load_yaml_config('配置/alarms.yaml')
@@ -584,6 +605,7 @@ def delete_alarm_rule(rule_id):
 @alarms_bp.route('/alarm-rules/notification', methods=['PUT'])
 @_require_engineer
 @api_error_handler
+@_serialize_alarm_config
 def update_notification():
     """更新通知设置"""
     data = request.get_json()
@@ -649,6 +671,7 @@ def get_alarm_output_config():
 @_require_auth
 @_require_engineer
 @api_error_handler
+@_serialize_alarm_config
 def update_alarm_output_config():
     """
     更新声光报警器配置（Modbus连接、DO映射等）
@@ -786,6 +809,7 @@ def get_broadcast_config():
 @_require_auth
 @_require_engineer
 @api_error_handler
+@_serialize_alarm_config
 def update_broadcast_config():
     """
     更新广播系统配置
@@ -975,6 +999,7 @@ def get_escalation_rules():
 @alarms_bp.route('/alarms/escalation/rules', methods=['PUT'])
 @_require_engineer
 @api_error_handler
+@_serialize_alarm_config
 def update_escalation_rules():
     """更新升级规则（写回 配置/alarms.yaml 并热重载，重启后仍生效）
 
@@ -1010,12 +1035,25 @@ def update_escalation_rules():
         return api_error('升级规则保存失败', 500)
 
     alarm_manager = current_app.alarm_manager
-    reload_ok = True
     try:
         alarm_manager.load_config()      # 装配 / 热更新多级规则
     except Exception as e:               # noqa: BLE001 —— load_config 自己吞异常
-        reload_ok = alarm_manager._escalation_manager is not None
         logger.error("升级规则重载失败: %s", e, exc_info=True)
+
+    # load_config() 内部会吞异常，只看它抛不抛等于永远"成功"。
+    # 以**运行时实际规则**与刚写入的规则比对来判定是否真的热加载了。
+    escalation = getattr(alarm_manager, '_escalation_manager', None)
+    try:
+        applied_ids = [str(r.get('id')) for r in (escalation.get_rules()
+                                                  if escalation else [])]
+    except Exception as e:               # noqa: BLE001
+        logger.error("读取已生效的升级规则失败: %s", e)
+        applied_ids = []
+    expected_ids = [str(r.get('id')) for r in rules]
+    reload_ok = escalation is not None and applied_ids == expected_ids
+    if not reload_ok:
+        logger.error(
+            "升级规则未生效：期望 %s，运行时 %s", expected_ids, applied_ids)
 
     get_auth_manager().log_operation(
         request.current_user['username'], 'update_escalation_rules',

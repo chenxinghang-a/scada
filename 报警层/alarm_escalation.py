@@ -90,6 +90,16 @@ def _validate_rules(rules: Any) -> List[EscalationRule]:
             notify_roles=r.get('notify_roles', ['operator']),
             message_template=r.get('message_template', ''),
         ))
+
+    # 级别越高、超时**不得更短**：乱序配置会让低级别永远轮不到
+    # （高级别的 timeout 先到，逐级补跑会直接把它跨过去）。
+    ordered = sorted(validated, key=lambda r: r.level)
+    for prev, cur in zip(ordered, ordered[1:]):
+        if cur.timeout_seconds < prev.timeout_seconds:
+            raise ValueError(
+                f'升级超时必须随级别递增：level={cur.level} 的 '
+                f'{cur.timeout_seconds}s 小于 level={prev.level} 的 '
+                f'{prev.timeout_seconds}s —— 低级别会被直接跳过')
     return validated
 
 
