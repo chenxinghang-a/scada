@@ -245,6 +245,10 @@ class SimulatedDeviceManager(IDeviceManager):
         from .real_device_manager import create_protocol_client
 
         endpoint = config.get('sim_endpoint') or {}
+        if not isinstance(endpoint, dict):
+            logger.error("设备 %s 的 sim_endpoint 不是映射: %r",
+                         config.get('id'), endpoint)
+            return None
         host = endpoint.get('host')
         port = endpoint.get('port')
         if not host or not isinstance(port, int):
@@ -471,7 +475,8 @@ class SimulatedDeviceManager(IDeviceManager):
             elif data_type in ('bool', 'boolean', 'coil'):
                 ok = client.write_single_coil(address, bool(value))
             else:
-                ok = client.write_single_register(address, int(round(raw_value)))
+                word = int(round(raw_value)) & 0xFFFF
+            ok = client.write_single_register(address, word)
         except Exception as e:          # noqa: BLE001
             logger.error("[模拟] 设备 %s 调节 %s 失败: %s", device_id, register_name, e)
             return {'success': False, 'message': str(e)}

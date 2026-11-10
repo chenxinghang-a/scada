@@ -259,7 +259,8 @@ class OPCUAClient:
                         "已配置: %s",
                         self.endpoint, len(self.node_configs),
                         [n.get('node_id') for n in self.node_configs])
-                elif ok_nodes:
+                else:
+                    # 节点列表为空或全部订上：清掉上一次的失败标志
                     self.connected = True
                     self.stats.pop('subscription_failed', None)
 
@@ -344,8 +345,10 @@ class OPCUAClient:
 
             self.stats['data_updates'] += 1
 
-            # 触发回调
-            for callback in self._data_callbacks:
+            # 触发回调（快照：注册回调与事件循环线程可能并发）
+            with self._data_lock:
+                callbacks = list(self._data_callbacks)
+            for callback in callbacks:
                 try:
                     callback(self.device_id, node_name, val, node_unit)
                 except Exception as e:

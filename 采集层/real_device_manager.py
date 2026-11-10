@@ -36,7 +36,10 @@ def create_protocol_client(config: dict[str, Any]) -> IDeviceClient | None:
     注意：这里**不做连接**，只构造。连接失败的处理在各自的 ``connect()`` 里，
     由 ``connect_all()`` 逐台隔离。
     """
-    protocol = config.get('protocol', 'modbus_tcp')
+    protocol = config.get('protocol')
+    if not protocol:
+        logger.warning("设备 %s 未声明 protocol，按 modbus_tcp 处理", config.get('id'))
+        protocol = 'modbus_tcp'
 
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         return ModbusClient(config)
@@ -610,7 +613,9 @@ class RealDeviceManager(IDeviceManager):
             return {'success': False, 'message': f'设备 {device_id} 不存在'}
 
         # 找到对应的寄存器配置
-        registers = config.get('registers', [])
+        registers = config.get('registers') or []
+        if not isinstance(registers, list):
+            registers = []
         target_reg = None
         for reg in registers:
             if isinstance(reg, dict) and reg.get('name') == register_name:
@@ -659,8 +664,14 @@ class RealDeviceManager(IDeviceManager):
                 regs = encode_int32_registers(
                     int(round(raw_value)), byte_order, signed=(dt == 'int32'))
                 success = self._write_registers_compat(client, address, regs)
+            elif dt in ('uint16', 'int16', 'word', 'uint', 'int', 'short'):
+                success = client.write_single_register(
+                    address, int(round(raw_value)) & 0xFFFF)
             else:
-                success = client.write_single_register(address, int(round(raw_value)))
+                logger.error("[真实] 设备 %s 的 data_type=%r 不支持单寄存器写入",
+                             config.get('id'), dt)
+                return {'success': False,
+                        'message': f'data_type={dt!r} 不支持单寄存器写入'}
 
             if success:
                 logger.info(f"[真实] 设备 {device_id} 调节 {register_name} = {value}")
@@ -940,6 +951,11 @@ class RealDeviceManager(IDeviceManager):
             self.disconnect_device(device_id)
             with self._lock:
                 removed = self.devices.pop(device_id, None)
+            if removed is None:
+                # 设备本来就不存在：不落盘、不发移除通知，也不报成功
+                logger.warning("[真实] 移除设备 %s：设备不存在", device_id)
+                return False
+            with self._lock:
                 self.clients.pop(device_id, None)
 
             # round 302：落盘失败要把设备放回去（同 device_manager.remove_device）

@@ -97,10 +97,16 @@ class PinkNoiseGenerator:
 _pink_noise_generators: Dict[str, PinkNoiseGenerator] = {}
 
 
+_pink_noise_lock = threading.Lock()
+
+
 def _get_pink_noise(key: str) -> PinkNoiseGenerator:
-    if key not in _pink_noise_generators:
-        _pink_noise_generators[key] = PinkNoiseGenerator()
-    return _pink_noise_generators[key]
+    # 多设备采集线程并发进入时，check-then-create 会互相覆盖实例
+    with _pink_noise_lock:
+        gen = _pink_noise_generators.get(key)
+        if gen is None:
+            gen = _pink_noise_generators[key] = PinkNoiseGenerator()
+    return gen
 
 
 # ============================================================
@@ -581,7 +587,10 @@ def _generate_data_common(
             'value': value,
             'unit': unit,
             'timestamp': datetime.now().isoformat(),
-            'quality': 'good',
+            # 停机/急停期间值是被强制归零的，不能标成 good（会掩盖设备不可用）
+        'quality': ('bad' if (device_stopped
+                              or (_ESTOP_ACTIVE and _is_machinery(name)))
+                    else 'good'),
             'device_id': device_id,
         }
         if extra_field_fn:
@@ -679,7 +688,9 @@ class SimulatedModbusClient(ModbusClientInterface):
                 addr = address + i
                 rt = self._register_types.get(addr, {})
                 data_type = str(rt.get('data_type', 'uint16')).lower()
-                width = 2 if data_type in ('float32', 'int32', 'uint32') else 1
+                # 64 位类型占 4 个寄存器；漏掉会让批量读长度与地址映射整体错位
+                width = (4 if data_type in ('float64', 'int64', 'uint64')
+                         else 2 if data_type in ('float32', 'int32', 'uint32') else 1)
                 is_mach = addr in self._machinery_addresses
                 if device_stopped or (estop_active and is_mach):
                     results.extend([0] * width)
@@ -742,17 +753,20 @@ class SimulatedModbusClient(ModbusClientInterface):
         raw_value = to_raw(value, scale, offset)
 
         if data_type == 'float32':
-            return encode_float32_registers(raw_value, self.byte_order)
+            words = encode_float32_registers(raw_value, self.byte_order)
+            return words + [0] * max(0, count - len(words))
         elif data_type in ('int32', 'uint32'):
             return encode_int32_registers(
                 int(round(raw_value)), self.byte_order,
                 signed=data_type == 'int32')
-        elif count >= 2:
-            # 兜底：未知类型但count>=2，按float32处理（按配置字节序）
-            return encode_float32_registers(raw_value, self.byte_order)
+        elif data_type in ('float64', 'int64', 'uint64'):
+            # 64 位编码器尚未提供（需硬件确认字序），先按 4 字补零占位
+            words = encode_float32_registers(raw_value, self.byte_order)
+            return words + [0] * max(0, count - len(words))
         else:
-            # uint16 / int16
-            return [int(round(raw_value)) & 0xFFFF]
+            # uint16 / int16 等单字类型：按实际 count 补齐，不再伪装成 float32
+            word = int(round(raw_value)) & 0xFFFF
+            return [word] + [0] * (count - 1)
 
     def decode_float32(self, registers: list[int]) -> float:
         """解码 float32，尊重配置的 byte_order（与编码侧严格互逆）。"""
@@ -1010,7 +1024,6 @@ class SimulatedMQTTClient(PushClientInterface):
             if topic:
                 self._subscriptions[topic] = topic_cfg.get('qos', 1)
 
-        self._generate_data()
         # round 374：**已在跑就不要重复起线程**。`DeviceManager` 的重连循环
         # 会对未连接设备反复调 `connect()`；每次无条件新建线程会让旧线程
         # （`_running` 仍为 True）继续跑 —— 两条线程交替写同一份
@@ -1033,7 +1046,8 @@ class SimulatedMQTTClient(PushClientInterface):
         self._subscriptions.pop(topic, None)
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
-        return dict(self.latest_data)
+        # 整体 copy 后再逐条复制：并发推送时不会抛 changed size，条目也不共享
+        return {k: dict(v) for k, v in self.latest_data.copy().items()}
 
     def get_stats(self) -> dict[str, Any]:
         return {'device_id': self.device_id, 'device_name': self.device_name,

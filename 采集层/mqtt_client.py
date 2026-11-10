@@ -616,7 +616,9 @@ class MQTTClient:
         直接调 `_process_message` 也能生效。
         """
         entries = getattr(self, 'topics_config', None) or []
-        cache_key = (id(entries), len(entries))
+        # 仅 id+len 无法感知「原地改 points/records 但长度不变」
+        sig = repr([e for e in entries if isinstance(e, dict)])
+        cache_key = (id(entries), len(entries), hash(sig))
         if getattr(self, '_topic_map_key', None) == cache_key:
             return self._topic_map_cache
 

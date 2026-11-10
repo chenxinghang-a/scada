@@ -325,8 +325,9 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         if not reg_config:
             # 未知寄存器，返回随机值
             if count >= 2:
-                raw = struct.pack('>f', float(50.0 + 30.0 * (time.time() % 1.0)))
-                return [struct.unpack('>H', raw[0:2])[0], struct.unpack('>H', raw[2:4])[0]]
+                words = encode_float32_registers(
+                    float(50.0 + 30.0 * (time.time() % 1.0)), self.byte_order)
+                return words + [0] * max(0, count - len(words))
             return [100]
         
         # 从缓存获取数据（None保护：行为模拟器边界条件下可能返回None）
@@ -353,10 +354,14 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
             return encode_int32_registers(
                 int(round(raw_value)), self.byte_order,
                 signed=data_type == 'int32')
-        elif count >= 2:
-            return encode_float32_registers(float(raw_value), self.byte_order)
+        elif data_type in ('float64', 'int64', 'uint64'):
+            # 64 位编码器待硬件确认字序，先按 4 字占位，长度必须与 count 一致
+            words = encode_float32_registers(float(raw_value), self.byte_order)
+            return words + [0] * max(0, count - len(words))
         else:
-            return [int(round(raw_value)) & 0xFFFF]
+            # uint16/int16 等单字类型：按实际 count 补齐，不再伪装成 float32
+            word = int(round(raw_value)) & 0xFFFF
+            return [word] + [0] * (count - 1)
     
     def read_input_registers(self, address: int, count: int,
                              slave_id: Optional[int] = None) -> Optional[List[int]]:
@@ -605,7 +610,7 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
             # 停机设备返回空数据
             if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
                 return {}
-            return dict(self.latest_data)
+            return {k: dict(v) for k, v in self.latest_data.copy().items()}
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
@@ -829,7 +834,6 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
     
     def disconnect(self):
         """断开连接"""
-        self._running = False
         self.connected = False
         self.behavior_simulator.stop()
         logger.info(f"[增强模拟] REST设备 {self.device_name} 已断开")
