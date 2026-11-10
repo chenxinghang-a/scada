@@ -183,9 +183,11 @@ class MCClient(ByteOrderCapableDecoder):
                 header = b''
                 while len(header) < 9:
                     chunk = self._sock.recv(9 - len(header))
-                    if not chunk:
+                    # 必须校验类型与进展：mock/异常实现返回非 bytes 时
+                    # `header += chunk` 抛错还好，返回"长度不增长"的对象会**死循环**。
+                    if not isinstance(chunk, (bytes, bytearray)) or not chunk:
                         break
-                    header += chunk
+                    header += bytes(chunk)
                 if len(header) < 9:
                     logger.error("[MC] 响应头不完整（收到 %d/9 字节）", len(header))
                     self.stats['failed_reads'] += 1
