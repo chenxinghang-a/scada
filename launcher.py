@@ -27,8 +27,16 @@ if not (WORK_DIR / '.env').exists() and (BASE_DIR / '.env.example').exists():
     shutil.copy2(BASE_DIR / '.env.example', WORK_DIR / '.env')
 
 
-def open_browser(port):
-    time.sleep(2)
+def open_browser(port, timeout: float = 20.0):
+    """等到端口真正可连再开浏览器（固定 sleep 会在慢启动时打开错误页面）。"""
+    import socket
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(('127.0.0.1', int(port)), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.3)
     webbrowser.open(f'http://localhost:{port}')
 
 

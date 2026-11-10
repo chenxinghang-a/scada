@@ -287,8 +287,11 @@ class PluginAdapterClient:
                          self.device_id, self._config_error)
 
         device_interval = try_finite_float(config.get('poll_interval'))
+        # spec 里的间隔也要过一遍校验：0/负数会让 Event.wait 立即返回 → 忙循环打插件
+        spec_interval = try_finite_float(
+            self.spec.poll_interval if self.spec is not None else None)
         self.poll_interval = (
-            self.spec.poll_interval if (self.spec and self.spec.poll_interval)
+            spec_interval if (spec_interval and spec_interval > 0)
             else device_interval if (device_interval and device_interval > 0)
             else 5.0
         )

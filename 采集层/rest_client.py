@@ -124,8 +124,9 @@ class RESTDeviceClient:
         logger.info(f"REST设备客户端初始化: {self.base_url}")
 
     def add_data_callback(self, callback: Callable[..., Any]):
-        """添加数据回调函数"""
-        self._data_callbacks.append(callback)
+        """添加数据回调函数（与轮询线程并发，追加需持锁）"""
+        with self._data_lock:
+            self._data_callbacks.append(callback)
 
     def connect(self) -> bool:
         """
@@ -241,7 +242,8 @@ class RESTDeviceClient:
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取所有端点的最新数据"""
         with self._data_lock:
-            return dict(self.latest_data)
+            # 浅拷贝只隔离了外层：条目与缓存共享，调用方补字段会写穿缓存
+            return {k: dict(v) for k, v in self.latest_data.items()}
 
     def read_endpoint(self, endpoint_config: dict[str, Any]) -> Any:
         """
@@ -253,6 +255,14 @@ class RESTDeviceClient:
         Returns:
             端点返回的数据
         """
+        if self._session is None:
+            # 断开后 `_session.request` 会 AttributeError 并被通用异常吞成 None，
+            # 调用方无法区分"没连接"与"请求失败"。
+            logger.warning("REST 设备 %s 未连接，跳过端点读取: %s",
+                           self.device_id, endpoint_config.get('path'))
+            self.stats['failed_requests'] = self.stats.get('failed_requests', 0) + 1
+            return None
+
         url = self.base_url.rstrip('/') + endpoint_config.get('path', '/')
         method = endpoint_config.get('method', 'GET').upper()
         params = endpoint_config.get('params', {})
@@ -426,8 +436,10 @@ class RESTDeviceClient:
                                 'device_id': self.device_id
                             }
 
-                        # 触发回调
-                        for callback in self._data_callbacks:
+                        # 触发回调（快照：外部线程可能正在 add_data_callback）
+                        with self._data_lock:
+                            _callbacks = list(self._data_callbacks)
+                        for callback in _callbacks:
                             try:
                                 callback(self.device_id, ep_name, value, ep.get('unit', ''))
                             except Exception as e:

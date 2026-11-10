@@ -942,3 +942,57 @@ def _drain_thread_pool_workers():
     except Exception as e:         # noqa: BLE001 —— 收尾失败不该让测试报错
         import warnings
         warnings.warn(f'_drain_thread_pool_workers 收尾失败: {e}', RuntimeWarning)
+
+
+# ==========================================================================
+# 测试期资源收口（2026-11-10 整机内存耗尽复盘）
+#
+# 复盘结论：全量测试把单个 pytest 进程的提交量推到 49.6~51.5 GB（上限 43.8 GB），
+# 触发 Windows 资源耗尽 → 硬复位，同机的编辑器被一起带走。合成因子有两条：
+#   · 自旋（已在 采集层/mc_client.py 修）；
+#   · `DataCollector` 每个用例建一个 ThreadPoolExecutor，只有 `stop()` 才拆池，
+#     而测试极少调 stop —— worker 线程跨用例线性累积（每个线程都要提交栈内存）。
+# 这里把「用例内启动的采集器」在用例结束时统一停掉，并把测试期并发压到 2。
+# ==========================================================================
+_STARTED_COLLECTORS: list = []
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _track_data_collectors():
+    """记录测试里启动过的 DataCollector（不改变生产代码行为）。"""
+    try:
+        from 采集层.data_collector import DataCollector
+    except Exception:      # noqa: BLE001 —— 导入失败不该影响测试收集
+        yield
+        return
+
+    original_start = DataCollector.start
+
+    def _tracked_start(self, *args, **kwargs):
+        _STARTED_COLLECTORS.append(self)
+        # 测试期不追求并发，压低线程数即可显著降低提交量
+        try:
+            self._max_concurrent = min(int(getattr(self, "_max_concurrent", 2) or 2), 2)
+        except Exception:      # noqa: BLE001
+            pass
+        return original_start(self, *args, **kwargs)
+
+    DataCollector.start = _tracked_start
+    try:
+        yield
+    finally:
+        DataCollector.start = original_start
+
+
+@pytest.fixture(autouse=True)
+def _stop_started_collectors():
+    """用例结束后拆掉它启动的采集器线程池，避免跨用例累积。"""
+    before = len(_STARTED_COLLECTORS)
+    yield
+    pending = _STARTED_COLLECTORS[before:]
+    del _STARTED_COLLECTORS[before:]
+    for collector in pending:
+        try:
+            collector.stop()
+        except Exception:      # noqa: BLE001 —— 收尾失败不该让用例变红
+            pass

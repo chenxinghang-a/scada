@@ -203,7 +203,8 @@ class IDeviceManager(ABC):
         - safety: 灯/蜂鸣器/继电器 → 不可启停
         """
         # 优先使用显式声明
-        category = device_config.get('device_category', '').lower()
+        # 显式 null / 数字时 `.lower()` 会 AttributeError，一台脏配置就中断分类
+        category = str(device_config.get('device_category') or '').lower()
         if category in ('mechanical', 'instrument', 'safety'):
             return category
 
@@ -220,7 +221,8 @@ class IDeviceManager(ABC):
 
         # 机械类：检查寄存器名
         from .simulated_client import _is_machinery
-        for reg in device_config.get('registers', []):
+        # `registers: null` 是合法的 YAML 写法，直接迭代 None 会 TypeError
+        for reg in (device_config.get('registers') or []):
             if _is_machinery(reg.get('name', '')):
                 return 'mechanical'
 

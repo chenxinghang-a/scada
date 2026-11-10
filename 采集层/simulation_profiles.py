@@ -112,7 +112,10 @@ def apply_profile(device_config: Dict[str, Any]) -> bool:
         _merge_missing(pm, profile['process_model'])
 
     if 'monitoring' in profile and 'monitoring' not in sim_cfg:
-        sim_cfg['monitoring'] = profile['monitoring']
+        # 必须是副本：`_load_profiles()` 有全局缓存，按引用写进去后
+        # 任何设备运行时改这个值都会污染后续所有设备。
+        import copy
+        sim_cfg['monitoring'] = copy.deepcopy(profile['monitoring'])
 
     # ---- 点位级：把 points 合并到各点位的 sim 段 ----
     points = profile.get('points') or {}

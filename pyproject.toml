@@ -74,7 +74,9 @@ python_functions = ["test_*"]
 # pytest 每次都遇到"全新的、不存在的" basetemp，因此**不需要清任何东西**。
 # 具体路径在 tests/conftest.py 的 `pytest_configure` 里设置（可做插值）。
 # 这里只保留：关 cacheprovider + 把 .pytest_tmp-* 排除出收集范围。
-addopts = "-p no:cacheprovider"
+# 2026-11-10 复盘：没有超时保护时，一个自旋能把测试挂到天亮并拖垮整机。
+# `--timeout` 由 pytest-timeout 提供（pyproject 依赖里已声明）。
+addopts = "-p no:cacheprovider --timeout=120 --timeout-method=thread"
 
 [tool.coverage.run]
 # 显式列出源码包。不写 `source = ["."]` 是因为仓库根下还有：

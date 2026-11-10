@@ -182,8 +182,12 @@ class RecipeSimulator:
             'time': time.time()
         })
         # round 374：只保留最近 HISTORY_LIMIT 条（见类属性说明）。
-        if len(self._history) > self.HISTORY_LIMIT:
-            del self._history[:-self.HISTORY_LIMIT]
+        limit = int(self.HISTORY_LIMIT or 0)
+        if limit <= 0:
+            # `del lst[:-0]` 等价于 `del lst[:0]`（空切片）—— 配成 0 会无界增长
+            self._history.clear()
+        elif len(self._history) > limit:
+            del self._history[:-limit]
 
         self.current_phase_index += 1
         self.phase_start_time = time.monotonic()
