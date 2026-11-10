@@ -250,8 +250,9 @@ class TestMQTTOnMessage:
         mqtt_client._data_callbacks = [cb]
         msg = MagicMock()
         msg.topic = 'factory/temp'
+        # 报文 device_id 必须与客户端绑定设备一致（跨设备注入防护）
         msg.payload = json.dumps({
-            'device_id': 'dev1',
+            'device_id': 'mqtt_01',
             'register': 'temperature',
             'value': 25.5,
             'unit': 'C'
@@ -261,7 +262,7 @@ class TestMQTTOnMessage:
 
         assert mqtt_client.stats['messages_received'] == 1
         assert mqtt_client.stats['messages_parsed'] == 1
-        cb.assert_called_once_with('dev1', 'temperature', 25.5, 'C')
+        cb.assert_called_once_with('mqtt_01', 'temperature', 25.5, 'C')
 
     def test_on_message_json_format2_simple(self, mqtt_client):
         cb = MagicMock()
@@ -281,7 +282,7 @@ class TestMQTTOnMessage:
         msg = MagicMock()
         msg.topic = 'factory/data'
         msg.payload = json.dumps({
-            'device_id': 'dev1',
+            'device_id': 'mqtt_01',
             'data': {'temp': 25.5, 'pressure': 101.3}
         }).encode()
 

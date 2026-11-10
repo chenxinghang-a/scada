@@ -221,10 +221,10 @@ class TestMCReadWriteWords:
 
         result = mc_client.read_words('D', 0, 3)
 
-        assert len(result) == 3
-        assert result[0] == 50
-        assert result[1] == 0
-        assert result[2] == 0
+        # 响应短于请求字数 = 通信失败：原来补 0 冒充有效值（还会被计成功、
+        # 污染报警与统计），现在必须返回 None 并计失败。
+        assert result is None
+        assert mc_client.stats['failed_reads'] >= 1
 
     def test_write_words_not_connected(self, mc_client):
         result = mc_client.write_words('D', 0, [1])

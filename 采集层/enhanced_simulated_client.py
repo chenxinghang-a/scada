@@ -258,7 +258,9 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                 reg_name = reg_cfg.get('name', '')
                 is_mach = self._is_machinery(reg_name)
                 data_type = reg_cfg.get('data_type', 'uint16')
-                width = 2 if data_type in ('float32', 'int32', 'uint32') else 1
+                # 64 位类型占 4 个寄存器；漏掉会让批量读长度与地址映射整体错位
+                width = (4 if data_type in ('float64', 'int64', 'uint64')
+                         else 2 if data_type in ('float32', 'int32', 'uint32') else 1)
                 if device_stopped or (estop_active and is_mach):
                     results.extend([0] * width)
                 else:

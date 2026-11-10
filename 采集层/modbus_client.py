@@ -29,6 +29,10 @@ _PERMANENT_EXCEPTIONS = {0x01, 0x02, 0x03}  # Illegal Function/Address/Value
 # 瞬态错误：可重试
 _TRANSIENT_EXCEPTIONS = {0x04, 0x06, 0x08, 0x0A, 0x0B}  # Device Failure/Busy/Parity/Gateway
 
+#: 读取缓存（(address,count) → 原始寄存器）的容量上限。
+#: 无上限时不同区间会持续累积，长跑进程单调增长（0476）。
+_MAX_CACHED_RANGES = 512
+
 
 class ByteOrder(Enum):
     """Modbus字节序（32/64位浮点数的寄存器排列方式）
@@ -176,8 +180,17 @@ class ModbusClient:
 
     def _mark_read_fresh(self, cache_key: tuple, registers: list[int]):
         """成功读取：写入缓存 + 时间戳，并标记本次读取为新鲜数据"""
-        self._last_good_values[cache_key] = registers
+        # 存副本：调用方拿到的同一个 list 若被原地修改（解码时很常见），
+        # 缓存里的"上次好值"会被悄悄改掉，兜底时就返回了被污染的数据。
+        self._last_good_values[cache_key] = list(registers)
         self._last_good_at[cache_key] = time.monotonic()
+        # 0467/0476：缓存表不能无界增长（不同 (address,count) 组合会持续累积），
+        # 超上限时按时间戳淘汰最旧的一半。
+        if len(self._last_good_values) > _MAX_CACHED_RANGES:
+            ordered = sorted(self._last_good_at.items(), key=lambda kv: kv[1])
+            for key, _ts in ordered[:len(ordered) // 2]:
+                self._last_good_values.pop(key, None)
+                self._last_good_at.pop(key, None)
         with self._stats_lock:
             self.last_read_source = 'fresh'
             self.last_read_ok = True
@@ -224,7 +237,8 @@ class ModbusClient:
             f"设备 {self.device_name} 读取失败，返回 {age:.1f}s 前的陈旧缓存值 "
             f"({address},{count}) — {reason}"
         )
-        return cached
+        # 返回副本（同上：调用方修改不得影响缓存）
+        return list(cached)
 
     def _raw_to_engineering(self, address: int, raw_value: int) -> float:
         """将原始寄存器值转换为工程值（用于安全验证）"""
@@ -408,7 +422,9 @@ class ModbusClient:
         """
         with self._log_lock:
             entries = list(self._comm_log)
-        # 返回最新的 limit 条
+        # 返回最新的 limit 条（limit<=0 返回空，不能退化成"全部"）
+        if limit <= 0:
+            return []
         return entries[-limit:] if len(entries) > limit else entries
 
     def connect(self) -> bool:

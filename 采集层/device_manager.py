@@ -385,6 +385,9 @@ class DeviceManager:
                     'rejected': reason}
 
         with self._lock:
+            # 差集快照必须与替换同锁取：锁外快照与并发 reload/增删交错时，
+            # added/removed 会算错（采集器据此增删定时器 → 幽灵采集/漏采）。
+            old_ids = set(self.devices.keys())
             self.devices = new_devices
             # round 370（BUG-022）：配置变了，5 秒 TTL 的状态缓存必须失效。
             # 否则改完设备地址后，前 5 秒 `get_device_status()` 还回旧连接状态，

@@ -469,6 +469,22 @@ class MQTTClient:
         """订阅成功回调"""
         logger.debug(f"订阅确认: mid={mid}, QoS={granted_qos}")
 
+    def _accept_device_id(self, declared: Any, topic: str) -> str | None:
+        """校验报文里的 device_id 归属；返回可用设备 ID，不匹配返回 None。
+
+        MQTT 报文里的 `device_id` 是**发布方自述**，不可信：任何一个能发布的
+        客户端都能把数据写进别的设备（报警、联锁、报表全部被污染）。
+        """
+        claimed = str(declared or '').strip()
+        bound = str(getattr(self, 'device_id', '') or '').strip()
+        if bound and claimed and claimed != bound:
+            logger.error(
+                "MQTT %s 报文的 device_id=%r 与客户端绑定设备 %r 不符，已丢弃"
+                "（防跨设备注入）", topic, claimed, bound)
+            self.stats['parse_errors'] = self.stats.get('parse_errors', 0) + 1
+            return None
+        return claimed or bound or (topic.split('/')[-1] if '/' in topic else topic)
+
     def _process_message(self, topic: str, data: dict[str, Any], retain: bool = False):
         """
         处理JSON格式消息
@@ -531,7 +547,9 @@ class MQTTClient:
 
         # 格式1: 完整格式
         if 'device_id' in data and 'register' in data:
-            device_id = data['device_id']
+            device_id = self._accept_device_id(data.get('device_id'), topic)
+            if device_id is None:
+                return
             register_name = data['register']
             # round 370（BUG-025）：`{"value": null}` 时 `float(None)` 抛 TypeError，
             # 整条消息被外层吞掉 —— 一个空值让同一包里的其它点位全部丢失。
@@ -544,7 +562,9 @@ class MQTTClient:
 
         # 格式3: 嵌套数据格式
         elif 'device_id' in data and 'data' in data:
-            device_id = data['device_id']
+            device_id = self._accept_device_id(data.get('device_id'), topic)
+            if device_id is None:
+                return
             points_dict = data.get('data')
             if not isinstance(points_dict, dict):
                 logger.warning("MQTT %s 的 data 字段不是对象，已跳过", topic)

@@ -167,7 +167,8 @@ class MCClient(ByteOrderCapableDecoder):
         """发送请求帧并接收响应"""
         with self._lock:
             try:
-                self._sock.send(frame)
+                # send() 可能只发出一部分字节（大帧/TCP 缓冲），必须 sendall
+                self._sock.sendall(frame)
 
                 # 接收响应头
                 #
@@ -178,9 +179,16 @@ class MCClient(ByteOrderCapableDecoder):
                 # 头 2 字节（完成码）**，于是解析出的长度是个垃圾值：
                 # 要么 0（读不到数据 → 测点恒为 0），要么是个随机长度（乱跳），
                 # 而 _send_recv 仍可能返回"成功"，自诊断因此显示"读取成功"。
-                header = self._sock.recv(9)
+                # recv(9) 不保证一次收满（分包到达很常见），必须循环收
+                header = b''
+                while len(header) < 9:
+                    chunk = self._sock.recv(9 - len(header))
+                    if not chunk:
+                        break
+                    header += chunk
                 if len(header) < 9:
-                    logger.error("[MC] 响应头不完整")
+                    logger.error("[MC] 响应头不完整（收到 %d/9 字节）", len(header))
+                    self.stats['failed_reads'] += 1
                     return None
 
                 # 解析响应数据长度（9 字节头的最后 2 字节，小端）
@@ -197,14 +205,17 @@ class MCClient(ByteOrderCapableDecoder):
                     remaining -= len(chunk)
 
                 # 检查完成码
-                if len(resp_data) >= 2:
-                    completion_code = struct.unpack('<H', resp_data[0:2])[0]
-                    if completion_code != 0:
-                        logger.error(f"[MC] 完成码错误: 0x{completion_code:04X}")
-                        return None
-                    return resp_data[2:]  # 返回去掉完成码的数据
-
-                return resp_data
+                if len(resp_data) < 2:
+                    # 没有完成码 = 响应残缺，不能当成功返回（否则上层把 0 当有效值）
+                    logger.error("[MC] 响应缺少完成码（仅 %d 字节）", len(resp_data))
+                    self.stats['failed_reads'] += 1
+                    return None
+                completion_code = struct.unpack('<H', resp_data[0:2])[0]
+                if completion_code != 0:
+                    logger.error(f"[MC] 完成码错误: 0x{completion_code:04X}")
+                    self.stats['failed_reads'] += 1
+                    return None
+                return resp_data[2:]  # 返回去掉完成码的数据
 
             except socket.timeout:
                 logger.error("[MC] 通信超时")
@@ -234,6 +245,9 @@ class MCClient(ByteOrderCapableDecoder):
     @staticmethod
     def _pack_device_spec(device_code: int, addr: int) -> bytes:
         """3E 二进制批量访问的数据区头：先地址(3, 低位在前) + 设备代码(1)。"""
+        if not isinstance(addr, int) or isinstance(addr, bool) or not 0 <= addr <= 0xFFFFFF:
+            # 超过 3 字节会被静默截断 → 写到另一个软元件（最危险的一类"看起来成功"）
+            raise ValueError(f'MC 软元件地址越界: {addr!r}（允许 0~0xFFFFFF）')
         return struct.pack('<I', addr)[0:3] + struct.pack('B', device_code)
 
     def read_words(self, device: str, address: int, count: int) -> list[int] | None:
@@ -264,6 +278,13 @@ class MCClient(ByteOrderCapableDecoder):
             self.stats['failed_reads'] += 1
             return None
 
+        # 字数必须够：不足时补 0 会把"通信失败"伪装成有效 0 值（还会污染报警）
+        if len(resp) < count * 2:
+            logger.error("[MC] 字读取响应长度不足：需要 %d 字节，实得 %d",
+                         count * 2, len(resp))
+            self.stats['failed_reads'] += 1
+            return None
+
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
 
@@ -271,11 +292,7 @@ class MCClient(ByteOrderCapableDecoder):
         values = []
         for i in range(count):
             offset = i * 2
-            if offset + 2 <= len(resp):
-                val = struct.unpack('<H', resp[offset:offset + 2])[0]
-                values.append(val)
-            else:
-                values.append(0)
+            values.append(struct.unpack('<H', resp[offset:offset + 2])[0])
 
         return values
 
@@ -474,7 +491,7 @@ class MCClient(ByteOrderCapableDecoder):
         if ok and verify:
             read_back = self.read_holding_registers(address, 1, slave_id=slave_id)
             if not read_back or int(read_back[0]) != (int(value) & 0xFFFF):
-                logger.warning("MC 寄存器回读验证失败: D%d 写=%s 回读=%s",
+                logger.warning("MC 寄存器回读验证失败: 地址 %d 写=%s 回读=%s",
                                address, value, read_back)
                 return False
         return ok
@@ -496,7 +513,7 @@ class MCClient(ByteOrderCapableDecoder):
             read_back = self.read_holding_registers(
                 address, len(words), slave_id=slave_id)
             if not read_back or [int(v) & 0xFFFF for v in read_back] != words:
-                logger.warning("MC 多寄存器回读验证失败: D%d 写=%s 回读=%s",
+                logger.warning("MC 多寄存器回读验证失败: 地址 %d 写=%s 回读=%s",
                                address, words, read_back)
                 return False
         return ok
@@ -512,7 +529,7 @@ class MCClient(ByteOrderCapableDecoder):
         if ok and verify:
             read_back = self.read_coils(address, 1, slave_id=slave_id)
             if not read_back or bool(read_back[0]) != bool(value):
-                logger.warning("MC 线圈回读验证失败: M%d 写=%s 回读=%s",
+                logger.warning("MC 线圈回读验证失败: 地址 %d 写=%s 回读=%s",
                                address, value, read_back)
                 return False
         return ok

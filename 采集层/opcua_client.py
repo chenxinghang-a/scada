@@ -122,23 +122,39 @@ class OPCUAClient:
                 return False
             time.sleep(0.1)
 
-        logger.warning("OPC UA连接超时")
-        return self.connected
+        logger.warning("OPC UA连接超时（3s 内未连上），回收后台连接线程")
+        # 不回收的话：调用方拿到 False，而后台线程还在无限重连，
+        # 下次 connect() 又会起一条 —— 线程和 socket 越积越多。
+        self.disconnect()
+        return False
 
     def disconnect(self):
-        """断开连接"""
+        """断开连接（幂等；事件循环可能尚未建立或已关闭）"""
         self._running = False
-        if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._cleanup(), self._loop)
-        if self._thread:
-            self._thread.join(timeout=5)
+        loop = self._loop
+        if loop is not None:
+            try:
+                if loop.is_running():
+                    # `is_running()` 与调度之间循环可能关闭 → 必须兜 RuntimeError
+                    asyncio.run_coroutine_threadsafe(self._cleanup(), loop)
+            except RuntimeError as e:
+                logger.debug("OPC UA 事件循环已关闭，跳过异步清理: %s", e)
+            except Exception as e:      # noqa: BLE001 —— 清理失败不该阻断断开
+                logger.warning("OPC UA 异步清理调度失败: %s", e)
+        thread = self._thread
+        if thread is not None and thread.is_alive() \
+                and thread is not threading.current_thread():
+            thread.join(timeout=5)
+            if thread.is_alive():
+                logger.warning("OPC UA 连接线程 5s 内未退出（connected 置 False）")
         self.connected = False
         logger.info("OPC UA客户端已断开")
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取所有节点的最新数据（round 370：持锁快照）"""
         with self._data_lock:
-            return dict(self.latest_data)
+            # 只拷外层会让条目与缓存共享：调用方补字段就把脏数据写回缓存
+            return {k: dict(v) for k, v in self.latest_data.items()}
 
     def _run_loop(self):
         """在独立线程中运行asyncio事件循环"""
@@ -232,6 +248,8 @@ class OPCUAClient:
 
                 self.stats['nodes_subscribed_ok'] = ok_nodes
                 if self.node_configs and ok_nodes == 0:
+                    # 连上但一个点位都订不上 = 无法产出任何数据，不能报在线
+                    self.connected = False
                     self.stats['subscription_failed'] = True
                     logger.error(
                         "OPC UA %s 的 %d 个节点**全部订阅失败** —— 设备连上了但"
@@ -242,6 +260,7 @@ class OPCUAClient:
                         self.endpoint, len(self.node_configs),
                         [n.get('node_id') for n in self.node_configs])
                 elif ok_nodes:
+                    self.connected = True
                     self.stats.pop('subscription_failed', None)
 
                 if ok_nodes or not self.node_configs:
