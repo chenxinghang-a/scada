@@ -286,10 +286,10 @@ class TestMCReadWriteBits:
 
         result = mc_client.read_bits('M', 0, 4)
 
-        assert len(result) == 4
-        # byte 0x05 = 0101: low nibble bit0=1, bit1=0
-        assert result[0] is True
-        assert result[1] is False
+        # 4 个位需要 2 字节，只回 1 字节 = 通信失败：原来补 False 会把失败
+        # 记成成功（还会让上位机看到"全 0"的正常假象），现在必须返回 None。
+        assert result is None
+        assert mc_client.stats['failed_reads'] >= 1
 
     def test_write_bits_not_connected(self, mc_client):
         result = mc_client.write_bits('M', 0, [True])

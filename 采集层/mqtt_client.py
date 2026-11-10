@@ -224,7 +224,12 @@ class MQTTClient:
                 tls_context = ssl.create_default_context()
 
                 if self.ca_cert:
-                    tls_context.load_verify_locations(self.ca_cert)
+                    try:
+                        tls_context.load_verify_locations(self.ca_cert)
+                    except Exception as e:      # noqa: BLE001
+                        # 0482：ca_cert 非法/不可读时不能让整个 connect 失败，
+                        # 回退到 create_default_context() 已装载的系统根证书校验
+                        logger.warning(f"MQTT CA 证书加载失败，回退系统根证书: {e}")
                 # round 353：**没填 ca_cert ≠ 可以不校验证书**。
                 # `create_default_context()` 默认就用系统根证书校验；
                 # 原来 else 分支直接关掉主机名校验并设 CERT_NONE，

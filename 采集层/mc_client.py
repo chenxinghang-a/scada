@@ -360,6 +360,13 @@ class MCClient(ByteOrderCapableDecoder):
             self.stats['failed_reads'] += 1
             return None
 
+        # 0457：位应答至少要 ceil(count/2) 字节，不足还补 False 等于把通信失败伪装成有效位值
+        if len(resp) < (count + 1) // 2:
+            logger.error("[MC] 位读取响应长度不足：需要 %d 字节，实得 %d",
+                         (count + 1) // 2, len(resp))
+            self.stats['failed_reads'] += 1
+            return None
+
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
 

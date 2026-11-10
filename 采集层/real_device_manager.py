@@ -193,6 +193,16 @@ class RealDeviceManager(IDeviceManager):
             return False
         except OSError as exc:
             logger.error("配置文件读取失败: %s — %s", self.config_path, exc)
+            self._load_failed_reason = 'read'    # 0537：不留 None，否则构造报错原因为 None
+            return False
+
+        except Exception as exc:                     # noqa: BLE001
+            # 0536：expand_env_vars 抛错、非 UTF-8 解码（UnicodeDecodeError）都会
+            # 落到这里；原来只捕 YAMLError/OSError，一条坏配置直接穿出 load_config，
+            # 破坏「失败即返回 False、设备表保持原样」的契约。
+            logger.error("配置解析/展开失败（保留原有设备表）: %s — %s",
+                         self.config_path, exc)
+            self._load_failed_reason = 'parse'
             return False
 
         if not isinstance(config, dict):
@@ -206,6 +216,7 @@ class RealDeviceManager(IDeviceManager):
                 "配置的 devices 段必须是列表，实际 %s —— 拒绝使用（否则会把"
                 "非列表对象逐项迭代成假设备）: %s",
                 type(devices_config).__name__, self.config_path)
+            self._load_failed_reason = 'structure'   # 0538：与其它失败分支口径一致
             return False
 
         # 先构建新表，全部成功后才替换
@@ -468,6 +479,18 @@ class RealDeviceManager(IDeviceManager):
             return None
 
         value = spec.get('value', default_value)
+        # 0539：value 为 None/非数值时，_write_control 的 int(value) 会抛 TypeError
+        # 直接穿出 start_device/stop_device；这里先归一化，非法即明确拒绝。
+        if kind == 'coil':
+            value = (str(value).strip().lower() not in ('', '0', 'false', 'off', 'no')
+                     if isinstance(value, str) else bool(value))
+        else:
+            raw = try_int(value)
+            if raw is None:
+                logger.error("[真实] 设备 %s 启停写入值非法: %r",
+                             config.get('id'), spec.get('value'))
+                return None
+            value = raw
         return kind, address, value
 
     @staticmethod
@@ -724,11 +747,12 @@ class RealDeviceManager(IDeviceManager):
 
             if time.monotonic() - start > timeout:
                 logger.warning(f"[真实] connect_all 已达超时 {timeout}s，剩余 {len(self.devices) - len(results)} 个设备跳过")
-                for rid in list(self.devices.keys())[len(results):]:
-                    if self.devices[rid].get('enabled', True):
-                        results[rid] = False
-                    else:
-                        results[rid] = None
+                # 0542：不能用 len(results) 切片当前 self.devices —— 并发增删会让
+                # 切片错位（状态标到别的设备）且 self.devices[rid] 可能 KeyError。
+                for rid, cfg in list(self.devices.items()):
+                    if rid in results:
+                        continue
+                    results[rid] = False if (cfg or {}).get('enabled', True) else None
                 break
 
             # 单台设备的构造/连接异常**不能穿出 connect_all**：
@@ -889,14 +913,20 @@ class RealDeviceManager(IDeviceManager):
             'protocol': device_config.get('protocol', 'modbus_tcp'),
             'host': device_config.get('host', device_config.get('endpoint', '')),
             'device_category': IDeviceManager.get_device_category(device_config),
-            'registers': [{'name': r.get('name', ''), 'unit': r.get('unit', '')} for r in regs],
-            'nodes': [{'name': n.get('name', ''), 'unit': n.get('unit', '')} for n in nodes],
+            'registers': [{'name': (r.get('name', '') if isinstance(r, dict) else str(r)),
+                           'unit': (r.get('unit', '') if isinstance(r, dict) else '')}
+                          for r in regs],
+            'nodes': [{'name': (n.get('name', '') if isinstance(n, dict) else str(n)),
+                       'unit': (n.get('unit', '') if isinstance(n, dict) else '')}
+                      for n in nodes],
             # round 370（BUG-021）：topics 允许裸字符串，直接 .get 会 AttributeError
             'topics': [{'name': (t.get('name', '') if isinstance(t, dict)
                                  else str(t).rsplit('/', 1)[-1]),
                         'unit': (t.get('unit', '') if isinstance(t, dict) else '')}
                        for t in topics],
-            'endpoints': [{'name': e.get('name', ''), 'unit': e.get('unit', '')} for e in endpoints],
+            'endpoints': [{'name': (e.get('name', '') if isinstance(e, dict) else str(e)),
+                           'unit': (e.get('unit', '') if isinstance(e, dict) else '')}
+                          for e in endpoints],
         }
 
     def add_device(self, device_config: dict[str, Any]) -> bool:
@@ -913,6 +943,7 @@ class RealDeviceManager(IDeviceManager):
                 logger.error(f"不支持的协议: {protocol}，支持: {self.SUPPORTED_PROTOCOLS}")
                 return False
 
+            prev_config = self.devices.get(device_id)   # 0533：覆盖前快照，回滚要用
             if device_id in self.devices:
                 logger.warning(f"设备 {device_id} 已存在，将被覆盖")
                 self.disconnect_device(device_id)
@@ -925,7 +956,11 @@ class RealDeviceManager(IDeviceManager):
             # round 302：落盘失败必须回滚并如实返回（同 device_manager.add_device）
             if not self._save_config():
                 with self._lock:
-                    self.devices.pop(device_id, None)
+                    if prev_config is None:
+                        self.devices.pop(device_id, None)
+                    else:
+                        # 覆盖场景必须还原旧配置：只 pop 会把旧设备直接弄丢
+                        self.devices[device_id] = prev_config
                     self.clients.pop(device_id, None)
                 logger.error("[真实] 添加设备失败：配置落盘失败，已回滚 %s", device_id)
                 return False

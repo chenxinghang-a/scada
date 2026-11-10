@@ -901,10 +901,15 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
                 addr = self._resolve_endpoint_address(name)
                 if addr is not None:
                     # REST/OPC UA 点位写进来的是工程值
-                    self.behavior_simulator.handle_write_register(
-                        addr,
-                        int(value) if isinstance(value, (int, float)) else 0,
-                        engineering=True)
+                    if not isinstance(value, (int, float)):
+                        # 非数值不能静默按 0 写进寄存器，否则测点被错误置零
+                        logger.warning("[增强模拟] REST %s 写入非数值 %r，已拒绝写寄存器 %s",
+                                       method, value, name)
+                    else:
+                        self.behavior_simulator.handle_write_register(
+                            addr,
+                            int(value),
+                            engineering=True)
 
             logger.info(f"[增强模拟] REST {method}写入成功: {path} -> {name} = {value}")
         else:
@@ -999,6 +1004,13 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
                     'device_id': self.device_id,
                     'method': 'PUT'
                 }
+
+            # 与 write_endpoint 对齐：回写行为模拟器，否则下次数据生成会覆盖写入值
+            if isinstance(data.get('value'), (int, float)):
+                addr = self._resolve_endpoint_address(name)
+                if addr is not None and getattr(self, 'behavior_simulator', None):
+                    self.behavior_simulator.handle_write_register(
+                        addr, int(data['value']), engineering=True)
 
             response = {
                 'success': True,

@@ -185,7 +185,8 @@ class SimulatedDeviceManager(IDeviceManager):
         snapshot = {did: cfg for did, cfg in list(self.devices.items())}
 
         if not self.load_config():
-            reason = (f'配置文件解析失败（{self.config_path}），'
+            # 0591：missing/read/structure 也被统一说成「解析失败」，掩盖真实原因
+            reason = (f'配置加载失败（{self._load_failed_reason}: {self.config_path}），'
                       f'已保留原配置（{len(old_ids)} 台设备）')
             logger.error("设备配置重载被拒绝: %s", reason)
             return {'added': [], 'removed': [], 'kept': sorted(old_ids),
@@ -204,6 +205,18 @@ class SimulatedDeviceManager(IDeviceManager):
         added = sorted(new_ids - old_ids)
         removed = sorted(old_ids - new_ids)
         kept = sorted(new_ids & old_ids)
+        # 0582：kept 设备配置也可能变了（host/port/寄存器），客户端是缓存 ——
+        # 不断开重建就永远按旧参数采（与 RealDeviceManager.reload_config 对齐）
+        changed = [did for did in kept if snapshot.get(did) != self.devices.get(did)]
+        for did in changed:
+            try:
+                self.disconnect_device(did)
+            except Exception as e:      # noqa: BLE001
+                logger.error("[重载] 断开已变更设备 %s 失败: %s", did, e)
+            with self._lock:
+                self.clients.pop(did, None)
+        if changed:
+            logger.info("[重载] 配置已变更，客户端将按新配置重建: %s", changed)
         if added or removed:
             logger.info("[重载] 设备变更: +%s -%s", added, removed)
 
@@ -452,7 +465,14 @@ class SimulatedDeviceManager(IDeviceManager):
         if offset is None:
             offset = 0.0
         # round 372：换算统一入口（scale/offset 的兜底保持本文件既有口径）
-        raw_value = to_raw(value, scale, offset)
+        # 0585：value 非数值 / scale=0 时 to_raw 抛 ValueError，原来在 try 之外
+        # 直接冒出 adjust_device（接口 500），这里先收敛成失败结果。
+        try:
+            raw_value = to_raw(value, scale, offset)
+        except Exception as e:          # noqa: BLE001
+            logger.error("[模拟] 设备 %s 调节 %s 换算失败: %s",
+                         device_id, register_name, e)
+            return {'success': False, 'message': f'设定值非法: {value!r}'}
         data_type = str(target.get('data_type', 'uint16')).lower()
 
         try:
@@ -491,8 +511,11 @@ class SimulatedDeviceManager(IDeviceManager):
             try:
                 sim.set_point_override(register_name, float(value))
             except Exception as e:      # noqa: BLE001
-                logger.warning("[模拟] 设定点覆盖失败 %s/%s: %s",
-                               device_id, register_name, e)
+                # 0587：覆盖失败时后续采集仍读回旧模拟值，不能报成功（假成功）
+                logger.error("[模拟] 设定点覆盖失败 %s/%s: %s",
+                             device_id, register_name, e)
+                return {'success': False,
+                        'message': f'{register_name} 设定点覆盖失败: {e}'}
 
         logger.info(f"[模拟] 设备 {device_id} 调节 {register_name} = {value}"
                     f"（原始值 {raw_value}）")
@@ -668,7 +691,9 @@ class SimulatedDeviceManager(IDeviceManager):
             self.disconnect_device(device_id)
             with self._lock:
                 removed = self.devices.pop(device_id, None)
-                self.clients.pop(device_id, None)
+                # 0596：被移出的客户端要留着 —— 落盘失败回滚设备时一并还原，
+                # 否则设备回来了却没有客户端，采集永远拿不到数据。
+                removed_client = self.clients.pop(device_id, None)
             if removed is None:
                 # 保持幂等语义：删不存在的设备不算失败（既有契约）。
                 logger.warning("[模拟] 移除设备 %s：设备不存在", device_id)
@@ -679,6 +704,8 @@ class SimulatedDeviceManager(IDeviceManager):
                 if removed is not None:
                     with self._lock:
                         self.devices[device_id] = removed
+                        if removed_client is not None:
+                            self.clients[device_id] = removed_client
                 logger.error("[模拟] 移除设备失败：配置落盘失败，已回滚 %s", device_id)
                 return False
 

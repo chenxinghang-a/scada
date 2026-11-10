@@ -268,9 +268,16 @@ class OPCUAClient:
                     # 连接 + 订阅都成功，才算真正可用；此时才允许退避归 1。
                     reconnect_delay = 1.0
 
-                # 保持运行
+                # 保持运行：会话/订阅一旦失效必须退出本循环走重连。
+                # 原来只空转 sleep(1)，服务端断链后 connected 一直停在 True，
+                # 上层（采集/健康/告警）永远把设备当在线。
                 while self._running:
                     await asyncio.sleep(1)
+                    if not self._running:
+                        break
+                    if self.client is None or self.subscription is None \
+                            or not getattr(self.client, 'connected', True):
+                        raise ConnectionError("OPC UA 会话/订阅已失效，触发重连")
 
             except Exception as e:
                 logger.error(f"OPC UA连接异常: {e}，{reconnect_delay:.0f}秒后重连...")
@@ -326,24 +333,36 @@ class OPCUAClient:
             node_name = node_id_str
             node_unit = ""
 
+            node_key = str(node_id_str).replace(' ', '').lower()
             for cfg in self.node_configs:
-                if cfg.get('node_id') == node_id_str:
-                    node_name = cfg.get('name', node_id_str)
+                # 0511：node_id 字符串精确匹配太脆（'ns=2; s=Temp' 带空格或
+                # 大小写不同就静默匹配失败，name/unit 丢失 → 单位换算出错）
+                cfg_key = str(cfg.get('node_id', '')).replace(' ', '').lower()
+                if cfg_key == node_key:
+                    node_name = cfg.get('name') or node_id_str
                     node_unit = cfg.get('unit', '')
                     break
 
             # 更新缓存（round 370 / BUG-024：持锁写）
+            # 0506：质量码与时间戳必须取自服务端 DataValue，不能固定 good/本地时钟
+            dv = getattr(getattr(data, 'monitored_item', None), 'Value', None)
+            status = getattr(dv, 'StatusCode', None)
+            src_ts = getattr(dv, 'SourceTimestamp', None)
+            bad = bool(getattr(status, 'is_bad', lambda: False)())
+            unc = bool(getattr(status, 'is_uncertain', lambda: False)())
             entry = {
                 'value': val,
                 'unit': node_unit,
-                'timestamp': datetime.now().isoformat(),
-                'quality': 'good',
+                'timestamp': (src_ts.isoformat() if src_ts
+                              else datetime.now().isoformat()),
+                'quality': 'bad' if bad else ('uncertain' if unc else 'good'),
                 'node_id': node_id_str
             }
+            # 0512：stats 由 asyncua 回调线程自增、主线程读取，`+=` 是读-改-写，
+            # 跨线程无锁会丢更新 —— 复用缓存锁同一临界区收口。
             with self._data_lock:
                 self.latest_data[node_name] = entry
-
-            self.stats['data_updates'] += 1
+                self.stats['data_updates'] = self.stats.get('data_updates', 0) + 1
 
             # 触发回调（快照：注册回调与事件循环线程可能并发）
             with self._data_lock:
@@ -394,6 +413,7 @@ class OPCUADiscovery:
             # 备用方案：尝试常见端口
             common_ports = [4840, 4841, 4842, 4843]
             for port in common_ports:
+                client = None      # 0507：探测失败也要能拿到已建实例回收
                 try:
                     url = f"opc.tcp://localhost:{port}"
                     client = Client(url=url)
@@ -406,10 +426,15 @@ class OPCUADiscovery:
                         'status': 'online'
                     }
                     servers.append(server_info)
-                    await client.disconnect()
                 except Exception as e:
                     # 安全忽略：端口探测，该端口无 OPC UA 服务属预期内，继续试下一个
                     logger.debug(f"OPC UA 端口探测 {url} 失败: {e}")
+                finally:
+                    if client is not None:
+                        try:
+                            await client.disconnect()   # 超时/失败也要关闭会话
+                        except Exception:               # noqa: BLE001
+                            pass
 
         except Exception as e:
             logger.error(f"OPC UA发现异常: {e}")

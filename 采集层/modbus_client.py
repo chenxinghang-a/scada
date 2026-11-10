@@ -182,8 +182,13 @@ class ModbusClient:
         """成功读取：写入缓存 + 时间戳，并标记本次读取为新鲜数据"""
         # 存副本：调用方拿到的同一个 list 若被原地修改（解码时很常见），
         # 缓存里的"上次好值"会被悄悄改掉，兜底时就返回了被污染的数据。
-        self._last_good_values[cache_key] = list(registers)
-        self._last_good_at[cache_key] = time.monotonic()
+        # 0467：值、时间戳与 last_read_source 必须在同一把锁内更新，否则并发读取
+        # 会看到"新值 + 旧/空时间戳"，或读到与 source 不匹配的组合。
+        with self._stats_lock:
+            self._last_good_values[cache_key] = list(registers)
+            self._last_good_at[cache_key] = time.monotonic()
+            self.last_read_source = 'fresh'
+            self.last_read_ok = True
         # 0467/0476：缓存表不能无界增长（不同 (address,count) 组合会持续累积），
         # 超上限时按时间戳淘汰最旧的一半。
         if len(self._last_good_values) > _MAX_CACHED_RANGES:
@@ -386,7 +391,11 @@ class ModbusClient:
         """
         if file_path is None:
             os.makedirs(self._stats_dir, exist_ok=True)
-            safe_name = (self.device_name or self.device_id or 'unknown').replace('/', '_').replace('\\', '_')
+            # 0477：Windows/POSIX 非法文件名字符一并替换，否则含 : * ? " < > | 的设备名
+            # 在本机写统计文件会直接失败（文件名被截断或报错）。
+            safe_name = str(self.device_name or self.device_id or 'unknown')
+            for _bad_ch in '\\/:*?"<>|':
+                safe_name = safe_name.replace(_bad_ch, '_')
             file_path = os.path.join(
                 self._stats_dir,
                 f"{safe_name}_stats.json"
@@ -558,6 +567,13 @@ class ModbusClient:
 
         slave = self._resolve_slave(slave_id)
         if slave is None:
+            # 0473：从站非法不能静默 return —— 记账、留日志，并把新鲜度置为"无数据"
+            self._inc_stat('total_reads')
+            self._inc_stat('failed_reads')
+            self._log_operation('read_holding_registers', address, count, False, '从站地址非法')
+            with self._stats_lock:
+                self.last_read_source = 'none'
+                self.last_read_ok = False
             return None
         self._inc_stat('total_reads')
 
@@ -569,11 +585,14 @@ class ModbusClient:
             )
 
             if result.isError():
-                # 区分永久错误（配置问题）和瞬态错误（可重试）
-                if isinstance(result, ExceptionResponse) and result.exception_code in _PERMANENT_EXCEPTIONS:
-                    logger.error(f"Modbus 永久错误 (0x{result.exception_code:02X}): {result} — 不重试，检查寄存器配置")
-                else:
+                # 区分永久错误（配置问题）、瞬态错误（可重试）与其它非重试码（0475）
+                code = getattr(result, 'exception_code', None)
+                if isinstance(result, ExceptionResponse) and code in _PERMANENT_EXCEPTIONS:
+                    logger.error(f"Modbus 永久错误 (0x{code:02X}): {result} — 不重试，检查寄存器配置")
+                elif isinstance(result, ExceptionResponse) and code in _TRANSIENT_EXCEPTIONS:
                     logger.warning(f"Modbus 瞬态错误: {result} — 可重试")
+                else:
+                    logger.error(f"Modbus 非重试错误 (exception_code={code!r}): {result}")
                 self._inc_stat('failed_reads')
                 with self._stats_lock:
                     self.stats['last_error'] = str(result)
@@ -581,6 +600,12 @@ class ModbusClient:
                 return self._fallback_to_cache(
                     cache_key, address, count, f'Modbus 错误响应: {result}'
                 )
+
+            # 0480：短应答（寄存器数不足）不能当完整值缓存，后续按 count 解码会索引越界
+            if len(result.registers or []) < count:
+                self._inc_stat('failed_reads')
+                self._log_operation('read_holding_registers', address, count, False, '寄存器数量不足')
+                return self._fallback_to_cache(cache_key, address, count, '寄存器数量不足')
 
             self._inc_stat('successful_reads')
             self._consecutive_failures = 0  # 成功读取，重置失败计数
@@ -657,6 +682,10 @@ class ModbusClient:
             )
 
         if not self.connected:
+            # 0479：未连接同样是一次失败的读，必须计入 total_reads/failed_reads，
+            # 否则失败率、熔断与健康统计长期偏低（监控盲区）。
+            self._inc_stat('total_reads')
+            self._inc_stat('failed_reads')
             return self._fallback_to_cache(
                 cache_key, address, count, '设备未连接'
             )

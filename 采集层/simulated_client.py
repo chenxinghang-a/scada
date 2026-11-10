@@ -341,9 +341,13 @@ def _find_rule(name: str, unit: str, data_type: str = 'uint16') -> dict[str, Any
         elif not unit_lower:
             return rule
 
-    # 按name关键字匹配（忽略unit）
-    for rule in _REGISTER_RULES:
-        if rule['kw'] in name_lower:
+    # 按name关键字匹配（忽略unit）：同样要长关键字优先，否则 flow/speed/pressure
+    # 会按表序抢先命中 inlet_flow / injection_speed / spray_pressure；
+    # 两字符关键字（ph）只认独立词，否则会误命中 phase 之类名称。
+    tokens = name_lower.replace('-', '_').split('_')
+    for rule in candidates:
+        kw = rule['kw']
+        if kw in name_lower and (len(kw) > 2 or kw in tokens):
             return rule
 
     # 按unit兜底：必须精确相等（子串会让 m/s 命中 mm/s、W 命中 kW）
