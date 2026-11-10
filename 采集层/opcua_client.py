@@ -433,8 +433,9 @@ class OPCUADiscovery:
                     if client is not None:
                         try:
                             await client.disconnect()   # 超时/失败也要关闭会话
-                        except Exception:               # noqa: BLE001
-                            pass
+                        except Exception as _e:        # noqa: BLE001
+                            logger.debug("OPC UA 探测后关闭客户端失败: %s", _e,
+                                         exc_info=True)
 
         except Exception as e:
             logger.error(f"OPC UA发现异常: {e}")
