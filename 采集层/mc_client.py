@@ -226,6 +226,8 @@ class MCClient(ByteOrderCapableDecoder):
             except Exception as e:
                 logger.error(f"[MC] 通信异常: {e}")
                 self.stats['last_error'] = str(e)
+                # 非超时异常同样意味着链路不可用
+                self.connected = False
                 return None
 
     def _parse_device_address(self, device: str, address: int) -> tuple[int, int]:

@@ -850,7 +850,6 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
     def read_endpoint(self, endpoint_config: Dict[str, Any]) -> Any:
         """读取端点"""
         self.stats['total_requests'] += 1
-        self.stats['successful_requests'] += 1
         self.stats['last_request_time'] = datetime.now().isoformat()
         
         name = endpoint_config.get('name', 'unknown')
@@ -859,6 +858,8 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
         data = self.behavior_simulator.update(1.0)
         
         # 从行为模拟器获取数据
+        # 只有真正取到读数才算成功：原实现先计成功，后续异常时计数虚高
+        self.stats['successful_requests'] += 1
         value = data.get(name, 50.0)
 
         return round(float(value), 2)

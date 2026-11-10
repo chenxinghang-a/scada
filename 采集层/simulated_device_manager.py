@@ -183,6 +183,8 @@ class SimulatedDeviceManager(IDeviceManager):
         # 必须用 list(...) 快照：别的线程（API 增删设备）正在改这张表，
         # 直接迭代活视图会抛 RuntimeError: dictionary changed size during iteration。
         snapshot = {did: cfg for did, cfg in list(self.devices.items())}
+        # 0592：原始表（含 ${VAR} 占位符）也要快照，回滚时一起还原
+        old_raw = list(getattr(self, '_raw_devices', []) or [])
 
         if not self.load_config():
             # 0591：missing/read/structure 也被统一说成「解析失败」，掩盖真实原因
@@ -196,6 +198,9 @@ class SimulatedDeviceManager(IDeviceManager):
         if not new_ids and old_ids and not allow_empty:
             with self._lock:
                 self.devices = snapshot
+                # 只还原 devices 会让下一次保存写出已解析的新表（占位符丢失）
+                if hasattr(self, '_raw_devices'):
+                    self._raw_devices = list(old_raw)
             reason = ('重载后设备数为 0，已回滚 —— 防止文件被清空时'
                       '现场全部设备停止采集')
             logger.error("设备配置重载被拒绝: %s", reason)
@@ -657,11 +662,15 @@ class SimulatedDeviceManager(IDeviceManager):
                 logger.error(f"不支持的协议: {protocol}，支持: {self.SUPPORTED_PROTOCOLS}")
                 return False
 
-            if device_id in self.devices:
-                logger.warning(f"设备 {device_id} 已存在，将被覆盖")
+            # 判断/摘客户端/写配置必须在同一临界区：两个并发 add_device
+            # 同时进入覆盖分支会交错断开与覆盖。旧配置留底供落盘失败回滚。
+            with self._lock:
+                previous = self.devices.get(device_id) if device_id in self.devices else None
+                if previous is not None:
+                    logger.warning(f"设备 {device_id} 已存在，将被覆盖")
+                old_client = self.clients.pop(device_id, None)
+            if old_client is not None:
                 self.disconnect_device(device_id)
-                with self._lock:
-                    self.clients.pop(device_id, None)
 
             with self._lock:
                 self.devices[device_id] = device_config
