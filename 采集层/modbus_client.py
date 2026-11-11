@@ -189,16 +189,15 @@ class ModbusClient:
             self._last_good_at[cache_key] = time.monotonic()
             self.last_read_source = 'fresh'
             self.last_read_ok = True
-        # 0467/0476：缓存表不能无界增长（不同 (address,count) 组合会持续累积），
-        # 超上限时按时间戳淘汰最旧的一半。
-        if len(self._last_good_values) > _MAX_CACHED_RANGES:
-            ordered = sorted(self._last_good_at.items(), key=lambda kv: kv[1])
-            for key, _ts in ordered[:len(ordered) // 2]:
-                self._last_good_values.pop(key, None)
-                self._last_good_at.pop(key, None)
-        with self._stats_lock:
-            self.last_read_source = 'fresh'
-            self.last_read_ok = True
+            # 0467/0476：缓存表不能无界增长（不同 (address,count) 组合会持续
+            # 累积），超上限时按时间戳淘汰最旧的一半。
+            # 淘汰必须在**同一把锁内**：锁外 sorted/pop 会与并发读竞争；
+            # 原来这里还留了一段锁外重复赋值，等于把 0467 的修复绕过去了。
+            if len(self._last_good_values) > _MAX_CACHED_RANGES:
+                ordered = sorted(self._last_good_at.items(), key=lambda kv: kv[1])
+                for key, _ts in ordered[:len(ordered) // 2]:
+                    self._last_good_values.pop(key, None)
+                    self._last_good_at.pop(key, None)
 
     def _fallback_to_cache(self, cache_key: tuple, address: int, count: int,
                            reason: str) -> list[int] | None:

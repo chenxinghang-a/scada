@@ -62,22 +62,46 @@ def _is_code_line(line: str) -> bool:
     return True
 
 
+#: 纯初始化赋值（`x = None/True/False/0`）几乎不可观测，变异它只会制造
+#: "等价变异体"，把分数压得毫无意义 —— 直接排除。
+_ASSIGN_ONLY = re.compile(
+    r'^\s*(?:self\.)?[\w.\[\]]+\s*=\s*(?:None|True|False|0|0\.0)\s*$')
+
+#: 真正承载语义的行：条件、返回、断言、抛错。
+_KEYWORD = re.compile(r'\b(if|elif|while|return|assert|raise)\b')
+
+
+def _candidates(source: str):
+    """按语义价值给可行变异点排序：条件/返回行优先。"""
+    strong, weak = [], []
+    for idx, line in enumerate(source.splitlines(), 1):
+        if not _is_code_line(line) or _ASSIGN_ONLY.match(line):
+            continue
+        target = strong if _KEYWORD.search(line) else weak
+        for order, (pattern, repl, label) in enumerate(MUTATIONS):
+            if re.search(pattern, line):
+                target.append((idx, order, label, line))
+    return strong, weak
+
+
 def find_mutants(source: str, max_mutants: int = 20) -> list[Mutant]:
-    """在源码里找出可变异点（每个运算符只取第一次出现，保证覆盖面）。"""
+    """挑出**可观测**的变异点：每类运算符只取一次，条件行优先。"""
+    strong, weak = _candidates(source)
     mutants: list[Mutant] = []
     used: set[str] = set()
-    for idx, line in enumerate(source.splitlines(), 1):
-        if not _is_code_line(line):
-            continue
-        for pattern, repl, label in MUTATIONS:
+
+    for pool in (strong, weak):
+        for idx, _order, label, line in pool:
             if label in used:
                 continue
+            pattern, repl, _ = next(m for m in MUTATIONS if m[2] == label)
             new_line, count = re.subn(pattern, repl, line, count=1)
-            if count and new_line != line:
-                mutants.append(Mutant(idx, label, line, new_line))
-                used.add(label)
-        if len(mutants) >= max_mutants:
-            break
+            if not count or new_line == line:
+                continue
+            mutants.append(Mutant(idx, label, line, new_line))
+            used.add(label)
+            if len(mutants) >= max_mutants:
+                return mutants
     return mutants
 
 
@@ -89,7 +113,10 @@ def apply_mutant(source: str, mutant: Mutant) -> str:
 
 
 def run_tests(test_target: str, timeout: int = 120) -> int:
-    cmd = [sys.executable, '-m', 'pytest', test_target, '-q', '--tb=no',
+    # 支持多个测试文件（逗号分隔）：同一处实现的行为用例常常分散在
+    # 「原有用例 + 后续补的针对性用例」两个文件里，只跑一个会低估分数。
+    targets = [t.strip() for t in str(test_target).split(',') if t.strip()]
+    cmd = [sys.executable, '-m', 'pytest', *targets, '-q', '--tb=no',
            '-p', 'no:cacheprovider', '--timeout=60']
     return subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL, timeout=timeout).returncode
