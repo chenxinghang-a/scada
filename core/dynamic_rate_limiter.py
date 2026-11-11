@@ -405,10 +405,18 @@ class DynamicRateLimiter:
             # 直接改 app.config 或 default_limits 参数都不会影响运行中的限流器。
             # 唯一真正生效的入口是 LimitManager.set_default_limits()。
             key_func = getattr(self._flask_limiter, '_key_func', None)
+            # flask-limiter 4.0 把 Limit 的形参名从 `key_func` 改成了 `key_function`
+            # （见 _limits.py:__init__）。照旧名调用会 TypeError，而这个异常
+            # 被下面的 except 吞成一行"下发失败"—— 表现就是：配置改了、日志说
+            # "动态限流调整 A → B"、实际阈值纹丝不动。3.x 仍是 key_func，
+            # 所以按**实际签名**取参数名，两个大版本都能下发。
+            import inspect as _inspect
+            _params = _inspect.signature(Limit.__init__).parameters
+            _key_kw = 'key_function' if 'key_function' in _params else 'key_func'
             new_limits = [
                 Limit(
                     limit_provider=new_limit,
-                    key_func=key_func,
+                    **{_key_kw: key_func},
                 ).bind(self._flask_limiter)
             ]
             self._flask_limiter.limit_manager.set_default_limits(new_limits)
