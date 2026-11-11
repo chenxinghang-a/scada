@@ -7,6 +7,7 @@
 * 模拟客户端：`simulated_client` / `enhanced_simulated_client` 的 64 位读长度
 """
 
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -87,5 +88,6 @@ def test_simulated_float64_read_is_full_width(factory):
     assert len(regs) == 4, f'{factory.__name__} 的 float64 只回了 {len(regs)} 个字'
     value = decode_float64_registers(regs, 'ABCD')
     # 不再是「float32 + 补零」拼出来的假值：必须是有限且与模型量级一致
-    assert value == value                     # 非 NaN
+    assert not math.isnan(value)
+    assert math.isfinite(value)
     assert abs(value) < 1e6

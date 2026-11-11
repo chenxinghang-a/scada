@@ -81,8 +81,9 @@ def _compute_health_snapshot() -> dict[str, Any]:
                 devices = getattr(mgr, 'devices', None)
                 if isinstance(devices, dict):
                     device_config['device_count'] = len(devices)
-    except Exception:      # noqa: BLE001 —— 探测失败不该让健康接口 500
-        pass
+    except Exception as e:      # noqa: BLE001 —— 探测失败不该让健康接口 500
+        logger.debug("读取 device_manager 状态失败（按未失败处理）: %s", e,
+                     exc_info=True)
     if device_config['load_failed']:
         global_status = 'unhealthy'
 
