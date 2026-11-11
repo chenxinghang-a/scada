@@ -50,7 +50,12 @@ def _bare_modbus(n_registers):
     client.validate_address_range = lambda *a, **k: None
     client._inc_stat = lambda key, amount=1: client.stats.__setitem__(
         key, client.stats.get(key, 0) + amount)
-    client._log_operation = lambda *a, **k: None
+    client.operations = []
+
+    def _log(*args, **kwargs):
+        client.operations.append((args, kwargs))
+
+    client._log_operation = _log
     client.client = SimpleNamespace(
         read_holding_registers=lambda **k: _ShortResult(n_registers),
         read_input_registers=lambda **k: _ShortResult(n_registers),
@@ -64,9 +69,16 @@ def test_modbus_short_response_is_failure_on_both_paths(method):
     result = getattr(client, method)(0, 4)
 
     assert result is None, f'{method} 把短应答当成功返回了: {result!r}'
-    assert client.stats['failed_reads'] >= 1
-    assert client.last_read_source in ('none', 'cache')
+    # 精确计数：`>= 1` 会放过"重复计数"的 bug
+    assert client.stats['failed_reads'] == 1
     assert client.stats['successful_reads'] == 0
+    assert client.last_read_source in ('none', 'cache')
+
+    # **关键**：必须因为"寄存器数量不足"而失败。
+    # 只断言 None 的话，旧实现里随便一个 AttributeError 也会是 None ——
+    # 本文件的金丝雀实验（把 f61a6b2^ 的旧实现装回去）正是这样"假通过"的。
+    reasons = ' '.join(str(args) + str(kwargs) for args, kwargs in client.operations)
+    assert '寄存器数量不足' in reasons, f'{method} 的失败原因不是短应答: {reasons}'
 
 
 # ------------------------------------------------------------ simulated 64bit
