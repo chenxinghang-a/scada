@@ -25,9 +25,29 @@ functions:
     name: 急停（E-STOP）时机械类点位强制归零
     standard: [GB/T 21109]
     code: 采集层/simulated_client.py::_estop_override
-    tests: [tests/test_silent_failures_round307.py]
-    status: partial
-    note: "仅仿真客户端验证；真实设备侧由 PLC 自身逻辑保证，本系统只做显示与联锁，需在 SRS 中界定责任边界。"
+    tests: [tests/test_silent_failures_round307.py, tests/test_estop_machinery_scope.py]
+    status: verified
+    note: |
+      责任边界先划清（详见 `文档/安全边界声明.md` §2）：
+      硬急停回路、SIS、保护逻辑由 PLC/SIS 独立完成，不依赖本系统；
+      本系统保证的是**软件侧**行为 —— 急停激活后把「机械类点位」归零。
+      SF-01 断言的就是这个软件侧行为，硬件侧不在本系统的验证范围内。
+
+      本轮补 `tests/test_estop_machinery_scope.py`（20 条）：
+      归零行为（激活归零/工艺量不变/解除恢复/冻结表清空/幂等）
+      + 机械类判定的正反边界。此前 `_estop_override` 与 `_is_machinery`
+      在整个 tests/ 里零引用，这条路径从没被验证过。
+
+      顺带修掉一个真实缺陷：`_is_machinery` 的注释声称用词边界避免了
+      「position 匹配 temperature_position」，但 `(?<![a-z])` 只排除小写字母、
+      `_` 不是字母 —— 防护根本不存在。实测 `temperature_position`、`flow_speed`
+      都被判为机械类，急停时会归零，操作员会把"停机"看成"温度/流量掉零"。
+      已加工艺量排除层修复。
+
+      分层说明：`device_control.emergency_stop` 筛设备用的是
+      `IDeviceManager.get_device_category()`（**设备级**分类）；
+      `_is_machinery` 是**寄存器级**判定。两者独立，本条目覆盖后者。
+
 
   - id: SF-02
     name: 停机设备不产生"正常"读数（质量码降级）
