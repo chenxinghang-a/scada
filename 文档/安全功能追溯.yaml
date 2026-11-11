@@ -102,10 +102,23 @@ functions:
   - id: SF-09
     name: 协议短帧/坏帧不得被当作有效数据
     standard: [GB/T 21109]
-    code: 采集层/mc_client.py::_send_recv
-    tests: [tests/test_mc_client.py, tests/test_sibling_paths_parity.py]
+    code: 采集层/data_collector.py::_collect_device_data_inner
+    tests: [tests/test_mc_client.py, tests/test_sibling_paths_parity.py, tests/test_short_frame_not_faked.py]
     status: partial
-    note: "仅模拟 socket；缺少真实 PLC/网关的异常帧样本库。"
+    note: |
+      本轮补齐了「短帧」这一半 —— 六个用例，覆盖两条**独立实现**的读路径：
+      · 单次读取（<=125 个寄存器）：少给一个 → 该寄存器不产生记录、
+        计 dropped_register_short；
+      · 分块读取（>125）：块内短缺同样丢弃，且 125+5 两块分开验证。
+      重点断言的是「不许补 0」：短帧寄存器**不存在**于结果里，
+      而不是存在一条 value=0 的记录；float32 只回半个字也必须整条丢
+      （否则会解出一个完全错误的小数）。
+      已做变异验证：把 `continue` 改成 `raw + [0]*(size-len(raw))`，
+      4 条用例精确变红，恢复后全绿。
+      仍然 partial 的部分：「坏帧」的传输层形态（CRC 错、超长帧、
+      粘包/拆包）需要真实 PLC/网关的抓包样本 —— 那部分造不出来，
+      没有样本就只能假定客户端库正确。
+
 
   - id: SF-10
     name: 断线期间数据质量降级而不是"沿用上次值当正常值"
