@@ -176,3 +176,5 @@ web:
   #   * 且 `expand_env_vars` 对「未设置且无默认值」的占位符是**保留原文 + 告警**，
   #     这行会让每次加载配置都打一条永远消除不掉的 warning。
   # 已删除。守卫见 tests/test_env_vars_wired.py 的「引用了但无处声明」那组。
+ui:
+  language: zh-CN

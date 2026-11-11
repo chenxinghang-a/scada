@@ -1,0 +1,118 @@
+# 安全相关功能追溯表（骨架，需与需求文档/危害分析对齐后签署）
+#
+# 字段说明：
+#   id        追溯编号（与需求/HAZOP 条目关联）
+#   name      功能描述（面向审核员，不写实现术语）
+#   standard  适用标准族（仅列可能适用的，**适用性必须由安全评估机构确认**）
+#   code      实现位置 `相对路径::可检索符号`
+#   tests     验证用例（文件或 文件::函数）
+#   status    verified=有可复现验证；partial=仅模拟/部分路径；gap=无验证
+#   note      差距说明（审核时必须如实呈现，不能隐藏）
+#
+# 维护规则：新增安全相关功能必须同时加 code 与 tests，否则 `check_traceability.py` 失败。
+
+meta:
+  owner: 待指定（安全负责人）
+  last_review: 2026-11-11
+  standards_reference:
+    - GB/T 20438（等同 IEC 61508，功能安全）
+    - GB/T 21109（等同 IEC 61511，过程工业 SIS）
+    - GB/T 30976（工业控制系统信息安全）
+    - GB/T 22239（网络安全等级保护基本要求）
+
+functions:
+  - id: SF-01
+    name: 急停（E-STOP）时机械类点位强制归零
+    standard: [GB/T 21109]
+    code: 采集层/simulated_client.py::_estop_override
+    tests: [tests/test_silent_failures_round307.py]
+    status: partial
+    note: "仅仿真客户端验证；真实设备侧由 PLC 自身逻辑保证，本系统只做显示与联锁，需在 SRS 中界定责任边界。"
+
+  - id: SF-02
+    name: 停机设备不产生"正常"读数（质量码降级）
+    standard: [GB/T 21109]
+    code: 采集层/simulated_client.py::device_stopped
+    tests: ["tests/test_simulation_profiles*.py"]
+    status: partial
+    note: "质量码语义需与上位机/报表口径一致，当前仅部分用例断言。"
+
+  - id: SF-03
+    name: 控制写入必须"写后回读"且不一致即判失败
+    standard: [GB/T 21109]
+    code: 智能层/device_control.py::write_with_verification
+    tests: [tests/test_write_safety.py, tests/test_write_endpoint_safety.py]
+    status: verified
+    note: "模拟设备回读；真实设备回读逻辑需现场确认字节序与量纲。"
+
+  - id: SF-04
+    name: 未授权/越权用户不得执行控制写入
+    standard: [GB/T 30976, GB/T 22239]
+    code: 用户层/auth.py::role_required
+    tests: [tests/test_security_penetration.py]
+    status: partial
+    note: "有鉴权用例，但缺少系统化的越权矩阵（角色 × 端点）。"
+
+  - id: SF-05
+    name: 报警升级按时间阈值逐级触发，可屏蔽且屏蔽跨重启保持
+    standard: [GB/T 21109]
+    code: 报警层/alarm_escalation.py::record_alarm
+    tests: [tests/test_alarm_restore_on_restart_round314.py, "tests/test_alarm_escalation*.py"]
+    status: verified
+    note: "时钟基准（单调钟/墙钟）已专门处理；DST/回拨场景缺用例。"
+
+  - id: SF-06
+    name: 配置加载失败必须 fail-closed（保留原表，不得以空表启动）
+    standard: [GB/T 21109]
+    code: 采集层/device_manager.py::_load_config_into
+    tests: [tests/test_config_schema_round406.py, tests/test_device_config_reload_safety.py]
+    status: verified
+    note: "结构校验覆盖 devices/alarms；未覆盖\"环境变量注入导致类型变化\"的全路径。"
+
+  - id: SF-07
+    name: 设备删除/覆盖失败必须回滚（不得丢失旧配置）
+    standard: [GB/T 21109]
+    code: 采集层/real_device_manager.py::remove_device
+    tests: [tests/test_real_manager_reload_edges_round408.py]
+    status: partial
+    note: "real/sim/device_manager 三份实现回滚语义不完全一致，需统一后再判定。"
+
+  - id: SF-08
+    name: 退出时未入库数据必须落盘，下次启动可恢复
+    standard: [GB/T 21109]
+    code: 采集层/data_collector.py::stop
+    tests: [tests/test_shutdown_data_preservation.py]
+    status: verified
+    note: "覆盖\"处理线程未退出\"分支；断电（非优雅退出）依赖 SQLite WAL，未做掉电注入验证。"
+
+  - id: SF-09
+    name: 协议短帧/坏帧不得被当作有效数据
+    standard: [GB/T 21109]
+    code: 采集层/mc_client.py::_send_recv
+    tests: [tests/test_mc_client.py, tests/test_sibling_paths_parity.py]
+    status: partial
+    note: "仅模拟 socket；缺少真实 PLC/网关的异常帧样本库。"
+
+  - id: SF-10
+    name: 断线期间数据质量降级而不是"沿用上次值当正常值"
+    standard: [GB/T 21109]
+    code: 采集层/modbus_client.py::_fallback_to_cache
+    tests: [tests/test_modbus_client_decode.py]
+    status: partial
+    note: "`last_read_source` 已暴露，但上层是否据此降质量码取决于调用方，未端到端验证。"
+
+  - id: SF-11
+    name: 报警规则已删除时不得复活为"幽灵报警"并重新升级
+    standard: [GB/T 21109]
+    code: 报警层/alarm_manager.py::_restore_active_alarms
+    tests: [tests/test_fix_plan_simulation.py]
+    status: verified
+    note: "只跳过不清库，规则恢复后可继续；需在运维手册中说明。"
+
+  - id: SF-12
+    name: 时间序列写入的非有限值（NaN/Inf）不得污染库
+    standard: [GB/T 21109]
+    code: timeseries/data_models.py::_sql_number
+    tests: [tests/test_non_finite_input_guard.py]
+    status: verified
+    note: "非有限值写 NULL；前端如何呈现 NULL 未验证。"

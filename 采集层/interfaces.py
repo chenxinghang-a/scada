@@ -223,7 +223,11 @@ class IDeviceManager(ABC):
         from .simulated_client import _is_machinery
         # `registers: null` 是合法的 YAML 写法，直接迭代 None 会 TypeError
         for reg in (device_config.get('registers') or []):
-            if _is_machinery(reg.get('name', '')):
+            # 裸字符串点位是合法写法（topics/registers 都见过），
+            # 直接 `.get` 会让整台设备分类抛 AttributeError。
+            reg_name = (reg.get('name', '') if isinstance(reg, dict)
+                        else str(reg))
+            if _is_machinery(reg_name):
                 return 'mechanical'
 
         # 默认：仪表

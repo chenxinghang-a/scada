@@ -991,13 +991,17 @@ class RealDeviceManager(IDeviceManager):
                 logger.warning("[真实] 移除设备 %s：设备不存在", device_id)
                 return False
             with self._lock:
-                self.clients.pop(device_id, None)
+                # 0596 同型缺陷：客户端也要留底。只还原 devices 会得到
+                # "设备在表里、但连接已断"的半死状态，重连循环也救不回来。
+                removed_client = self.clients.pop(device_id, None)
 
             # round 302：落盘失败要把设备放回去（同 device_manager.remove_device）
             if not self._save_config():
-                if removed is not None:
-                    with self._lock:
+                with self._lock:
+                    if removed is not None:
                         self.devices[device_id] = removed
+                    if removed_client is not None:
+                        self.clients[device_id] = removed_client
                 logger.error("[真实] 移除设备失败：配置落盘失败，已回滚 %s", device_id)
                 return False
 
