@@ -686,7 +686,15 @@ class SimulatedDeviceManager(IDeviceManager):
             # 后果相同：接口回「添加成功」、界面出现设备，重启后消失。
             if not self._save_config():
                 with self._lock:
-                    self.devices.pop(device_id, None)
+                    # 覆盖场景必须还原**旧配置**，不能无条件 pop。
+                    # `previous` 上面已经留底了，回滚时却没用它 ——
+                    # 结果是「覆盖同名设备 + 落盘失败 → 旧设备直接丢失」，
+                    # 而接口只回一句"添加失败"，运维以为只是没加成。
+                    # real_device_manager 的同一段是正确写法（见其 0533 注释）。
+                    if previous is None:
+                        self.devices.pop(device_id, None)
+                    else:
+                        self.devices[device_id] = previous
                     self.clients.pop(device_id, None)
                 logger.error("[模拟] 添加设备失败：配置落盘失败，已回滚 %s", device_id)
                 return False

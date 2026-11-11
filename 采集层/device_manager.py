@@ -928,18 +928,44 @@ class DeviceManager:
     def remove_device(self, device_id: str) -> bool:
         """移除设备"""
         try:
+            # 先留底客户端引用，再 disconnect。
+            #
+            # 本类的 `disconnect_device` 会 `clients.pop()`（real/simulated 两份
+            # 只 `get` 不 pop）—— 这是三份实现里第三处语义差异。等 disconnect
+            # 之后再取 removed_client 永远是 None，回滚就没东西可放。
+            # 这里不改 disconnect 的既有行为（API 的断开接口可能依赖"断开即移除"），
+            # 改成在它之前拿引用。
+            with self._lock:
+                removed_client = self.clients.get(device_id)
+
             self.disconnect_device(device_id)
             # 持锁删除：与 add_device 同理，防「迭代中被删除」
             with self._lock:
                 removed = self.devices.pop(device_id, None)
-                self.clients.pop(device_id, None)
+
+            if removed is None:
+                # 设备本来就不存在：**幂等语义**——不算失败，返回 True。
+                # 与 simulated_device_manager 一致（其注释明确写了
+                # 「删不存在的设备不算失败（既有契约）」），两处既有用例
+                # （test_device_manager / test_simulated_device_manager）也都断言 True。
+                # 但**不要落盘**：原实现照样走 _save_config()，等于每次删空白设备
+                # 都重写一遍配置文件，还可能和读方撞 os.replace。
+                with self._lock:
+                    if removed_client is not None:
+                        self.clients[device_id] = removed_client
+                logger.warning("移除设备 %s：设备不存在", device_id)
+                return True
+
             # round 302：落盘失败要把设备**放回去**，并如实返回 False。
             # 否则「删掉了但文件里还在」—— 重启后设备回来，运维以为见鬼；
             # 而接口当时回的是「已删除」。
+            # 客户端必须一起还原：只还原 devices 会得到「设备在表里、但连接已断」
+            # 的半死状态，采集永远拿不到数据（real/simulated 两份都这么做）。
             if not self._save_config():
-                if removed is not None:
-                    with self._lock:
-                        self.devices[device_id] = removed
+                with self._lock:
+                    self.devices[device_id] = removed
+                    if removed_client is not None:
+                        self.clients[device_id] = removed_client
                 logger.error("移除设备失败：配置落盘失败，已回滚 %s", device_id)
                 return False
 

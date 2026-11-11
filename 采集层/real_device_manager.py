@@ -987,9 +987,16 @@ class RealDeviceManager(IDeviceManager):
             with self._lock:
                 removed = self.devices.pop(device_id, None)
             if removed is None:
-                # 设备本来就不存在：不落盘、不发移除通知，也不报成功
+                # 设备本来就不存在：**幂等语义**——不算失败，返回 True。
+                #
+                # 这里原来返回 False，是三份实现里唯一偏离契约的一个：
+                # simulated_device_manager 明确写着「删不存在的设备不算失败
+                # （既有契约）」，device_manager 与其既有用例也都断言 True。
+                # 契约统一为幂等之后，真实模式与模拟模式下同一个操作才能
+                # 给出同样的结果（否则 API 层一旦改成直接透传返回值，
+                # 换模式就换了语义）。不落盘：配置没变化不该写文件。
                 logger.warning("[真实] 移除设备 %s：设备不存在", device_id)
-                return False
+                return True
             with self._lock:
                 # 0596 同型缺陷：客户端也要留底。只还原 devices 会得到
                 # "设备在表里、但连接已断"的半死状态，重连循环也救不回来。

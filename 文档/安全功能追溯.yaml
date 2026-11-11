@@ -78,9 +78,18 @@ functions:
     name: 设备删除/覆盖失败必须回滚（不得丢失旧配置）
     standard: [GB/T 21109]
     code: 采集层/real_device_manager.py::remove_device
-    tests: [tests/test_real_manager_reload_edges_round408.py]
-    status: partial
-    note: "real/sim/device_manager 三份实现回滚语义不完全一致，需统一后再判定。"
+    tests: [tests/test_real_manager_reload_edges_round408.py, tests/test_manager_rollback_parity.py]
+    status: verified
+    note: "本轮补 tests/test_manager_rollback_parity.py：同一组断言（新增/覆盖/删除
+           × 落盘失败）对三份实现各跑一遍，共 15 条，把「一致」变成可执行约束。
+           修掉三处真实差异：(1) device_manager.remove_device 不还原 clients
+           → 设备在表里但没连接，采集永远拿不到数据；(2) simulated.add_device
+           算了 previous 却没用，覆盖失败时旧配置直接丢失；(3) 删不存在的设备
+           real 返回 False、另两份返回 True（两份既有用例都断言 True），统一为幂等。
+           另修 device_manager 删空设备仍落盘的无谓写。
+           关于 _raw_devices：它在 add_device 里是落盘成功之后才更新的，删除路径
+           不碰它，且 _save_config 按内存表遍历还原占位符 —— 删掉的设备不会被
+           写回，因此**不需要回滚**（已在测试注释里写明，避免后来人误加断言）。"
 
   - id: SF-08
     name: 退出时未入库数据必须落盘，下次启动可恢复
