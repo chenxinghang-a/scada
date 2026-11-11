@@ -61,6 +61,23 @@ _spc_kw = ('temperature', 'pressure', 'humidity', 'viscosity', 'ph', 'concentrat
 _status_kw = ('status', 'state', 'running_status', 'boiler_status', 'packing_status', 'line_status', 'ahu_status', 'compressor_status', 'robot_status', 'welder_status', 'ups_status', 'cems_status')
 _count_kw = ('_count', 'quantity', 'output', 'production', 'yield', 'shot_count', 'painted_count', 'label_count', 'palletizing_count', 'reject_count', 'weld_count', 'part_count', 'inbound_count', 'outbound_count')
 
+#: 「含 _count / quantity 但**不是产量**」的点位，命中即不喂 OEE。
+#:
+#: `_count_kw` 的第一项是裸 `_count`，于是 `connection_count`（连接数）、
+#: `agv_count_active`（在充数）这类当计数用的点位全被当成产量：
+#:   · 连接数在 131~134 之间抖动 → `record_production` 的 delta 计算里
+#:     「变小就按归零重算」的分支被反复触发 → total_count 每轮 +133 左右；
+#:   · good_count 从来没人喂 → quality = 0/N = 0 → **OEE 恒 0**，
+#:     而在界面上看是"设备没生产"，不是"统计被污染"。
+#: 实测 scada_server_01 因此累计了 total_count=6352、defect_count=6352。
+_count_exclude_kw = (
+    'connection_count', 'conn_count', 'connection', 'session_count',
+    'agv_count_active', 'agv_count_charging', 'count_active', 'count_charging',
+    'error_count', 'retry_count', 'fail_count', 'timeout_count', 'drop_count',
+    'alarm_count', 'warning_count', 'restart_count', 'reconnect_count',
+    'online_count', 'offline_count', 'node_count', 'client_count',
+)
+
 # --- 命名常量（替代魔法数字） ---
 BACKOFF_CEILING_S = 60              # 退避上限
 #: 崩溃恢复清单（`pending_data.jsonl` + `_pending`）的硬上限。
@@ -2570,6 +2587,16 @@ class DataCollector:
             return
 
         if not _has_keyword(name_lower, _count_kw):
+            return
+
+        # 先排除「长得像产量、其实是运行指标」的计数：
+        # connection_count / agv_count_active / error_count 之类命中裸 `_count`，
+        # 喂进 OEE 会把 total_count 顶到几千、quality 打到 0（OEE 恒 0%）。
+        if _has_keyword(name_lower, _count_exclude_kw):
+            logger.debug(
+                "OEE 产量跳过非生产计数: device=%s reg=%s value=%r",
+                device_id, name_lower, value,
+            )
             return
 
         count = try_finite_float(value)

@@ -318,6 +318,33 @@ class TestDispatchIntelligence:
         collector._dispatch_intelligence(data)
         oee.record_production.assert_called_once_with('d1', count=100)
 
+    def test_dispatch_oee_skips_non_production_counts(self):
+        """连接数 / 车辆状态计数命中裸 `_count`，但**不能当产量**喂 OEE。
+
+        `_count_kw` 的第一项是裸 `_count`，于是 `connection_count`（连接数）、
+        `agv_count_active`（在充数）全被当成产量。模拟环境实证：
+        scada_server_01 的连接数在 131~134 之间抖动，`record_production` 里
+        「计数变小就按归零重算」的分支被反复触发 → total_count 累计到 6352、
+        good_count 恒 0 → quality = 0 → **OEE 恒 0%**，
+        而界面上看不出是"统计被污染"，只会以为"设备没生产"。
+        """
+        oee = MagicMock()
+        collector = self._make_collector(oee_calculator=oee)
+        for name, val in [('connection_count', 133),
+                          ('agv_count_active', 2),
+                          ('agv_count_charging', 1),
+                          ('error_count', 7),
+                          ('retry_count', 3)]:
+            collector._dispatch_intelligence(
+                {'device_id': 'd1', 'register_name': name,
+                 'value': val, 'timestamp': datetime.now()})
+        oee.record_production.assert_not_called()
+        # 同一批里混一个真产量点位，必须照常喂 —— 排除规则不能误伤
+        collector._dispatch_intelligence(
+            {'device_id': 'd1', 'register_name': 'actual_quantity',
+             'value': 970, 'timestamp': datetime.now()})
+        oee.record_production.assert_called_once_with('d1', count=970)
+
     def test_dispatch_spc_temperature(self):
         """Dispatch routes temperature to SPC analyzer"""
         spc = MagicMock()
