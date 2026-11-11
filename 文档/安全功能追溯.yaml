@@ -49,9 +49,14 @@ functions:
     name: 未授权/越权用户不得执行控制写入
     standard: [GB/T 30976, GB/T 22239]
     code: 用户层/auth.py::role_required
-    tests: [tests/test_security_penetration.py]
-    status: partial
-    note: "有鉴权用例，但缺少系统化的越权矩阵（角色 × 端点）。"
+    tests: [tests/test_security_penetration.py, tests/test_authz_matrix.py]
+    status: verified
+    note: "本轮补 tests/test_authz_matrix.py：12 个代表端点 × 4 角色穷举，59 条用例，
+           并有一条 viewer 写操作兜底清单。所有探测请求都指向不存在的资源
+           （__authz_probe__）或空 payload，鉴权失效也不会产生副作用。
+           已做变异验证（把 viewer 混进 /api/auth/users 的允许名单，精确红在该格）。
+           范围限于 API 层与本系统的页面级 _PAGE_ROLES；真实 PLC/DCS 侧的操作权限
+           由现场系统自身保证，不在本系统断言范围内。"
 
   - id: SF-05
     name: 报警升级按时间阈值逐级触发，可屏蔽且屏蔽跨重启保持

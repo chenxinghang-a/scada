@@ -1823,10 +1823,18 @@
             }
 
             // 健康评分（0~100 分值：数值 + 分级色，与表格分段色条同一套阈值）
-            var score = data.predictive_maintenance && data.predictive_maintenance.avg_health_score;
+            //
+            // 判据两层，缺一不可：
+            //   1) `status === 'available'` —— 后端在**还没算出**评分时返回的是
+            //      `{status:'unavailable', avg_health_score:0}`，那个 0 是占位符不是读数。
+            //      只判数值会把"启动初期没数据"显示成"0 分"（看着像全线崩了）。
+            //   2) `!= null && isFinite` —— 反过来，真的算出 0 分（设备全挂）
+            //      也必须显示 0，不能显示 `--`。原来用 `> 0` 把这种情况吞掉了。
+            var pm = data.predictive_maintenance || {};
+            var score = pm.avg_health_score;
             var scoreEl = document.getElementById('ov-health');
             if (scoreEl) {
-                if (score != null && score > 0) {
+                if (pm.status === 'available' && score != null && isFinite(score)) {
                     scoreEl.textContent = score;
                     scoreEl.className = 'metric-value metric-value--' +
                         (i40HealthLevel(score) === 'excellent' || i40HealthLevel(score) === 'good' ? 'success' :
@@ -1838,13 +1846,15 @@
             }
 
             // OEE（与 85% 目标线对比着色）
-            // 判据用 `!= null` 而不是 `> 0`：0% 是合法读数（真的没生产 / 班次刚开），
-            // 用 `> 0` 会把它显示成 `--%`，看起来像"后端没给数据"，
-            // 而同一个后端值在大屏那边显示的是 `0%` —— 两屏对同一事实给了两种说法。
-            var oee = data.oee && data.oee.avg_oee_percent;
+            // 同健康评分：`status` 决定"有没有数据"，数值决定"好不好"。
+            // 原来只看 `> 0`，把两件事混成一件 —— 0% 既可能是"真的没生产"
+            // 也可能是"后端没算"，前端一律显示 `--%`，而大屏那边显示 0%，
+            // 同一个后端值两屏两种说法。
+            var oeeMod = data.oee || {};
+            var oee = oeeMod.avg_oee_percent;
             var oeeEl = document.getElementById('ov-oee');
             if (oeeEl) {
-                if (oee != null && isFinite(oee)) {
+                if (oeeMod.status === 'available' && oee != null && isFinite(oee)) {
                     oeeEl.textContent = oee + '%';
                     oeeEl.className = 'metric-value metric-value--' +
                         (oee >= I40_OEE_TARGET ? 'success' : oee >= 65 ? 'warning' : 'danger');
@@ -1855,10 +1865,14 @@
             }
 
             // 能源
-            var power = data.energy && data.energy.total_power_kw;
-            safeText('ov-power', (power != null && isFinite(power)) ? power : '--');
-            var carbon = data.energy && data.energy.carbon_emission_kg;
-            safeText('ov-carbon', (carbon != null && carbon > 0) ? carbon : '--');
+            // 0 kW / 0 kg 都是合法读数（没开工、全绿电），不能当"没数据"；
+            // 是否"有数据"一律看 status。
+            var enMod = data.energy || {};
+            var enOk = enMod.status === 'available';
+            var power = enMod.total_power_kw;
+            safeText('ov-power', (enOk && power != null && isFinite(power)) ? power : '--');
+            var carbon = enMod.carbon_emission_kg;
+            safeText('ov-carbon', (enOk && carbon != null && isFinite(carbon)) ? carbon : '--');
 
             // 维护建议：等级只用左侧色条表达
             var alerts = data.predictive_maintenance && data.predictive_maintenance.recent_alerts;

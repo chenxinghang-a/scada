@@ -363,7 +363,7 @@ async function loadData() {
             const ov = await apiFetch('/industry40/overview');
             if (gen !== loadGeneration) return;
             if (ov && ov.data && ov.data.oee) {
-                updateOeeKpi(ov.data.oee.avg_oee_percent);
+                updateOeeKpi(ov.data.oee);   // 传整个模块：status 决定有无数据，数值决定好坏
             }
         }
 
@@ -428,13 +428,17 @@ function retryDeviceLoad() {
 }
 
 // ========== KPI 更新 ==========
-// OEE 卡片：0% 是合法读数（班次刚开/真的没生产），不能当成"没数据"显示 `--%`。
-// 与 industry40.html 的 ov-oee 保持同一口径：`!= null && isFinite` 才画数值。
+// OEE 卡片：判"有没有数据"看 status，判"好不好"看数值。
+// `/api/industry40/overview` 在还没算出 OEE 时返回
+// `{status:'unavailable', avg_oee_percent:0}` —— 那个 0 是占位符；
+// 而真的算出 0%（班次刚开 / 没产量）又必须显示 0 而不是 `--%`。
+// 只看数值会把这两种情况混成一个。
 let oeePollTick = 0;
-function updateOeeKpi(v) {
+function updateOeeKpi(mod) {
     const el = document.getElementById('kpi-oee-val');
     if (!el) return;
-    const ok = (v !== null && v !== undefined) && isFinite(v);
+    const v = mod ? mod.avg_oee_percent : null;
+    const ok = !!mod && mod.status === 'available' && v != null && isFinite(v);
     el.textContent = ok ? (Math.round(v * 10) / 10) + '%' : '--%';
     const card = document.getElementById('kpi-oee');
     if (card) {

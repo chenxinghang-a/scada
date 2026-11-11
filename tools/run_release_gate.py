@@ -34,6 +34,12 @@ from datetime import datetime, timezone
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, 'build')
 
+# 让函数内 `from core.safe_numeric import ...` 能正常工作。
+# run_full_suite.py 一直有这行，本文件此前没有 —— 因为它从没 import 过项目内模块，
+# 直到这一轮把变异得分的裸 float() 换成 try_finite_float 才暴露出来：
+# 不加这行直接 ModuleNotFoundError，整个闸门崩在 mutation 这一关。
+sys.path.insert(0, ROOT)
+
 # Windows 控制台默认 GBK：打印子进程输出里的中文/替换字符会直接抛
 # UnicodeEncodeError，把"闸门失败"变成"脚本崩溃"。
 try:

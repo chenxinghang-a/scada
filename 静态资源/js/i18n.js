@@ -61,8 +61,19 @@
     });
   }
 
-  /** 切换语言并落盘 */
-  function apply(lang) {
+  /** 加载语言并渲染。
+   *
+   * @param {string} lang
+   * @param {boolean} [persist] 是否把语言写回**部署默认值**（system.yaml 的 ui.language）。
+   *
+   * 只有用户主动切换时才该落盘。原实现不看调用来源，一律 PUT ——
+   * 而 DOMContentLoaded 也会调本函数，于是**每打开一个页面就写一次
+   * system.yaml**。巡检 10 个页面就是 10 次 YAML 原子写，
+   * 并发时 `os.replace` 会撞上读方，实测偶发 500
+   * （`界面默认语言保存失败: zh-CN`，耗时 0.93s = 正常值的 10 倍）。
+   * 加载页面不该产生写副作用。
+   */
+  function apply(lang, persist) {
     return fetch('/api/i18n/' + encodeURIComponent(lang || ''), {
       headers: { 'Accept': 'application/json' }
     })
@@ -85,17 +96,20 @@
         document.dispatchEvent(new CustomEvent('scada:language-changed', {
           detail: { language: current, messages: messages }
         }));
-        // BUG-100：写回后端部署默认值，换浏览器打开也是同一种语言。
-        // 未登录（登录页）会 401，属预期 —— 本地切换已生效，忽略即可。
-        var token = window.localStorage.getItem('auth_token');
-        fetch('/api/i18n', {
-          method: 'PUT',
-          headers: Object.assign(
-            { 'Content-Type': 'application/json' },
-            token ? { 'Authorization': 'Bearer ' + token } : {}
-          ),
-          body: JSON.stringify({ language: current })
-        }).catch(function () { /* 写回失败不影响本地切换 */ });
+        // 写回后端部署默认值（换浏览器打开也是同一种语言）。
+        // 只在用户**主动切换**时做 —— 页面加载不写盘，见函数开头说明。
+        // 未登录（登录页）会 401，属预期：本地切换已生效，忽略即可。
+        if (persist) {
+          var token = window.localStorage.getItem('auth_token');
+          fetch('/api/i18n', {
+            method: 'PUT',
+            headers: Object.assign(
+              { 'Content-Type': 'application/json' },
+              token ? { 'Authorization': 'Bearer ' + token } : {}
+            ),
+            body: JSON.stringify({ language: current })
+          }).catch(function (e) { console.warn('[i18n] 写回默认语言失败（本地已切换）', e); });
+        }
         return current;
       })
       .catch(function (e) {
