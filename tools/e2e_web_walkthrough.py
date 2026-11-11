@@ -126,8 +126,8 @@ def attach_listeners(page, rec: Recorder, entry: dict):
         try:
             if "/api/" in r.url:
                 cur().setdefault("api_calls", []).append(r.url.split("?")[0])
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] 忽略异常 {type(e).__name__}: {e}")
 
     def on_response(resp):
         # 先把记录建好再抓 body：resp.text() 对已消费/无体的响应会抛异常，
@@ -147,8 +147,8 @@ def attach_listeners(page, rec: Recorder, entry: dict):
             ct = resp.headers.get("content-type", "")
             if "json" in ct or "text" in ct:
                 item["body"] = resp.text()[:200]
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] 忽略异常 {type(e).__name__}: {e}")
 
     page.on("request", on_request)
     page.on("console", on_console)
@@ -245,8 +245,8 @@ def collect_nav(page, rec: Recorder) -> list[dict]:
                 text = (el.inner_text() or "").strip()
                 if href and not href.startswith("#") and href not in ("/logout",):
                     items.append({"href": href, "text": text})
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                print(f"  [warn] 忽略异常 {type(e).__name__}: {e}")
     except Exception as e:  # noqa: BLE001
         rec.log(f"导航抓取失败: {e}")
     seen, out = set(), []

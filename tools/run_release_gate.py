@@ -39,8 +39,12 @@ BUILD = os.path.join(ROOT, 'build')
 try:
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-except Exception:      # noqa: BLE001 —— 老解释器/非 TTY 忽略
-    pass
+except Exception as e:      # noqa: BLE001 —— 老解释器/非 TTY
+    # 不能静默 `pass`（仓库有静态检查禁止，也确实是坏习惯）：
+    # 这句话本身就是给"编码出问题"兜底的，静默吞掉等于下次再出同样的坑
+    # 还是查不到。用 os.write 写 fd 2 —— 此刻 sys.stderr 自己可能就是问题源，
+    # 走它反而会二次抛异常。
+    os.write(2, f'[warn] 控制台编码设置失败（继续执行）: {e}\n'.encode('utf-8', 'replace'))
 
 #: 关键模块行覆盖率下限（按风险定，不搞"全局 70% 就算过"）
 COVERAGE_GATES = {
@@ -138,10 +142,12 @@ def gate_mutation() -> dict:
         line = next((l for l in proc.stdout.splitlines() if l.startswith('module=')), '')
         score = 0.0
         if 'score=' in line:
-            try:
-                score = float(line.split('score=')[1].strip().rstrip('%'))
-            except ValueError:
-                score = 0.0
+            # 用 try_finite_float 而不是裸 float()：`float('inf')` / `float('nan')`
+            # 一个不抛、一个抛的是别的类型；变异得分是"闸门是否放行"的依据，
+            # 解析出脏值必须当成 0（= 不过），不能让它静默通过或炸掉整个闸门。
+            from core.safe_numeric import try_finite_float
+            _raw = try_finite_float(line.split('score=')[1].strip().rstrip('%'))
+            score = _raw if _raw is not None else 0.0
         passed = score >= minimum
         ok = ok and passed
         results.append(f'{module}: {score:.0f}% (下限 {minimum}%) '

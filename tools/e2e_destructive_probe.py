@@ -76,8 +76,8 @@ def main() -> int:
                 if has_modal:
                     try:
                         rec["modal_text"] = page.locator(".modal.show").first.inner_text()[:300]
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as e:  # noqa: BLE001
+                        print(f"  [warn] 忽略异常 {type(e).__name__}: {e}")
 
                 safe = "".join(c if c.isalnum() else "_" for c in label)
                 shot = OUT / f"{safe}.png"
