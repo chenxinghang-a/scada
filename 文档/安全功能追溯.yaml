@@ -33,9 +33,22 @@ functions:
     name: 停机设备不产生"正常"读数（质量码降级）
     standard: [GB/T 21109]
     code: 采集层/simulated_client.py::device_stopped
-    tests: ["tests/test_simulation_profiles*.py"]
+    tests: ["tests/test_simulation_profiles*.py", tests/test_realtime_quality_persistence.py, tests/test_data_collector.py]
     status: partial
-    note: "质量码语义需与上位机/报表口径一致，当前仅部分用例断言。"
+    note: |
+      本轮把口径**显式化**了：`文档/质量码口径.md` 一张表写清
+      「代码里怎么判 / 库里怎么存 / 前端怎么画」，包括判定优先级与三个
+      定义了但从不产生的码（104/80/8）。
+      代码层面已确认的核心：设备 status 为 offline/disconnected 时，
+      `assess()` 的第一条分支就返回 BAD_COMM_FAILURE(6)，不会因为
+      "值看起来很合理"而给 GOOD；采集层的 stale 降级只在 `quality == GOOD`
+      时生效，不会把已判 BAD 的值"升级"成 UNCERTAIN。
+      仍然 partial 的原因不是代码，而是**口径需要外部确认**，四条见文档 §5：
+      ①「不确定」是否要拆成通信类/设备类；② 5 分钟卡死窗口与千分之一阈值
+      是否适配现场采样周期与量程；③ BAD 是否要参与报警；
+      ④ 入库时"缺 quality 默认 GOOD"（乐观默认，与其它地方的 fail-closed 相反）
+      是否还有调用方依赖。
+
 
   - id: SF-03
     name: 控制写入必须"写后回读"且不一致即判失败
