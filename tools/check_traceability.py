@@ -115,6 +115,29 @@ def main(argv=None) -> int:
         if note:
             print(f'        说明: {note}')
 
+    # id 必须连续无缺口（SF-01..SF-NN）。
+    #
+    # 为什么要单独查这个：按位置切片改 yaml 时，很容易把**夹在中间的一条整段删掉**，
+    # 而 status 计数只是"少一条 verified"——看起来跟"某条从 verified 变成 partial"
+    # 差不多，不会报警。本轮真的发生过一次：更新 SF-09 时把 SF-10 一起切掉了，
+    # 表里只剩 11 条、check 仍报"结构完整"，是靠"提交信息写的数字和实际对不上"
+    # 才发现的。这条断言把那种失误变成硬错误。
+    import re as _re
+    _nums = []
+    for item in functions:
+        m = _re.fullmatch(r'SF-(\d+)', str(item.get('id') or ''))
+        if m:
+            _nums.append(int(m.group(1)))
+    if _nums:
+        _missing = sorted(set(range(1, max(_nums) + 1)) - set(_nums))
+        _dup = sorted({n for n in _nums if _nums.count(n) > 1})
+        if _missing:
+            print('\n  [ID 缺口] 缺少: ' + ', '.join('SF-%02d' % n for n in _missing))
+            errors += 1
+        if _dup:
+            print('\n  [ID 重复] ' + ', '.join('SF-%02d' % n for n in _dup))
+            errors += 1
+
     print(f'\n统计：verified={len(functions) - gaps - partial} '
           f'partial={partial} gap={gaps} 结构错误={errors}')
     if errors:
