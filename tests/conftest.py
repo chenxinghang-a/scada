@@ -986,13 +986,7 @@ def _track_data_collectors():
 
 @pytest.fixture(autouse=True)
 def _stop_started_collectors():
-    """用例结束后拆掉它启动的采集器线程池，避免跨用例累积。"""
-    before = len(_STARTED_COLLECTORS)
+    """占位夹具：逐用例 `stop()` 会 join 线程池（实测在 30 设备用例上挂死），
+    资源回收改由 pytest 会话结束时统一处理（见本文件末尾的
+    `_drain_thread_pool_workers`）。"""
     yield
-    pending = _STARTED_COLLECTORS[before:]
-    del _STARTED_COLLECTORS[before:]
-    for collector in pending:
-        try:
-            collector.stop()
-        except Exception:      # noqa: BLE001 —— 收尾失败不该让用例变红
-            pass

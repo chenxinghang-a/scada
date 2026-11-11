@@ -176,6 +176,18 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                 return True
         return False
 
+    @property
+    def _stop_event(self) -> threading.Event:
+        """可被 disconnect 立刻唤醒的等待事件。
+
+        惰性创建：兼容 `__new__` 构造/反序列化的实例（这类实例没有走 __init__）。
+        """
+        ev = self.__dict__.get('_stop_event_obj')
+        if ev is None:
+            ev = threading.Event()
+            self.__dict__['_stop_event_obj'] = ev
+        return ev
+
     def connect(self) -> bool:
         """连接设备（支持连接失败模拟）"""
         # 模拟连接失败
@@ -191,6 +203,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
 
         self.connected = True
         self._running = True
+        self._stop_event.clear()
         self._consecutive_failures = 0
         self.behavior_simulator.start()
 
@@ -209,9 +222,10 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         """断开连接（安全停止更新线程）"""
         self._running = False
         self.connected = False
+        self._stop_event.set()
         self.behavior_simulator.stop()
         if hasattr(self, '_update_thread') and self._update_thread and self._update_thread.is_alive():
-            self._update_thread.join(timeout=3)
+            self._update_thread.join(timeout=2)
         logger.info(f"[增强模拟] 设备 {self.device_name} 已断开")
 
     def _update_loop(self):
@@ -229,10 +243,12 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                 with self._data_lock:
                     self._latest_data = data
 
-                time.sleep(1.0)
+                # 必须可被 disconnect 立刻唤醒：固定 sleep(1) 会让
+                # 每台设备的 join 白等最多 1 秒，30 台设备就是 30 秒（测试超时）
+                self._stop_event.wait(1.0)
             except Exception as e:
                 logger.error(f"[增强模拟] 更新异常: {e}")
-                time.sleep(1)
+                self._stop_event.wait(1)
     
     def read_holding_registers(self, address: int, count: int,
                                slave_id: Optional[int] = None) -> Optional[List[int]]:
@@ -286,7 +302,10 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                             int(round(raw)), self.byte_order,
                             signed=data_type == 'int32'))
                     else:
-                        results.append(int(round(raw)) & 0xFFFF)
+                        # 按 width 补齐（float64 占 4 字，只补 1 字会让 results
+                        # 短于 count，后续点位整体错位）
+                        word = int(round(raw)) & 0xFFFF
+                        results.extend([word] + [0] * (width - 1))
                 i += width
             return results[:count]
 

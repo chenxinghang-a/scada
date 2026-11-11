@@ -500,8 +500,9 @@ class SimulatedDeviceManager(IDeviceManager):
             elif data_type in ('bool', 'boolean', 'coil'):
                 ok = client.write_single_coil(address, bool(value))
             else:
+                # 单寄存器写入：按 16 位掩码下发（负值/超量程不能原样丢给设备）
                 word = int(round(raw_value)) & 0xFFFF
-            ok = client.write_single_register(address, word)
+                ok = client.write_single_register(address, word)
         except Exception as e:          # noqa: BLE001
             logger.error("[模拟] 设备 %s 调节 %s 失败: %s", device_id, register_name, e)
             return {'success': False, 'message': str(e)}
@@ -668,8 +669,11 @@ class SimulatedDeviceManager(IDeviceManager):
                 previous = self.devices.get(device_id) if device_id in self.devices else None
                 if previous is not None:
                     logger.warning(f"设备 {device_id} 已存在，将被覆盖")
-                old_client = self.clients.pop(device_id, None)
+                old_client = self.clients.get(device_id)
             if old_client is not None:
+                # 必须走 disconnect_device（它负责关连接 + 停模拟线程 + 清池）；
+                # 先把客户端摘掉再调它，会让它 get 到 None 而直接返回 ——
+                # 旧客户端带着推送线程被静默遗弃，后续 join 永远等不到。
                 self.disconnect_device(device_id)
 
             with self._lock:

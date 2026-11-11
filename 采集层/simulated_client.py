@@ -713,7 +713,10 @@ class SimulatedModbusClient(ModbusClientInterface):
                                 int(round(raw_value)), self.byte_order,
                                 signed=data_type == 'int32'))
                         else:
-                            results.append(int(round(raw_value)) & 0xFFFF)
+                            # 按 width 补齐：float64 占 4 个字，只补 1 个会让
+                            # results 短于 count，后续点位全部错位
+                            word = int(round(raw_value)) & 0xFFFF
+                            results.extend([word] + [0] * (width - 1))
                     else:
                         results.extend([0] * width)
                 i += width
