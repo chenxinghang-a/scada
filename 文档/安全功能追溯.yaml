@@ -158,6 +158,30 @@ functions:
       CRC/超长帧的校验就变成本仓库的责任，那时需要补对应测试；
       当前依赖 pymodbus，这部分不在范围内。
 
+  - id: SF-10
+    name: 断线期间数据质量降级而不是"沿用上次值当正常值"
+    standard: [GB/T 21109]
+    code: 采集层/modbus_client.py::_fallback_to_cache
+    tests: [tests/test_modbus_stale_data.py, tests/test_realtime_quality_persistence.py, tests/test_data_collector.py]
+    status: verified
+    note: |
+      降级有两条路径，都已验证：
+      (1) Modbus 读失败 → 客户端用缓存兜底 → 采集层 _mark_stale 打 stale 标记
+          + 用缓存原始时刻做时间戳 → assess() 在 quality==GOOD 时降为
+          UNCERTAIN_LAST_USABLE(64)。覆盖见 test_modbus_stale_data.py 的
+          test_collect_modbus_flags_stale_item 与 test_realtime_quality_persistence.py。
+      (2) 设备 status 为 offline/disconnected → assess() 直接返回
+          BAD_COMM_FAILURE(6)，且这条判定在 stale 之前，不会被"升级"成 UNCERTAIN
+          （代码有显式注释）。OPC UA / REST / MQTT 没有 last_read_source，靠的正是这条。
+      端到端实测（本轮手工，可复现）：POST /api/devices/vibration_sensor_01/disconnect
+      后连续观察 22 秒 —— bearing_temperature 的 timestamp 冻在断开那一刻、
+      value 不变、quality 仍是断开前的 192。也就是说断线后不再产生新记录，
+      而不是"拿旧值配新时间戳入库"；前端卡片同时切到「离线」
+      （deviceStateInfo 的 connected=false 分支）。
+      剩余风险：真实 PLC 的「半开连接」（TCP 仍通、设备不响应）未验证 ——
+      那种情况下 read 会阻塞到超时，行为取决于现场超时配置，需上真机。
+
+
   - id: SF-11
     name: 报警规则已删除时不得复活为"幽灵报警"并重新升级
     standard: [GB/T 21109]
