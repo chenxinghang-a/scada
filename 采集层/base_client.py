@@ -161,6 +161,28 @@ def encode_float32_registers(value: float, byte_order: str = 'ABCD') -> list[int
     return [w_hi, w_lo]
 
 
+def encode_float64_registers(value: float, byte_order: str = 'ABCD') -> list[int]:
+    """按字节序把 float64 编码成四个寄存器（``decode_float64_registers`` 的严格逆）。
+
+    没有独立 64 位编码器的后果：模拟设备只能拿 float32 编码 + 补零冒充，
+    解码出来是一个"像样的错误值"，比直接失败更难发现。这里按解码器的
+    四种重排逐一求逆，保证 `decode(encode(v)) == v`（有往返测试钉住）。
+    """
+    raw = struct.pack('>d', float(value))
+    w0, w1, w2, w3 = struct.unpack('>HHHH', raw)
+
+    if hasattr(byte_order, 'value'):
+        byte_order = byte_order.value
+    order = str(byte_order or 'ABCD').upper()
+    if order == 'BADC':
+        return [w1, w0, w3, w2]
+    if order == 'CDAB':
+        return [w2, w3, w0, w1]
+    if order == 'DCBA':
+        return [_swap16(w3), _swap16(w2), _swap16(w1), _swap16(w0)]
+    return [w0, w1, w2, w3]
+
+
 def encode_int32_registers(value: int, byte_order: str = 'ABCD',
                            signed: bool = True) -> list[int]:
     """按字节序把 32 位整数编码成两个寄存器（``decode_int32/uint32`` 的逆运算）。"""

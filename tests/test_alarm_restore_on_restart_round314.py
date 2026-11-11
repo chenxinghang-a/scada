@@ -61,6 +61,10 @@ def _manager(db):
     m.broadcast_system = MagicMock()
     m.broadcast_system.enabled = True
     m._websocket_emit = MagicMock()
+    # 生产顺序是「load_config() → _restore_active_alarms()」；单测为了只装
+    # 必要依赖，先构造再补规则，因此这里再触发一次恢复（函数是幂等的：
+    # 已恢复的 key 会被跳过）。这样仍然验证的是同一条恢复路径。
+    m._restore_active_alarms()
     return m
 
 

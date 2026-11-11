@@ -692,7 +692,18 @@ class ModbusClient:
 
         slave = self._resolve_slave(slave_id)
         if slave is None:
-            return None
+            # 与 read_holding_registers 对齐：非法从站也是一次失败的读，
+            # 不计入统计会让失败率/熔断长期偏低，且调用方仍看到上一次的 fresh。
+            self._inc_stat('total_reads')
+            self._inc_stat('failed_reads')
+            with self._stats_lock:
+                self.last_read_source = 'none'
+                self.last_read_ok = False
+            self._log_operation('read_input_registers', address, count,
+                                False, '从站地址非法')
+            return self._fallback_to_cache(
+                cache_key, address, count, '从站地址非法'
+            )
         self._inc_stat('total_reads')
 
         try:
@@ -708,6 +719,14 @@ class ModbusClient:
                 self._log_operation('read_input_registers', address, count, False, str(result))
                 return self._fallback_to_cache(
                     cache_key, address, count, f'Modbus 错误响应: {result}'
+                )
+
+            if len(result.registers or []) < count:
+                self._inc_stat('failed_reads')
+                self._log_operation('read_input_registers', address, count,
+                                    False, '寄存器数量不足')
+                return self._fallback_to_cache(
+                    cache_key, address, count, '寄存器数量不足'
                 )
 
             self._inc_stat('successful_reads')

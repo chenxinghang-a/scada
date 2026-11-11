@@ -23,6 +23,7 @@ from .base_client import (
     PushClientInterface,
     decode_float64_registers,
     encode_float32_registers as _encode_float32_registers,
+    encode_float64_registers,
     encode_int32_registers,
     reorder_32_words,
 )
@@ -767,9 +768,10 @@ class SimulatedModbusClient(ModbusClientInterface):
                 int(round(raw_value)), self.byte_order,
                 signed=data_type == 'int32')
         elif data_type in ('float64', 'int64', 'uint64'):
-            # 64 位编码器尚未提供（需硬件确认字序），先按 4 字补零占位
-            words = encode_float32_registers(raw_value, self.byte_order)
-            return words + [0] * max(0, count - len(words))
+            # 用真编码器（decode_float64_registers 的逆）；不再拿 float32+补零
+            # 冒充 —— 那会让解码得到"看似合理"的错误值。
+            regs = encode_float64_registers(float(raw_value), self.byte_order)
+            return regs + [0] * max(0, count - len(regs))
         else:
             # uint16 / int16 等单字类型：按实际 count 补齐，不再伪装成 float32
             word = int(round(raw_value)) & 0xFFFF

@@ -25,7 +25,11 @@ import threading
 import time
 from typing import Any
 
-from .base_client import ModbusClientInterface, ByteOrderCapableDecoder
+from .base_client import (
+    ByteOrderCapableDecoder,
+    ModbusClientInterface,
+    encode_float32_registers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +209,16 @@ class MCClient(ByteOrderCapableDecoder):
                         break
                     resp_data += chunk
                     remaining -= len(chunk)
+
+                # 数据段必须收满：`recv` 循环在 `not chunk` 时会 break，
+                # 半帧（如 4/8 字节）此前会被当成功解析，得到"像样的错误值"。
+                if len(resp_data) != resp_data_len:
+                    logger.error("[MC] 响应数据不完整：声明 %d 字节，实收 %d",
+                                 resp_data_len, len(resp_data))
+                    self.stats['failed_reads'] += 1
+                    # 流已失步，继续读只会错位：断开等重连
+                    self.connected = False
+                    return None
 
                 # 检查完成码
                 if len(resp_data) < 2:
@@ -571,10 +585,15 @@ class MCClient(ByteOrderCapableDecoder):
         return None
 
     def write_float32(self, device: str, address: int, value: float) -> bool:
-        """写入32位浮点数"""
-        raw = struct.pack('<f', value)
-        words = struct.unpack('<HH', raw)
-        return self.write_words(device, address, list(words))
+        """写入32位浮点数（与 `read_float32` 严格互逆）。
+
+        round 405：原来硬编码 `<f`（等价只支持 ABCD），配成 CDAB/BADC/DCBA
+        的设备写进去与读回来不一致 —— 设定值写入"成功"但值完全不同。
+        """
+        order = self.config.get('byte_order', 'ABCD')
+        words = encode_float32_registers(float(value), order)
+        # 三菱是**低字在前**：基类编码给的是高字在前，写入前换回来
+        return self.write_words(device, address, [words[1], words[0]])
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""

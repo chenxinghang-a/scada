@@ -699,6 +699,19 @@ class AlarmManager:
                 continue
             key = (alarm_id, device_id, register_name)
 
+            # 规则可能在停机期间被删除/禁用（运维常见操作）。库里遗留的
+            # `cleared = 0` 行此时**没有任何规则再会来收尾它**：复活后会变成
+            # 永久"未知报警"，未确认的还会重新进入 300/900/1800s 升级链。
+            # 这类孤立行直接收尾，不复活、不升级。
+            if (getattr(self, '_config_loaded', False)
+                    and alarm_id not in self.rules):
+                logger.warning(
+                    "恢复报警 %s/%s/%s：对应规则已不存在，直接收尾（不复活）",
+                    alarm_id, device_id, register_name)
+                # 只跳过，**不清库**：规则可能只是临时被注释/改名，重新加回后
+                # 这条报警应当能继续被恢复；提前清掉会永久丢掉现场记录。
+                continue
+
             ts = _to_dt(row.get('timestamp'))
             if ts is None:
                 # 静默用 now 会把首次触发时刻重置，升级计时被推后且无痕迹
@@ -1496,6 +1509,8 @@ class AlarmManager:
             with self._state_lock:
                 self.rules = new_rules
                 self._deadbands = new_deadbands
+                #: 配置确实加载成功过 —— 恢复时据此区分"规则被删"与"尚未加载配置"
+                self._config_loaded = True
             if removed:
                 logger.info("报警规则重载：配置里已删除 %d 条（内存同步移除）: %s",
                             len(removed), removed)

@@ -66,9 +66,30 @@ def _compute_health_snapshot() -> dict[str, Any]:
     else:
         global_status = 'healthy'
 
+    # 设备配置加载失败（坏 YAML/顶层非映射）：进程会以 0 台设备继续跑，
+    # 采集与联锁全空，但探活此前照样回 healthy。这里必须让它变 unhealthy。
+    device_config: dict[str, Any] = {'load_failed': False, 'device_count': None}
+    try:
+        from flask import current_app, has_app_context
+        if has_app_context():
+            mgr = getattr(current_app, 'device_manager', None)
+            if mgr is not None:
+                # 只认真正的 True：测试/替身把该属性做成 MagicMock 时，
+                # bool(Mock) 恒为真会让健康检查无端变红。
+                device_config['load_failed'] = (
+                    getattr(mgr, 'config_load_failed', False) is True)
+                devices = getattr(mgr, 'devices', None)
+                if isinstance(devices, dict):
+                    device_config['device_count'] = len(devices)
+    except Exception:      # noqa: BLE001 —— 探测失败不该让健康接口 500
+        pass
+    if device_config['load_failed']:
+        global_status = 'unhealthy'
+
     return {
         'version': get_version(),
         'global_status': global_status,
+        'device_config': device_config,
         'modules': modules_status,
         'checks': health_status,
         'unhealthy_modules': unhealthy_modules,

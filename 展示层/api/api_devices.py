@@ -5,6 +5,7 @@
 
 from typing import Any
 import logging
+import threading
 from functools import wraps
 from flask import Blueprint, jsonify, request, current_app
 
@@ -21,6 +22,20 @@ devices_bp = Blueprint('api_devices', __name__, url_prefix='/api')
 
 _require_auth = jwt_required
 _require_engineer = role_required('admin', 'engineer')
+
+#: `配置/devices.yaml` 的「读 → 改 → 落盘」必须串行：并发写入时后保存者会
+#: 用自己读到的旧快照覆盖前者刚写入的内容（丢设备/丢改动）。与
+#: `api_alarms._ALARM_CONFIG_LOCK` 同构。
+_DEVICE_CONFIG_LOCK = threading.RLock()
+
+
+def _serialize_device_config(fn):
+    """把设备配置的读改写整段串行化（只用于写接口）。"""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _DEVICE_CONFIG_LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 # ==================== 设备管理API ====================
@@ -588,6 +603,7 @@ def _sanitize_text_field(value, field_label: str, *, max_len: int = 200) -> str:
 
 @devices_bp.route('/devices', methods=['POST'])
 @_require_engineer
+@_serialize_device_config
 def add_device():
     """添加新设备（支持所有协议）"""
     data = request.get_json(silent=True)
@@ -693,6 +709,7 @@ _RECONNECT_TRIGGER_KEYS = (
 
 @devices_bp.route('/devices/<device_id>', methods=['PUT'])
 @_require_engineer
+@_serialize_device_config
 def update_device(device_id):
     """更新设备配置（支持所有协议）"""
     data = request.get_json(silent=True)
@@ -806,6 +823,7 @@ def update_device(device_id):
 
 @devices_bp.route('/devices/reload', methods=['POST'])
 @_require_engineer
+@_serialize_device_config
 def reload_device_config():
     """热重载设备配置（`配置/devices.yaml`）并**同步采集任务**。
 
@@ -878,6 +896,7 @@ def reload_device_config():
 
 @devices_bp.route('/devices/<device_id>', methods=['DELETE'])
 @_require_engineer
+@_serialize_device_config
 def delete_device(device_id):
     """删除设备（先验证存在 → 停采集 → 删配置）"""
     # 先检查设备是否存在
