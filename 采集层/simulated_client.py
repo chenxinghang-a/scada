@@ -153,13 +153,42 @@ def is_device_stopped(device_id: str) -> bool:
     return device_id in _DEVICE_STOPPED
 
 
+#: 工艺量关键词：名字里带这些词时，**即使同时含机械类关键词也不归零**。
+#:
+#: 急停的语义是"停机"，不是"把所有数清零"。`temperature_position`（温度测点位置）、
+#: `flow_speed`（流体速度）这类点位里虽然出现 position/speed，但它们读的是
+#: 工艺量 —— 归零会让操作员看到"温度/流量掉到 0"的假象，把停机误判成工艺异常。
+#:
+#: 之前这里只有一段词边界正则，注释写着「avoid false positives like 'position'
+#: matching in 'temperature_position'」，但 `(?<![a-z])` 只排除**小写字母**，
+#: `_` 不是字母 —— 所以那个防护根本不存在，注释是假的。
+_PROCESS_VALUE_KEYWORDS = {
+    'temperature', 'temp', 'pressure', 'flow', 'level', 'voltage', 'current',
+    'humidity', 'viscosity', 'concentration', 'density', 'weight', 'frequency',
+    'power', 'energy', 'thd', 'carbon',
+}
+
+
 def _is_machinery(name: str) -> bool:
-    """判断寄存器名称是否属于机械类"""
+    """判断寄存器名称是否属于机械类（急停时需要归零的那一类）"""
     import re
     name_lower = name.lower()
+
+    def _word_hit(kw: str) -> bool:
+        """按词边界匹配：前后不能是小写字母。
+
+        注意 `_` 不算字母，所以 `temperature_position` 里的 `position` 会命中，
+        这正是必须先过一遍工艺量排除的原因。
+        """
+        return re.search(r'(?<![a-z])' + re.escape(kw) + r'(?![a-z])',
+                         name_lower) is not None
+
+    # 工艺量优先：`flow_speed` / `temperature_position` 不是机械动作
+    for kw in _PROCESS_VALUE_KEYWORDS:
+        if _word_hit(kw):
+            return False
     for kw in _MACHINERY_KEYWORDS:
-        # Word-boundary match to avoid false positives like 'position' matching in 'temperature_position'
-        if re.search(r'(?<![a-z])' + re.escape(kw) + r'(?![a-z])', name_lower):
+        if _word_hit(kw):
             return True
     return False
 
