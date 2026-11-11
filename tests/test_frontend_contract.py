@@ -1037,6 +1037,10 @@ def test_unused_backend_endpoints_are_reported_only(contract_report, capsys):
 #:
 #: 现在：每条未调用端点必须落进下面某个前缀规则；**新出现的**未分类端点 → 红。
 UNUSED_BACKEND_PREFIX_RULES: dict[str, str] = {
+    "/api/alarms/health-metrics": (
+        "报警健康度（standing/stale/orphan，ISA-18.2 口径）。"
+        "面向运维巡检脚本 / 报表，暂未接入浏览器 UI（前端一旦接入请删本条）"
+    ),
     "/api/i18n/": (
         "界面语言词条。**前端确实在调**（静态资源/js/i18n.js），但调用方式是"
         "`fetch('/api/i18n/' + encodeURIComponent(lang))` —— **动态拼接**，"
