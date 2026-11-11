@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-bs-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>页面不存在 - 工业数据采集与监控系统</title>
+    <link href="{{ url_for('static', filename='css/design-tokens.css') }}" rel="stylesheet">
+    <style>
+        /* 独立页：不继承 base.html —— 404 可能发生在未登录状态，
+           base.html 的导航栏要读 g.current_user，未登录时会取到空值。 */
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-page, #f4f6fa);
+            color: var(--text-primary, #1f2937);
+            font-family: var(--font-sans, "Microsoft YaHei", system-ui, sans-serif);
+        }
+        .wrap { text-align: center; padding: 40px 24px; max-width: 480px; }
+        .code {
+            font-family: var(--font-mono, ui-monospace, monospace);
+            font-size: 64px;
+            font-weight: 700;
+            line-height: 1;
+            color: var(--color-brand, #2563eb);
+            letter-spacing: 2px;
+        }
+        .title { margin: 16px 0 8px; font-size: 18px; font-weight: 600; }
+        .hint {
+            margin: 0 0 24px;
+            font-size: 13px;
+            line-height: 1.7;
+            color: var(--text-secondary, #6b7280);
+        }
+        .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        .btn {
+            display: inline-block;
+            padding: 9px 22px;
+            border-radius: 6px;
+            font-size: 13px;
+            text-decoration: none;
+            border: 1px solid var(--border-base, #d1d5db);
+            color: var(--text-primary, #1f2937);
+            background: var(--bg-surface, #fff);
+            transition: background .15s ease, border-color .15s ease;
+        }
+        .btn:hover { background: var(--bg-hover, #f3f4f6); }
+        .btn--primary {
+            background: var(--color-brand, #2563eb);
+            border-color: var(--color-brand, #2563eb);
+            color: #fff;
+        }
+        .btn--primary:hover { filter: brightness(1.08); }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="code">404</div>
+        <div class="title">页面不存在</div>
+        <p class="hint">
+            请求的地址 <code>{{ request.path }}</code> 没有对应的页面。<br>
+            可能是链接过期、地址输错，或该功能已在当前版本下线。
+        </p>
+        <div class="actions">
+            <a class="btn btn--primary" href="/dashboard">返回仪表盘</a>
+            <a class="btn" href="javascript:history.back()">返回上一页</a>
+        </div>
+    </div>
+</body>
+</html>

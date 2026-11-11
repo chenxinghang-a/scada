@@ -476,10 +476,36 @@ def create_app(database, device_manager, alarm_manager, data_collector,
         token = csrf.generate_token()
         return jsonify({'csrf_token': token})
 
+    # 站点图标。
+    # 浏览器对**每个页面**都会自动请求 /favicon.ico，站点没提供时控制台就挂一条
+    # 「Failed to load resource: 404」。这条噪音会淹没真正的报错 —— E2E 巡检里
+    # 每个页面都"有 console error"，等于判定标准失效。
+    # 用内联 SVG（齿轮），不新增静态文件依赖，也不用管 .ico 的二进制格式。
+    @app.route('/favicon.ico')
+    def favicon():
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+            '<rect width="32" height="32" rx="7" fill="#2563eb"/>'
+            '<circle cx="16" cy="16" r="7.5" fill="none" stroke="#fff" stroke-width="2.6"/>'
+            '<circle cx="16" cy="16" r="2.6" fill="#fff"/>'
+            '</svg>'
+        )
+        return app.response_class(svg, mimetype='image/svg+xml')
+
     # 错误处理
     @app.errorhandler(404)
     def not_found(error):
-        return jsonify({'error': 'Not found'}), 404
+        # 页面请求给 HTML，API 请求给 JSON。
+        # 原来不分请求类型一律返回 JSON —— 用户在地址栏敲错一个字母，
+        # 看到的是白底一行 {"error": "Not found"}，既不知道发生了什么、
+        # 也没有回首页的入口。
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'Not found'}), 404
+        wants_json = request.accept_mimetypes.best == 'application/json'
+        if wants_json and request.accept_mimetypes['application/json'] > \
+                request.accept_mimetypes['text/html']:
+            return jsonify({'error': 'Not found'}), 404
+        return render_template('404.html'), 404
 
     @app.errorhandler(500)
     def internal_error(error):

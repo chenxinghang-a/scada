@@ -1459,6 +1459,11 @@
             })
             .catch(function(e) { alert('导出失败: ' + e.message); });
     }
+    // 页面上的导出按钮是内联 onclick="exportI40Data('...')"，走的是**全局**查找；
+    // 而本文件整段实现包在 IIFE 里，不显式挂到 window 就是
+    // `ReferenceError: exportI40Data is not defined`（点一下只会在控制台报错、
+    // 下载毫无反应）。其余 5 个内联 onclick 目标都已挂 window，只有这个漏了。
+    window.exportI40Data = exportI40Data;
 
     // ===== 调试日志 =====
     var debugVisible = false;
@@ -1833,10 +1838,13 @@
             }
 
             // OEE（与 85% 目标线对比着色）
+            // 判据用 `!= null` 而不是 `> 0`：0% 是合法读数（真的没生产 / 班次刚开），
+            // 用 `> 0` 会把它显示成 `--%`，看起来像"后端没给数据"，
+            // 而同一个后端值在大屏那边显示的是 `0%` —— 两屏对同一事实给了两种说法。
             var oee = data.oee && data.oee.avg_oee_percent;
             var oeeEl = document.getElementById('ov-oee');
             if (oeeEl) {
-                if (oee != null && oee > 0) {
+                if (oee != null && isFinite(oee)) {
                     oeeEl.textContent = oee + '%';
                     oeeEl.className = 'metric-value metric-value--' +
                         (oee >= I40_OEE_TARGET ? 'success' : oee >= 65 ? 'warning' : 'danger');
@@ -1848,7 +1856,7 @@
 
             // 能源
             var power = data.energy && data.energy.total_power_kw;
-            safeText('ov-power', (power != null && power > 0) ? power : '--');
+            safeText('ov-power', (power != null && isFinite(power)) ? power : '--');
             var carbon = data.energy && data.energy.carbon_emission_kg;
             safeText('ov-carbon', (carbon != null && carbon > 0) ? carbon : '--');
 

@@ -352,6 +352,21 @@ async function loadData() {
         updateStatusBar(status);
         gridErrorMsg = '';   // 本轮成功：清掉上一轮失败态，避免它继续压住正常渲染
 
+        // OEE：`/system/status?brief=1` 里**没有**这个字段，必须单独拉。
+        // 原来仪表盘的 OEE 卡片是模板里写死的 `--%`，dashboard.js 里
+        // 根本不存在 `kpi-oee-val` 的赋值点 —— 这块 KPI 从上线起就没动过，
+        // 而工业4.0 页读的是同一个后端值（两边一个 `--%`、一个 `0%`）。
+        // overview 响应里带整表设备明细，没必要每 5 秒拉一次，降频到 15 秒；
+        // 但**首次必须拉**（`oeePollTick++ % 3 === 0` 的首轮为 0），
+        // 否则首屏会在 15 秒内一直挂着 `--%`。
+        if (oeePollTick++ % 3 === 0) {
+            const ov = await apiFetch('/industry40/overview');
+            if (gen !== loadGeneration) return;
+            if (ov && ov.data && ov.data.oee) {
+                updateOeeKpi(ov.data.oee.avg_oee_percent);
+            }
+        }
+
         // 先获取实时数据填充缓存，再渲染网格（避免首次显示"--"）
         const data = await apiFetch('/data/realtime?limit=5000');
         if (gen !== loadGeneration) return;
@@ -413,6 +428,22 @@ function retryDeviceLoad() {
 }
 
 // ========== KPI 更新 ==========
+// OEE 卡片：0% 是合法读数（班次刚开/真的没生产），不能当成"没数据"显示 `--%`。
+// 与 industry40.html 的 ov-oee 保持同一口径：`!= null && isFinite` 才画数值。
+let oeePollTick = 0;
+function updateOeeKpi(v) {
+    const el = document.getElementById('kpi-oee-val');
+    if (!el) return;
+    const ok = (v !== null && v !== undefined) && isFinite(v);
+    el.textContent = ok ? (Math.round(v * 10) / 10) + '%' : '--%';
+    const card = document.getElementById('kpi-oee');
+    if (card) {
+        // 目标 ≥85%：达标用默认色，未达标给 warn 底，与设备在线率卡片同一套语义
+        card.classList.toggle('warn', ok && v < 85);
+    }
+    card && card.setAttribute('title', ok ? `OEE 综合效率 ${v}%` : 'OEE 暂无数据');
+}
+
 function updateKPI(stats) {
     // 设备
     if (stats.devices) {

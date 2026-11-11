@@ -164,6 +164,11 @@ body.dashboard-page {
 /* ========== 设备卡片网格（自适应列数，网格内部滚动一层） ========== */
 .device-grid {
     grid-column: 1 / 4;
+    /* 显式钉行：分页器是 JS 动态插进 .main 的 grid item，
+     * 只靠 auto-placement 时它会抢走第 3 行、把设备区那一行
+     * minmax(0,1fr) 压成 0 高（卡片被 overflow:auto 整块裁掉，
+     * 页面看着"有分页没设备"）。三块都写死行列，插入顺序不再影响布局。 */
+    grid-row: 2;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: var(--space-2);
@@ -608,6 +613,7 @@ body.dashboard-page {
 /* ========== 设备分页控件 ========== */
 .device-pager {
     grid-column: 1 / 4;
+    grid-row: 3;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -661,6 +667,8 @@ body.dashboard-page {
 /* ========== 报警面板 ========== */
 .alarm-panel {
     grid-column: 4 / -1;
+    /* 跨"设备区 + 分页器"两行：与设备网格等高，分页器只占第 3 行左三列 */
+    grid-row: 2 / 4;
     display: flex;
     flex-direction: column;
     background: var(--bg-surface);

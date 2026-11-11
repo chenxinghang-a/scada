@@ -233,6 +233,16 @@ document.addEventListener('DOMContentLoaded', function() {
             if (preset && devices.some(d => (d.device_id || d.id) === preset)) {
                 select.value = preset;
                 select.dispatchEvent(new Event('change'));
+            } else if (devices.length > 0) {
+                // 默认选中第一台设备。
+                // 原来默认停在「全部设备」（value=""），点查询直接命中
+                // `if (!deviceId) alert('请选择设备')` —— 页面写着"全部设备"、
+                // 提示却说"请选择设备"，而且**一个请求都不发**，
+                // 看着就像"查询按钮坏了"。后端 `/api/data/history/<device_id>/...`
+                // 的 device_id 是必填路径参数，跨设备查询本来就没实现，
+                // 所以默认值改成一个真能查的设备，并让下拉主动加载它的参数列表。
+                select.value = devices[0].device_id || devices[0].id;
+                select.dispatchEvent(new Event('change'));
             }
         })
         .catch(e => { console.error('加载设备列表失败:', e); alert('加载设备列表失败: ' + e.message); });
@@ -343,7 +353,11 @@ async function queryHistoryData() {
     const interval = document.getElementById('interval').value;
 
     if (!deviceId) {
-        alert('请选择设备');
+        // 下拉首项是「全部设备」（value=""）。后端 `/api/data/history/<device_id>/...`
+        // 的 device_id 是必填路径参数、没有跨设备分支，所以这里必须拦；
+        // 但提示要说清"是全部设备不支持"，而不是含糊的"请选择设备"
+        // —— 用户明明已经选了「全部设备」。
+        alert('「全部设备」暂不支持历史查询：请在设备下拉里选择一台具体设备。');
         return;
     }
 

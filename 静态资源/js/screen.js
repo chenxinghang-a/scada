@@ -333,6 +333,11 @@ async function loadDeviceList() {
                         trendChart.setOption({ series: [], legend: { data: [] }, xAxis: { data: [] } }, { replaceMerge: 'series' });
                     }
                 });
+                // 设备列表是异步拉回来的，可能晚于 socket 的 connect 事件；
+                // 这一刻才真正知道有哪些设备可订阅，补一次订阅。
+                if (window.socket && window.socket.connected) {
+                    window.socket.emit('subscribe', {device_id: selectedDeviceId});
+                }
             }
         }
     } catch (e) { console.warn('loadDeviceList:', e); }
@@ -707,7 +712,34 @@ function getLabel(name) {
 }
 
 // ========== WebSocket 实时更新 ==========
+// 大屏是独立页面（screen.html 不继承 base.html），页面里只引了 screen.js，
+// 而 `window.socket` 是 main.js 的 initWebSocket() 建的 —— 所以下面
+// `const sk = window.socket` 恒为 undefined，WS 推送从来没生效过
+// （实测 window.socket === undefined，大屏只能靠 3s 轮询刷新）。
+//
+// 为什么不直接把 main.js 引进来：它带着「15 分钟无操作自动登出」的兜底
+// （GB/T 33008 终端锁定），大屏是 24h 无人值守的展示屏，引进来会被
+// 定时 confirm 弹窗打断、甚至直接登出。
+//
+// 所以这里自建连接，连接参数与 main.js 保持同一套（query.token + 指数退避）。
+function initScreenSocket() {
+    if (window.socket) return;
+    if (typeof window.io !== 'function') return;   // socket.io CDN 没加载到
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;                            // 未登录，服务端也会拒
+    window.socket = window.io({
+        query: { token },
+        reconnection: true,
+        reconnectionAttempts: 50,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 30000,
+        timeout: 10000,
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+    initScreenSocket();
+
     function attachSocketHandlers() {
         const sk = window.socket;
         if (!sk) return;
@@ -727,18 +759,27 @@ document.addEventListener('DOMContentLoaded', () => {
         // Subscribe to all visible devices on connect
         sk.on('connect', () => {
             console.log('WS connected (screen)');
-            const select = document.getElementById('trend-device-select');
-            if (select) {
-                Array.from(select.options).forEach(opt => {
-                    if (opt.value) sk.emit('subscribe', {device_id: opt.value});
-                });
-            } else if (selectedDeviceId) {
-                sk.emit('subscribe', {device_id: selectedDeviceId});
-            }
+            subscribeAllDevices(sk);
         });
     }
+
+    // 订阅逻辑单独抽出来：socket 可能在 attach 之前就已经连上
+    // （io() 是异步连的，而 attach 在同一个 tick 里跑），那时 'connect'
+    // 事件已经过去了，只靠 sk.on('connect') 会永远订阅不上。
+    function subscribeAllDevices(sk) {
+        const select = document.getElementById('trend-device-select');
+        if (select && select.options.length > 0) {
+            Array.from(select.options).forEach(opt => {
+                if (opt.value) sk.emit('subscribe', {device_id: opt.value});
+            });
+        } else if (selectedDeviceId) {
+            sk.emit('subscribe', {device_id: selectedDeviceId});
+        }
+    }
+
     if (window.socket) {
         attachSocketHandlers();
+        if (window.socket.connected) subscribeAllDevices(window.socket);
     } else {
         const timer = setInterval(() => {
             if (window.socket) { clearInterval(timer); attachSocketHandlers(); }
