@@ -233,6 +233,9 @@ class DeviceManager:
         # round 382：load_config() 返回 False（坏 YAML/顶层非映射）时不能
         # 静默带 0 台设备启动 —— 健康检查会显示“正常”，而采集/联锁全空。
         self.config_load_failed = False
+        #: 最近一次设备配置的结构校验错误（空 = 通过）。任何读取方都不该
+        #: 依赖 `_load_config_into` 是否走到校验分支才存在该属性。
+        self.config_schema_errors: list[str] = []
         if not self.load_config():
             self.config_load_failed = True
             logger.critical(
@@ -278,6 +281,25 @@ class DeviceManager:
                     "设备配置文件顶层不是映射（期望 `devices:` 列表），拒绝使用: %s",
                     type(config).__name__)
                 return False
+
+            # 结构校验：一次报全，而不是运行期逐条炸（Yin SOSP'11 / Xu OSDI'16）
+            from core.config_schema import (
+                format_errors as _fmt_cfg_errors,
+                validate_devices_document as _validate_devices,
+            )
+            from core.config_schema import has_structural_errors as _has_struct
+            self.config_schema_errors = list(_validate_devices(config) or [])
+            if self.config_schema_errors:
+                import os as _os
+                _strict = str(_os.environ.get('SCADA_STRICT_CONFIG', '')).strip().lower() \
+                    in ('1', 'true', 'yes', 'on')
+                _structural = _has_struct(self.config_schema_errors)
+                if _strict and _structural:
+                    logger.error(_fmt_cfg_errors('devices.yaml', self.config_schema_errors))
+                    logger.error('严格模式：存在结构性错误，拒绝加载整表')
+                    return False
+                logger.warning(_fmt_cfg_errors('devices.yaml', self.config_schema_errors))
+                logger.warning('非结构性错误：对应条目将在运行期表现为连接失败，请尽快修正')
 
             # 解析设备配置
             devices_config = config.get('devices', [])
@@ -371,8 +393,15 @@ class DeviceManager:
 
         new_devices: dict[str, Any] = {}
         if not self._load_config_into(new_devices):
-            reason = (f'配置文件解析失败（{self.config_path}），已保留原配置'
-                      f'（{len(old_ids)} 台设备）')
+            _schema = getattr(self, 'config_schema_errors', None)
+            if _schema:
+                from core.config_schema import format_errors as _fmt2
+                reason = (f'配置校验/解析失败（{self.config_path}）：'
+                          f'{_fmt2("devices.yaml", _schema, limit=3)}；'
+                          f'已保留原配置（{len(old_ids)} 台设备）')
+            else:
+                reason = (f'配置文件解析失败（{self.config_path}），已保留原配置'
+                          f'（{len(old_ids)} 台设备）')
             logger.error("设备配置重载被拒绝: %s", reason)
             return {'added': [], 'removed': [], 'kept': sorted(old_ids),
                     'rejected': reason}
@@ -420,6 +449,10 @@ class DeviceManager:
             'kept': sorted(new_ids & old_ids),
             'rejected': None,
         }
+
+    def get_config_schema_errors(self) -> list[str]:
+        """最近一次 devices.yaml 结构校验的错误明细（空 = 通过）。"""
+        return list(getattr(self, 'config_schema_errors', []) or [])
 
     def get_device_config(self, device_id: str) -> dict[str, Any] | None:
         """获取设备配置"""

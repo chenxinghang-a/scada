@@ -1474,6 +1474,26 @@ class AlarmManager:
             with open(config_file, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
 
+            # 结构校验（与 devices.yaml 同一套口径）：错误只告警不阻断启动，
+            # 但会被记录并可通过 get_config_schema_errors() 暴露给运维。
+            try:
+                from core.config_schema import (
+                    format_errors as _fmt_cfg_errors,
+                    validate_alarms_document as _validate_alarms,
+                )
+                self.config_schema_errors = list(_validate_alarms(config) or [])
+                if self.config_schema_errors:
+                    import os as _os2
+                    _strict2 = str(_os2.environ.get('SCADA_STRICT_CONFIG', '')).strip().lower() \
+                        in ('1', 'true', 'yes', 'on')
+                    logger.error(_fmt_cfg_errors('alarms.yaml',
+                                                 self.config_schema_errors))
+                    if _strict2:
+                        logger.error('严格模式：报警规则未通过校验，保留原有规则')
+                        return
+            except Exception as _e:      # noqa: BLE001 —— 校验器故障不阻断加载
+                logger.warning('alarms.yaml 结构校验失败（已跳过）: %s', _e)
+
             # 解析报警规则
             #
             # round 304：**文件即真源 —— 整体替换，不再「只增不删」**。
@@ -2453,6 +2473,24 @@ class AlarmManager:
                                  timestamp or datetime.now())
         logger.info("外部报警已恢复: %s - %s/%s", alarm_id, device_id, register_name)
         return True
+
+    def get_alarm_health_metrics(self) -> dict[str, Any]:
+        """活跃报警的健康度分类（ISA-18.2：standing / stale / orphan）。"""
+        try:
+            from 报警层.alarm_analytics import analyse
+            with self._state_lock:
+                states = dict(self.alarm_states)
+            return analyse(states, self.rules)
+        except Exception as e:      # noqa: BLE001 —— 统计失败不该影响报警主链路
+            logger.warning('计算报警健康度失败: %s', e)
+            return {'total': 0, 'unacknowledged': 0, 'ack_rate': None,
+                    'counts': {'orphan': 0, 'standing': 0, 'stale': 0},
+                    'orphan': [], 'standing': [], 'stale': [],
+                    'thresholds': {}, 'error': str(e)}
+
+    def get_config_schema_errors(self) -> list[str]:
+        """最近一次 alarms.yaml 结构校验的错误（空 = 通过）。"""
+        return list(getattr(self, 'config_schema_errors', []) or [])
 
     def get_active_alarms(self) -> list[dict[str, Any]]:
         """

@@ -1,0 +1,777 @@
+{
+  "generated_at": "2026-11-11T08:13:05+00:00",
+  "commits_scanned": 40,
+  "fix_commits": 28,
+  "mappings": [
+    {
+      "fix": "2550c7cc",
+      "file": "launcher.py",
+      "lines": "30+2",
+      "introduced_by": "2a5f585c",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "2550c7cc",
+      "file": "pyproject.toml",
+      "lines": "77+1",
+      "introduced_by": "6396abb2",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "1dae0208",
+      "file": "gateway/s7_gateway.py",
+      "lines": "182+1",
+      "introduced_by": "73723acf",
+      "introduced_subject": "fix: round 394 100 条候选批量核验落地（71 条）"
+    },
+    {
+      "fix": "1dae0208",
+      "file": "gateway/s7_gateway.py",
+      "lines": "184+4",
+      "introduced_by": "73723acf",
+      "introduced_subject": "fix: round 394 100 条候选批量核验落地（71 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "gateway/dnp3_gateway.py",
+      "lines": "454+2",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "gateway/iec104_gateway.py",
+      "lines": "687+2",
+      "introduced_by": "ac0a324f",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "gateway/iec104_gateway.py",
+      "lines": "690+2",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "42+3",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "54+5",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "307+2",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "312+1",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "314+1",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "28+3",
+      "introduced_by": "4f2119a0",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "23+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "62+1",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "130+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "141+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "267+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "273+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "329+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "66+3",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "51+4",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "450eacb1",
+      "file": "timeseries/data_models.py",
+      "lines": "58+2",
+      "introduced_by": "e8784530",
+      "introduced_subject": "fix: 按 BUGSCAN 清单核验落地（高危收口 + 中低危 180 条）"
+    },
+    {
+      "fix": "e8784530",
+      "file": "gateway/dnp3_gateway.py",
+      "lines": "451+1",
+      "introduced_by": "c039915a",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "gateway/iec104_gateway.py",
+      "lines": "684+1",
+      "introduced_by": "ac0a324f",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "gateway/s7_gateway.py",
+      "lines": "105+1",
+      "introduced_by": "e1a764ec",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "gateway/s7_gateway.py",
+      "lines": "149+1",
+      "introduced_by": "d7c9a0c3",
+      "introduced_subject": "fix: round 398 多 agent 续跑（8 条）"
+    },
+    {
+      "fix": "e8784530",
+      "file": "gateway/s7_gateway.py",
+      "lines": "368+1",
+      "introduced_by": "729bb134",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "paths.py",
+      "lines": "161+2",
+      "introduced_by": "46363b72",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/data_models.py",
+      "lines": "64+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/data_models.py",
+      "lines": "104+1",
+      "introduced_by": "ac0a324f",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/data_models.py",
+      "lines": "127+3",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/data_models.py",
+      "lines": "149+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/data_models.py",
+      "lines": "171+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/data_models.py",
+      "lines": "269+1",
+      "introduced_by": "ac0a324f",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/integration_example.py",
+      "lines": "50+18",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/integration_example.py",
+      "lines": "69+14",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/integration_example.py",
+      "lines": "84+11",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/integration_example.py",
+      "lines": "194+35",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/integration_example.py",
+      "lines": "230+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/integration_example.py",
+      "lines": "233+4",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "101+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "105+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "111+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "159+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "181+1",
+      "introduced_by": "bf6d34cc",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "190+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "195+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "212+1",
+      "introduced_by": "bf6d34cc",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "220+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "231+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "255+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "263+2",
+      "introduced_by": "c27398a0",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "270+2",
+      "introduced_by": "7191a872",
+      "introduced_subject": "fix: round 397 分 agent 按清单推进（22 条）"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "276+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "295+1",
+      "introduced_by": "c27398a0",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "298+1",
+      "introduced_by": "c27398a0",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "302+1",
+      "introduced_by": "bf6d34cc",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "308+2",
+      "introduced_by": "7191a872",
+      "introduced_subject": "fix: round 397 分 agent 按清单推进（22 条）"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "317+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/mqtt_to_tsdb.py",
+      "lines": "324+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/query_builder.py",
+      "lines": "93+1",
+      "introduced_by": "5f9a1bca",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/query_builder.py",
+      "lines": "98+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/query_builder.py",
+      "lines": "109+1",
+      "introduced_by": "73723acf",
+      "introduced_subject": "fix: round 394 100 条候选批量核验落地（71 条）"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "308+3",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "370+3",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "88+2",
+      "introduced_by": "ac0a324f",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "274+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "321+1",
+      "introduced_by": "8e77ae60",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "330+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "363+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "396+1",
+      "introduced_by": "ac0a324f",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "426+1",
+      "introduced_by": "c27398a0",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "433+1",
+      "introduced_by": "c27398a0",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "513+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "521+4",
+      "introduced_by": "8e77ae60",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "540+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "112+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "171+2",
+      "introduced_by": "5f9a1bca",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "316+5",
+      "introduced_by": "c27398a0",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "325+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "688+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "690+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "67+5",
+      "introduced_by": "8e77ae60",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "118+1",
+      "introduced_by": "e10cc3f1",
+      "introduced_subject": "fix: round 389 高严重度批量修复（38 条）"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "131+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "474+3",
+      "introduced_by": "c27398a0",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "520+3",
+      "introduced_by": "8e77ae60",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "153+3",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "200+2",
+      "introduced_by": "75125892",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "220+3",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "182+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "191+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "405+1",
+      "introduced_by": "c27398a0",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "512+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "570+2",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "602+1",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    },
+    {
+      "fix": "e8784530",
+      "file": "timeseries/tdengine_client.py",
+      "lines": "646+8",
+      "introduced_by": "3aeb89ac",
+      "introduced_subject": "(不在本次窗口内)"
+    }
+  ],
+  "hot_files": [
+    [
+      "timeseries/tdengine_client.py",
+      34
+    ],
+    [
+      "timeseries/data_models.py",
+      22
+    ],
+    [
+      "timeseries/mqtt_to_tsdb.py",
+      20
+    ],
+    [
+      "timeseries/integration_example.py",
+      6
+    ],
+    [
+      "gateway/s7_gateway.py",
+      5
+    ],
+    [
+      "gateway/iec104_gateway.py",
+      3
+    ],
+    [
+      "timeseries/query_builder.py",
+      3
+    ],
+    [
+      "gateway/dnp3_gateway.py",
+      2
+    ],
+    [
+      "launcher.py",
+      1
+    ],
+    [
+      "pyproject.toml",
+      1
+    ]
+  ],
+  "top_introducers": [
+    [
+      "3aeb89ac",
+      50
+    ],
+    [
+      "e8784530",
+      10
+    ],
+    [
+      "c27398a0",
+      8
+    ],
+    [
+      "ac0a324f",
+      6
+    ],
+    [
+      "8e77ae60",
+      4
+    ],
+    [
+      "73723acf",
+      3
+    ],
+    [
+      "bf6d34cc",
+      3
+    ],
+    [
+      "7191a872",
+      2
+    ],
+    [
+      "5f9a1bca",
+      2
+    ],
+    [
+      "2a5f585c",
+      1
+    ]
+  ]
+}

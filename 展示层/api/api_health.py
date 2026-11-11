@@ -81,6 +81,12 @@ def _compute_health_snapshot() -> dict[str, Any]:
                 devices = getattr(mgr, 'devices', None)
                 if isinstance(devices, dict):
                     device_config['device_count'] = len(devices)
+                schema_errors = getattr(mgr, 'get_config_schema_errors', None)
+                if callable(schema_errors):
+                    try:
+                        device_config['schema_errors'] = len(schema_errors() or [])
+                    except Exception as e:      # noqa: BLE001
+                        logger.debug('读取设备配置校验错误失败: %s', e, exc_info=True)
     except Exception as e:      # noqa: BLE001 —— 探测失败不该让健康接口 500
         logger.debug("读取 device_manager 状态失败（按未失败处理）: %s", e,
                      exc_info=True)

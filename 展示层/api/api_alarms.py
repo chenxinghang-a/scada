@@ -91,6 +91,14 @@ def get_alarms():
     return jsonify({'alarms': data})
 
 
+@alarms_bp.route('/alarms/health-metrics', methods=['GET'])
+@_require_auth
+@api_error_handler
+def get_alarm_health_metrics():
+    """活跃报警健康度：standing / stale / orphan 分类（ISA-18.2 口径）。"""
+    return jsonify(current_app.alarm_manager.get_alarm_health_metrics())
+
+
 @alarms_bp.route('/alarms/active', methods=['GET'])
 @_require_auth
 @api_error_handler
