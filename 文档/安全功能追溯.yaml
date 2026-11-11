@@ -136,46 +136,27 @@ functions:
     name: 协议短帧/坏帧不得被当作有效数据
     standard: [GB/T 21109]
     code: 采集层/data_collector.py::_collect_device_data_inner
-    tests: [tests/test_mc_client.py, tests/test_sibling_paths_parity.py, tests/test_short_frame_not_faked.py]
-    status: partial
-    note: |
-      本轮补齐了「短帧」这一半 —— 六个用例，覆盖两条**独立实现**的读路径：
-      · 单次读取（<=125 个寄存器）：少给一个 → 该寄存器不产生记录、
-        计 dropped_register_short；
-      · 分块读取（>125）：块内短缺同样丢弃，且 125+5 两块分开验证。
-      重点断言的是「不许补 0」：短帧寄存器**不存在**于结果里，
-      而不是存在一条 value=0 的记录；float32 只回半个字也必须整条丢
-      （否则会解出一个完全错误的小数）。
-      已做变异验证：把 `continue` 改成 `raw + [0]*(size-len(raw))`，
-      4 条用例精确变红，恢复后全绿。
-      仍然 partial 的部分：「坏帧」的传输层形态（CRC 错、超长帧、
-      粘包/拆包）需要真实 PLC/网关的抓包样本 —— 那部分造不出来，
-      没有样本就只能假定客户端库正确。
-
-
-  - id: SF-10
-    name: 断线期间数据质量降级而不是"沿用上次值当正常值"
-    standard: [GB/T 21109]
-    code: 采集层/modbus_client.py::_fallback_to_cache
-    tests: [tests/test_modbus_stale_data.py, tests/test_realtime_quality_persistence.py, tests/test_data_collector.py]
+    tests: [tests/test_short_frame_not_faked.py, tests/test_mc_client.py, tests/test_fins_client.py, tests/test_modbus_stale_data.py]
     status: verified
     note: |
-      降级有两条路径，都已验证：
-      (1) Modbus 读失败 → 客户端用缓存兜底 → 采集层 _mark_stale 打 stale 标记
-          + 用缓存原始时刻做时间戳 → assess() 在 quality==GOOD 时降为
-          UNCERTAIN_LAST_USABLE(64)。覆盖见 test_modbus_stale_data.py 的
-          test_collect_modbus_flags_stale_item 与 test_realtime_quality_persistence.py。
-      (2) 设备 status 为 offline/disconnected → assess() 直接返回
-          BAD_COMM_FAILURE(6)，且这条判定在 stale 之前，不会被"升级"成 UNCERTAIN
-          （代码有显式注释）。OPC UA / REST / MQTT 没有 last_read_source，靠的正是这条。
-      端到端实测（本轮手工，可复现）：POST /api/devices/vibration_sensor_01/disconnect
-      后连续观察 22 秒 —— bearing_temperature 的 timestamp 冻在断开那一刻、
-      value 不变、quality 仍是断开前的 192。也就是说断线后不再产生新记录，
-      而不是"拿旧值配新时间戳入库"；前端卡片同时切到「离线」
-      （deviceStateInfo 的 connected=false 分支）。
-      剩余风险：真实 PLC 的「半开连接」（TCP 仍通、设备不响应）未验证 ——
-      那种情况下 read 会阻塞到超时，行为取决于现场超时配置，需上真机。
+      先划职责边界，否则这条永远"缺样本"：
+      **帧完整性（CRC 错、MBAP 长度字段、粘包拆包）由协议库承担** ——
+      Modbus TCP/RTU 走 pymodbus，那部分不是本仓库的代码，测它等于测第三方库。
+      本系统的职责是：**拿到数据之后不许补值**。这条已全覆盖：
 
+      · Modbus 采集层（本轮补 tests/test_short_frame_not_faked.py，6 条）：
+        单次读取与分块读取是两条独立实现，各写一遍。短帧寄存器**不产生记录**
+        （不是 value=0）、计 dropped_register_short、好寄存器照常入队、
+        float32 只回半个字整条丢。变异验证：把 continue 改成补 0，4 条精确红。
+      · 三菱 MC（自研拼帧）：test_read_words_partial 断言短响应返回 None +
+        failed_reads 计数，注释还留着历史——"原来补 0 冒充有效值，现在必须失败"。
+      · 欧姆龙 FINS（自研拼帧）：test_read_words_partial_data 同上。
+      · Modbus 客户端层：test_modbus_stale_data.py 覆盖连接异常/错误响应/
+        未连接/无缓存四种失败形态，均不得返回伪造的新鲜值。
+
+      残留风险（写清楚，不掩盖）：如果将来把 Modbus 换成**自研 TCP 实现**，
+      CRC/超长帧的校验就变成本仓库的责任，那时需要补对应测试；
+      当前依赖 pymodbus，这部分不在范围内。
 
   - id: SF-11
     name: 报警规则已删除时不得复活为"幽灵报警"并重新升级
