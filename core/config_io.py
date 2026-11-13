@@ -158,6 +158,141 @@ def _split_key_line(body: str, indent: int) -> tuple[str, str] | None:
     return head, rest
 
 
+def _dump_list_item(item: dict, indent: int) -> str:
+    """把单个列表项序列化成 ``- key: v`` 并按 ``indent`` 缩进。
+
+    `yaml.dump([item])` 已经自带层级：首行 ``- host: …``（0 缩进），
+    后续行 ``  id: …``（2 缩进）。所以统一加同一个 ``pad`` 即可 ——
+    早先给后续行又补了 2 个空格，结果 ``id`` 被顶到 6 格，
+    YAML 直接报 ``mapping values are not allowed here``。
+    """
+    text = yaml.dump([item], allow_unicode=True, default_flow_style=False,
+                     sort_keys=True, width=1000)
+    pad = ' ' * indent
+    lines = [line for line in text.splitlines() if line.strip()]
+    return '\n'.join(pad + line for line in lines) + '\n'
+
+
+def _split_item_tail(seg: str) -> tuple[str, str]:
+    """把列表项的原文切成 ``(条目正文, 尾部注释块)``。
+
+    尾部那串注释/空行其实是**下一项的标题**（很常见的写法）：
+
+        - id: boiler_01
+          name: 一号锅炉
+        # ---- 2 号锅炉 ----
+        - id: boiler_02
+
+    按 ``^  - `` 切分时，``# ---- 2 号锅炉 ----`` 落在 boiler_01 这段的末尾。
+    删 boiler_01 时若把整段丢掉，boiler_02 的标题就跟着没了。
+    所以把尾部注释剥出来、当成下一项的"前缀"。
+    """
+    lines = seg.splitlines(keepends=True)
+    k = len(lines)
+    while k > 0:
+        t = lines[k - 1].strip()
+        if t == '' or t.startswith('#'):
+            k -= 1
+            continue
+        break
+    return ''.join(lines[:k]), ''.join(lines[k:])
+
+
+def _parse_item(content: str, pad_len: int) -> dict | None:
+    """解析单个列表项正文（带缩进）。
+
+    注意：去缩进后文本以 ``- `` 开头，`yaml.safe_load` 得到的是**列表**，
+    不是 dict —— 必须取第一个元素。这一点踩过：直接当 dict 用会一路返回
+    None，最后悄悄退回整份重写，注释照样丢。
+    """
+    dedented = '\n'.join(
+        (line[pad_len:] if line.startswith(' ' * pad_len) else line)
+        for line in content.splitlines())
+    try:
+        val = yaml.safe_load(dedented)
+    except yaml.YAMLError:
+        return None
+    if isinstance(val, list) and len(val) == 1 and isinstance(val[0], dict):
+        val = val[0]
+    if not isinstance(val, dict) or not val.get('id'):
+        return None
+    return val
+
+
+def _merge_list_by_id(body: str, indent: int, new_items: list) -> str | None:
+    """就地合并 ``key:`` 下的**字典列表**，按 ``id`` 匹配，保留未变项的原文。
+
+    ## 为什么需要它
+
+    `_merge_block` 只处理映射。设备清单是 ``devices: [ {...}, ... ]`` ——
+    只要增删一台设备，整个列表就被 `_dump_block` 重写。实测代价：
+    `devices_simulated.yaml` 16025 行里 127 行注释、键序与排版一次全丢
+    （"由 gen_factory 生成""现场可改这里""${VAR} 占位"这些唯一说明都没了）。
+    数据没丢，但下一个人拿到这个文件会不知道它是生成的。
+
+    ## 做法
+
+    把每个条目拆成**三部分**分别保存：前缀注释、正文、尾部注释。
+      · 前缀注释 = 上一项的尾部注释（或文首注释）
+      · 尾部注释 = 下一项的标题
+    重组时按新列表顺序输出 ``前缀 + 正文``，未变的条目正文**逐字保留**。
+    这样删掉某一项时，它的正文消失、但它的尾部注释（下一项的标题）
+    仍作为下一项的前缀输出 —— 标题不会跟着陪葬。
+
+    只对「元素都是带 id 的字典」生效；其他形态返回 None，调用方整份重写。
+    """
+    nl = body.find('\n')
+    if nl < 0:
+        return None
+    head, rest = body[:nl + 1], body[nl + 1:]
+
+    item_pat = re.compile(r'^%s- ' % (' ' * (indent + 2)), re.MULTILINE)
+    matches = list(item_pat.finditer(rest))
+    if not matches:
+        return None
+
+    pad_len = indent + 2
+    raw_segs = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(rest)
+        raw_segs.append(rest[m.start():end])
+
+    # [(id, 前缀, 正文)]，按旧顺序
+    parsed: list[tuple[str, str, str]] = []
+    carry = rest[:matches[0].start()]        # 首项前缀 = 文首注释
+    last_tail = ''
+    for seg in raw_segs:
+        content, tail = _split_item_tail(seg)
+        if not content.strip():
+            carry += content + tail
+            continue
+        val = _parse_item(content, pad_len)
+        if val is None:
+            return None
+        parsed.append((str(val['id']), carry, content))
+        carry = tail
+        last_tail = tail
+
+    by_id = {pid: (pre, c) for pid, pre, c in parsed}
+
+    out = [head]
+    for item in new_items:
+        if not isinstance(item, dict) or not item.get('id'):
+            return None
+        hit = by_id.get(str(item['id']))
+        if hit is not None:
+            pre, content = hit
+            old_val = _parse_item(content, pad_len)
+            if old_val == item:
+                out.append(pre + content)     # 没变 → 逐字保留
+            else:
+                out.append(pre + _dump_list_item(item, indent + 2))
+        else:
+            out.append(_dump_list_item(item, indent + 2))
+    out.append(last_tail)                     # 最后一项之后的注释/空行
+    return ''.join(out)
+
+
 def _merge_block(text: str, indent: int, data: dict, depth: int) -> str | None:
     """就地合并一个映射的文本；结构对不上时返回 None（调用方退回整份 dump）。"""
     blocks = _child_blocks(text, indent)
@@ -194,6 +329,10 @@ def _merge_block(text: str, indent: int, data: dict, depth: int) -> str | None:
                                             depth - 1)
                 if inner_merged is not None:
                     merged = head + inner_merged
+        elif isinstance(data[key], list):
+            # 字典列表（设备清单、报警规则…）：按 id 就地增删改，
+            # 未变的条目连注释一起原样留下来。详见 _merge_list_by_id。
+            merged = _merge_list_by_id(body, indent, data[key])
 
         out.append((merged if merged is not None
                     else _dump_block(key, data[key], indent)) + trailer)

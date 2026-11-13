@@ -253,7 +253,13 @@ def update_user(username):
     allowed = {'display_name', 'email', 'phone', 'role', 'is_active'}
     filtered = {k: v for k, v in data.items() if k in allowed}
     auth_manager = get_auth_manager()
-    return jsonify(auth_manager.update_user(username, **filtered))
+    result = auth_manager.update_user(username, **filtered)
+    # 与 change_password 同理：状态码必须跟着 success 走。
+    # 原来 `return jsonify(...)` 一律 200 —— 用户名不存在、角色非法时
+    # body 里 success=false 但状态码 200，按 HTTP 判定的调用方会当成改成功了。
+    if not (result or {}).get('success'):
+        return jsonify(result or {'success': False, 'message': '更新失败'}), 400
+    return jsonify(result)
 
 
 @auth_bp.route('/auth/users/<username>', methods=['DELETE'])

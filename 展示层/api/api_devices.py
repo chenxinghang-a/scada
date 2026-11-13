@@ -661,10 +661,17 @@ def add_device():
         # 设备存在 → 启动采集任务 → 数据开始入库
         # round 382：返回值必须检查。采集器未运行/定时器创建失败时，
         # 设备配置已落盘但永远不采集，接口还回“添加成功”。
-        collection_started = _start_device_collection(data['id'])
+        #
+        # 但**禁用的设备本来就不该采集**：`enabled: false` 时
+        # `start_device_task` 返回 False 是设计行为，把它当成失败会回
+        # 500「采集任务未启动（不会产生数据）」—— 明明是加成功了一台
+        # 待投运设备，用户却看到服务端错误。实测就这么误报过。
+        device_enabled = bool(device_config.get('enabled', True))
+        collection_started = (_start_device_collection(data['id'])
+                              if device_enabled else False)
         # 获取设备状态（包含连接状态）
         device_status = current_app.device_manager.get_device_status(data['id'])
-        if not collection_started:
+        if device_enabled and not collection_started:
             # 审计必须与真实结果一致：配置已落盘但采集没起来
             get_auth_manager().log_operation(
                 request.current_user['username'], 'add_device_collection_failed',
@@ -677,8 +684,22 @@ def add_device():
                 'message': f"设备 {data['id']} 已写入配置，但**采集任务未启动**"
                            "（不会产生数据，请检查采集器状态）",
             }), 500
+
+        if not device_enabled:
+            # 禁用设备：落盘即成功，如实说明"不会采集"而不是报错
+            return jsonify({
+                'success': True,
+                'persisted': True,
+                'enabled': False,
+                'collection_started': False,
+                'connected': False,
+                'message': f"设备 {data['id']} 已添加（enabled=false，暂不启动采集）",
+                'device': device_status,
+            })
+
         return jsonify({
             'success': True,
+            'enabled': True,
             'collection_started': True,
             'message': f"设备 {data['id']} 添加成功",
             'connected': device_status.get('connected', False),
@@ -1077,6 +1098,12 @@ def _start_device_collection(device_id: str) -> bool:
     if not device_config:
         logger.error("设备 %s 已添加但不在配置表中，无法启动采集", device_id)
         return False
+    if not device_config.get('enabled', True):
+        # 禁用的设备**本来就不该采集**：`start_device_task` 对它返回 False
+        # 是设计行为。这里直接判成功，避免调用方把"没启动"当成故障
+        # （add_device 曾因此对禁用设备回 500「采集任务未启动」）。
+        logger.info("设备 %s 为 enabled=false，按设计不启动采集", device_id)
+        return True
     if not data_collector.start_device_task(device_id, device_config):
         logger.error("设备 %s 已添加，但**采集任务启动失败**（该设备不会产生数据）",
                      device_id)
