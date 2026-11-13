@@ -1,6 +1,6 @@
 {
   "report_schema_version": "1.0",
-  "generated_at": "2026-11-11T17:02:32+00:00",
+  "generated_at": "2026-11-13T17:19:22+00:00",
   "generated_by": "tests/test_frontend_contract.py",
   "report_location": "api-contract-report.json",
   "report_location_rationale": "仓库根目录 industrial_scada/api-contract-report.json（活产物，每次运行重算；归档证据包时由 tools/collect_evidence.py 按 VERSION 复制到 evidence/<version>/）",
@@ -243,7 +243,7 @@
       "source_path": "/auth/force-change-password",
       "backend_path": "/api/auth/force-change-password",
       "status": "match",
-      "detail": "精确匹配 api_auth.py:186",
+      "detail": "精确匹配 api_auth.py:198",
       "source_file": "auth.ts",
       "source_line": 56
     },
@@ -273,7 +273,7 @@
       "source_path": "/auth/logs",
       "backend_path": "/api/auth/logs",
       "status": "match",
-      "detail": "精确匹配 api_auth.py:256",
+      "detail": "精确匹配 api_auth.py:268",
       "source_file": "auth.ts",
       "source_line": 75
     },
@@ -313,7 +313,7 @@
       "source_path": "/auth/users",
       "backend_path": "/api/auth/users",
       "status": "match",
-      "detail": "精确匹配 api_auth.py:223",
+      "detail": "精确匹配 api_auth.py:235",
       "source_file": "auth.ts",
       "source_line": 63
     },
@@ -323,7 +323,7 @@
       "source_path": "/auth/users/:username",
       "backend_path": "/api/auth/users/<username>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_auth.py:247",
+      "detail": "结构匹配（参数名归一）api_auth.py:259",
       "source_file": "auth.ts",
       "source_line": 71
     },
@@ -333,7 +333,7 @@
       "source_path": "/auth/users/:username",
       "backend_path": "/api/auth/users/<username>",
       "status": "match",
-      "detail": "结构匹配（参数名归一）api_auth.py:232",
+      "detail": "结构匹配（参数名归一）api_auth.py:244",
       "source_file": "auth.ts",
       "source_line": 67
     },
