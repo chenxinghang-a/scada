@@ -1693,6 +1693,24 @@ class DeviceControlSafety:
                 if rule_id in self._interlock_bypass:
                     continue
 
+                # **跳过未启用的规则**。
+                #
+                # 原实现只看 `_interlock_bypass`，不看 `enabled` —— 于是
+                # `interlocks.yaml` 里写着 `enabled: false` 的模板规则照样评估、
+                # 照样把 `_interlock_states[rule_id]` 置成 True。
+                #
+                # 实测后果：`pump_low_water_level_block_start`（配置注释明确写
+                # 「模板规则，默认禁用……确认前保持 enabled: false」）因为
+                # `water_level` 恒为 0 而一直 triggered，导致
+                # `reset_emergency_stop()` 每次都回
+                # 「无法解除紧急停机：联锁 [...] 仍触发中」——**急停从此解不掉**。
+                # 一条没被启用的规则挡住合法操作，是权限层面的错位。
+                if not rule.get('enabled', True):
+                    # 顺手把残留状态清掉：规则被禁用后不该继续"保持触发"
+                    if self._interlock_states.get(rule_id):
+                        self._interlock_states[rule_id] = False
+                    continue
+
                 cond = rule.get('condition', {})
 
                 # 检查条件是否匹配
@@ -2634,9 +2652,16 @@ class DeviceControlSafety:
         4. 记录审计日志
         """
         # 检查联锁状态
+        #
+        # 必须同时排除**未启用**的规则：`check_interlocks` 已经把 disabled 的
+        # 规则跳过了（不再置 triggered），但 `_interlock_states` 里可能残留着
+        # 禁用之前留下的 True —— 只判断 triggered 会让一条已停用的规则
+        # 继续挡住复位。两处都判，才不依赖"另一处先修好了"这种假设。
         active_interlocks = [
             rule_id for rule_id, triggered in self._interlock_states.items()
-            if triggered and rule_id not in self._interlock_bypass
+            if triggered
+            and rule_id not in self._interlock_bypass
+            and (self._interlock_rules.get(rule_id) or {}).get('enabled', True)
         ]
         if active_interlocks:
             return {

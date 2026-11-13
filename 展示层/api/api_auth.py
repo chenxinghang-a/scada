@@ -180,7 +180,19 @@ def change_password():
         old_password=data.get('old_password', ''),
         new_password=data.get('new_password', '')
     )
-    return jsonify(result or {'success': False, 'message': '操作失败'})
+    # 状态码必须跟着 success 走。
+    #
+    # 原来这里一律 `jsonify(result)`（== HTTP 200），密码策略不满足时
+    # body 里是 `{"success": false, "message": "密码必须包含大写字母"}`
+    # 但状态码 200 —— 任何按 HTTP 判定的调用方都会当成"改成功了"。
+    # 实测踩过：脚本用 `status_code == 200` 判定，以为改回原密码成功，
+    # 实际密码已经变了、旧密码登不上，差点把 admin 关在系统外。
+    #
+    # 同文件的 `force_change_password` 早就是 `if success: 200 else: 400`
+    # 的正确写法，这一处漏了。
+    if not (result or {}).get('success'):
+        return jsonify(result or {'success': False, 'message': '操作失败'}), 400
+    return jsonify(result)
 
 
 @auth_bp.route('/auth/force-change-password', methods=['POST'])
