@@ -2087,6 +2087,11 @@ class DeviceControlSafety:
                     'name': rule.get('name'),
                     'description': rule.get('description'),
                     'priority': rule.get('priority', 99),
+                    # 规则是否启用。必须暴露：否则界面和运维没法区分
+                    # 「这条是禁用的」和「启用了但没触发」——两者 triggered
+                    # 都是 False，看起来一模一样。排查联锁问题时也栽过：
+                    # 接口不返回 enabled，只能去翻 yaml 才知道那条是 disabled。
+                    'enabled': rule.get('enabled', True),
                     'triggered': self._interlock_states.get(rule_id, False),
                     # round 302：条件已成立但动作没发出去（写寄存器失败/急停抛异常）。
                     # `triggered` 保持 False 是为了下个采样点重试；没有这个字段，
