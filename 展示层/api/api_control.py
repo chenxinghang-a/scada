@@ -55,7 +55,11 @@ def _idempotency_begin(write_key: str):
                 'message': '相同的写入正在执行中，请勿重复提交',
             }), 409
         if isinstance(last_write, float) and now - last_write < IDEMPOTENCY_WINDOW_S:
-            return jsonify({'success': True, 'message': '写入成功(幂等)'})
+            # 显式带 200：上面 409 那条返回的是 `(Response, 409)`，
+            # 这里只返 Response 会让"同一函数的返回值有两种形态"——
+            # 调用方 `return early` 虽然都能工作，但任何想读状态码的地方
+            # 都得先判类型。（补测试时就是这么踩到的：解包直接 TypeError。）
+            return jsonify({'success': True, 'message': '写入成功(幂等)'}), 200
         _recent_writes[write_key] = _IN_FLIGHT
         if len(_recent_writes) > RECENT_WRITES_MAX:
             for k in [k for k, v in _recent_writes.items()
