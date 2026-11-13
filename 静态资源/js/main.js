@@ -520,7 +520,21 @@ function updateAlarmCountSilent() {
                 countCard.textContent = count;
             }
         })
-        .catch(() => {}); // 静默失败
+        .catch((e) => {
+            // 原来是 `.catch(() => {})`（源码里自己写着"静默失败"）。
+            // 这个函数轮询的是**活动报警数**：接口一挂，计数就停在最后一次
+            // 成功的值上 —— 界面上还显示"3 个报警"，实际可能已经是 7 个，
+            // 或者报警早就清了还显示 3。漏报比报错危险得多。
+            //
+            // 不弹 toast（每 10 秒弹一次会烦死人），但必须留痕：
+            // console 警告 + 在元素 title 上标明"显示的是旧值"。
+            console.warn('[alarms] 活动报警数轮询失败，当前显示的是最后一次成功的值:', e);
+            const alarmEl = document.getElementById('active-alarms');
+            if (alarmEl) {
+                alarmEl.title = '⚠ 最近一次获取失败，显示的是上次成功的值，可能已过期';
+                alarmEl.style.opacity = '0.55';
+            }
+        });
 }
 
 /**

@@ -139,6 +139,26 @@ def gate_coverage(fast: bool) -> dict:
     return {'name': 'coverage', 'ok': ok, 'detail': results}
 
 
+def gate_false_success() -> dict:
+    """假成功：`success:false` 却回 HTTP 200。
+
+    前端 `apiRequest` 只判 `response.ok`，200 一律当成功 —— 这类接口
+    会让"操作失败"在界面上显示为"操作成功"。硬性要求 0 处。
+    """
+    proc = _run([sys.executable, 'tools/audit_false_success.py', '--strict'])
+    tail = [l for l in proc.stdout.splitlines() if '[PASS]' in l or '[FAIL]' in l]
+    return {'name': 'false_success', 'ok': proc.returncode == 0,
+            'detail': tail[-2:] or ['(无输出)']}
+
+
+def gate_swallowed() -> dict:
+    """静默失败：except 里返回成功（0 容忍）、except:pass（有预算）。"""
+    proc = _run([sys.executable, 'tools/audit_swallowed.py', '--strict'])
+    tail = [l for l in proc.stdout.splitlines() if '[PASS]' in l or '[FAIL]' in l]
+    return {'name': 'swallowed', 'ok': proc.returncode == 0,
+            'detail': tail[-3:] or ['(无输出)']}
+
+
 def gate_mutation() -> dict:
     results = []
     ok = True
@@ -190,6 +210,8 @@ def main(argv=None) -> int:
         gate_coverage(args.fast),
         gate_mutation(),
         gate_canary(),
+        gate_false_success(),
+        gate_swallowed(),
     ]
 
     report = {

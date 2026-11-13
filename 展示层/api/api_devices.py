@@ -1185,12 +1185,16 @@ def test_device_connection(device_id):
 
         connected = test_client.connect()
         if not connected:
+            # 状态码必须跟着 success 走：这是全仓库扫出来**唯一**一处
+            # 「success:false 却回 200」的接口（见 tools/audit_false_success.py，
+            # 按括号配对精确判定 278 个 jsonify 调用后剩这一处）。
+            # 前端 `apiRequest` 只看 `response.ok`，200 会被当成"测试通过"。
             return jsonify({
                 'success': False,
                 'message': f'连接失败（协议: {protocol}）',
                 'protocol': protocol,
                 'endpoint': device_config.get('host', device_config.get('endpoint', ''))
-            })
+            }), 400
 
         # 读取示例数据
         sample = {}
