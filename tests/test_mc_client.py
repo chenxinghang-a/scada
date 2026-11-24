@@ -259,14 +259,24 @@ class TestMCReadWriteBits:
     @patch.object(MCClient, '_send_recv')
     def test_read_bits_success(self, mock_send_recv, mc_client):
         mc_client.connected = True
-        # 4 bits packed in 2 bytes: bit0=1, bit1=0, bit2=1, bit3=0
-        mock_send_recv.return_value = bytes([0x01, 0x01])
+        # MC 3E 二进制位读取：1 字节装 2 点，**先头点在 bit4-7（0x10）**、
+        # 后一点在 bit0-3（0x01）。两半解反会让每对相邻线圈状态互换。
+        mock_send_recv.return_value = bytes([0x10, 0x10])
 
         result = mc_client.read_bits('M', 0, 4)
 
-        assert len(result) == 4
-        assert result[0] is True
-        assert result[2] is True
+        assert result == [True, False, True, False]
+        assert mc_client.stats['successful_reads'] == 1
+
+    @patch.object(MCClient, '_send_recv')
+    def test_read_bits_nibble_order(self, mock_send_recv, mc_client):
+        """独立判据：0x01 = 前点 0/后点 1，0x11 = 前点 1/后点 1。"""
+        mc_client.connected = True
+        mock_send_recv.return_value = bytes([0x01, 0x11])
+
+        result = mc_client.read_bits('M', 0, 4)
+
+        assert result == [False, True, True, True]
         assert mc_client.stats['successful_reads'] == 1
 
     @patch.object(MCClient, '_send_recv')
