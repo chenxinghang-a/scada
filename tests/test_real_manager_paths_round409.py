@@ -182,5 +182,19 @@ def test_brief_status_accepts_bare_strings(manager):
 
 
 def test_brief_status_reports_fault_when_estop(manager, monkeypatch):
+    """E-STOP 只把 mechanical 标成 fault；仪表必须继续显示（round 380 红线）。
+
+    原用例用 d1（只有 temp 点位 → instrument）断言 fault，固化了
+    「急停把仪表也停掉」的错误语义，已改为分别断言：
+    """
     monkeypatch.setattr(manager, '_estop_active', True)
-    assert manager._get_brief_status('d1')['status'] == 'fault'
+    assert manager._get_brief_status('d1')['status'] != 'fault', \
+        '仪表被 E-STOP 误标为 fault'
+
+    manager.devices['pump'] = {
+        'id': 'pump', 'name': 'pump', 'protocol': 'modbus_tcp',
+        'device_category': 'mechanical',
+    }
+    status = manager._get_brief_status('pump')
+    assert status['stopped'] is True
+    assert status['status'] == 'fault'

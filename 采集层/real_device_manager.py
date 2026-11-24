@@ -17,11 +17,27 @@ from .opcua_client import OPCUAClient
 from .mqtt_client import MQTTClient
 from .rest_client import RESTDeviceClient
 import paths
-from core.safe_numeric import try_int
+from core.safe_numeric import to_finite_float, try_int
 from core.device_lifecycle import notify_device_removed
 from core.engineering_units import to_raw
 
 logger = logging.getLogger(__name__)
+
+#: 整数点位的**可写范围**。超范围必须明确拒绝 —— 原来用 `& 0xFFFF`
+#: 截断会把 65536 写成一个完全不同的数（静默回绕），操作员拿到的是"成功"。
+_INTEGER_RANGES = {
+    'uint16': (0, 0xFFFF),
+    'uint': (0, 0xFFFF),
+    'word': (0, 0xFFFF),
+    'int16': (-0x8000, 0x7FFF),
+    'int': (-0x8000, 0x7FFF),
+    'short': (-0x8000, 0x7FFF),
+    'uint32': (0, 0xFFFFFFFF),
+    'int32': (-0x80000000, 0x7FFFFFFF),
+}
+
+#: IEEE-754 单精度可表示的最大有限值（`struct.pack('>f', 1e39)` 会 OverflowError）
+_FLOAT32_MAX = 3.4028234663852886e38
 
 
 def create_protocol_client(config: dict[str, Any]) -> IDeviceClient | None:
@@ -115,6 +131,13 @@ class RealDeviceManager(IDeviceManager):
         # `_save_config()` 同时在读它们。不可重入锁，临界区只包字典操作
         # （绝不包 connect/disconnect —— 那些会阻塞在网络上）。
         self._lock = threading.Lock()
+        # round 380：**按设备**的命令互斥。启停与调参是同一台设备上的三种写操作，
+        # 并发时会在「解析点位 → 写 PLC → 改本地状态」之间交错：
+        # 先 stop 后 start 的两个请求可能写成「PLC 已停、本地却记成运行」，
+        # 或 start 在急停生效前抢到写窗口（急停穿透）。
+        # 锁表本身用独立的小锁保护，避免与 `_lock` 形成锁序环。
+        self._device_locks: dict[str, threading.RLock] = {}
+        self._device_locks_guard = threading.Lock()
         self._stopped_devices: set[str] = set()  # 单独停止的设备
         self._estop_active = False
 
@@ -410,6 +433,89 @@ class RealDeviceManager(IDeviceManager):
         if active:
             logger.info("[真实] 紧急停机已激活")
 
+    def _device_lock(self, device_id: str) -> threading.RLock:
+        """取该设备的命令锁（不存在则创建）。
+
+        `RLock` 而不是 `Lock`：`_write_and_verify` 与调用方可能在同一线程内
+        重入（例如急停期间补发停止），可重入锁不会自锁死。
+        """
+        with self._device_locks_guard:
+            lock = self._device_locks.get(device_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._device_locks[device_id] = lock
+            return lock
+
+    @staticmethod
+    def _read_back_registers(client: Any, address: int,
+                             expected_words: list[int]) -> tuple[bool, str]:
+        """写后逐字回读寄存器并与期望值比较。
+
+        逐字（count=1）而不是一次读多字：模拟客户端只在单字读取时返回
+        「刚写入的值」，多字读取会落回仿真曲线 —— 一次读多字在模拟侧会
+        把正确写入判成失败。
+
+        Returns:
+            ``(True, '')`` 或 ``(False, 失败原因)``。**任何无法确认的情况
+            （无读方法 / 读异常 / 陈旧缓存 / 无数据）一律算失败**。
+        """
+        reader = getattr(client, 'read_holding_registers', None)
+        if not callable(reader):
+            return False, '客户端不支持寄存器回读，无法确认写入结果'
+
+        for offset, want in enumerate(expected_words):
+            addr = address + offset
+            try:
+                values = reader(addr, 1)
+            except Exception as exc:          # noqa: BLE001
+                return False, f'回读寄存器 {addr} 异常: {exc}'
+            # ModbusClient 读失败会返回陈旧缓存；源码注释明确指出返回值本身
+            # 无法区分新鲜度，必须看 `last_read_source`。
+            source = getattr(client, 'last_read_source', None)
+            if isinstance(source, str) and source != 'fresh':
+                return False, (f'回读寄存器 {addr} 不是新鲜数据'
+                               f'(source={source})，无法确认写入')
+            if not values:
+                return False, f'回读寄存器 {addr} 无数据，无法确认写入'
+            actual = int(values[0]) & 0xFFFF
+            expected = int(want) & 0xFFFF
+            if actual != expected:
+                return False, (f'回读不一致：寄存器 {addr} 写入 {expected}，'
+                               f'读回 {actual}')
+        return True, ''
+
+    @staticmethod
+    def _read_back_coil(client: Any, address: int,
+                        expected: bool) -> tuple[bool, str]:
+        """写后回读线圈并与期望值比较（无法确认一律失败）。"""
+        reader = getattr(client, 'read_coils', None)
+        if not callable(reader):
+            return False, '客户端不支持线圈回读，无法确认写入结果'
+        try:
+            values = reader(address, 1)
+        except Exception as exc:              # noqa: BLE001
+            return False, f'回读线圈 {address} 异常: {exc}'
+        source = getattr(client, 'last_read_source', None)
+        if isinstance(source, str) and source != 'fresh':
+            return False, (f'回读线圈 {address} 不是新鲜数据(source={source})，'
+                           f'无法确认写入')
+        if not values:
+            return False, f'回读线圈 {address} 无数据，无法确认写入'
+        actual = bool(values[0])
+        if actual != bool(expected):
+            return False, (f'回读不一致：线圈 {address} 写入 {bool(expected)}，'
+                           f'读回 {actual}')
+        return True, ''
+
+    def _write_and_verify(self, client: Any, kind: str, address: int,
+                          value) -> tuple[bool, str]:
+        """写点位并回读确认；返回 ``(ok, reason)``。"""
+        if not self._write_control(client, kind, address, value):
+            return False, '写入失败'
+        if kind == 'coil':
+            return self._read_back_coil(client, address, bool(value))
+        return self._read_back_registers(client, address, [int(value)])
+
     def _resolve_control_action(self, config: dict[str, Any], action: str):
         """解析启停点位，返回 ``(kind, address, value)``；解析不出返回 ``None``。
 
@@ -490,6 +596,11 @@ class RealDeviceManager(IDeviceManager):
                 logger.error("[真实] 设备 %s 启停写入值非法: %r",
                              config.get('id'), spec.get('value'))
                 return None
+            if not 0 <= raw <= 0xFFFF:
+                # 控制寄存器是 16 位字：超范围值不能 `& 0xFFFF` 后写下去
+                logger.error("[真实] 设备 %s 启停写入值 %r 超出 16 位寄存器范围",
+                             config.get('id'), raw)
+                return None
             value = raw
         return kind, address, value
 
@@ -513,6 +624,10 @@ class RealDeviceManager(IDeviceManager):
             except NotImplementedError:
                 logger.error("[真实] 客户端 write_single_coil 未实现 —— 拒绝跨类型退回")
                 return False
+            except Exception as exc:          # noqa: BLE001
+                # round 380：通信异常/超时不能穿出到 API（500），统一 fail-closed。
+                logger.error("[真实] 线圈写入 %s 异常: %s", address, exc)
+                return False
 
         if not hasattr(client, 'write_single_register'):
             logger.error("[真实] 客户端不支持寄存器写入（点位类型 register）—— 拒绝跨类型退回写线圈")
@@ -522,6 +637,9 @@ class RealDeviceManager(IDeviceManager):
         except NotImplementedError:
             logger.error("[真实] 客户端 write_single_register 未实现 —— 拒绝跨类型退回")
             return False
+        except Exception as exc:              # noqa: BLE001
+            logger.error("[真实] 寄存器写入 %s 异常: %s", address, exc)
+            return False
 
     def stop_device(self, device_id: str, write: bool = True) -> bool:
         """停止指定设备（仅限机械类设备）。
@@ -529,74 +647,94 @@ class RealDeviceManager(IDeviceManager):
         ⚠️ 返回 False 的**每一种**情形都必须明确（历史实现有两处会静默返回 True，
         调用方（`/api/devices/{id}/stop`）会把"什么都没做"报成"停止成功"）：
         ① 设备不存在；② 非机械类设备；③ 未配置启停点位（真实模式不猜点位）；
-        ④ 客户端不存在；⑤ 写入失败。
+        ④ 客户端不存在；⑤ 写入失败；⑥ **写后回读不一致/无法回读**。
+
+        round 380：⑤⑥ 分开 —— 只发帧不代表设备真的停了。`write=True` 时
+        一律 write-then-read-back，读回不一致按失败处理，绝不把「帧发出去了」
+        当成「设备停了」（操作员以为停了、设备还在转是致命假成功）。
 
         Args:
             write: 是否真的向 PLC 下发停止点位。``False`` 表示调用方
                 （如 ``device_control.batch_control``）**已经**通过安全通道
-                写过同一根点位，这里只同步本地状态 —— 否则每次批量停止都会
+                写过并校验过同一根点位，这里只同步本地状态 —— 否则每次批量停止都会
                 对同一地址**重复下发一次**。
         """
-        config = self.devices.get(device_id)
-        if not config:
-            logger.error("[真实] 停止失败：设备 %s 不存在", device_id)
-            return False
+        with self._device_lock(device_id):
+            config = self.devices.get(device_id)
+            if not config:
+                logger.error("[真实] 停止失败：设备 %s 不存在", device_id)
+                return False
 
-        category = IDeviceManager.get_device_category(config)
-        if category != 'mechanical':
-            logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
-            return False
+            category = IDeviceManager.get_device_category(config)
+            if category != 'mechanical':
+                logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
+                return False
 
-        resolved = self._resolve_control_action(config, 'stop')
-        if resolved is None:
-            return False
+            resolved = self._resolve_control_action(config, 'stop')
+            if resolved is None:
+                return False
 
-        client = self.get_client(device_id)
-        if not client:
-            logger.error("[真实] 停止失败：设备 %s 客户端不存在（配置或协议不支持）", device_id)
-            return False
+            client = self.get_client(device_id)
+            if not client:
+                logger.error("[真实] 停止失败：设备 %s 客户端不存在（配置或协议不支持）", device_id)
+                return False
 
-        if write and not self._write_control(client, *resolved):
-            logger.error(f"[真实] 设备 {device_id} 停止命令发送失败")
-            return False
+            if write:
+                ok, reason = self._write_and_verify(client, *resolved)
+                if not ok:
+                    logger.error("[真实] 设备 %s 停止失败：%s", device_id, reason)
+                    return False
 
-        # 只有**写成功**才标记为已停止（原来在写之前就标记，失败也会显示"已停止"）
-        self._stopped_devices.add(device_id)
-        logger.info(f"[真实] 设备 {device_id} 已停止")
-        return True
+            # 只有**写成功且回读确认**才标记为已停止
+            self._stopped_devices.add(device_id)
+            logger.info(f"[真实] 设备 {device_id} 已停止")
+            return True
 
     def start_device(self, device_id: str, write: bool = True) -> bool:
         """启动指定设备（仅限机械类设备）。失败情形同 `stop_device`。"""
-        # round 382：急停期间必须拒绝启动，不能只做状态显示。
-        if self._estop_active:
-            logger.error("[真实] 紧急停机生效中，拒绝启动设备 %s", device_id)
-            return False
-        config = self.devices.get(device_id)
-        if not config:
-            logger.error("[真实] 启动失败：设备 %s 不存在", device_id)
-            return False
+        with self._device_lock(device_id):
+            # round 382：急停期间必须拒绝启动，不能只做状态显示。
+            # round 380：检查放进设备锁内，与写操作串行化。
+            if self._estop_active:
+                logger.error("[真实] 紧急停机生效中，拒绝启动设备 %s", device_id)
+                return False
+            config = self.devices.get(device_id)
+            if not config:
+                logger.error("[真实] 启动失败：设备 %s 不存在", device_id)
+                return False
 
-        category = IDeviceManager.get_device_category(config)
-        if category != 'mechanical':
-            logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
-            return False
+            category = IDeviceManager.get_device_category(config)
+            if category != 'mechanical':
+                logger.warning(f"设备 {device_id} 类型为 {category}，不可启停")
+                return False
 
-        resolved = self._resolve_control_action(config, 'start')
-        if resolved is None:
-            return False
+            resolved = self._resolve_control_action(config, 'start')
+            if resolved is None:
+                return False
 
-        client = self.get_client(device_id)
-        if not client:
-            logger.error("[真实] 启动失败：设备 %s 客户端不存在（配置或协议不支持）", device_id)
-            return False
+            client = self.get_client(device_id)
+            if not client:
+                logger.error("[真实] 启动失败：设备 %s 客户端不存在（配置或协议不支持）", device_id)
+                return False
 
-        if write and not self._write_control(client, *resolved):
-            logger.error(f"[真实] 设备 {device_id} 启动命令发送失败")
-            return False
+            if write:
+                ok, reason = self._write_and_verify(client, *resolved)
+                if not ok:
+                    logger.error("[真实] 设备 %s 启动失败：%s", device_id, reason)
+                    return False
+                # 写入/回读期间急停可能生效：不得把「已经在转」当成启动成功，
+                # 并立即补发停止回到安全侧（best effort，失败只记 CRITICAL）。
+                if self._estop_active:
+                    logger.critical(
+                        "[真实] 设备 %s 启动写入期间急停生效，立即补发停止", device_id)
+                    stop_point = self._resolve_control_action(config, 'stop')
+                    if stop_point is not None:
+                        self._write_control(client, *stop_point)
+                    return False
 
-        self._stopped_devices.discard(device_id)
-        logger.info(f"[真实] 设备 {device_id} 已启动")
-        return True
+            self._stopped_devices.discard(device_id)
+            logger.info(f"[真实] 设备 {device_id} 已启动")
+            return True
 
     @staticmethod
     def _write_registers_compat(client: Any, address: int,
@@ -621,7 +759,7 @@ class RealDeviceManager(IDeviceManager):
 
     def adjust_device(self, device_id: str, register_name: str, value: float) -> dict:
         """
-        调节设备参数（写入指定寄存器值）
+        调节设备参数（写入指定寄存器值，**写后回读确认**）
 
         Args:
             device_id: 设备ID
@@ -630,10 +768,26 @@ class RealDeviceManager(IDeviceManager):
 
         Returns:
             {'success': bool, 'message': str}
+
+        round 380 的失败口径（都不能当成功）：
+        · `value` 是 NaN/±Infinity（JSON 的 1e400、YAML 的 .nan 都能进来）；
+        · 换算后的原始值超出点位位宽（原来 `& 0xFFFF` 静默回绕成另一个数）；
+        · 写入抛异常 / 返回 False；
+        · **写后回读不一致或无读能力**（假成功对调参同样危险）。
         """
         config = self.devices.get(device_id)
         if not config:
             return {'success': False, 'message': f'设备 {device_id} 不存在'}
+
+        # NaN/Inf 必须在任何换算/取整之前拦掉：`int(nan)` 抛 ValueError，
+        # 但范围校验对 NaN 恒为 False（NaN 与任何数比较都 False），
+        # 放进去就会一路下发到 PLC。
+        try:
+            numeric_value = to_finite_float(value)
+        except ValueError as exc:
+            logger.error("[真实] 设备 %s 调节 %s 的设定值非法: %r（%s）",
+                         device_id, register_name, value, exc)
+            return {'success': False, 'message': f'设定值非法: {value!r}（{exc}）'}
 
         # 找到对应的寄存器配置
         registers = config.get('registers') or []
@@ -663,48 +817,93 @@ class RealDeviceManager(IDeviceManager):
         data_type = target_reg.get('data_type', 'uint16')
         scale = target_reg.get('scale', 1.0)
         offset = target_reg.get('offset', 0)
+        dt = str(data_type).lower()
 
-        # 反向换算：工程值 → 原始值（round 372：统一入口）
-        raw_value = to_raw(value, scale or 1.0, offset or 0.0)
-
+        # 反向换算：工程值 → 原始值（round 372：统一入口）。
+        # `to_raw` 自己会拒绝非有限值与 scale=0；再兜一次结果 —— 极端的
+        # value/scale 组合（1e308 / 1e-10）会算出 inf。
         try:
-            byte_order = config.get('byte_order', 'ABCD')
-            dt = str(data_type).lower()
-            if dt in ('float32', 'float', 'real'):
-                # round 369：**必须按设备 byte_order 编码**。
-                # 原来硬编码 `struct.pack('>f', ...)`（等价 ABCD），
-                # 对 CDAB/BADC/DCBA 的 PLC（如施耐德 M340）等于把高低字
-                # 写反 —— 设定温度 50.0 会被设备解释成完全不同的数。
-                #
-                # round 370（BUG-009/010）：**不能再调 `write_float32(address, value)`**。
-                # FINS/MC 的这个方法是 `write_float32(area, address, value)`
-                # （区域名是第一个参数），两参调用直接 TypeError；而且
-                # int32/uint32 落进 else 分支只写一个 16 位寄存器（高字丢失）。
-                # 统一走「编码成字 → 多寄存器写」，三家协议共用同一条路径。
-                regs = encode_float32_registers(float(raw_value), byte_order)
-                success = self._write_registers_compat(client, address, regs)
-            elif dt in ('int32', 'uint32'):
-                regs = encode_int32_registers(
-                    int(round(raw_value)), byte_order, signed=(dt == 'int32'))
-                success = self._write_registers_compat(client, address, regs)
-            elif dt in ('uint16', 'int16', 'word', 'uint', 'int', 'short'):
-                success = client.write_single_register(
-                    address, int(round(raw_value)) & 0xFFFF)
-            else:
-                logger.error("[真实] 设备 %s 的 data_type=%r 不支持单寄存器写入",
-                             config.get('id'), dt)
-                return {'success': False,
-                        'message': f'data_type={dt!r} 不支持单寄存器写入'}
+            raw_value = to_raw(numeric_value, scale, offset)
+            raw_value = to_finite_float(raw_value, 'raw value')
+        except ValueError as exc:
+            logger.error("[真实] 设备 %s 调节 %s 换算失败: %s",
+                         device_id, register_name, exc)
+            return {'success': False, 'message': f'设定值非法: {value!r}（{exc}）'}
 
-            if success:
+        # 同一台设备的启停与调参串行化：并发写会让「写 → 回读 → 改状态」
+        # 交错，出现状态分裂，也会和急停抢写窗口。
+        with self._device_lock(device_id):
+            try:
+                byte_order = config.get('byte_order', 'ABCD')
+                if dt in ('float32', 'float', 'real'):
+                    # round 369：**必须按设备 byte_order 编码**。
+                    # 原来硬编码 `struct.pack('>f', ...)`（等价 ABCD），
+                    # 对 CDAB/BADC/DCBA 的 PLC（如施耐德 M340）等于把高低字
+                    # 写反 —— 设定温度 50.0 会被设备解释成完全不同的数。
+                    #
+                    # round 370（BUG-009/010）：**不能再调 `write_float32(address, value)`**。
+                    # FINS/MC 的这个方法是 `write_float32(area, address, value)`
+                    # （区域名是第一个参数），两参调用直接 TypeError；而且
+                    # int32/uint32 落进 else 分支只写一个 16 位寄存器（高字丢失）。
+                    # 统一走「编码成字 → 多寄存器写」，三家协议共用同一条路径。
+                    if abs(raw_value) > _FLOAT32_MAX:
+                        return {'success': False,
+                                'message': (f'设定值 {value} 超出 float32 可表示范围'
+                                            f'（±{_FLOAT32_MAX:.3e}）')}
+                    expected_words = encode_float32_registers(
+                        float(raw_value), byte_order)
+                    success = self._write_registers_compat(
+                        client, address, expected_words)
+                elif dt in ('int32', 'uint32'):
+                    expected_words = encode_int32_registers(
+                        self._checked_integer(dt, raw_value, value),
+                        byte_order, signed=(dt == 'int32'))
+                    success = self._write_registers_compat(
+                        client, address, expected_words)
+                elif dt in ('uint16', 'int16', 'word', 'uint', 'int', 'short'):
+                    # round 380：先做范围校验，**不再用 `& 0xFFFF` 静默回绕**。
+                    # int16 的负值再转成 16 位补码（这是编码，不是回绕）。
+                    word = self._checked_integer(dt, raw_value, value) & 0xFFFF
+                    expected_words = [word]
+                    success = client.write_single_register(address, word)
+                else:
+                    logger.error("[真实] 设备 %s 的 data_type=%r 不支持单寄存器写入",
+                                 config.get('id'), dt)
+                    return {'success': False,
+                            'message': f'data_type={dt!r} 不支持单寄存器写入'}
+
+                if not success:
+                    return {'success': False, 'message': '写入失败'}
+
+                verified, reason = self._read_back_registers(
+                    client, address, expected_words)
+                if not verified:
+                    logger.error("[真实] 设备 %s 调节 %s 写入后回读失败: %s",
+                                 device_id, register_name, reason)
+                    return {'success': False,
+                            'message': f'{register_name} 写入后回读校验失败: {reason}'}
+
                 logger.info(f"[真实] 设备 {device_id} 调节 {register_name} = {value}")
                 return {'success': True, 'message': f'{register_name} 设置为 {value}'}
-            else:
-                return {'success': False, 'message': '写入失败'}
 
-        except Exception as e:
-            logger.error(f"调节失败 {device_id}/{register_name}: {e}")
-            return {'success': False, 'message': str(e)}
+            except Exception as e:
+                logger.error(f"调节失败 {device_id}/{register_name}: {e}")
+                return {'success': False, 'message': str(e)}
+
+    @staticmethod
+    def _checked_integer(dt: str, raw_value: float, original) -> int:
+        """把换算后的原始值收敛成整数并校验位宽，超范围抛 `ValueError`。
+
+        **不能**用 `& 0xFFFF` 把超范围值截断后写进 PLC —— 65536 会变成 0，
+        -1 写进 uint16 会变成 65535，操作员只看到「设置成功」。
+        """
+        low, high = _INTEGER_RANGES[dt]
+        number = int(round(raw_value))
+        if not low <= number <= high:
+            raise ValueError(
+                f'设定值 {original} 换算为 {number}，超出 {dt} 可写范围 '
+                f'[{low}, {high}]')
+        return number
 
     def connect_device(self, device_id: str) -> bool:
         """连接设备（含退避逻辑）"""
@@ -849,6 +1048,15 @@ class RealDeviceManager(IDeviceManager):
         if not device_config:
             return {'error': '设备配置不存在'}
 
+        category = IDeviceManager.get_device_category(device_config)
+        # round 380：**E-STOP 只归零 mechanical**。
+        # 仪表（instrument）与安全设备（safety）必须继续工作，不得因为急停
+        # 被标成 stopped/fault/offline —— 那会让操作员以为温度/压力/报警灯
+        # 也停了，属于最高优先级的语义红线。
+        stopped = (category == 'mechanical'
+                   and (device_id in self._stopped_devices
+                        or self._estop_active))
+
         status = {
             'device_id': device_id,
             'name': device_config.get('name'),
@@ -858,8 +1066,8 @@ class RealDeviceManager(IDeviceManager):
             'port': device_config.get('port'),
             'enabled': device_config.get('enabled', True),
             'connected': False,
-            'stopped': device_id in self._stopped_devices or self._estop_active,
-            'device_category': IDeviceManager.get_device_category(device_config),
+            'stopped': stopped,
+            'device_category': category,
             # round 380：设备语义/铭牌/自主等级（界面编辑需要；不含 adapter）
             'device_class': device_config.get('device_class', 'other'),
             'electrical': device_config.get('electrical') or {},
@@ -897,7 +1105,11 @@ class RealDeviceManager(IDeviceManager):
         device_config = self.devices.get(device_id, {})
         client = self.clients.get(device_id)
         connected = getattr(client, 'connected', False) if client else False
-        stopped = device_id in self._stopped_devices or self._estop_active
+        category = IDeviceManager.get_device_category(device_config)
+        # round 380：同 get_device_status —— 急停只影响 mechanical。
+        stopped = (category == 'mechanical'
+                   and (device_id in self._stopped_devices
+                        or self._estop_active))
         regs = device_config.get('registers', [])
         nodes = device_config.get('nodes', [])
         topics = device_config.get('topics', [])
@@ -912,7 +1124,7 @@ class RealDeviceManager(IDeviceManager):
             'status': 'fault' if stopped else ('online' if connected else 'offline'),
             'protocol': device_config.get('protocol', 'modbus_tcp'),
             'host': device_config.get('host', device_config.get('endpoint', '')),
-            'device_category': IDeviceManager.get_device_category(device_config),
+            'device_category': category,
             'registers': [{'name': (r.get('name', '') if isinstance(r, dict) else str(r)),
                            'unit': (r.get('unit', '') if isinstance(r, dict) else '')}
                           for r in regs],

@@ -13,21 +13,35 @@ from 采集层.real_device_manager import RealDeviceManager
 
 
 class FakeClient:
-    def __init__(self, *, multi=True, fail=False, raise_on_multi=False):
+    def __init__(self, *, multi=True, fail=False, raise_on_multi=False,
+                 read_value=None):
         self.multi = multi
         self.fail = fail
         self.raise_on_multi = raise_on_multi
+        self.read_value = read_value      # 非 None 时回读恒返回它（模拟读回不一致）
         self.calls = []          # (方法名, 地址, 值)
+        self.words: dict[int, int] = {}
 
     def write_multiple_registers(self, address, values):
         self.calls.append(('multi', address, list(values)))
         if self.raise_on_multi:
             raise NotImplementedError
+        if not self.fail:
+            for offset, word in enumerate(values):
+                self.words[address + offset] = int(word) & 0xFFFF
         return not self.fail
 
     def write_single_register(self, address, value):
         self.calls.append(('single', address, value))
+        if not self.fail:
+            self.words[address] = int(value) & 0xFFFF
         return not self.fail
+
+    def read_holding_registers(self, address, count=1, *args, **kwargs):
+        """写后回读用：默认返回刚写入的字（真实 PLC 的正常行为）。"""
+        if self.read_value is not None:
+            return [self.read_value] * count
+        return [self.words.get(address + i, 0) for i in range(count)]
 
 
 def _dev(**kw):
@@ -121,12 +135,47 @@ def test_int32_writes_two_registers(manager):
     assert values == encode_int32_registers(70000, 'CDAB', signed=True)
 
 
-def test_uint16_masks_to_16_bits(manager):
+def test_uint16_out_of_range_rejected(manager):
+    """round 380：-1 写 uint16 **不能** `& 0xFFFF` 静默变成 65535。
+
+    原用例 `test_uint16_masks_to_16_bits` 断言的是「回绕成功」，那正是
+    审计里的缺陷（超范围值写进 PLC 会变成另一个数）。改为断言拒绝。
+    """
     client = _attach(manager, FakeClient())
     r = manager.adjust_device('dev1', 'speed', -1)
 
-    assert r['success'] is True
-    assert client.calls[-1] == ('single', 10, 65535)
+    assert r['success'] is False
+    assert '超出' in r['message']
+    assert client.calls == [], '超范围值不能下发'
+
+
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), float('-inf')])
+def test_non_finite_value_rejected(manager, bad):
+    """NaN/±Inf 不能走到写入路径（NaN 与任何数比较都 False，范围校验拦不住）。"""
+    client = _attach(manager, FakeClient())
+    r = manager.adjust_device('dev1', 'speed', bad)
+
+    assert r['success'] is False
+    assert '设定值非法' in r['message']
+    assert client.calls == []
+
+
+def test_int32_out_of_range_rejected(manager):
+    client = _attach(manager, FakeClient())
+    r = manager.adjust_device('dev1', 'count_sp', 2 ** 31)
+
+    assert r['success'] is False
+    assert '超出' in r['message']
+    assert client.calls == []
+
+
+def test_read_back_mismatch_is_failure(manager):
+    """写成功但回读不是写入值 → 失败（不能把"帧发出去了"当成功）。"""
+    _attach(manager, FakeClient(read_value=1234))
+    r = manager.adjust_device('dev1', 'speed', 1)
+
+    assert r['success'] is False
+    assert '回读' in r['message']
 
 
 def test_unsupported_data_type(manager):

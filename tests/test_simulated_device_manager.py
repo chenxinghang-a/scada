@@ -12,57 +12,60 @@ import yaml
 from 采集层.simulated_device_manager import SimulatedDeviceManager
 
 
+@pytest.fixture
+def tmp_config(tmp_path):
+    """Create a temporary device config file"""
+    config = {
+        'devices': [
+            {
+                'id': 'pump_01',
+                'name': 'Test Pump',
+                'protocol': 'modbus_tcp',
+                'host': '127.0.0.1',
+                'port': 502,
+                'enabled': True,
+                'device_category': 'mechanical',
+                'registers': [
+                    {'name': 'speed', 'address': 0, 'type': 'uint16'},
+                    {'name': 'status', 'address': 100, 'type': 'bool'},
+                    {'name': 'run_cmd', 'address': 101, 'data_type': 'bool'},
+                ]
+            },
+            {
+                'id': 'sensor_01',
+                'name': 'Temp Sensor',
+                'protocol': 'modbus_tcp',
+                'host': '127.0.0.1',
+                'port': 502,
+                'enabled': True,
+                'device_category': 'instrument',
+                'registers': [
+                    {'name': 'temperature', 'address': 0, 'type': 'float'},
+                ]
+            },
+            {
+                'id': 'mqtt_01',
+                'name': 'MQTT Sensor',
+                'protocol': 'mqtt',
+                'host': 'localhost',
+                'port': 1883,
+                'enabled': False,
+                'registers': []
+            },
+        ]
+    }
+    config_file = tmp_path / 'devices.yaml'
+    with open(config_file, 'w', encoding='utf-8') as f:
+        yaml.dump(config, f)
+    return str(config_file)
+
+
+@pytest.fixture
+def mgr(tmp_config):
+    return SimulatedDeviceManager(config_path=tmp_config)
+
+
 class TestSimulatedDeviceManager:
-
-    @pytest.fixture
-    def tmp_config(self, tmp_path):
-        """Create a temporary device config file"""
-        config = {
-            'devices': [
-                {
-                    'id': 'pump_01',
-                    'name': 'Test Pump',
-                    'protocol': 'modbus_tcp',
-                    'host': '127.0.0.1',
-                    'port': 502,
-                    'enabled': True,
-                    'device_category': 'mechanical',
-                    'registers': [
-                        {'name': 'speed', 'address': 0, 'type': 'uint16'},
-                        {'name': 'status', 'address': 100, 'type': 'bool'},
-                    ]
-                },
-                {
-                    'id': 'sensor_01',
-                    'name': 'Temp Sensor',
-                    'protocol': 'modbus_tcp',
-                    'host': '127.0.0.1',
-                    'port': 502,
-                    'enabled': True,
-                    'device_category': 'instrument',
-                    'registers': [
-                        {'name': 'temperature', 'address': 0, 'type': 'float'},
-                    ]
-                },
-                {
-                    'id': 'mqtt_01',
-                    'name': 'MQTT Sensor',
-                    'protocol': 'mqtt',
-                    'host': 'localhost',
-                    'port': 1883,
-                    'enabled': False,
-                    'registers': []
-                },
-            ]
-        }
-        config_file = tmp_path / 'devices.yaml'
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f)
-        return str(config_file)
-
-    @pytest.fixture
-    def mgr(self, tmp_config):
-        return SimulatedDeviceManager(config_path=tmp_config)
 
     def test_init(self, mgr):
         assert mgr.simulation_mode is True
@@ -278,3 +281,95 @@ class TestSimulatedDeviceManager:
         assert 'opcua' in SimulatedDeviceManager.SUPPORTED_PROTOCOLS
         assert 'mqtt' in SimulatedDeviceManager.SUPPORTED_PROTOCOLS
         assert 'rest' in SimulatedDeviceManager.SUPPORTED_PROTOCOLS
+
+
+class TestSimulatedSafetyRound380:
+    """round 380：急停语义 / 调参校验 / 回读 / 设备级互斥。"""
+
+    def test_estop_only_affects_mechanical(self, mgr):
+        mgr.devices['safety_01'] = {
+            'id': 'safety_01', 'name': '报警灯', 'protocol': 'modbus_tcp',
+            'device_category': 'safety', 'registers': [],
+        }
+        try:
+            mgr.set_estop_override(True)
+            assert mgr.get_device_status('pump_01')['stopped'] is True
+
+            for did in ('sensor_01', 'safety_01'):
+                full = mgr.get_device_status(did)
+                brief = mgr._get_brief_status(did)
+                assert full['stopped'] is False, f'{did} 被 E-STOP 误标为 stopped'
+                assert brief['stopped'] is False, f'{did} 被 E-STOP 误标为 stopped'
+                assert brief['status'] != 'fault', f'{did} 被 E-STOP 误标为 fault'
+        finally:
+            mgr.set_estop_override(False)
+
+    def test_start_refused_during_estop(self, mgr):
+        try:
+            mgr.set_estop_override(True)
+            assert mgr.start_device('pump_01') is False
+        finally:
+            mgr.set_estop_override(False)
+
+    def test_adjust_rejects_non_finite(self, mgr):
+        for bad in (float('nan'), float('inf'), float('-inf')):
+            r = mgr.adjust_device('pump_01', 'speed', bad)
+            assert r['success'] is False, f'{bad!r} 被当成合法设定值'
+
+    def test_adjust_rejects_out_of_range_instead_of_wrapping(self, mgr):
+        for bad in (65536, -1):
+            r = mgr.adjust_device('pump_01', 'speed', bad)
+            assert r['success'] is False, f'{bad} 超出 uint16 却被接受'
+
+    def test_coil_rejects_forced_truthiness(self, mgr):
+        """`bool("false")` / `bool(2)` 都是 True —— 必须按字面量解析或拒绝。"""
+        for bad in ('maybe', 2, -1, 0.5, float('nan')):
+            r = mgr.adjust_device('pump_01', 'run_cmd', bad)
+            assert r['success'] is False, f'{bad!r} 被强转后下发'
+
+    def test_coil_accepts_literal_values(self, mgr):
+        for good in ('true', 'false', 0, 1, True, False):
+            r = mgr.adjust_device('pump_01', 'run_cmd', good)
+            assert r['success'] is True, f'{good!r} 应被接受: {r["message"]}'
+
+    def test_adjust_read_back_mismatch_is_failure(self, mgr):
+        client = mgr.get_client('pump_01')
+        client.connect()
+        client.read_holding_registers = (
+            lambda address, count=1, *a, **k: [999])
+
+        r = mgr.adjust_device('pump_01', 'speed', 1500)
+        assert r['success'] is False
+        assert '回读' in r['message']
+
+    def test_concurrent_adjust_is_serialized(self, mgr):
+        import threading
+        import time
+
+        client = mgr.get_client('pump_01')
+        client.connect()
+        state = {'active': 0, 'max': 0, 'lock': threading.Lock()}
+        original = client.write_single_register
+
+        def _tracked(address, value, *args, **kwargs):
+            with state['lock']:
+                state['active'] += 1
+                state['max'] = max(state['max'], state['active'])
+            time.sleep(0.02)
+            try:
+                return original(address, value, *args, **kwargs)
+            finally:
+                with state['lock']:
+                    state['active'] -= 1
+
+        client.write_single_register = _tracked
+
+        threads = [threading.Thread(
+            target=mgr.adjust_device, args=('pump_01', 'speed', i + 1))
+            for i in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert state['max'] == 1, '同一设备的调参写操作发生了重叠'

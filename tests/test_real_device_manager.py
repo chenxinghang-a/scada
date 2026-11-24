@@ -35,10 +35,40 @@ def _mgr(tmp_path, devices):
 
 
 def _fake_client(ok=True):
+    """行为正确的假 PLC：写入生效、回读返回刚写入的值。
+
+    round 380 起 `stop_device/start_device/adjust_device` 都要求 write-then-read-back，
+    假客户端必须像真 PLC 一样「读得到刚写的东西」，否则测的就不是真实路径。
+    测试仍可用 `.write_single_*.return_value = False` 模拟写失败 —— side_effect
+    每次都从 `return_value` 取当前值，写入失败时不更新回读缓存。
+    """
     c = MagicMock()
     c.connected = True
-    c.write_single_coil.return_value = ok
+    c._regs: dict[int, int] = {}
+    c._coils: dict[int, bool] = {}
+
+    def _write_register(address, value, *args, **kwargs):
+        result = c.write_single_register.return_value
+        if result:
+            c._regs[address] = int(value) & 0xFFFF
+        return result
+
+    def _write_coil(address, value, *args, **kwargs):
+        result = c.write_single_coil.return_value
+        if result:
+            c._coils[address] = bool(value)
+        return result
+
     c.write_single_register.return_value = ok
+    c.write_single_coil.return_value = ok
+    c.write_single_register.side_effect = _write_register
+    c.write_single_coil.side_effect = _write_coil
+    c.read_holding_registers.side_effect = (
+        lambda address, count=1, *a, **k: [c._regs.get(address + i, 0)
+                                          for i in range(count)])
+    c.read_coils.side_effect = (
+        lambda address, count=1, *a, **k: [c._coils.get(address + i, False)
+                                          for i in range(count)])
     return c
 
 
@@ -371,7 +401,126 @@ class TestFailureSemantics:
 
 
 # ---------------------------------------------------------------------------
-# 6. 重连循环生命周期
+# 6. round 380：写后回读 / 急停语义 / 调参校验 / 设备级互斥
+# ---------------------------------------------------------------------------
+
+class TestWriteVerificationRound380:
+    def test_stop_fails_when_read_back_disagrees(self, tmp_path):
+        """帧发出去了但设备没停 → 必须 False，且不得标记 stopped（假成功致命）。"""
+        m, client = _mech_mgr(tmp_path, control={'stop_coil': 9})
+        client.read_coils.side_effect = (
+            lambda address, count=1, *a, **k: [True])   # 读回仍为 ON
+        assert m.stop_device('plc_a') is False
+        assert m.get_device_status('plc_a')['stopped'] is False
+
+    def test_start_fails_when_read_back_disagrees(self, tmp_path):
+        m, client = _mech_mgr(tmp_path, control={'start_coil': 7})
+        client.read_coils.side_effect = (
+            lambda address, count=1, *a, **k: [False])
+        assert m.start_device('plc_a') is False
+
+    def test_stale_cache_is_not_success(self, tmp_path):
+        """Modbus 读失败会返回陈旧缓存 —— 回读非 fresh 一律算失败。"""
+        m, client = _mech_mgr(tmp_path, control={'stop_coil': 9})
+        client.last_read_source = 'cache'
+        assert m.stop_device('plc_a') is False
+        assert m.get_device_status('plc_a')['stopped'] is False
+
+    def test_client_without_read_back_is_not_success(self, tmp_path):
+        """客户端没有回读能力 → 无法确认写入，不能报成功。"""
+        class WriteOnly:
+            connected = True
+
+            def write_single_coil(self, address, value):
+                return True
+
+        m, _ = _mech_mgr(tmp_path, control={'stop_coil': 9})
+        m.clients['plc_a'] = WriteOnly()
+        assert m.stop_device('plc_a') is False
+
+    def test_estop_only_affects_mechanical(self, tmp_path):
+        """红线：E-STOP 只归零 mechanical；仪表与安全设备继续工作。"""
+        m = _mgr(tmp_path, [
+            {'id': 'mech', 'name': 'pump', 'protocol': 'modbus_tcp',
+             'device_category': 'mechanical'},
+            {'id': 'inst', 'name': '温度计', 'protocol': 'modbus_tcp',
+             'device_category': 'instrument'},
+            {'id': 'safe', 'name': '报警灯', 'protocol': 'modbus_tcp',
+             'device_category': 'safety'},
+        ])
+        m.set_estop_override(True)
+        assert m.get_device_status('mech')['stopped'] is True
+        assert m._get_brief_status('mech')['status'] == 'fault'
+
+        for did in ('inst', 'safe'):
+            full = m.get_device_status(did)
+            brief = m._get_brief_status(did)
+            assert full['stopped'] is False, f'{did} 被 E-STOP 误标为 stopped'
+            assert brief['stopped'] is False, f'{did} 被 E-STOP 误标为 stopped'
+            assert brief['status'] != 'fault', f'{did} 被 E-STOP 误标为 fault'
+
+    def test_adjust_rejects_nan_and_inf(self, tmp_path):
+        m, client = _mech_mgr(tmp_path, extra={
+            'registers': [{'name': 'speed', 'address': 10, 'data_type': 'uint16'}]})
+        for bad in (float('nan'), float('inf'), float('-inf')):
+            r = m.adjust_device('plc_a', 'speed', bad)
+            assert r['success'] is False, f'{bad!r} 被当成合法设定值'
+        client.write_single_register.assert_not_called()
+
+    def test_adjust_rejects_out_of_range_instead_of_wrapping(self, tmp_path):
+        """65536 / -1 写 uint16 不能 `& 0xFFFF` 变成 0 / 65535。"""
+        m, client = _mech_mgr(tmp_path, extra={
+            'registers': [{'name': 'speed', 'address': 10, 'data_type': 'uint16'}]})
+        for bad in (65536, -1):
+            r = m.adjust_device('plc_a', 'speed', bad)
+            assert r['success'] is False, f'{bad} 超出 uint16 却被接受'
+        client.write_single_register.assert_not_called()
+
+    def test_adjust_read_back_mismatch_is_failure(self, tmp_path):
+        m, client = _mech_mgr(tmp_path, extra={
+            'registers': [{'name': 'speed', 'address': 10, 'data_type': 'uint16'}]})
+        client.read_holding_registers.side_effect = (
+            lambda address, count=1, *a, **k: [4242])
+        r = m.adjust_device('plc_a', 'speed', 1500)
+        assert r['success'] is False
+        assert '回读' in r['message']
+
+    def test_concurrent_commands_are_serialized_per_device(self, tmp_path):
+        """同一台设备的启停/调参不得重叠进入写临界区。"""
+        import threading
+        import time
+
+        m, client = _mech_mgr(tmp_path, control={'start_coil': 7, 'stop_coil': 9})
+        base_coil = client.write_single_coil.side_effect
+        state = {'active': 0, 'max': 0, 'lock': threading.Lock()}
+
+        def _tracked(address, value, *args, **kwargs):
+            with state['lock']:
+                state['active'] += 1
+                state['max'] = max(state['max'], state['active'])
+            time.sleep(0.02)
+            try:
+                return base_coil(address, value, *args, **kwargs)
+            finally:
+                with state['lock']:
+                    state['active'] -= 1
+
+        client.write_single_coil.side_effect = _tracked
+
+        def _work(i):
+            m.start_device('plc_a') if i % 2 == 0 else m.stop_device('plc_a')
+
+        threads = [threading.Thread(target=_work, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert state['max'] == 1, '同一设备的写操作发生了重叠'
+
+
+# ---------------------------------------------------------------------------
+# 7. 重连循环生命周期
 # ---------------------------------------------------------------------------
 
 class TestReconnectLoop:
