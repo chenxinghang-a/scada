@@ -60,6 +60,23 @@ DEVICE_LOCK_TIMEOUT_S = 5.0         # 设备锁超时（秒）
 # 联锁规则配置文件（生产推荐）
 INTERLOCK_CONFIG_PATH = '配置/interlocks.yaml'
 
+#: 联锁采样数据的最大可信年龄（秒，round 397）。
+#:
+#: 采集断线后快照会冻结在最后一帧；联锁拿到的仍是"断线前正常"的值。
+#: 超过这个年龄没更新 → 按不可信处理（fail-closed），不允许据此启动设备。
+#: 与 `智能层/edge_decision.py` 的 `max_data_age_seconds` 同一口径，可由
+#: `config['max_data_age_seconds']` 覆盖。
+INTERLOCK_DATA_MAX_AGE_S = 10.0
+
+#: 可被联锁视为"可信"的质量码 / 文本。
+#:
+#: OPC UA / 采集层的 GOOD 是数字 192（0xC0）；推送型客户端可能给字符串。
+#: **只认白名单**：不认识的质量码一律不可信。这是联锁的准入判据，
+#: 不能按"不是 BAD 就算好"来写 —— 中间那些 UNCERTAIN* 码恰恰是
+#: "值可能是旧的/不可用的"。
+TRUSTED_QUALITY_CODES = frozenset({192})
+TRUSTED_QUALITY_TOKENS = frozenset({'GOOD', '正常', 'OK', 'NORMAL', 'VALID'})
+
 # 批量起停的**显式回退点位**（仅在设备未配置 control 段时使用，并记录告警）
 # 历史实现把 coil0 / reg100 直接写死在 batch_control 内且无任何提示；
 # 现改为"设备配置优先、回退值显式命名并告警"，避免把点位猜测静默写进现场设备。
@@ -319,6 +336,19 @@ class DeviceControlSafety:
         #: 重启后由 `_restore_persisted_state()` 重新 `.set()`，跨重启锁定不丢。
         self._estop_signal = threading.Event()
 
+        # ===== 联锁数据可信度（round 397） =====
+        #: rule_id -> {'reason_code', 'device_id', 'register_name',
+        #:             'quality', 'age_s', 'seen_at'}
+        #: 该规则**最近一次采样不可信**（质量非 GOOD / 时间戳超龄）。
+        #: 保留到同一规则收到一条可信采样为止 —— 断线期间不能因为
+        #: "没有新数据"就把保护悄悄解除。启机/写入准入读它（fail-closed）。
+        self._interlock_untrusted: dict[str, dict[str, Any]] = {}
+        _max_age = try_finite_float(
+            self.config.get('max_data_age_seconds', INTERLOCK_DATA_MAX_AGE_S))
+        self._interlock_max_data_age_s = (
+            INTERLOCK_DATA_MAX_AGE_S if _max_age is None or _max_age < 0
+            else float(_max_age))
+
         # ===== 故障降级 =====
         self._device_health: dict[str, dict[str, Any]] = {}  # device_id -> health info
         self._safe_state_handlers: dict[str, Callable[..., Any]] = {}  # device_id -> safe_state_func
@@ -472,6 +502,7 @@ class DeviceControlSafety:
                 for rid in removed:
                     self._interlock_states.pop(rid, None)
                     self._interlock_action_failures.pop(rid, None)
+                    self._interlock_untrusted.pop(rid, None)
                     self._interlock_bypass.discard(rid)
                 # changed：规则还在（新条件），状态**重置为未触发**而不是删 key ——
                 # 删掉会让 `_interlock_states` 缺少这条规则的条目，
@@ -480,6 +511,7 @@ class DeviceControlSafety:
                     if rid in self._interlock_states:
                         self._interlock_states[rid] = False
                     self._interlock_action_failures.pop(rid, None)
+                    self._interlock_untrusted.pop(rid, None)
                     self._interlock_bypass.discard(rid)
 
             # round 370（BUG-041）：旁路状态有**五份**，只清 `_interlock_bypass`
@@ -916,12 +948,17 @@ class DeviceControlSafety:
 
     def _interlock_blocks(
             self, action: str, scope: set[str] | None
-    ) -> tuple[dict[str, tuple[str, Any, str]], list[tuple[str, Any, str]]]:
-        """列出**当前已触发**联锁对各设备的阻止项。
+    ) -> tuple[dict[str, tuple[str, Any, str, str]],
+               list[tuple[str, Any, str, str]]]:
+        """列出**当前已触发 / 数据不可信**联锁对各设备的阻止项。
 
         Returns:
-            (device_blocks: device_id -> (rule_id, name, act_type),
-             global_blocks: [(rule_id, name, act_type), ...])
+            (device_blocks: device_id -> (rule_id, name, act_type, issue),
+             global_blocks: [(rule_id, name, act_type, issue), ...])
+
+            ``issue`` 为空串表示"条件确实成立"；非空时是数据不可信的原因
+            （``DATA_STALE`` / ``QUALITY_UNTRUSTED`` …），用于在返回体和
+            审计里明确区分「真的联锁了」与「读数不可信，不敢放行」（round 397）。
 
         round 386：归属判定统一走 `_interlock_targets()`。原实现只读
         `action.device_id` 与 `condition.device_id` 两个字段，于是：
@@ -930,8 +967,8 @@ class DeviceControlSafety:
           · `condition.type == and/or` 的嵌套条件、只给 `key` 的规则
             解析不出设备，会被漏掉（这里改为全厂级拦截）。
         """
-        device_blocks: dict[str, tuple[str, Any, str]] = {}
-        global_blocks: list[tuple[str, Any, str]] = []
+        device_blocks: dict[str, tuple[str, Any, str, str]] = {}
+        global_blocks: list[tuple[str, Any, str, str]] = []
 
         # round 373：**锁内取快照再遍历**。`_interlock_rules` 会被
         # `reload_interlocks()` 整体替换、`_interlock_states` 由采集线程
@@ -941,22 +978,29 @@ class DeviceControlSafety:
             items = list(self._interlock_rules.items())
             states = dict(self._interlock_states)
             bypass = set(self._interlock_bypass)
+            untrusted = dict(self._interlock_untrusted)
 
         for rule_id, rule in items:
             if rule_id in bypass:
-                continue
-            if not states.get(rule_id, False):
                 continue
             # 已停用的规则即使残留 True，也不该阻止操作
             # （`check_interlocks` 已跳过 disabled，这里再挡一道）。
             if not rule.get('enabled', True):
                 continue
+            triggered = states.get(rule_id, False)
+            issue_info = untrusted.get(rule_id)
+            if not triggered and not issue_info:
+                continue
             act = rule.get('action')
             act = act if isinstance(act, dict) else {}
             act_type = act.get('type')
+            # 已实际触发的优先级高于"数据不可信"：前者是确定要拦，
+            # 后者只是没法证明安全。两者的拦截效果一样，文案不同。
+            issue = '' if triggered else str(
+                (issue_info or {}).get('reason_code') or 'DATA_UNTRUSTED')
             targets, plant_wide = self._interlock_targets(
                 rule.get('condition'), act)
-            entry = (rule_id, rule.get('name'), act_type)
+            entry = (rule_id, rule.get('name'), act_type, issue)
             if plant_wide:
                 global_blocks.append(entry)
                 continue
@@ -1025,14 +1069,17 @@ class DeviceControlSafety:
             scope = set(device_ids) if device_ids is not None else None
             device_blocks, global_blocks = self._interlock_blocks(action, scope)
             if global_blocks:
-                names = '、'.join(f'{rid}({name}/{t})'
-                                  for rid, name, t in global_blocks)
+                names = '、'.join(
+                    f'{rid}({name}/{t})' + (f'[{issue}]' if issue else '')
+                    for rid, name, t, issue in global_blocks)
                 logger.error("批量%s被全厂级联锁阻止: %s", action, names)
                 return {
                     'success': False,
-                    'message': f'联锁正在触发，禁止{action}：{names}',
+                    'message': f'联锁正在触发或数据不可信，禁止{action}：{names}',
                     'results': {},
-                    'blocked_by': [rid for rid, _, _ in global_blocks],
+                    'blocked_by': [item[0] for item in global_blocks],
+                    'blocked_reasons': {item[0]: item[3]
+                                        for item in global_blocks if item[3]},
                 }
 
         results = {}
@@ -1058,15 +1105,25 @@ class DeviceControlSafety:
             try:
                 # 该设备被已触发的联锁覆盖 → 只跳过它，不连坐整批
                 if device_id in device_blocks:
-                    rule_id, rule_name, act_type = device_blocks[device_id]
+                    rule_id, rule_name, act_type, issue = device_blocks[device_id]
+                    if issue:
+                        message = (f'联锁数据不可信（{issue}），禁止{action}：'
+                                   f'{rule_id}({rule_name})')
+                    else:
+                        message = (f'联锁正在触发，禁止{action}：'
+                                   f'{rule_id}({rule_name}/{act_type})')
                     results[device_id] = {
                         'success': False,
-                        'message': f'联锁正在触发，禁止{action}：'
-                                   f'{rule_id}({rule_name}/{act_type})',
+                        'message': message,
                         'blocked_by': rule_id,
                     }
+                    if issue:
+                        results[device_id].update({
+                            'data_untrusted': True,
+                            'reason_code': issue,
+                        })
                     self._audit(f'batch_{action}', operator,
-                                f'批量{action}设备 {device_id}: 被已触发联锁 {rule_id} 阻止')
+                                f'批量{action}设备 {device_id}: {message}')
                     continue
 
                 client = self.device_manager.get_client(device_id) if self.device_manager else None
@@ -1522,6 +1579,9 @@ class DeviceControlSafety:
                 return False
             del self._interlock_rules[rule_id]
             self._interlock_states.pop(rule_id, None)
+            # round 397：不可信标记也要清 —— 否则同 id 规则重新加回来时，
+            # 会继承一条早已过期的"数据不可信"拦截。
+            self._interlock_untrusted.pop(rule_id, None)
             # round 353：**旁路状态有两份，必须一起清**。
             #
             # 原来只 `discard(_interlock_bypass)`，漏了 `_active_bypasses` 与落盘 ——
@@ -1839,7 +1899,115 @@ class DeviceControlSafety:
                     })
             return pending
 
-    def check_interlocks(self, device_id: str, register_name: str, value: float):
+    @staticmethod
+    def _coerce_sample_timestamp(updated_at: Any) -> float | None:
+        """把采样时间戳归一为 Unix 秒（round 397）。
+
+        接受 ``datetime`` / epoch 秒（int/float）/ 可解析字符串。
+        解析不出来返回 ``None`` —— 调用方按**不可信**处理，绝不回退到
+        ``time.time()``（那会把一条没有时间戳的旧值当成刚刚采到的新值）。
+        """
+        if updated_at is None or isinstance(updated_at, bool):
+            return None
+        if isinstance(updated_at, datetime):
+            try:
+                return updated_at.timestamp()
+            except (OverflowError, OSError, ValueError):
+                return None
+        if isinstance(updated_at, (int, float)):
+            return try_finite_float(updated_at)
+        if isinstance(updated_at, str):
+            text = updated_at.strip()
+            if not text:
+                return None
+            numeric = try_finite_float(text)
+            if numeric is not None:
+                return numeric
+            try:
+                return datetime.fromisoformat(text.replace('Z', '+00:00')).timestamp()
+            except (TypeError, ValueError, OverflowError, OSError):
+                return None
+        return None
+
+    def _assess_sample_trust(self, quality: Any, updated_at: Any
+                             ) -> tuple[bool, str, dict[str, Any]]:
+        """判断一条联锁采样是否可信（round 397）。
+
+        Returns:
+            ``(trusted, reason_code, detail)``。reason_code 取值：
+
+            * ``TRUSTED`` —— 可信；
+            * ``QUALITY_MISSING`` —— 调用方没给质量码（**fail-closed**）；
+            * ``QUALITY_UNTRUSTED`` —— 质量码非 GOOD/正常；
+            * ``TIMESTAMP_MISSING`` / ``TIMESTAMP_INVALID`` —— 没有/无法解析时间戳；
+            * ``DATA_STALE`` —— 距采样时间超过 ``max_data_age_s``；
+            * ``TIMESTAMP_IN_FUTURE`` —— 时间戳明显在未来（时钟异常）。
+
+        关键：``quality=None`` 是**不可信**，不是"默认正常"。给 quality 一个
+        "正常"的默认值会让所有没改到的调用点静默穿透 —— 那条路正是采集断线
+        后联锁继续拿旧值工作的原因。
+        """
+        detail: dict[str, Any] = {
+            'quality': quality,
+            'updated_at': (updated_at.isoformat()
+                           if isinstance(updated_at, datetime) else updated_at),
+            'age_s': None,
+        }
+
+        if quality is None:
+            return False, 'QUALITY_MISSING', detail
+        if isinstance(quality, bool):
+            trusted_quality = False
+        elif isinstance(quality, (int, float)):
+            numeric_quality = try_finite_float(quality)
+            trusted_quality = (numeric_quality is not None
+                               and int(numeric_quality) in TRUSTED_QUALITY_CODES
+                               and numeric_quality == int(numeric_quality))
+        else:
+            trusted_quality = str(quality).strip().upper() in TRUSTED_QUALITY_TOKENS
+        if not trusted_quality:
+            return False, 'QUALITY_UNTRUSTED', detail
+
+        if updated_at is None:
+            return False, 'TIMESTAMP_MISSING', detail
+        sampled_at = self._coerce_sample_timestamp(updated_at)
+        if sampled_at is None:
+            return False, 'TIMESTAMP_INVALID', detail
+
+        age = time.time() - sampled_at
+        detail['age_s'] = round(age, 3)
+        if age > self._interlock_max_data_age_s:
+            return False, 'DATA_STALE', detail
+        # 未来时间戳容 1 秒时钟抖动；再多就是时钟/单位错误，不能信。
+        if age < -1.0:
+            return False, 'TIMESTAMP_IN_FUTURE', detail
+        return True, 'TRUSTED', detail
+
+    def _rule_matches_sample(self, rule: dict[str, Any], device_id: str,
+                             register_name: str) -> bool:
+        """这条联锁的**条件点位**是否就是本次采样（round 397）。
+
+        只做匹配判定，不求值 —— 不可信采样要先把受影响的规则标记出来。
+        口径必须与 `check_interlocks()` 内的判定一致（threshold / coil）。
+        """
+        cond = rule.get('condition', {})
+        cond_type = cond.get('type')
+        if cond_type == 'threshold':
+            return (cond.get('device_id') == device_id and
+                    cond.get('register') == register_name)
+        if cond_type == 'coil':
+            cond_address = cond.get('address')
+            reg_addr = try_int(register_name)
+            if reg_addr is None:
+                reg_addr = self._resolve_register_address(device_id, register_name)
+            return (cond.get('device_id') == device_id and
+                    cond_address is not None and reg_addr is not None and
+                    int(cond_address) == int(reg_addr))
+        return False
+
+    def check_interlocks(self, device_id: str, register_name: str, value: float,
+                         quality: Any = None, updated_at: Any = None
+                         ) -> dict[str, Any] | None:
         """
         检查联锁条件（每次数据采集时调用）
 
@@ -1847,6 +2015,16 @@ class DeviceControlSafety:
             device_id: 设备ID
             register_name: 寄存器名称
             value: 当前值
+            quality: 该读数的数据质量码（OPC UA 数值码或 ``'GOOD'`` 等文本）。
+                **默认 ``None`` = 不可信**（fail-closed）：调用方必须显式声明
+                这条读数可信，否则不据此触发、也不据此解除联锁。
+            updated_at: 该读数的采样时间（``datetime`` / epoch 秒 / ISO 串）。
+                默认为 ``None`` = 不可信。超过 ``max_data_age_seconds``
+                （默认 10s）按 ``DATA_STALE`` 处理。
+
+        Returns:
+            可信时为 ``None``（保持原契约）；不可信时返回带 ``trusted=False``
+            与 ``reason_code`` 的字典，调用方与日志都能看到具体原因。
         """
         # 非有限值（NaN / ±Infinity）= 读数无效，**不是「条件解除」**。
         #
@@ -1873,6 +2051,51 @@ class DeviceControlSafety:
                 "%s/%s value=%r", device_id, register_name, value)
             return
         value = numeric
+
+        # round 397：**数据质量/时间戳是准入契约，不靠调用方自觉**。
+        #
+        # 采集断线后快照会冻结在最后一帧（或客户端返回陈旧缓存），联锁拿到的
+        # 是"断线前正常"的值 —— 继续按它判定等于保护失效。不可信采样：
+        #   * **不触发**任何动作（不能拿坏值去停设备）；
+        #   * **不解除**已触发的联锁（不能因为读不到就认为条件恢复）；
+        #   * 把受影响的规则记入 `_interlock_untrusted`，启机/写入准入据此拦截
+        #     （不知道该不该启 = 不许启，fail-closed）。
+        trusted, reason_code, trust_detail = self._assess_sample_trust(
+            quality, updated_at)
+        if not trusted:
+            matched_rules: list[str] = []
+            with self._lock:
+                for rule_id, rule in self._interlock_rules.items():
+                    if rule_id in self._interlock_bypass:
+                        continue
+                    if not rule.get('enabled', True):
+                        continue
+                    if self._rule_matches_sample(rule, device_id, register_name):
+                        self._interlock_untrusted[rule_id] = {
+                            'reason_code': reason_code,
+                            'device_id': device_id,
+                            'register_name': register_name,
+                            'seen_at': time.time(),
+                            **trust_detail,
+                        }
+                        matched_rules.append(rule_id)
+            logger.warning(
+                "联锁采样不可信(%s): %s/%s value=%r quality=%r age=%ss —— "
+                "不触发/不解除；启机准入按不可信拦截（受影响规则: %s）",
+                reason_code, device_id, register_name, value, quality,
+                trust_detail.get('age_s'), matched_rules or '无')
+            return {
+                'trusted': False,
+                'reason_code': reason_code,
+                'device_id': device_id,
+                'register_name': register_name,
+                'quality': quality,
+                'age_s': trust_detail.get('age_s'),
+                'matched_rules': matched_rules,
+                'message': (f'联锁采样不可信（{reason_code}）：'
+                            f'不据此触发或解除联锁'),
+            }
+
 
         # round 302：锁内只做「判定 + 排队」，I/O 一律锁外执行（理由见下方执行块）
         to_execute: list[tuple[str, dict[str, Any]]] = []
@@ -1947,6 +2170,10 @@ class DeviceControlSafety:
                 # round 298：采样不是这条规则的点位 → 不许动它的状态
                 if not matched:
                     continue
+
+                # round 397：同一规则收到**可信**采样 → 解除不可信标记。
+                # 只清本规则的，别的点位仍然断线时继续拦截。
+                self._interlock_untrusted.pop(rule_id, None)
 
                 # ===== 去抖（round 343）=====
                 #
@@ -2245,6 +2472,13 @@ class DeviceControlSafety:
                     container.pop(device_id, None)
                     removed = True
 
+            # round 397：不可信采样标记以 rule_id 为键，但归属某台设备 ——
+            # 设备删掉后若不清理，会留下一条永远等不到"可信采样"的拦截项。
+            for rid in [r for r, info in self._interlock_untrusted.items()
+                        if (info or {}).get('device_id') == device_id]:
+                self._interlock_untrusted.pop(rid, None)
+                removed = True
+
         # round 355：`_degraded_devices` 是 **set**（上面循环都是 dict.pop），
         # 所以它从来没被清过。后果：删掉再重加的设备如果之前处于故障降级态，
         # 会一直留在集合里 —— 而 `update_device_health` 的判断是
@@ -2284,6 +2518,13 @@ class DeviceControlSafety:
                     # 接口不返回 enabled，只能去翻 yaml 才知道那条是 disabled。
                     'enabled': rule.get('enabled', True),
                     'triggered': self._interlock_states.get(rule_id, False),
+                    # round 397：条件点位的**最新采样是否可信**。
+                    # 与 `triggered` 分开暴露：一条"未触发"的联锁可能只是
+                    # 因为传感器断线读不到值，界面不能把它显示成"安全"。
+                    'data_trusted': rule_id not in self._interlock_untrusted,
+                    'data_issue': (dict(self._interlock_untrusted[rule_id])
+                                   if rule_id in self._interlock_untrusted
+                                   else None),
                     # round 302：条件已成立但动作没发出去（写寄存器失败/急停抛异常）。
                     # `triggered` 保持 False 是为了下个采样点重试；没有这个字段，
                     # 界面上就是"条件没成立"，而事实是"成立过、但没执行成功"。
@@ -2692,6 +2933,7 @@ class DeviceControlSafety:
             interlock_rules = list(self._interlock_rules.items())
             interlock_states = dict(self._interlock_states)
             interlock_bypass = set(self._interlock_bypass)
+            interlock_untrusted = dict(self._interlock_untrusted)
         for rule_id, rule in interlock_rules:
             if rule_id in interlock_bypass:
                 continue
@@ -2713,6 +2955,19 @@ class DeviceControlSafety:
                     if interlock_states.get(rule_id, False):
                         result['allowed'] = False
                         result['reason'] = f'联锁 {rule_id} ({rule.get("name")}) 阻止操作'
+                        return result
+                    # round 397：条件点位的数据不可信（断线/超龄）→ 无法证明
+                    # 安全，按 fail-closed 拒绝。这是"联锁没触发"与"不知道
+                    # 有没有触发"必须区分的地方。
+                    issue = interlock_untrusted.get(rule_id)
+                    if issue:
+                        code = str(issue.get('reason_code') or 'DATA_UNTRUSTED')
+                        result['allowed'] = False
+                        result['reason'] = (
+                            f'联锁 {rule_id} ({rule.get("name")}) 的采样数据不可信'
+                            f'（{code}），拒绝写入')
+                        result['reason_code'] = code
+                        result['data_untrusted'] = True
                         return result
 
         # 5. 操作互斥检查
@@ -3026,16 +3281,21 @@ class DeviceControlSafety:
                 'start', set(to_restore))
             for device_id in to_restore:
                 if blocked_global:
-                    reason = ('联锁触发中（全厂级）: ' + '、'.join(
-                        f'{rid}({name})' for rid, name, _ in blocked_global))
+                    reason = ('联锁触发中或数据不可信（全厂级）: ' + '、'.join(
+                        f'{rid}({name})' + (f'[{issue}]' if issue else '')
+                        for rid, name, _t, issue in blocked_global))
                     skipped_devices.append({'device_id': device_id, 'reason': reason})
                     logger.warning("解除急停：跳过 %s —— %s", device_id, reason)
                     continue
                 blocked = blocked_devices.get(device_id)
                 if blocked:
-                    rid, rule_name, act_type = blocked
-                    reason = (f'联锁 {rid}({rule_name}/{act_type}) 触发中，'
-                              f'不自动启动')
+                    rid, rule_name, act_type, issue = blocked
+                    if issue:
+                        reason = (f'联锁 {rid}({rule_name}) 数据不可信（{issue}），'
+                                  f'不自动启动')
+                    else:
+                        reason = (f'联锁 {rid}({rule_name}/{act_type}) 触发中，'
+                                  f'不自动启动')
                     skipped_devices.append({'device_id': device_id, 'reason': reason})
                     logger.warning("解除急停：跳过 %s —— %s", device_id, reason)
                     continue

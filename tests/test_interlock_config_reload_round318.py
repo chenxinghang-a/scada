@@ -28,6 +28,7 @@
 """
 
 import logging
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -71,14 +72,16 @@ def test_reload_reports_diff():
 def test_reload_applies_new_threshold():
     """改阈值后必须真的生效（这是整个缺陷的核心）。"""
     dc = _dc([_rule('r1', thr=90.0)])
-    dc.check_interlocks('d1', 'temp', 100.0)
+    dc.check_interlocks('d1', 'temp', 100.0,
+                        quality='GOOD', updated_at=time.time())
     assert dc._interlock_states['r1'] is True, '前提不成立：旧阈值下应已触发'
 
     dc.config['interlocks'] = [_rule('r1', thr=200.0)]
     dc.reload_interlocks()
 
     # 新阈值 200：100 不再成立
-    dc.check_interlocks('d1', 'temp', 100.0)
+    dc.check_interlocks('d1', 'temp', 100.0,
+                        quality='GOOD', updated_at=time.time())
     assert dc._interlock_states['r1'] is False, (
         '改完阈值仍按旧值判定 —— 运维调参完全没生效')
 

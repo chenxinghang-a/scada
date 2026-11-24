@@ -28,6 +28,7 @@ round 245 修掉了「NaN 解除联锁」，但当时如实记录了一个更根
 而 round 245 那批注入式用例照样全绿。
 """
 import pathlib
+import time
 
 import pytest
 import yaml
@@ -138,7 +139,8 @@ class TestRealLoading:
         # 取一个必然满足条件的值（> 阈值就填阈值的 10 倍，< 就填 0）
         hot = cond['value'] * 10 if cond['operator'].startswith('>') else 0.0
 
-        dcm.check_interlocks(did, reg, hot)
+        dcm.check_interlocks(did, reg, hot,
+                             quality='GOOD', updated_at=time.time())
         assert dcm._interlock_states.get(rule['id']) is True, \
             f'{rule["id"]} 在超限值 {hot} 下没有触发'
 

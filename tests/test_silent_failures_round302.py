@@ -226,12 +226,14 @@ def test_interlock_action_failure_keeps_state_and_retries():
     client.write_single_register.side_effect = [RuntimeError('gateway down'), True]
     dc.device_manager.get_client.return_value = client
 
-    dc.check_interlocks('d1', 'temp', 120.0)
+    dc.check_interlocks('d1', 'temp', 120.0,
+                        quality='GOOD', updated_at=time.time())
     assert dc._interlock_states.get('il1') is False, (
         '动作没发出去，却已把联锁标成「已触发」—— 下一轮不会再试')
     assert dc._interlock_action_failures.get('il1') == 1
 
-    dc.check_interlocks('d1', 'temp', 120.0)
+    dc.check_interlocks('d1', 'temp', 120.0,
+                        quality='GOOD', updated_at=time.time())
     assert dc._interlock_states.get('il1') is True, '第二轮没有重试成功'
     assert 'il1' not in dc._interlock_action_failures, '重试成功后失败计数没清'
 
@@ -248,8 +250,9 @@ def test_interlock_status_not_blocked_by_slow_io():
     client.write_single_register.side_effect = slow_write
     dc.device_manager.get_client.return_value = client
 
-    worker = threading.Thread(target=lambda: dc.check_interlocks('d1', 'temp', 120.0),
-                              daemon=True)
+    worker = threading.Thread(target=lambda: dc.check_interlocks(
+        'd1', 'temp', 120.0, quality='GOOD', updated_at=time.time()),
+        daemon=True)
     worker.start()
     time.sleep(0.25)          # 让 check_interlocks 进到慢 I/O
 

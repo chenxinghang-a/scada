@@ -612,7 +612,9 @@ class TestInterlockConfigDriven:
 
         dc = DeviceControlSafety(MagicMock(), device_manager=dm,
                                  config={'interlocks': [INTERLOCK_SAMPLE]})
-        dc.check_interlocks('plc_a', 'temperature', 99.0)
+        # round 397：联锁的质量码/时间戳是强制契约，测试必须显式声明"新鲜且 GOOD"
+        dc.check_interlocks('plc_a', 'temperature', 99.0,
+                            quality='GOOD', updated_at=time.time())
 
         assert dc._interlock_states['il_temp_high'] is True
         client.write_single_register.assert_called_once_with(10, 0)
@@ -621,7 +623,8 @@ class TestInterlockConfigDriven:
         """条件不满足时不得触发"""
         from 智能层.device_control import DeviceControlSafety
         dc = DeviceControlSafety(MagicMock(), config={'interlocks': [INTERLOCK_SAMPLE]})
-        dc.check_interlocks('plc_a', 'temperature', 20.0)
+        dc.check_interlocks('plc_a', 'temperature', 20.0,
+                            quality='GOOD', updated_at=time.time())
         assert dc._interlock_states['il_temp_high'] is False
 
 

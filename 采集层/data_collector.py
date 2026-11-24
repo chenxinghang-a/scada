@@ -2620,6 +2620,11 @@ class DataCollector:
                                 'device_control',
                                 self.device_control.check_interlocks,
                                 data['device_id'], data['register_name'], data['value'],
+                                # round 397：质量码与采样时间是**联锁准入契约**。
+                                # 不传 = 不可信（fail-closed），断线冻结的快照
+                                # 不能再被当成"正常值"参与联锁判定。
+                                quality=data.get('quality'),
+                                updated_at=data.get('timestamp'),
                             )
                         data['_interlock_done'] = True
                         continue
@@ -2760,6 +2765,10 @@ class DataCollector:
             self._safe_intel(
                 'device_control', self.device_control.check_interlocks,
                 device_id, register_name, value,
+                # round 397：同批处理路径 —— 质量码 + 采样时间必须一起传，
+                # 缺任何一项都被联锁视为不可信。
+                quality=data.get('quality'),
+                updated_at=timestamp,
             )
 
         # 预测性维护

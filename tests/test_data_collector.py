@@ -367,7 +367,9 @@ class TestDispatchIntelligence:
         collector = self._make_collector(device_control=dc)
         data = {'device_id': 'd1', 'register_name': 'temp', 'value': 100.0, 'timestamp': datetime.now()}
         collector._dispatch_intelligence(data)
-        dc.check_interlocks.assert_called_once_with('d1', 'temp', 100.0)
+        dc.check_interlocks.assert_called_once_with(
+            'd1', 'temp', 100.0,
+            quality=data.get('quality'), updated_at=data['timestamp'])
 
     def test_dispatch_vibration(self):
         """Dispatch routes data to vibration analyzer"""

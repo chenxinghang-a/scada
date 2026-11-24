@@ -36,6 +36,7 @@ tests/test_interlocks_config_wiring.py 负责。
 
 import os
 import sys
+import time
 
 import pytest
 
@@ -76,6 +77,16 @@ def _triggered(dcm, rule_id='il_temp'):
     return dcm.get_interlock_status()[rule_id]['triggered']
 
 
+def _check(dcm, device_id, register_name, value):
+    """round 397：联锁的质量码/时间戳是强制契约。
+
+    不传质量码 = 不可信（fail-closed），本文件测的是"新鲜 GOOD 值下的
+    非有限值防御"，所以每条调用都要显式声明新鲜与可信。
+    """
+    return dcm.check_interlocks(device_id, register_name, value,
+                                quality='GOOD', updated_at=time.time())
+
+
 # ============================================================
 # 1. 非有限值不能解除已触发的联锁（核心）
 # ============================================================
@@ -83,10 +94,10 @@ def _triggered(dcm, rule_id='il_temp'):
 class TestNonFiniteDoesNotRelease:
     @pytest.mark.parametrize('bad', NON_FINITE)
     def test_high_operator_survives(self, dcm, bad):
-        dcm.check_interlocks('D1', 'temp', 120.0)
+        _check(dcm, 'D1', 'temp', 120.0)
         assert _triggered(dcm)
 
-        dcm.check_interlocks('D1', 'temp', bad)
+        _check(dcm, 'D1', 'temp', bad)
 
         assert _triggered(dcm), \
             f'{bad!r} 把已触发的联锁解除了 —— block_start 保护随之失效'
@@ -97,20 +108,20 @@ class TestNonFiniteDoesNotRelease:
         manager = DeviceControlSafety(
             MagicMock(), MagicMock(), MagicMock(),
             config={'interlocks': [_rule(op='<', threshold=50.0)]})
-        manager.check_interlocks('D1', 'temp', 10.0)
+        _check(manager, 'D1', 'temp', 10.0)
         assert _triggered(manager)
 
-        manager.check_interlocks('D1', 'temp', bad)
+        _check(manager, 'D1', 'temp', bad)
 
         assert _triggered(manager), f'{bad!r} 把「低于阈值」联锁解除了'
 
     def test_state_machine_intact_after_nan(self, dcm):
         """NaN 之后真实恢复必须仍能正常解除联锁。"""
-        dcm.check_interlocks('D1', 'temp', 120.0)
-        dcm.check_interlocks('D1', 'temp', float('nan'))
+        _check(dcm, 'D1', 'temp', 120.0)
+        _check(dcm, 'D1', 'temp', float('nan'))
         assert _triggered(dcm)
 
-        dcm.check_interlocks('D1', 'temp', 80.0)
+        _check(dcm, 'D1', 'temp', 80.0)
         assert not _triggered(dcm), '正常值反而解不掉联锁了'
 
 
@@ -121,7 +132,7 @@ class TestNonFiniteDoesNotRelease:
 class TestNonFiniteDoesNotTrigger:
     @pytest.mark.parametrize('bad', NON_FINITE)
     def test_no_new_interlock(self, dcm, bad):
-        dcm.check_interlocks('D1', 'temp', bad)
+        _check(dcm, 'D1', 'temp', bad)
         assert not _triggered(dcm), f'{bad!r} 凭空触发了联锁'
 
 
@@ -131,7 +142,7 @@ class TestNonFiniteDoesNotTrigger:
 
 def test_non_finite_is_logged(dcm, caplog):
     with caplog.at_level('WARNING'):
-        dcm.check_interlocks('D1', 'temp', float('nan'))
+        _check(dcm, 'D1', 'temp', float('nan'))
 
     assert any('非有限值' in r.getMessage() for r in caplog.records), \
         'NaN 被静默跳过了 —— 运维在日志里看不到痕迹'
@@ -143,7 +154,7 @@ def test_no_false_release_log(dcm, caplog):
 
     with caplog.at_level('INFO'):
         caplog.clear()
-        dcm.check_interlocks('D1', 'temp', float('nan'))
+        _check(dcm, 'D1', 'temp', float('nan'))
 
     assert not any('联锁条件解除' in r.getMessage() for r in caplog.records), \
         'NaN 触发了一条假的「联锁条件解除」日志'
@@ -159,8 +170,8 @@ def test_block_start_guard_still_blocks_after_nan(dcm):
     （`batch_control` 还需要 device_manager 提供可控设备列表，
     在单测里搭起来噪声太大；状态位是真正的判断依据，断言它更直接。）
     """
-    dcm.check_interlocks('D1', 'temp', 120.0)
-    dcm.check_interlocks('D1', 'temp', float('nan'))
+    _check(dcm, 'D1', 'temp', 120.0)
+    _check(dcm, 'D1', 'temp', float('nan'))
 
     status = dcm.get_interlock_status()['il_temp']
     assert status['triggered'] is True

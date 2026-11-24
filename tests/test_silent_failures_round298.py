@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -48,12 +49,15 @@ def test_interlock_survives_unrelated_register():
     """触发之后，**别的寄存器**的采样不许把联锁清掉。"""
     il = _safety()
 
-    il.check_interlocks('D1', 'temperature', 120.0)
+    il.check_interlocks('D1', 'temperature', 120.0,
+                        quality='GOOD', updated_at=time.time())
     assert il._interlock_states.get('IL_TEMP') is True, '前提不成立：联锁没触发'
 
     # 现场每 5s 就会来一条别的寄存器的数据
-    il.check_interlocks('D1', 'pressure', 0.5)
-    il.check_interlocks('D2', 'level', 10.0)
+    il.check_interlocks('D1', 'pressure', 0.5,
+                        quality='GOOD', updated_at=time.time())
+    il.check_interlocks('D2', 'level', 10.0,
+                        quality='GOOD', updated_at=time.time())
 
     assert il._interlock_states.get('IL_TEMP') is True, (
         '无关点位的采样把联锁清成了"未触发" —— 超温状态下仍可启动设备')
@@ -63,10 +67,12 @@ def test_interlock_clears_on_its_own_register():
     """反向对照：**本点位**恢复正常时，联锁必须解除。"""
     il = _safety()
 
-    il.check_interlocks('D1', 'temperature', 120.0)
+    il.check_interlocks('D1', 'temperature', 120.0,
+                        quality='GOOD', updated_at=time.time())
     assert il._interlock_states.get('IL_TEMP') is True
 
-    il.check_interlocks('D1', 'temperature', 60.0)
+    il.check_interlocks('D1', 'temperature', 60.0,
+                        quality='GOOD', updated_at=time.time())
     assert il._interlock_states.get('IL_TEMP') is False, (
         '本点位恢复后联锁没解除 —— 会永久锁死设备')
 
