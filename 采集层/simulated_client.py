@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict
 
 from core.safe_numeric import try_finite_float
 from core.engineering_units import to_raw
+from .interfaces import IDeviceManager
 from .base_client import (
     ModbusClientInterface,
     PushClientInterface,
@@ -582,6 +583,7 @@ def _generate_data_common(
     extra_field_fn: Callable[[dict], dict] | None = None,
     stat_inc_key: str = 'data_updates',
     callback_error_label: str = '回调',
+    device_category: str = '',
 ):
     """通用模拟数据生成逻辑（供OPC UA/MQTT/REST客户端复用）
 
@@ -596,9 +598,16 @@ def _generate_data_common(
         extra_field_fn: 接受config条目，返回额外字段的函数
         stat_inc_key: 统计计数器的key名
         callback_error_label: 回调异常日志标签
+        device_category: 设备三分类（mechanical/instrument/safety）。
+            空串表示未知，退回按点位名逐点判定（历史行为）。
+            非 mechanical 的设备不会被急停归零，也不会被标 bad。
     """
     t = time.time() - start_time
-    device_stopped = is_device_stopped(device_id)
+    # round 383：急停只作用于机械类设备。仪表/安全设备在急停期间必须继续
+    # 上报真实值 —— 原来这里不分设备类别，只要点位名像机械就归零。
+    machine_scope = device_category in ('', 'mechanical')
+    device_stopped = is_device_stopped(device_id) and machine_scope
+    estop_active = _ESTOP_ACTIVE and machine_scope
 
     for i, cfg in enumerate(configs):
         name = cfg.get('name') or cfg.get('node_id') or cfg.get('topic') or 'unknown'
@@ -614,7 +623,7 @@ def _generate_data_common(
                 value = 50 + 30 * math.sin(t / 20) + random.gauss(0, 2)
 
         value = round(value, 2)
-        if not device_stopped:
+        if not device_stopped and estop_active:
             value = _estop_override(name, value)
 
         entry = {
@@ -622,9 +631,9 @@ def _generate_data_common(
             'unit': unit,
             'timestamp': datetime.now().isoformat(),
             # 停机/急停期间值是被强制归零的，不能标成 good（会掩盖设备不可用）
-        'quality': ('bad' if (device_stopped
-                              or (_ESTOP_ACTIVE and _is_machinery(name)))
-                    else 'good'),
+            'quality': ('bad' if (device_stopped
+                                  or (estop_active and _is_machinery(name)))
+                        else 'good'),
             'device_id': device_id,
         }
         if extra_field_fn:
@@ -656,6 +665,14 @@ class SimulatedModbusClient(ModbusClientInterface):
 
         # 字节序：与 EnhancedSimulatedModbusClient 保持一致（配置可覆盖）
         self.byte_order = str(config.get('byte_order', 'ABCD')).upper()
+
+        # round 383：设备三分类。E-STOP 只对 mechanical 生效 —— 原来这里
+        # 无条件把一切点位/线圈置 0，连仪表读数、安全继电器都被"停掉"，
+        # 看板上的温度/压力瞬间掉 0，操作员会把急停误判成工艺异常。
+        # 分类统一走 IDeviceManager.get_device_category（**不存在**
+        # `self.category` 字段，上一轮补丁就是因此 AttributeError）。
+        self.device_category = IDeviceManager.get_device_category(config)
+        self._is_mechanical = self.device_category == 'mechanical'
 
         # 预缓存每个寄存器的模拟规则（只算一次）
         self._rules_cache = {}
@@ -704,8 +721,11 @@ class SimulatedModbusClient(ModbusClientInterface):
         self.stats['last_read_time'] = time.time()
 
         # ===== 设备级停止：机械归零，传感器保持环境值 =====
-        device_stopped = is_device_stopped(self.device_id)
-        estop_active = _ESTOP_ACTIVE
+        # round 383：停机/急停都只作用于 mechanical。instrument/safety 设备
+        # 既不能被"停止"，也不能被急停归零 —— 温度、压力、安全回路必须继续
+        # 上报真实值。
+        device_stopped = is_device_stopped(self.device_id) and self._is_mechanical
+        estop_active = _ESTOP_ACTIVE and self._is_mechanical
 
         if device_stopped or estop_active:
             # round 370（BUG-014/015）：停机分支三处修正 ——
@@ -759,52 +779,57 @@ class SimulatedModbusClient(ModbusClientInterface):
 
         t = time.time() - self.start_time
 
-        # 从缓存查找规则
-        rule = self._rules_cache.get(address)
-        if rule is None:
-            # 没有匹配规则，按寄存器读取数量猜测类型
-            if count >= 4:
-                # float64: 4 个寄存器；count 更大时补足长度
-                raw = struct.pack('>d', float(random.uniform(0, 100)))
-                words = [struct.unpack('>H', raw[i*2:(i+1)*2])[0] for i in range(4)]
-                return words + [random.randint(0, 1000) for _ in range(count - 4)]
-            elif count >= 2:
-                words = encode_float32_registers(
-                    random.uniform(0, 100), self.byte_order)
-                return words + [random.randint(0, 1000) for _ in range(count - 2)]
-            return [random.randint(0, 1000)]
+        # round 383：与停机分支、增强版同口径 —— **逐点按宽度步进**。
+        # 原来这里只编码 `address` 这一个点位，其余 count-1 个字全部补 0：
+        # 批量读 10 个点位，后 9 个恒为 0，看板上除首点外全部"归零"，
+        # 仪表设备在急停期间走这条路径也读不到真实值。
+        results = []
+        i = 0
+        while i < count:
+            addr = address + i
+            rule = self._rules_cache.get(addr)
+            if rule is None:
+                # 没有匹配规则：单位宽占位值，步进 1（不猜测宽度）
+                results.append(random.randint(0, 1000))
+                i += 1
+                continue
 
-        # 用地址做相位偏移，避免同类型寄存器曲线完全一致
-        phase = address * 0.3
-        value = _generate_value(rule, t, phase, noise_key=f"{self.device_id}:{address}")
+            reg_type = self._register_types.get(addr, {})
+            data_type = str(reg_type.get('data_type', 'uint16')).lower()
+            # 64 位类型占 4 个寄存器；漏掉会让批量读长度与地址映射整体错位
+            width = (4 if data_type in ('float64', 'int64', 'uint64')
+                     else 2 if data_type in ('float32', 'int32', 'uint32') else 1)
 
-        # 根据data_type决定编码方式
-        reg_type = self._register_types.get(address, {})
-        data_type = str(reg_type.get('data_type', 'uint16')).lower()
-        scale = try_finite_float(reg_type.get('scale', 1.0)) or 1.0
-        offset = try_finite_float(reg_type.get('offset', 0.0)) or 0.0
+            # 用地址做相位偏移，避免同类型寄存器曲线完全一致
+            value = _generate_value(
+                rule, t, addr * 0.3, noise_key=f"{self.device_id}:{addr}")
+            scale = try_finite_float(reg_type.get('scale', 1.0)) or 1.0
+            offset = try_finite_float(reg_type.get('offset', 0.0)) or 0.0
 
-        # 模拟值是实际值，需要反算为原始寄存器值再编码
-        # round 370（BUG-015）：补 offset 与字节序
-        # round 372：换算统一走 `core.engineering_units.to_raw`
-        raw_value = to_raw(value, scale, offset)
+            # 模拟值是实际值，需要反算为原始寄存器值再编码
+            # round 370（BUG-015）：补 offset 与字节序
+            # round 372：换算统一走 `core.engineering_units.to_raw`
+            raw_value = to_raw(value, scale, offset)
 
-        if data_type == 'float32':
-            words = encode_float32_registers(raw_value, self.byte_order)
-            return words + [0] * max(0, count - len(words))
-        elif data_type in ('int32', 'uint32'):
-            return encode_int32_registers(
-                int(round(raw_value)), self.byte_order,
-                signed=data_type == 'int32')
-        elif data_type in ('float64', 'int64', 'uint64'):
-            # 用真编码器（decode_float64_registers 的逆）；不再拿 float32+补零
-            # 冒充 —— 那会让解码得到"看似合理"的错误值。
-            regs = encode_float64_registers(float(raw_value), self.byte_order)
-            return regs + [0] * max(0, count - len(regs))
-        else:
-            # uint16 / int16 等单字类型：按实际 count 补齐，不再伪装成 float32
-            word = int(round(raw_value)) & 0xFFFF
-            return [word] + [0] * (count - 1)
+            if data_type == 'float32':
+                results.extend(encode_float32_registers(raw_value, self.byte_order))
+            elif data_type in ('int32', 'uint32'):
+                results.extend(encode_int32_registers(
+                    int(round(raw_value)), self.byte_order,
+                    signed=data_type == 'int32'))
+            elif data_type in ('float64', 'int64', 'uint64'):
+                # 用真编码器（decode_float64_registers 的逆）；不再拿 float32+补零
+                # 冒充 —— 那会让解码得到"看似合理"的错误值。
+                results.extend(encode_float64_registers(
+                    float(raw_value), self.byte_order))
+            else:
+                # uint16 / int16 等单字类型
+                results.append(int(round(raw_value)) & 0xFFFF)
+            i += width
+
+        if len(results) < count:
+            results.extend([0] * (count - len(results)))
+        return results[:count]
 
     def decode_float32(self, registers: list[int]) -> float:
         """解码 float32，尊重配置的 byte_order（与编码侧严格互逆）。"""
@@ -868,13 +893,23 @@ class SimulatedModbusClient(ModbusClientInterface):
             return None
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
+        # round 383：只剩 mechanical 会被急停/停机压制；safety 线圈（灯/蜂鸣器/
+        # 继电器）必须保持可用，否则急停时连声光报警都读不到。
+        estop_blocking = _ESTOP_ACTIVE and self._is_mechanical
+        device_stopped = is_device_stopped(self.device_id) and self._is_mechanical
         results = []
         for i in range(count):
             addr = address + i
-            if _ESTOP_ACTIVE:
-                results.append(False)  # All off during E-STOP
+            if estop_blocking:
+                # 急停后机械动作必须 fail-closed：即使此前写过 True，
+                # 回读也一律 False，不得让上层看到"还在运行"。
+                results.append(False)
+            elif addr in self._written_coils:
+                # round 383：写后回读。原来这里完全忽略 `_written_coils`，
+                # 写进去的值读出来是随机翻转 —— "写后回读"在模拟层是假的。
+                results.append(bool(self._written_coils[addr]))
             elif addr == 0:
-                results.append(not is_device_stopped(self.device_id))  # Running coil
+                results.append(not device_stopped)  # Running coil
             elif addr == 1:
                 results.append(False)  # Fault coil
             else:
@@ -886,13 +921,16 @@ class SimulatedModbusClient(ModbusClientInterface):
             return None
         self.stats['total_reads'] += 1
         self.stats['successful_reads'] += 1
+        # 只读输入：反映现场状态，三分类口径与线圈一致（round 383）
+        estop_blocking = _ESTOP_ACTIVE and self._is_mechanical
+        device_stopped = is_device_stopped(self.device_id) and self._is_mechanical
         results = []
         for i in range(count):
             addr = address + i
-            if _ESTOP_ACTIVE:
+            if estop_blocking:
                 results.append(False)
             elif addr == 0:
-                results.append(not is_device_stopped(self.device_id))
+                results.append(not device_stopped)
             elif addr == 1:
                 results.append(False)
             else:
@@ -922,6 +960,8 @@ class SimulatedOPCUAClient(PushClientInterface):
         self.start_time = time.time()
 
         self.node_configs = config.get('nodes', [])
+        # round 383：三分类 —— 急停只归零 mechanical 设备
+        self.device_category = IDeviceManager.get_device_category(config)
         self.latest_data: dict[str, dict[str, Any]] = {}
         self._data_callbacks: list[Callable[..., Any]] = []
         self._push_thread: threading.Thread | None = None
@@ -994,6 +1034,7 @@ class SimulatedOPCUAClient(PushClientInterface):
             stats=self.stats,
             extra_field_fn=lambda cfg: {'node_id': cfg.get('node_id', '')},
             callback_error_label='OPC UA',
+            device_category=self.device_category,
         )
 
     def datachange_notification(self, node, val, data):
@@ -1023,6 +1064,8 @@ class SimulatedMQTTClient(PushClientInterface):
         self.start_time = time.time()
 
         self.topics_config = self.config.get('topics', [])
+        # round 383：三分类 —— 急停只归零 mechanical 设备
+        self.device_category = IDeviceManager.get_device_category(self.config)
         self.latest_data: dict[str, dict[str, Any]] = {}
         self._data_callbacks: list[Callable[..., Any]] = []
         self._subscriptions: dict[str, int] = {}
@@ -1121,6 +1164,7 @@ class SimulatedMQTTClient(PushClientInterface):
             stats=self.stats,
             stat_inc_key='messages_received',
             callback_error_label='MQTT',
+            device_category=self.device_category,
         )
         # MQTT特有统计
         self.stats['messages_parsed'] = self.stats.get('messages_parsed', 0) + len(self.topics_config)
@@ -1142,6 +1186,8 @@ class SimulatedRESTClient(PushClientInterface):
         self.start_time = time.time()
 
         self.endpoints = config.get('endpoints', [])
+        # round 383：三分类 —— 急停只归零 mechanical 设备
+        self.device_category = IDeviceManager.get_device_category(config)
         self.latest_data: dict[str, dict[str, Any]] = {}
         self._data_callbacks: list[Callable[..., Any]] = []
 
@@ -1218,4 +1264,5 @@ class SimulatedRESTClient(PushClientInterface):
             stats=self.stats,
             extra_field_fn=lambda cfg: {'endpoint': cfg.get('path', '')},
             callback_error_label='REST',
+            device_category=self.device_category,
         )

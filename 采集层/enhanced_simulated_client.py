@@ -38,6 +38,24 @@ from .modbus_client import ByteOrder
 logger = logging.getLogger(__name__)
 
 
+def _bad_quality_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    """断线时返回的快照：值保留做参考，但质量码一律降为 ``bad``。
+
+    round 383：原来 `get_latest_data` 在 `connected=False` 时仍把上一次
+    缓存的条目原样返回，`quality` 还是 `good` —— 上层看板与联锁把断线前的
+    旧值当成新鲜数据使用（fail-open）。断线不得报 GOOD。
+    """
+    result: dict[str, Any] = {}
+    for key, entry in list(data.items()):
+        if isinstance(entry, dict):
+            item = dict(entry)
+            item['quality'] = 'bad'
+            result[key] = item
+        elif entry is not None:
+            result[key] = {'value': entry, 'quality': 'bad'}
+    return result
+
+
 def _generate_enhanced_data(
     device_id: str,
     behavior_simulator,
@@ -340,48 +358,64 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         if written_value is not None and count == 1:
             return [written_value & 0xFFFF]
         
-        # 获取寄存器配置
-        reg_config = self._register_map.get(address)
-        if not reg_config:
-            # 未知寄存器，返回随机值
-            if count >= 2:
-                words = encode_float32_registers(
-                    float(50.0 + 30.0 * (time.time() % 1.0)), self.byte_order)
-                return words + [0] * max(0, count - len(words))
-            return [100]
-        
-        # 从缓存获取数据（None保护：行为模拟器边界条件下可能返回None）
-        with self._data_lock:
-            value = self._latest_data.get(reg_config['name'])
-            if value is None:
-                value = 0
+        # round 383：**逐点按宽度步进**，与上面的停机分支同口径。
+        # 原来这里只编码 `address` 一个点位，其余 count-1 个字一律补 0 ——
+        # 批量读 10 个点位，后 9 个全是 0，看板上除首点外全部"归零"。
+        results = []
+        i = 0
+        while i < count:
+            reg_addr = address + i
+            reg_config = self._register_map.get(reg_addr)
+            if not reg_config:
+                # 未知寄存器：单位宽占位值（步进 1，不猜测宽度）
+                results.append(100)
+                i += 1
+                continue
 
-        # 应用缩放和偏移
-        scale = try_finite_float(reg_config.get('scale', 1.0))
-        offset = try_finite_float(reg_config.get('offset', 0)) or 0.0
-        raw_value = to_raw(value, scale if scale else 1.0, offset)
-        
-        # 根据数据类型编码
-        data_type = reg_config.get('data_type', 'uint16')
-        
-        # round 369：**编解码必须同源**。原来这里硬编码 `>f` / `>i` / `>I`
-        # （固定 ABCD），而 decode_float32 是按 byte_order 解的 ——
-        # 配成 CDAB（施耐德 M340）、BADC、DCBA 的设备，写进去的浮点数
-        # 读回来就是乱码或 NaN。
-        if data_type == 'float32':
-            return encode_float32_registers(float(raw_value), self.byte_order)
-        elif data_type in ('int32', 'uint32'):
-            return encode_int32_registers(
-                int(round(raw_value)), self.byte_order,
-                signed=data_type == 'int32')
-        elif data_type in ('float64', 'int64', 'uint64'):
-            # 真编码器（decode_float64_registers 的逆），不再用 float32+补零占位
-            regs = encode_float64_registers(float(raw_value), self.byte_order)
-            return regs + [0] * max(0, count - len(regs))
-        else:
-            # uint16/int16 等单字类型：按实际 count 补齐，不再伪装成 float32
-            word = int(round(raw_value)) & 0xFFFF
-            return [word] + [0] * (count - 1)
+            data_type = str(reg_config.get('data_type', 'uint16')).lower()
+            width = (4 if data_type in ('float64', 'int64', 'uint64')
+                     else 2 if data_type in ('float32', 'int32', 'uint32') else 1)
+
+            # 从缓存获取数据（None保护：行为模拟器边界条件下可能返回None）
+            with self._data_lock:
+                value = (self._latest_data or {}).get(reg_config.get('name'))
+
+            if value is None:
+                # 缓存还没生成这一轮数据：按安全侧补 0，绝不用随机数冒充真实值
+                results.extend([0] * width)
+                i += width
+                continue
+
+            # 应用缩放和偏移
+            scale = try_finite_float(reg_config.get('scale', 1.0))
+            offset = try_finite_float(reg_config.get('offset', 0)) or 0.0
+            raw_value = to_raw(value, scale if scale else 1.0, offset)
+
+            # round 369：**编解码必须同源**。原来这里硬编码 `>f` / `>i` / `>I`
+            # （固定 ABCD），而 decode_float32 是按 byte_order 解的 ——
+            # 配成 CDAB（施耐德 M340）、BADC、DCBA 的设备，写进去的浮点数
+            # 读回来就是乱码或 NaN。
+            if data_type == 'float32':
+                results.extend(encode_float32_registers(
+                    float(raw_value), self.byte_order))
+            elif data_type in ('int32', 'uint32'):
+                results.extend(encode_int32_registers(
+                    int(round(raw_value)), self.byte_order,
+                    signed=data_type == 'int32'))
+            elif data_type in ('float64', 'int64', 'uint64'):
+                # 真编码器（decode_float64_registers 的逆），不再用 float32+补零占位
+                results.extend(encode_float64_registers(
+                    float(raw_value), self.byte_order))
+            else:
+                # uint16/int16 等单字类型
+                results.append(int(round(raw_value)) & 0xFFFF)
+            i += width
+
+        # 编码器返回的字数应与请求长度一致；少补多截，避免调用方拿到
+        # 比 count 短的列表导致后续点位整体错位。
+        if len(results) < count:
+            results.extend([0] * (count - len(results)))
+        return results[:count]
     
     def read_input_registers(self, address: int, count: int,
                              slave_id: Optional[int] = None) -> Optional[List[int]]:
@@ -514,6 +548,9 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
             # 停机设备返回空数据
             if is_device_stopped(self.device_id):
                 return {}
+            # round 383：断线不得把断线前的缓存当新鲜数据交出去
+            if not self.connected:
+                return {}
             return dict(self._latest_data)
     
     def inject_fault(self, fault_type: FaultType, severity: float = 0.5):
@@ -630,7 +667,11 @@ class EnhancedSimulatedOPCUAClient(PushClientInterface):
             # 停机设备返回空数据
             if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
                 return {}
-            return {k: dict(v) for k, v in self.latest_data.copy().items()}
+            snapshot = {k: dict(v) for k, v in self.latest_data.copy().items()}
+            # round 383：断线时旧值只能以 bad 质量交付
+            if not self.connected:
+                return _bad_quality_snapshot(snapshot)
+            return snapshot
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
@@ -766,7 +807,11 @@ class EnhancedSimulatedMQTTClient(PushClientInterface):
         # 停机设备返回空数据
         if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
             return {}
-        return dict(self.latest_data)
+        snapshot = dict(self.latest_data)
+        # round 383：断线时旧值只能以 bad 质量交付
+        if not self.connected:
+            return _bad_quality_snapshot(snapshot)
+        return snapshot
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
@@ -865,7 +910,11 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
         # 停机设备返回空数据
         if self.behavior_simulator.state == DeviceState.STOPPED and not self.behavior_simulator.is_monitoring_device:
             return {}
-        return dict(self.latest_data)
+        snapshot = dict(self.latest_data)
+        # round 383：断线时旧值只能以 bad 质量交付
+        if not self.connected:
+            return _bad_quality_snapshot(snapshot)
+        return snapshot
     
     def read_endpoint(self, endpoint_config: Dict[str, Any]) -> Any:
         """读取端点"""
