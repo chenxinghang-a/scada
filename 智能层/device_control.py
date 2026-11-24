@@ -24,6 +24,7 @@
 
 import time
 import uuid
+import re
 import logging
 import threading
 import json
@@ -74,6 +75,23 @@ LEGACY_FALLBACK_CONTROL_POINTS = {
 
 # 未显式给出 value 时，各动作的默认写入值
 _DEFAULT_ACTION_VALUES = {'start': True, 'stop': False, 'reset': 0}
+
+# 从设备点位名推断启停点用的语义词。
+# 现场设备是人自己接线、自己命名的，不能要求每台都额外写一段 control 配置；
+# 只要该设备本来就有一个叫 motor_start / run_cmd / 停止 的可写点位，就该能用。
+# 词边界按「前后不能是小写字母」判定，`_` 不算字母，所以 `motor_start` 能命中。
+_CONTROL_POINT_PATTERNS = {
+    'start': re.compile(r'(?<![a-z])(start|run|enable)(?![a-z])|启动|运行', re.I),
+    'stop': re.compile(r'(?<![a-z])(stop|halt|disable)(?![a-z])|停止|停机', re.I),
+    'reset': re.compile(r'(?<![a-z])(reset)(?![a-z])|复位|清除故障', re.I),
+}
+
+# 这些点位名里的词说明它是工艺量/状态量，不是可写控制点
+_CONTROL_POINT_EXCLUDE = re.compile(
+    r'(?<![a-z])(position|speed|temperature|pressure|flow|count|total|alarm|status)'
+    r'(?![a-z])|位置|速度|温度|压力|流量|计数|累计|状态',
+    re.I,
+)
 
 
 class SafetyLevel:
@@ -2814,12 +2832,71 @@ class DeviceControlSafety:
         """
         return bool(getattr(self.device_manager, 'simulation_mode', False))
 
+    def _infer_control_point(self, device_config: dict, action: str) -> dict[str, Any] | None:
+        """从设备**已有的**点位里推断启停点，不要求额外配置 control 段。
+
+        现场设备是人自己接线、自己命名点位的。设备清单里 33 台真实 Modbus 设备
+        全部已有形如 `motor_start` / `conveyor_run` / `停止` 的可写寄存器，只是
+        控制层从来没用过它们 —— 原来一律退回写死的 `coil0`，等于所有设备的起停
+        都打到同一个线圈上。这里按语义从 registers/nodes/topics/endpoints 里找：
+
+        1. 必须可写（access 为 w/rw/write/readwrite）；
+        2. 点位名或描述命中该动作的语义词（start/run/enable/启动/运行 …）；
+        3. 排除工艺量与状态量（position/speed/temperature/status/…）；
+        4. 带地址才可用（Modbus 类必须有 address）。
+
+        Returns:
+            {'type': 'coil'|'register', 'address': int, 'value': Any, 'source': 'inferred'} 或 None
+        """
+        pattern = _CONTROL_POINT_PATTERNS.get(action)
+        if pattern is None:
+            return None
+
+        for bucket in ('registers', 'coils', 'nodes', 'topics', 'endpoints'):
+            raw = device_config.get(bucket)
+            if not isinstance(raw, list):
+                continue
+            for point in raw:
+                if not isinstance(point, dict):
+                    continue
+                access = str(point.get('access', '') or '').lower()
+                if access not in ('w', 'rw', 'write', 'readwrite'):
+                    continue
+                name = str(point.get('name') or point.get('node_id')
+                           or point.get('topic') or point.get('path') or '')
+                haystack = f"{name} {point.get('description') or ''}"
+                if _CONTROL_POINT_EXCLUDE.search(haystack):
+                    continue
+                if not pattern.search(haystack):
+                    continue
+
+                address = try_int(point.get('address', point.get('addr')))
+                if address is None:
+                    continue
+                data_type = str(point.get('data_type', '') or '').lower()
+                kind = 'coil' if data_type in ('bool', 'bit', 'coil', 'boolean') else 'register'
+                return {
+                    'type': kind,
+                    'address': address,
+                    'value': _DEFAULT_ACTION_VALUES.get(action),
+                    'source': 'inferred',
+                    'point_name': name,
+                }
+        return None
+
     def _resolve_control_point(self, device_id: str, action: str) -> dict[str, Any] | None:
         """
         解析批量控制（start/stop/reset）要写入的点位
 
-        点位不再写死：优先取设备配置的 `control` 段，取不到才回退到显式命名的
-        LEGACY_FALLBACK_CONTROL_POINTS（并记录告警，提示补配置）。
+        解析顺序（**不再写死点位**）：
+
+        1. 设备配置的 `control` 段（显式声明，最高优先，两种写法都支持）；
+        2. 从该设备**已有点位**按语义自动推断（`_infer_control_point`）——
+           现场设备是人自己接的，不强迫每台补一段 control；
+        3. 模拟模式才回退到 `LEGACY_FALLBACK_CONTROL_POINTS`（无物理风险，
+           且保证演示链路可用），并打 warning 提示补配置；
+        4. 真实模式推断不出就**拒绝写入** —— coil0/reg100 只是历史默认值，
+           未必对应现场任何线圈，写错点位就是误操作。
 
         设备配置形态（配置/devices*.yaml 中该设备的 control 段）——两种写法均支持：
 
@@ -2841,6 +2918,7 @@ class DeviceControlSafety:
         default_value = _DEFAULT_ACTION_VALUES.get(action)
 
         spec = None
+        device_config = {}
         if self.device_manager:
             try:
                 device_config = (getattr(self.device_manager, 'devices', {}) or {}).get(device_id) or {}
@@ -2861,15 +2939,27 @@ class DeviceControlSafety:
                         'value': control.get(f'{action}_value', default_value),
                     }
 
+            if spec is None and isinstance(device_config, dict):
+                inferred = self._infer_control_point(device_config, action)
+                if inferred is not None:
+                    spec = inferred
+                    logger.info(
+                        "设备 %s 未配置 control.%s，按点位名推断为 %s#%s(%s)",
+                        device_id, action, inferred['type'], inferred['address'],
+                        inferred.get('point_name', ''),
+                    )
+
         if spec is None:
             # 真实设备模式下**不允许**回退到猜测点位：coil0 / reg100 只是历史默认，
             # 未必对应现场任何真实线圈/寄存器，写错点位就是误操作。
             # 只有模拟模式才允许回退（无物理风险，且保证演示链路可用）。
             if not self._is_simulation():
+                proto = str((device_config or {}).get('protocol') or '未知')
                 logger.error(
-                    "设备 %s 未配置控制点位 control.%s，真实设备模式下拒绝回退到默认点位"
-                    "（请在该设备配置中显式声明 control 段）",
-                    device_id, action,
+                    "设备 %s（协议 %s）推断不出 %s 点位：既没有 control.%s 段，点位里也没有"
+                    "可写的启停语义寄存器。真实设备模式下拒绝回退到默认点位 ——"
+                    "请在设备配置里补 control.%s（或给该点位起一个含 start/stop 语义的名字）",
+                    device_id, proto, action, action, action,
                 )
                 return None
             fallback = LEGACY_FALLBACK_CONTROL_POINTS.get(action)
