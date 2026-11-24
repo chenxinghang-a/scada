@@ -157,7 +157,13 @@ def _call_function_code_read(client, function_code: int, address: int,
     **不传该关键字**，兼容只接受 ``(address, count)`` 的旧客户端/测试替身。
     """
     router = getattr(client, 'read_by_function_code', None)
-    if callable(router):
+    # 必须查**类上**有没有这个方法，不能用实例属性的可调用性判断：
+    # `unittest.mock.MagicMock()` 对任意属性名都会返回一个可调用替身，
+    # 于是 `callable(getattr(client, 'read_by_function_code'))` 永远为真 ——
+    # 采集会去调一个假方法、拿到 MagicMock，然后把整批数据判成"读不到"。
+    # 真实客户端的方法都定义在类上（modbus_client.ModbusClient:935）。
+    if callable(router) and callable(
+            getattr(type(client), 'read_by_function_code', None)):
         return router(address, count,
                       function_code=function_code, slave_id=slave_id)
 

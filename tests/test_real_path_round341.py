@@ -34,6 +34,7 @@
 import copy
 import inspect
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -285,6 +286,12 @@ class TestReadbackFreshness:
         fake_self._get_device_lock.return_value.__exit__ = MagicMock(return_value=False)
         fake_self._interlock_states = {}
         fake_self._estop_active = False
+        # round 396 起写入路径多了一道内存急停闸门。替身必须显式声明它 ——
+        # MagicMock 对任何属性名都会自动造一个 truthy 的替身，不声明的话
+        # `_estop_signal_rejection()` 会返回一个 MagicMock 被当成"急停中"，
+        # 于是这里测的其实是急停拒绝、不是回读新鲜度。
+        fake_self._estop_signal = threading.Event()      # 未置位 = 没有急停
+        fake_self._estop_signal_rejection = lambda *a, **k: None
 
         result = real(fake_self, 'dev', 10, 42, 'op', kind='register')
         assert result.get('verified') is None, (

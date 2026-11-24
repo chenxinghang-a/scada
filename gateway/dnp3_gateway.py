@@ -90,6 +90,7 @@ import logging
 from typing import Any
 
 from .base_gateway import BaseGateway
+from core.safe_numeric import try_finite_float
 from .thing_model import (
     DeviceTelemetry, ThingModelConverter,
     ProtocolType, DataQuality
@@ -1186,11 +1187,16 @@ class DNP3Gateway(BaseGateway):
                     device_id, feedback_index, e)
                 return False
             if info is not None:
-                try:
-                    fresh = float(info.get('time') or 0) >= sent_at
-                    actual = int(info.get('value', 0))
-                except (TypeError, ValueError):
+                # 裸 float()/int() 只捕 TypeError/ValueError：`float('nan')` 不抛，
+                # 于是 `nan >= sent_at` 恒为 False 会让回读静默判定"不一致"；
+                # `int(float('inf'))` 抛的是 OverflowError（不在捕获列表里）。
+                # 统一走 safe_numeric：解析失败与非有限值都返回 None。
+                fresh_at = try_finite_float(info.get('time') or 0)
+                actual_val = try_finite_float(info.get('value'))
+                if fresh_at is None or actual_val is None:
                     return False
+                fresh = fresh_at >= sent_at
+                actual = int(actual_val)
                 if fresh and actual == value:
                     return True
             time.sleep(0.1)
