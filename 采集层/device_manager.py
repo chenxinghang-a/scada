@@ -56,6 +56,86 @@ def _device_stopped_state(device_id: str, client: Any) -> bool:
     return bool(getattr(client, 'stopped', False))
 
 
+# ---- 双栈（模拟 5000 / 真实 5001）路径隔离 ----
+#: 模拟层与真实层各自的设备清单。文件名与 ``run.py`` 的
+#: ``paths.get_config_path('devices_simulated.yaml' / 'devices_real.yaml')``
+#: 完全一致 —— 不另起一套命名。
+_CONFIG_FILENAME_BY_MODE = {
+    True: 'devices_simulated.yaml',
+    False: 'devices_real.yaml',
+}
+#: 旧版共享清单。历史上模拟/真实都读它，两套栈同时启动会互相写配置。
+_LEGACY_CONFIG_FILENAME = 'devices.yaml'
+
+
+def _default_devices_config_path(simulation_mode: bool) -> str:
+    """按模拟/真实分层解析默认设备清单路径（未显式传 ``config_path`` 时使用）。
+
+    约定沿用 ``paths.resolve_config_file``：``配置/`` 前缀会吃
+    ``SCADA_CONFIG_DIR`` 环境变量，其它相对路径按 ``BASE_DIR`` 解析，
+    因此多实例/打包布局下不会各写各的。
+
+    兼容旧部署：只要旧的 ``配置/devices.yaml`` 存在，就**优先继续用旧路径
+    并打 warning** —— 不允许一次升级就把现网设备清单悄悄换掉（真实层会
+    变成空表，界面设备全部消失）。只有旧文件不存在（全新部署）才直接落到
+    模式专属文件。
+    """
+    target = paths.resolve_config_file(
+        f'配置/{_CONFIG_FILENAME_BY_MODE[bool(simulation_mode)]}')
+    legacy = paths.resolve_config_file(f'配置/{_LEGACY_CONFIG_FILENAME}')
+
+    # 老路径优先级最高：现网数据/人工编辑都在那里。即便模式专属文件已经
+    # 存在，也不许一声不响换目录（那会让现场看到的是一张空配置）。
+    if legacy.exists():
+        logger.warning(
+            "设备配置仍在使用旧版共享路径 %s（%s 模式）。模拟/真实双栈"
+            "同时启动会共用同一份清单，存在串台风险；建议迁移到 %s 后"
+            "删除旧文件。本次为兼容现网部署，不自动切换。",
+            legacy, '模拟' if simulation_mode else '真实', target)
+        return str(legacy)
+    return str(target)
+
+
+# ---- 热重载：哪些配置变化需要重建客户端 ----
+#: 纯展示/调度字段：改它们不需要断开设备连接。
+#:
+#: 采用**黑名单**（而不是只列 host/port）：客户端在 ``__init__`` 里会缓存
+#: 寄存器/节点/主题/字节序等参数，漏掉任何一个都会让采集继续按旧配置跑。
+#: 新增字段默认触发重建（多断一次，不会用旧参数采错数据）。
+_PRESENTATION_ONLY_KEYS = frozenset({
+    'name', 'device_name', 'description', 'zone', 'enabled',
+    'device_class', 'device_category', 'category', 'autonomy',
+    'electrical', 'collection_interval', 'collect_interval',
+    'poll_interval', 'sim_endpoint',
+    'ui', 'display', 'tags', 'notes', 'comment', 'location',
+    'area', 'line', 'stage', 'workshop', 'site',
+})
+
+
+def _freeze(value: Any) -> Any:
+    """把配置值转成可稳定比较的结构（字典顺序无关）。"""
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _freeze(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(v) for v in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted(repr(_freeze(v)) for v in value))
+    return value
+
+
+def _connection_signature(config: dict[str, Any] | None) -> Any:
+    """连接参数签名：用于判断热重载后某台设备的客户端是否必须重建。
+
+    包括 host/port/protocol/device_id、串口/从站号/endpoint、``adapter``
+    等连接参数，也包括客户端构造时缓存的 registers/nodes/topics/endpoints
+    与 byte_order —— 这些不重建就会按旧点位采集。仅排除展示/调度字段。
+    """
+    if not isinstance(config, dict):
+        return ()
+    return _freeze({k: v for k, v in config.items()
+                    if k not in _PRESENTATION_ONLY_KEYS})
+
+
 # ---- 协议工厂：根据protocol字段自动选择客户端 ----
 def _create_client(config: dict[str, Any], simulation_mode: bool, use_enhanced: bool = True):
     """
@@ -183,11 +263,19 @@ class DeviceManager:
             simulation_mode: 是否启用模拟模式（无真实设备时使用模拟数据）
             use_enhanced_simulation: 是否使用增强版模拟（物理模型驱动）
         """
-        self.config_path = config_path or '配置/devices.yaml'
         self.simulation_mode = simulation_mode
+        # round 381：默认路径按模拟/真实分层（旧 ``配置/devices.yaml`` 存在时
+        # 仍优先兼容并告警），避免双栈同目录启动共用一份设备清单。
+        self.config_path = config_path or _default_devices_config_path(simulation_mode)
         self.use_enhanced_simulation = use_enhanced_simulation
         self.devices = {}  # device_id -> device_config
         self.clients = {}  # device_id -> protocol client (legacy, kept for backward compat)
+        #: device_id -> 创建该客户端时的 simulation_mode。
+        #:
+        #: 模式热切换时可以出现「标志已改、旧客户端还没摘掉」的瞬间。只靠
+        #: ``clients`` 缓存会把另一端的客户端继续发给采集线程（模拟数据写进
+        #: 真实链路，或反之）。``get_client`` 用这份标记做校验，不一致就丢弃重建。
+        self._client_modes: dict[str, bool] = {}
         self._lock = threading.Lock()
         #: 模式热切换互斥（不能复用 _lock：disconnect_all 会反复取它）
         self._switch_lock = threading.Lock()
@@ -217,17 +305,10 @@ class DeviceManager:
         # `performance.connection_pool` 写的是 `size: 10 / timeout: 30` ——
         # 两边都对不上，运维按配置调小连接数**没有任何效果**。
         # 现在真正读配置（读不到才回退 `CONNECTION_POOL_DEFAULTS`）。
-        pool_cfg = load_connection_pool_settings()
-        self._connection_pool = ConnectionPool(
-            factory=self._create_client_for_pool,
-            max_size=pool_cfg['size'],
-            max_idle_time=pool_cfg['idle_timeout_seconds'],
-            max_lifetime=pool_cfg['max_lifetime_seconds'],
-            name="modbus",
-        )
-        logger.info("连接池已按配置初始化: size=%d idle=%ds lifetime=%ds",
-                    pool_cfg['size'], pool_cfg['idle_timeout_seconds'],
-                    pool_cfg['max_lifetime_seconds'])
+        #
+        # round 381：抽成 _build_connection_pool()，模式切换与启动共用同一份
+        # 构造逻辑，杜绝两处参数漂移。
+        self._connection_pool = self._build_connection_pool()
 
         # 加载设备配置
         # round 382：load_config() 返回 False（坏 YAML/顶层非映射）时不能
@@ -241,6 +322,36 @@ class DeviceManager:
             logger.critical(
                 "设备配置加载失败（%s）：本次启动设备表为空，采集与联锁均无设备。"
                 "请修复后重启，或在线 POST /api/devices/reload", self.config_path)
+
+    def _build_connection_pool(self) -> ConnectionPool:
+        """按 ``配置/system.yaml`` 的 ``performance.connection_pool`` 建池。
+
+        启动与模式热切换共用 —— round 257 曾在两处各写一份参数，切一次模式
+        就把配置值换回硬编码；round 381 再收敛成唯一实现。
+        """
+        pool_cfg = load_connection_pool_settings()
+        pool = ConnectionPool(
+            factory=self._create_client_for_pool,
+            max_size=pool_cfg['size'],
+            max_idle_time=pool_cfg['idle_timeout_seconds'],
+            max_lifetime=pool_cfg['max_lifetime_seconds'],
+            name="modbus",
+        )
+        logger.info("连接池已按配置初始化: size=%d idle=%ds lifetime=%ds",
+                    pool_cfg['size'], pool_cfg['idle_timeout_seconds'],
+                    pool_cfg['max_lifetime_seconds'])
+        return pool
+
+    @property
+    def db_path(self) -> str:
+        """当前模式对应的数据库路径（只读镜像，不负责打开数据库）。
+
+        round 381：模拟层（端口 5000）与真实层（端口 5001）必须落在不同的
+        库里。路径真源是 :func:`paths.get_db_path`（``data/scada_simulated.db``
+        / ``data/scada_real.db``，并吃 ``SCADA_DATA_DIR``），这里只按
+        ``simulation_mode`` 映射，**不另拼文件名**。
+        """
+        return paths.get_db_path('simulated' if self.simulation_mode else 'real')
 
     def _load_config_into(self, target: dict) -> bool:
         """把配置文件解析进 `target`（**不触碰 `self.devices`**）。
@@ -390,6 +501,9 @@ class DeviceManager:
         """
         with self._lock:
             old_ids = set(self.devices.keys())
+            # round 381：连接参数签名必须在替换前取 —— 替换后再拿旧配置就没了。
+            old_signatures = {did: _connection_signature(cfg)
+                              for did, cfg in self.devices.items()}
 
         new_devices: dict[str, Any] = {}
         if not self._load_config_into(new_devices):
@@ -403,20 +517,28 @@ class DeviceManager:
                 reason = (f'配置文件解析失败（{self.config_path}），已保留原配置'
                           f'（{len(old_ids)} 台设备）')
             logger.error("设备配置重载被拒绝: %s", reason)
-            return {'added': [], 'removed': [], 'kept': sorted(old_ids),
-                    'rejected': reason}
+            return {'added': [], 'removed': [], 'changed': [],
+                    'kept': sorted(old_ids), 'rejected': reason}
 
         if not new_devices and old_ids and not allow_empty:
             reason = (f'解析结果为 0 台设备，而原配置有 {len(old_ids)} 台 —— '
                       f'疑似文件被清空或写坏，已保留原配置')
             logger.error("设备配置重载被拒绝: %s", reason)
-            return {'added': [], 'removed': [], 'kept': sorted(old_ids),
-                    'rejected': reason}
+            return {'added': [], 'removed': [], 'changed': [],
+                    'kept': sorted(old_ids), 'rejected': reason}
 
         with self._lock:
             # 差集快照必须与替换同锁取：锁外快照与并发 reload/增删交错时，
             # added/removed 会算错（采集器据此增删定时器 → 幽灵采集/漏采）。
             old_ids = set(self.devices.keys())
+            new_ids = set(new_devices.keys())
+            # round 381：**同 id 但连接参数变了**的设备（改 host/port/协议等），
+            # 客户端是按旧配置建的 —— 只换配置表的话采集/下发仍走旧地址。
+            # 这里只挑真正变化的，没变的保持连接（全量重连会让采集抖一下）。
+            changed = sorted(
+                did for did in (new_ids & old_ids)
+                if old_signatures.get(did) != _connection_signature(new_devices[did])
+            )
             self.devices = new_devices
             # round 370（BUG-022）：配置变了，5 秒 TTL 的状态缓存必须失效。
             # 否则改完设备地址后，前 5 秒 `get_device_status()` 还回旧连接状态，
@@ -424,10 +546,23 @@ class DeviceManager:
             self._status_cache.clear()
             self._status_cache_time.clear()
 
-        new_ids = set(new_devices.keys())
-
         added = sorted(new_ids - old_ids)
         removed = sorted(old_ids - new_ids)
+
+        # 先断旧客户端再让下一次 get_client 按新配置重建。
+        # 不在这里主动 connect：连接由采集线程/重连循环负责，热重载路径
+        # 同步连接会阻塞接口 20 秒，还会和采集线程抢同一台设备。
+        for did in changed:
+            try:
+                self.disconnect_device(did)
+            except Exception as e:      # noqa: BLE001 —— 单台断开失败不该中断整次重载
+                logger.error("重载断开已变更设备 %s 失败: %s", did, e)
+            with self._lock:
+                self.clients.pop(did, None)
+                self._client_modes.pop(did, None)
+        if changed:
+            logger.info("设备连接参数已变更，客户端将按新配置重建: %s", changed)
+
         if added:
             logger.info(f"新增设备: {added}")
         if removed:
@@ -446,6 +581,7 @@ class DeviceManager:
         return {
             'added': added,
             'removed': removed,
+            'changed': changed,
             'kept': sorted(new_ids & old_ids),
             'rejected': None,
         }
@@ -470,6 +606,16 @@ class DeviceManager:
             return None
         return _create_client(device_config, self.simulation_mode, self.use_enhanced_simulation)
 
+    def _client_matches_mode(self, device_id: str) -> bool:
+        """缓存里的客户端是否属于**当前**模拟/真实模式。
+
+        round 381：模式热切换是「改标志 + 换池」，两个动作之间可能有并发采集
+        线程拿到旧缓存。没有标记时（测试/MagicMock 直接塞进来的客户端）按
+        可用处理，不制造无穷重建。
+        """
+        recorded = self._client_modes.get(device_id)
+        return recorded is None or recorded == bool(self.simulation_mode)
+
     def get_client(self, device_id: str):
         """
         获取设备客户端（懒创建，通过连接池复用）
@@ -479,14 +625,27 @@ class DeviceManager:
         """
         # 无锁快速路径 - 先查 legacy 缓存
         client = self.clients.get(device_id)
-        if client is not None:
+        if client is not None and self._client_matches_mode(device_id):
             return client
 
         with self._lock:
             # 双重检查：另一个线程可能已经创建了客户端
             client = self.clients.get(device_id)
             if client is not None:
-                return client
+                if self._client_matches_mode(device_id):
+                    return client
+                # round 381：模式已切但客户端还是另一端的 —— 直接丢弃重建，
+                # 绝不能把真实客户端发给模拟采集线程（或反之）。
+                self.clients.pop(device_id, None)
+                self._client_modes.pop(device_id, None)
+                try:
+                    client.disconnect()
+                except Exception as e:      # noqa: BLE001 —— 清理失败不该阻断重建
+                    logger.warning("丢弃跨模式客户端 %s 时断开失败: %s", device_id, e)
+                try:
+                    self._connection_pool.remove(device_id)
+                except Exception as e:      # noqa: BLE001
+                    logger.debug("清理跨模式客户端池条目失败: %s", e)
 
             # 从连接池获取（池会自动创建或复用）
             device_config = self.devices.get(device_id)
@@ -505,8 +664,9 @@ class DeviceManager:
                 logger.warning("设备 %s 未取到客户端（池满或已 shutdown）", device_id)
                 return None
 
-            # 同步到 legacy 缓存，保持向后兼容
+            # 同步到 legacy 缓存，保持向后兼容；同时记下创建时的模式。
             self.clients[device_id] = client
+            self._client_modes[device_id] = bool(self.simulation_mode)
 
         return client
 
@@ -543,6 +703,7 @@ class DeviceManager:
         """断开设备连接（同时从连接池中移除）"""
         with self._lock:
             client = self.clients.pop(device_id, None)
+            self._client_modes.pop(device_id, None)
         if client:
             client.disconnect()
         # 从连接池中移除
@@ -562,8 +723,8 @@ class DeviceManager:
                 results[device_id] = None
         return results
 
-    def disconnect_all(self):
-        """断开所有设备连接"""
+    def _stop_reconnect_loop(self):
+        """停掉自动重连线程（不碰连接池）。模式切换与 disconnect_all 共用。"""
         self._reconnect_running = False
         self._reconnect_stop.set()          # 唤醒 sleep 中的旧重连线程
         old_thread = self._reconnect_thread
@@ -571,11 +732,16 @@ class DeviceManager:
                 and old_thread is not threading.current_thread()):
             old_thread.join(timeout=2)
         self._reconnect_thread = None
+
+    def disconnect_all(self):
+        """断开所有设备连接"""
+        self._stop_reconnect_loop()
         # 锁内一次性摘空：锁外快照期间 get_client() 可能刚放进新客户端，
         # 既不会被断开、又会被 clear() 丢掉唯一引用 → 泄漏的活连接。
         with self._lock:
             drained = list(self.clients.items())
             self.clients.clear()
+            self._client_modes.clear()
         for device_id, client in drained:
             try:
                 client.disconnect()
@@ -662,46 +828,74 @@ class DeviceManager:
         logger.info(f"切换模式: {'模拟' if old_mode else '真实'} → {'模拟' if new_mode else '真实'}")
 
         # 0. 记住重连循环此前是否在跑。
-        # `disconnect_all()` 会把 `_reconnect_running` 置 False —— 这在一处是正确的
-        # （它同时服务于 run.py 的关停路径），但**模式切换不是关停**。
+        # `_stop_reconnect_loop()` 会把 `_reconnect_running` 置 False —— 这在一处
+        # 是正确的（它同时服务于 disconnect_all/关停路径），但**模式切换不是关停**。
         # 原先切换后从不重启重连循环，后果是**自动重连永久静默失效**：
         # 切一次模式，之后任何设备掉线都不会再重连，也没有任何报错，
         # 运维只看到设备一直离线。
         reconnect_was_running = self._reconnect_running
 
-        # 1. 断开所有现有连接并关闭连接池
-        self.disconnect_all()
+        # 1. 先停重连线程：它按 self.simulation_mode 重连，切换窗口内不该跑。
+        self._stop_reconnect_loop()
 
-        # 2. 清除客户端缓存（下次get_client时会用新模式创建）
-        self.clients.clear()
-
-        # 3. 重建连接池（使用新模式的工厂方法）
-        #    round 257：这里原来又是一份 `max_size=50 / 300 / 3600` 的硬编码副本 ——
-        #    切换模拟/真实模式会把 __init__ 里按配置建好的池**换回硬编码值**，
-        #    配置只在启动时生效一次、切一次模式就失效。改成同一个来源。
-        pool_cfg = load_connection_pool_settings()
-        self._connection_pool = ConnectionPool(
-            factory=self._create_client_for_pool,
-            max_size=pool_cfg['size'],
-            max_idle_time=pool_cfg['idle_timeout_seconds'],
-            max_lifetime=pool_cfg['max_lifetime_seconds'],
-            name="modbus",
-        )
-
-        # 4. 更新模式标志
+        # 2. **先改标志，再建新池**（round 381）。
+        #
+        #    原顺序是「先建新池、再改标志」：中间窗口里并发采集线程按旧标志
+        #    从新池取到旧模式的客户端，接着标志切成新模式 —— 这个客户端
+        #    会被 connect_all 复用，模拟数据就写进了真实端（或反之）。
+        #
+        #    现在标志先落，任何时刻工厂创建的都是新模式客户端；换池仍在
+        #    self._lock 内原子完成。窗口内采集线程若从旧池取客户端，工厂
+        #    读到的已是新模式，拿到的是**新模式**客户端，只是暂存在旧池里，
+        #    随后的原子换池会一并摘掉 —— 不存在跨模式客户端被继续使用。
+        old_pool = self._connection_pool
+        drained: list[tuple[str, Any]] = []
         self.simulation_mode = new_mode
-        # round 370（BUG-022）：模式切换后旧状态缓存全部作废
-        self._status_cache.clear()
-        self._status_cache_time.clear()
+        try:
+            new_pool = self._build_connection_pool()
+        except Exception as e:      # noqa: BLE001 —— 切换失败要如实回给接口
+            # 建池失败必须回滚标志：否则下一次 get_client 会按新标志
+            # 去用旧池，又回到「标志与池不一致」。
+            self.simulation_mode = old_mode
+            logger.error("模式切换失败，已保持原模式: %s", e, exc_info=True)
+            if reconnect_was_running:
+                self.start_reconnect_loop(interval=self._reconnect_interval)
+            return {
+                'success': False,
+                'message': f'模式切换失败: {e}',
+                'simulation_mode': self.simulation_mode,
+                'reconnected': 0,
+                'failed': 0,
+                'reconnect_loop_restored': reconnect_was_running,
+            }
 
-        # 5. 重新连接所有设备
+        with self._lock:
+            self._connection_pool = new_pool
+            drained = list(self.clients.items())
+            self.clients.clear()
+            self._client_modes.clear()
+            # round 370（BUG-022）：模式切换后旧状态缓存全部作废
+            self._status_cache.clear()
+            self._status_cache_time.clear()
+
+        for device_id, client in drained:
+            try:
+                client.disconnect()
+            except Exception as e:      # noqa: BLE001
+                logger.debug("模式切换断开设备 %s 失败: %s", device_id, e)
+        try:
+            old_pool.shutdown()
+        except Exception as e:          # noqa: BLE001
+            logger.warning("关闭旧连接池失败: %s", e)
+
+        # 3. 按新池重新连接所有设备（此时标志与池已经一致）
         results = self.connect_all()
         connected = sum(1 for v in results.values() if v is True)
         failed = sum(1 for v in results.values() if v is False)
 
         logger.info(f"模式切换完成: {connected}个设备连接成功, {failed}个失败")
 
-        # 6. 恢复第 0 步记下的重连循环（模式切换不该把自动重连关掉）
+        # 4. 恢复第 0 步记下的重连循环（模式切换不该把自动重连关掉）
         if reconnect_was_running:
             self.start_reconnect_loop(interval=self._reconnect_interval)
             logger.info("模式切换后已恢复断线自动重连循环")
@@ -871,6 +1065,7 @@ class DeviceManager:
                 self.disconnect_device(device_id)
                 with self._lock:
                     self.clients.pop(device_id, None)
+                    self._client_modes.pop(device_id, None)
                 self._connection_pool.remove(device_id)
 
             # ⚠️ 必须持锁写入：`_save_config()` 在锁内做
@@ -899,6 +1094,7 @@ class DeviceManager:
                     else:
                         self.devices.pop(device_id, None)
                     self.clients.pop(device_id, None)
+                    self._client_modes.pop(device_id, None)
                 try:
                     self._connection_pool.remove(device_id)
                 except Exception as e:      # noqa: BLE001 —— 池里本来就没有时不该二次失败
@@ -937,6 +1133,7 @@ class DeviceManager:
             # 改成在它之前拿引用。
             with self._lock:
                 removed_client = self.clients.get(device_id)
+                removed_client_mode = self._client_modes.get(device_id)
 
             self.disconnect_device(device_id)
             # 持锁删除：与 add_device 同理，防「迭代中被删除」
@@ -953,6 +1150,8 @@ class DeviceManager:
                 with self._lock:
                     if removed_client is not None:
                         self.clients[device_id] = removed_client
+                        if removed_client_mode is not None:
+                            self._client_modes[device_id] = removed_client_mode
                 logger.warning("移除设备 %s：设备不存在", device_id)
                 return True
 
@@ -966,6 +1165,8 @@ class DeviceManager:
                     self.devices[device_id] = removed
                     if removed_client is not None:
                         self.clients[device_id] = removed_client
+                        if removed_client_mode is not None:
+                            self._client_modes[device_id] = removed_client_mode
                 logger.error("移除设备失败：配置落盘失败，已回滚 %s", device_id)
                 return False
 
