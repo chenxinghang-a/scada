@@ -979,6 +979,7 @@ devices:
     address: 0
     data_type: uint16
     description: 数字输入1 — 急停按钮反馈
+    function_code: 2
     length: 1
     name: di_1
     offset: 0
@@ -988,6 +989,7 @@ devices:
     address: 1
     data_type: uint16
     description: 数字输入2 — 门禁开关
+    function_code: 2
     length: 1
     name: di_2
     offset: 0
@@ -997,6 +999,7 @@ devices:
     address: 2
     data_type: uint16
     description: 数字输入3 — 烟感报警
+    function_code: 2
     length: 1
     name: di_3
     offset: 0
@@ -1006,6 +1009,7 @@ devices:
     address: 3
     data_type: uint16
     description: 数字输入4 — 水浸报警
+    function_code: 2
     length: 1
     name: di_4
     offset: 0
@@ -1015,6 +1019,7 @@ devices:
     address: 4
     data_type: uint16
     description: 数字输入5 — 手动/自动切换
+    function_code: 2
     length: 1
     name: di_5
     offset: 0
@@ -1024,6 +1029,7 @@ devices:
     address: 5
     data_type: uint16
     description: 数字输入6 — 备用
+    function_code: 2
     length: 1
     name: di_6
     offset: 0

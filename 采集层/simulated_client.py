@@ -696,6 +696,12 @@ class SimulatedModbusClient(ModbusClientInterface):
         # ===== 写操作反馈：存储写入值，支持回读验证 =====
         self._written_values: dict[int, Any] = {}  # address -> value
         self._written_coils: dict[int, bool] = {}  # address -> bool
+        # round 391（Q9）：**离散输入是独立的地址空间**，绝不能和线圈共用
+        # 一份内存。原来 `read_discrete_inputs` 直接按地址造值，写线圈后读
+        # 同地址的 di 会读到同样的 1 —— 输出状态被当成停机反馈（假反馈）。
+        # 这里显式存一份「现场输入」状态，默认全 False；仿真用例可通过
+        # `set_discrete_input()` 注入动作。
+        self._discrete_input_values: dict[int, bool] = {}
 
         self.stats: dict[str, Any] = {
             'total_reads': 0, 'successful_reads': 0, 'failed_reads': 0,
@@ -888,6 +894,19 @@ class SimulatedModbusClient(ModbusClientInterface):
         logger.info(f"[模拟] 设备 {self.device_name} 写入线圈: address={address}, value={value}")
         return True
 
+    def set_discrete_input(self, address: int, value: bool) -> None:
+        """注入离散输入状态（round 391 / Q9）。
+
+        离散输入代表**现场触点**（急停按钮、门禁、烟感…），与输出线圈是
+        两套独立的地址空间。仿真层必须提供一个显式入口去改变它，
+        否则测试只能靠"写线圈"间接影响输入 —— 那正是假反馈的来源。
+        """
+        self._discrete_input_values[int(address)] = bool(value)
+
+    def set_coil(self, address: int, value: bool) -> None:
+        """直接设置线圈状态（不经过写请求，模拟设备侧已有输出）。"""
+        self._written_coils[int(address)] = bool(value)
+
     def read_coils(self, address: int, count: int, slave_id: int | None = None) -> list[bool] | None:
         if not self.connected:
             return None
@@ -923,18 +942,15 @@ class SimulatedModbusClient(ModbusClientInterface):
         self.stats['successful_reads'] += 1
         # 只读输入：反映现场状态，三分类口径与线圈一致（round 383）
         estop_blocking = _ESTOP_ACTIVE and self._is_mechanical
-        device_stopped = is_device_stopped(self.device_id) and self._is_mechanical
+        # round 391（Q9）：只读 `_discrete_input_values`，**不看** `_written_coils`。
+        # 输出线圈置 1 不代表现场触点动作；共用内存会把输出状态读成输入反馈。
         results = []
         for i in range(count):
             addr = address + i
             if estop_blocking:
                 results.append(False)
-            elif addr == 0:
-                results.append(not device_stopped)
-            elif addr == 1:
-                results.append(False)
             else:
-                results.append(bool((addr * 7 + int(time.time()) // 30) % 2))
+                results.append(bool(self._discrete_input_values.get(addr, False)))
         return results
 
     def read_input_registers(self, address: int, count: int, slave_id: int | None = None) -> list[int] | None:

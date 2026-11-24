@@ -33,6 +33,57 @@ _TRANSIENT_EXCEPTIONS = {0x04, 0x06, 0x08, 0x0A, 0x0B}  # Device Failure/Busy/Pa
 #: 无上限时不同区间会持续累积，长跑进程单调增长（0476）。
 _MAX_CACHED_RANGES = 512
 
+#: 功能码 → 读取方法名（round 391 / Q9）。
+#: 四类地址空间在 Modbus 里**彼此独立**：FC01 线圈、FC02 离散输入、
+#: FC03 保持寄存器、FC04 输入寄存器。同一从站上 0 号线圈和 0 号离散输入
+#: 是两个不同的点，不能共用一个地址空间读。
+FUNCTION_CODE_READ_METHODS: dict[int, str] = {
+    1: 'read_coils',
+    2: 'read_discrete_inputs',
+    3: 'read_holding_registers',
+    4: 'read_input_registers',
+}
+
+#: 位地址空间（读回来是 bool，需要转成 0/1）
+FUNCTION_CODE_BIT_READS = frozenset({1, 2})
+
+#: 存量配置没有 `function_code` 字段时按 FC03 处理（无痛兼容）
+DEFAULT_FUNCTION_CODE = 3
+
+#: 配置里 `function_code` / `register_type` 允许的别名
+_FUNCTION_CODE_ALIASES: dict[str, int] = {
+    'coil': 1, 'coils': 1, 'do': 1,
+    'discrete_input': 2, 'discrete_inputs': 2, 'di': 2,
+    'holding_register': 3, 'holding_registers': 3, 'holding': 3, 'hr': 3,
+    'input_register': 4, 'input_registers': 4, 'input': 4, 'ir': 4,
+}
+
+
+def normalize_function_code(value: Any, default: int = DEFAULT_FUNCTION_CODE) -> int | None:
+    """把配置里的 ``function_code`` / ``register_type`` 规范成 1/2/3/4。
+
+    缺省（``None`` / 空串）返回 ``default``（FC03），存量配置行为不变。
+    **非法值返回 None**（fail-closed）：宁可不读这个点，也不能"猜一个功能码"
+    —— 猜错就会把输出线圈区当输入区读，正是假反馈的成因。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    if isinstance(value, (int, float)):
+        code = int(value)
+        return code if code in FUNCTION_CODE_READ_METHODS else None
+
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text.isdigit():
+        code = int(text)
+        return code if code in FUNCTION_CODE_READ_METHODS else None
+    return _FUNCTION_CODE_ALIASES.get(text)
+
 
 class ByteOrder(Enum):
     """Modbus字节序（32/64位浮点数的寄存器排列方式）
@@ -880,6 +931,63 @@ class ModbusClient:
             logger.error(f"读取离散输入异常: {e}")
             self._log_operation('read_discrete_inputs', address, count, False, str(e))
             return None
+
+    def read_by_function_code(self, address: int, count: int,
+                              function_code: int = DEFAULT_FUNCTION_CODE,
+                              slave_id: int | None = None) -> list[int] | None:
+        """按功能码读取（round 391 / Q9），统一返回 ``list[int]``。
+
+        为什么需要这一层：采集层过去对所有点位一律 ``read_holding_registers``
+        （FC03）。当设备把**输出线圈**与**输入点**配在同一批地址上
+        （例：relay_1..6 与 di_1..6 都是 0..5），把输出置 1 之后 FC03 读回的
+        同地址 "di_1" 也是 1 —— 系统把输出状态当成停机反馈已触发（假反馈）。
+
+        四类地址空间在协议层就是独立的，必须按配置的功能码分别读取：
+
+          * FC01 ``read_coils``            —— 输出线圈
+          * FC02 ``read_discrete_inputs``  —— 只读离散输入
+          * FC03 ``read_holding_registers``—— 保持寄存器（缺省，存量配置）
+          * FC04 ``read_input_registers``  —— 只读输入寄存器
+
+        Args:
+            address: 起始地址
+            count: 数量（位区按位计，寄存器区按 16 位字计）
+            function_code: 1/2/3/4，或 'coil'/'di'/'holding'/'input' 等别名
+            slave_id: 从站地址（可选）
+
+        Returns:
+            list[int] | None: 位区返回 0/1；寄存器区返回原始寄存器值。
+            功能码非法或读取失败返回 None（fail-closed，绝不猜区域）。
+        """
+        fc = normalize_function_code(function_code)
+        if fc is None:
+            logger.error(
+                "设备 %s 功能码非法: %r（合法值 1/2/3/4）",
+                self.device_name, function_code)
+            self._log_operation('read_by_function_code', address, count,
+                                False, f'功能码非法: {function_code!r}')
+            return None
+
+        reader = getattr(self, FUNCTION_CODE_READ_METHODS[fc], None)
+        if not callable(reader):
+            logger.error("功能码 %d 没有对应的读取方法", fc)
+            return None
+
+        # 从站地址统一走 `_resolve_slave`：`slave_id or self.slave_id` 会把
+        # 0（广播地址）静默替换成默认从站；读广播没有从站应答，直接失败。
+        slave = self._resolve_slave(slave_id)
+        if slave is None:
+            self._log_operation('read_by_function_code', address, count,
+                                False, '从站地址非法')
+            return None
+
+        values = reader(address, count, slave_id=slave)
+        if values is None:
+            return None
+        if fc in FUNCTION_CODE_BIT_READS:
+            # 位区统一成 0/1 整数：上层按数值点位处理，避免 bool/数值混用
+            return [1 if v else 0 for v in values]
+        return list(values)
 
     def write_single_register(self, address: int, value: int,
                               slave_id: int | None = None,

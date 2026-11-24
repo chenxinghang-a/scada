@@ -103,6 +103,75 @@ def _register_span(data_type: str) -> int:
     return 1
 
 
+#: 功能码 → 客户端读取方法（round 391 / Q9）。与 `采集层.modbus_client`
+#: 的同名映射保持一致；这里复制一份是为了让采集层不依赖具体客户端实现
+#: （MC / FINS / 模拟客户端也走同一套路由）。
+_FUNCTION_CODE_READ_METHODS: dict[int, str] = {
+    1: 'read_coils',
+    2: 'read_discrete_inputs',
+    3: 'read_holding_registers',
+    4: 'read_input_registers',
+}
+_FUNCTION_CODE_BIT_READS = frozenset({1, 2})
+_DEFAULT_FUNCTION_CODE = 3
+_FUNCTION_CODE_ALIASES: dict[str, int] = {
+    'coil': 1, 'coils': 1, 'do': 1,
+    'discrete_input': 2, 'discrete_inputs': 2, 'di': 2,
+    'holding_register': 3, 'holding_registers': 3, 'holding': 3, 'hr': 3,
+    'input_register': 4, 'input_registers': 4, 'input': 4, 'ir': 4,
+}
+
+
+def _resolve_function_code(value: Any) -> int | None:
+    """把点位配置的 ``function_code`` / ``register_type`` 规范成 1/2/3/4。
+
+    缺省（没配该字段）→ FC03，**存量配置行为完全不变**。
+    非法值返回 None：调用方必须丢弃该点位并计数，不能"猜一个功能码"读 ——
+    猜错就会把输出线圈区当输入区读，这正是 Q9 的假反馈成因。
+    """
+    if value is None:
+        return _DEFAULT_FUNCTION_CODE
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    if isinstance(value, (int, float)):
+        code = int(value)
+        return code if code in _FUNCTION_CODE_READ_METHODS else None
+
+    text = str(value).strip().lower()
+    if not text:
+        return _DEFAULT_FUNCTION_CODE
+    if text.isdigit():
+        code = int(text)
+        return code if code in _FUNCTION_CODE_READ_METHODS else None
+    return _FUNCTION_CODE_ALIASES.get(text)
+
+
+def _call_function_code_read(client, function_code: int, address: int,
+                             count: int, slave_id):
+    """按功能码调用客户端读取（round 391 / Q9）。
+
+    优先用 ``client.read_by_function_code``（``ModbusClient`` 提供）；
+    其余客户端（MC / FINS / 模拟）退回同名方法。``slave_id`` 为 None 时
+    **不传该关键字**，兼容只接受 ``(address, count)`` 的旧客户端/测试替身。
+    """
+    router = getattr(client, 'read_by_function_code', None)
+    if callable(router):
+        return router(address, count,
+                      function_code=function_code, slave_id=slave_id)
+
+    method_name = _FUNCTION_CODE_READ_METHODS.get(function_code)
+    method = getattr(client, method_name, None) if method_name else None
+    if not callable(method):
+        logger.error("客户端 %s 不支持功能码 %d（缺少 %s）",
+                     type(client).__name__, function_code, method_name)
+        return None
+    if slave_id is None:
+        return method(address, count)
+    return method(address, count, slave_id=slave_id)
+
+
 def compute_next_delay(interval: float, elapsed: float = 0.0,
                        min_delay: float = SCHEDULE_MIN_DELAY_S) -> float:
     """算下一次采集该等多久（**含漂移补偿**）。
@@ -784,6 +853,7 @@ class DataCollector:
             if key in ('successful_collections', 'failed_collections'):
                 self.stats['total_collections'] = (
                     self.stats.get('total_collections', 0) + amount)
+
 
     def _protocol_of(self, device_id: str) -> str:
         """设备协议（带缓存）。指标标签用，避免每次读数都查设备配置。
@@ -1814,20 +1884,30 @@ class DataCollector:
 
     def _collect_modbus(self, client, device_id: str, device_config: dict[str, Any],
                         timestamp: datetime) -> bool:
-        """采集Modbus设备的寄存器数据（批量读取优化）。
+        """采集Modbus设备的寄存器数据（按功能码分组 + 批量读取优化）。
 
-        按 GB/T 19582 Modbus 规范：FC03 单次最多读 125 个寄存器。
+        round 391（Q9）：分组键是 ``(slave_id, function_code)``，不再只按
+        设备把全部点位当成一块地址空间。点位可用 ``function_code``
+        （或 ``register_type``）声明 1/2/3/4，缺省 3（保持寄存器，存量配置
+        无痛兼容）。同一从站上「0 号线圈」和「0 号离散输入」是**两个点**，
+        必须分别用 FC01 / FC02 读，否则输出置位会被读成输入已动作。
+
+        按 GB/T 19582 Modbus 规范：单次最多读 125 个（寄存器或位）。
         将连续地址范围合并为一次请求，减少网络往返。对于超过 125
-        个寄存器的设备自动分段读取，并在块边界预留重叠区防止多寄存器
+        个的区间自动分段读取，并在块边界预留重叠区防止多寄存器
         值被截断。
 
         Args:
-            client: Modbus 客户端实例，需支持 ``read_holding_registers()``
-                和 ``decode_*()`` 方法。
+            client: Modbus 客户端实例，需支持按功能码读取
+                （``read_by_function_code`` 或 read_coils /
+                read_discrete_inputs / read_holding_registers /
+                read_input_registers）和 ``decode_*()`` 方法。
             device_id: 设备唯一标识符。
             device_config: 设备配置字典，需包含 ``registers`` 列表，
                 每个寄存器需有 ``address``、``name`` 字段，可选
-                ``data_type``、``scale``、``offset``、``unit``。
+                ``data_type``、``scale``、``offset``、``unit``、
+                ``function_code``（1/2/3/4 或 coil/di/holding/input）、
+                ``slave_id``。
             timestamp: 本次采集的时间戳。
 
         Returns:
@@ -1838,7 +1918,7 @@ class DataCollector:
                   的退避/熔断逻辑看到失败）。
 
         Side Effects:
-            - 通过 ``client.read_holding_registers()`` 发起网络请求。
+            - 对每个功能码分组发起网络请求。
             - 将解码后的数据项写入 ``self.data_queue``。
             - 更新 ``self.stats['successful_collections']`` 或
               ``self.stats['failed_collections']`` 计数器。
@@ -1852,16 +1932,37 @@ class DataCollector:
             # 否则会给空配置设备误开断路器
             return True
 
-        # 计算每个寄存器需要的寄存器数
-        reg_sizes = {}
+        # === 按 (从站, 功能码) 分组读取（Q9 / round 391） ===
+        #
+        # 旧实现把一台设备上**所有**点位当成同一块地址空间，一律
+        # `read_holding_registers` 连续读。现场有设备（如研华 ADAM-6060）
+        # 把输出线圈与输入点配在同一批地址上（relay_1..6 与 di_1..6 都是 0..5）：
+        # 输出置 1 后 FC03 读回的同地址 "di_1" 也是 1 —— 系统把输出状态当成
+        # 停机反馈已触发（假反馈），联锁跟着误动作。
+        #
+        # 现在按功能码分别走 FC01/02/03/04，分组键 = (slave_id, function_code)。
+        # 缺省 FC03，存量配置行为不变。
+        groups: dict[tuple[Any, int], list[dict]] = {}
         for reg in registers:
-            dt = reg.get('data_type', 'uint16')
-            reg_sizes[reg['address']] = _register_span(dt)
+            fc = _resolve_function_code(
+                reg.get('function_code', reg.get('register_type')))
+            if fc is None:
+                self._inc_stat('dropped_invalid_function_code')
+                logger.error(
+                    "设备 %s 点位 %s 的 function_code 非法(%r)，已跳过"
+                    "（合法值 1/2/3/4 或 coil/di/holding/input）",
+                    device_id, reg.get('name', '?'),
+                    reg.get('function_code', reg.get('register_type')))
+                continue
+            slave = reg.get('slave_id', device_config.get('slave_id'))
+            groups.setdefault((slave, fc), []).append(reg)
 
-        # 计算整体地址范围
-        min_addr = min(r['address'] for r in registers)
-        max_end = max(r['address'] + reg_sizes[r['address']] for r in registers)
-        total_count = max_end - min_addr
+        if not groups:
+            # 配了点位却一个都读不了（功能码全非法）—— 必须计失败，
+            # 否则断路器对"配置错死的设备"永不打开。
+            self._inc_stat('failed_collections')
+            logger.error("设备 %s 没有任何可读点位（功能码全部非法）", device_id)
+            return False
 
         def _enqueue(item):
             """非阻塞入队，满则丢最旧"""
@@ -1873,95 +1974,124 @@ class DataCollector:
                 client, address, count, timestamp)
             item['stale'] = True
 
-        # 单次 FC03 读取整个范围（规范限制 125，超出则分段）
-        if total_count <= 125:
-            all_regs = client.read_holding_registers(min_addr, total_count)
-            if all_regs is None:
-                self._inc_stat('failed_collections')
-                logger.debug(f"设备 {device_id} Modbus读取返回None")
-                return False
-            stale = _read_is_stale(client)
-            # 陈旧缓存 = 底层读取失败（只是客户端用旧值兜了底），
-            # 必须计失败，否则熔断器对"有缓存的死设备"永不打开
-            self._inc_stat('failed_collections' if stale else 'successful_collections')
-            for reg in registers:
-                offset = reg['address'] - min_addr
-                size = reg_sizes[reg['address']]
-                raw = all_regs[offset:offset + size]
-                if len(raw) < size:
-                    self._inc_stat('dropped_register_short')
-                    logger.warning(
-                        "设备 %s 寄存器 %s 响应长度不足（需 %d，实得 %d），本条丢弃",
-                        device_id, reg.get('name', '?'), size, len(raw))
-                    continue
-                value = self._decode_register(client, raw, reg)
-                if value is not None:
-                    item = {
-                        'device_id': device_id,
-                        'register_name': reg['name'],
-                        'value': value,
-                        'timestamp': timestamp,
-                        'unit': reg.get('unit', '')
-                    }
-                    if stale:
-                        # 值是陈旧缓存兜底，交给质量评估降级为 UNCERTAIN_LAST_USABLE
-                        _mark_stale(item, min_addr, total_count)
-                    _enqueue(item)
-            return not stale
-        else:
-            # 分块读取，块边界预留重叠区防止多寄存器值被截断
-            max_reg_size = max(reg_sizes.values()) if reg_sizes else 1
-            chunk_size = 125
-            step = chunk_size - (max_reg_size - 1)  # 重叠区 = 最大寄存器宽度-1
-            any_chunk_ok = False
-            any_chunk_fresh = False
-            for start in range(min_addr, max_end, step):
-                count = min(chunk_size, max_end - start)
-                chunk = client.read_holding_registers(start, count)
-                if chunk is None:
-                    continue
-                stale = _read_is_stale(client)
-                any_chunk_ok = True
-                if not stale:
-                    any_chunk_fresh = True
-                for reg in registers:
-                    if reg['address'] < start or reg['address'] >= start + count:
-                        continue
-                    offset = reg['address'] - start
-                    size = reg_sizes[reg['address']]
-                    raw = chunk[offset:offset + size]
-                    if len(raw) < size:
-                        self._inc_stat('dropped_register_short')
-                        logger.warning(
-                            "设备 %s 寄存器 %s 分块响应长度不足（需 %d，实得 %d），本条丢弃",
-                            device_id, reg.get('name', '?'), size, len(raw))
-                        continue
-                    value = self._decode_register(client, raw, reg)
-                    if value is not None:
-                        item = {
-                            'device_id': device_id,
-                            'register_name': reg['name'],
-                            'value': value,
-                            'timestamp': timestamp,
-                            'unit': reg.get('unit', '')
-                        }
-                        if stale:
-                            _mark_stale(item, start, count)
-                        _enqueue(item)
+        any_ok = False      # 至少一组底层读取成功（不是全部失败）
+        any_fresh = False   # 至少一组读到新鲜数据（区分"只有陈旧缓存兜底"）
+        for (slave, fc), group_regs in groups.items():
+            ok, fresh = self._collect_function_code_group(
+                client, device_id, group_regs, fc, slave, timestamp,
+                _enqueue, _mark_stale)
+            any_ok = any_ok or ok
+            any_fresh = any_fresh or fresh
 
-            # 所有分块都读失败 → 本次采集失败
-            if not any_chunk_ok:
-                self._inc_stat('failed_collections')
-                logger.debug(f"设备 {device_id} Modbus分块读取全部失败")
+        if not any_ok:
+            self._inc_stat('failed_collections')
+            logger.debug("设备 %s Modbus 全部功能码分组读取失败", device_id)
+            return False
+        # 没有任何一组读到新鲜数据（全是陈旧缓存兜底）→ 设备实际不可达，
+        # 同样按失败上报给退避/熔断；只要有一组新鲜的仍算成功，
+        # 避免给"部分降级但还活着"的设备误开断路器。
+        if not any_fresh:
+            self._inc_stat('failed_collections')
+            return False
+        self._inc_stat('successful_collections')
+        return True
+
+    def _collect_function_code_group(self, client, device_id: str,
+                                     group_regs: list[dict], function_code: int,
+                                     slave_id, timestamp,
+                                     _enqueue, _mark_stale) -> tuple[bool, bool]:
+        """按单一功能码读取一组点位，返回 ``(读到数据, 含新鲜数据)``。
+
+        FC01/FC02 是**位**地址空间：每个点占 1 位、解成 0/1；同一批数值地址
+        在 FC03 里是另一块独立空间，互不影响（Q9 的核心）。
+        FC03/FC04 才是 16 位寄存器空间，按 ``data_type`` 跨字解码。
+
+        位区读取失败时返回 None，**不做缓存兜底** —— 线圈/离散输入没有
+        "最后已知良好值"语义，拿上一次状态冒充本次反馈会让联锁误判。
+        """
+        bit_access = function_code in _FUNCTION_CODE_BIT_READS
+        spans = {
+            id(reg): (1 if bit_access
+                      else _register_span(reg.get('data_type', 'uint16')))
+            for reg in group_regs
+        }
+        min_addr = min(r['address'] for r in group_regs)
+        max_end = max(r['address'] + spans[id(r)] for r in group_regs)
+
+        def _read(start: int, count: int):
+            return _call_function_code_read(
+                client, function_code, start, count, slave_id)
+
+        def _emit(reg, raw: list, stale: bool, start: int, count: int) -> bool:
+            """解码并入队一个点位；返回是否产出了数据"""
+            size = spans[id(reg)]
+            if len(raw) < size:
+                self._inc_stat('dropped_register_short')
+                logger.warning(
+                    "设备 %s 寄存器 %s 响应长度不足（需 %d，实得 %d），本条丢弃",
+                    device_id, reg.get('name', '?'), size, len(raw))
                 return False
-            # 没有任何一块读到新鲜数据（全是陈旧缓存兜底）→ 设备实际不可达，
-            # 同样按失败上报给退避/熔断；只要有任意一块是新鲜的就仍算成功，
-            # 避免给"部分降级但还活着"的设备误开断路器。
-            if not any_chunk_fresh:
-                self._inc_stat('failed_collections')
+            value = (int(bool(raw[0])) if bit_access
+                     else self._decode_register(client, raw, reg))
+            if value is None:
                 return False
-            self._inc_stat('successful_collections')
+            item = {
+                'device_id': device_id,
+                'register_name': reg['name'],
+                'value': value,
+                'timestamp': timestamp,
+                'unit': reg.get('unit', '')
+            }
+            if stale:
+                # 值是陈旧缓存兜底，交给质量评估降级为 UNCERTAIN_LAST_USABLE
+                _mark_stale(item, start, count)
+            _enqueue(item)
             return True
+
+        if max_end - min_addr <= 125:
+            raw_all = _read(min_addr, max_end - min_addr)
+            if raw_all is None:
+                return False, False
+            # 位区不参与缓存新鲜度判定：读线圈不会更新 last_read_source，
+            # 混用会把上一个 FC03 的状态误算到线圈组头上。
+            stale = (not bit_access) and _read_is_stale(client)
+            produced = False
+            for reg in group_regs:
+                offset = reg['address'] - min_addr
+                size = spans[id(reg)]
+                if _emit(reg, raw_all[offset:offset + size], stale,
+                         min_addr, max_end - min_addr):
+                    produced = True
+            return produced, produced and not stale
+
+        # 分块读取，块边界预留重叠区防止多寄存器值被截断
+        max_span = max(spans.values()) if spans else 1
+        chunk_size = 125
+        step = chunk_size - (max_span - 1)  # 重叠区 = 最大寄存器宽度-1
+        any_chunk_ok = False
+        any_chunk_fresh = False
+        produced = False
+        for start in range(min_addr, max_end, step):
+            count = min(chunk_size, max_end - start)
+            chunk = _read(start, count)
+            if chunk is None:
+                continue
+            stale = (not bit_access) and _read_is_stale(client)
+            any_chunk_ok = True
+            if not stale:
+                any_chunk_fresh = True
+            for reg in group_regs:
+                if reg['address'] < start or reg['address'] >= start + count:
+                    continue
+                offset = reg['address'] - start
+                size = spans[id(reg)]
+                if _emit(reg, chunk[offset:offset + size], stale, start, count):
+                    produced = True
+
+        if not produced:
+            # 有响应但没有任何可用点位（长度不足/解码全失败）→ 本组失败
+            return False, False
+        return any_chunk_ok, any_chunk_fresh
 
     def _decode_register(self, client, raw_regs: list[int], register: dict) -> float | None:
         """从原始寄存器值解码为工程值"""
