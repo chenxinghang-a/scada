@@ -102,14 +102,22 @@ def evaluate_condition(rule_config: dict, value: float, *,
         if isinstance(low, bool) or isinstance(high, bool):
             return False
         low, high = try_finite_float(low), try_finite_float(high)
-        if low is None or high is None:
+        # 上下限配反时任何值都不成立，先拦住（否则 out_of_range 恒真/恒假）
+        if low is None or high is None or low > high:
             return False
         _db = normalize_deadband(deadband)
         if active and _db > 0:
             # 区间条件同样要迟滞：退出才放宽 deadband
             if condition == 'in_range':
                 return (low - _db) <= value <= (high + _db)
-            return value < (low - _db) or value > (high + _db)
+            # out_of_range 的迟滞必须向区间**内侧**收缩：越上限后要回到
+            # high - db 以内才算恢复。原来写成 high + db（区间外扩），
+            # 读数停在 (high, high + db] 时会每个采样周期 FIRE/CLEAR 交替。
+            eff_low = low + _db
+            eff_high = high - _db
+            if eff_low >= eff_high:
+                return value < low or value > high
+            return value < eff_low or value > eff_high
         if condition == 'in_range':
             return low <= value <= high
         return value < low or value > high
@@ -236,8 +244,15 @@ def decide(rule_config: dict, state: dict | None, value: Any,
             # （fail-open，宁可多报一次也不静默漏报），由调用方记 warning。
             elapsed = delay
         if elapsed < 0:
-            # 时间戳回退会让 elapsed 永远 < delay，报警永久 pending
-            elapsed = 0.0
+            # 时间戳回退会让 elapsed 永远 < delay，报警永久 pending。
+            # 只把局部 elapsed 置 0 不够：下一次采样读到的 confirm_time 仍在
+            # "未来"，elapsed 恒被压成 0 —— 时钟回拨窗口内配了 delay 的
+            # 真实故障完全静音。这里必须把锚点一起重置，让延迟重新起算。
+            return Decision(PENDING, {
+                'last_trigger_time': timestamp,
+                'last_value': numeric,
+                'confirm_time': timestamp,
+            }, elapsed=0.0, reason='时钟回拨，延迟计时重新起算')
         if elapsed >= delay:
             return Decision(FIRE, {
                 'pending': False,

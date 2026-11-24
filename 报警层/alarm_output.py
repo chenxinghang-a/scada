@@ -70,6 +70,9 @@ class AlarmOutput:
     }
     """
 
+    #: 报警级别优先级：低级别报警不得覆盖/降级高级别的声光输出
+    _LEVEL_PRIORITY = {'info': 1, 'warning': 2, 'critical': 3}
+
     def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or {}
         self.enabled = self.config.get('enabled', True)
@@ -336,13 +339,30 @@ class AlarmOutput:
         if not self.enabled:
             return
 
-        # round 370（BUG-034）：真实报警接管输出，手动测试计时器必须作废
-        self._cancel_manual_timer()
+        # round 370（BUG-034）：真实报警接管输出，手动测试计时器必须作废。
+        # 但**手动模式**下不能在这里取消：取消后本次报警会被下面的 manual 分支
+        # 拒绝，`level` 永远停在 'manual'、定时器也没了（点检到时不再自动复位），
+        # 此后所有 critical 报警都不驱动声光。
+        with self._lock:
+            is_manual = self.current_state.get('level') == 'manual'
+        if not is_manual:
+            self._cancel_manual_timer()
 
         # 同级别报警不重复触发灯控（避免抢灯）；但已确认(消音)后必须放行
         with self._lock:
+            # 高级别报警生效期间，低级别报警不得灭红灯/切绿灯 ——
+            # 一条 info 就能把 critical 的声光清掉，属于静默降级。
+            cur_level = self.current_state.get('level')
+            if (self._LEVEL_PRIORITY.get(cur_level, 0)
+                    > self._LEVEL_PRIORITY.get(level, 0)):
+                return (f"保持高级别({cur_level})报警输出，"
+                        f"忽略低级别({level})报警: {message}")
             if (self.current_state.get('level') == level
                     and self.current_state.get('pattern') != AlarmLightPattern.STEADY
+                    # 闪烁线程已死（DO 瞬断退出）时同级去重必须放行，
+                    # 否则后续同级报警全部被 return 吃掉，灯再也不会亮。
+                    and self._flash_thread is not None
+                    and self._flash_thread.is_alive()
                     and not self.current_state.get('acknowledged', False)):
                 # 只更新消息，不动灯
                 self.current_state['message'] = message
@@ -620,32 +640,39 @@ class AlarmOutput:
         """蜂鸣器脉冲循环（响-停-响-停...）"""
         # round 381：退出关断放进 finally。`time.sleep` 收到非数值会抛
         # TypeError，原来会跳过末尾 `_shutdown_do`，蜂鸣器可能一直响到拔电源。
+        # 失败处理同闪烁线程：单次写失败只记日志继续，熔断后才退出，
+        # 且故障退出时保持鸣响（fail-closed），由人工或复位收尾。
+        aborted_by_fault = False
         try:
             while self._buzzer_running:
                 # round 286：I/O 用 `_io_lock`，状态锁不跨网络调用持有
                 with self._io_lock:
                     ok = self._write_do(self.do_buzzer, True)
                 if not ok:
-                    # round 308：**脉冲线程写失败必须停下来**。
-                    # 原来不看返回值：DO 通道断开后脉冲线程继续空转
-                    # （每 on_time/off_time 写一次、每次都失败），
-                    # 而 `get_status()['state']['buzzer']` 仍然显示在响 ——
-                    # 界面说"蜂鸣器正在叫"，现场其实一点声音都没有。
-                    # 停下来至少能让状态机进入可诊断的失败态，而不是空转的假活跃。
-                    logger.error("蜂鸣器脉冲：DO 写入失败，停止脉冲"
-                                 "（现场可能不再响，请检查 DO 通道与通信链路）")
-                    self._buzzer_running = False
-                    break
+                    # round 308：持续失败时脉冲线程空转会让状态显示"正在响"，
+                    # 熔断后必须停下来。
+                    if self._circuit_is_open():
+                        logger.error("蜂鸣器脉冲：DO 通道连续失败已熔断，停止脉冲"
+                                     "（现场可能不再响，请检查 DO 通道与通信链路）")
+                        aborted_by_fault = True
+                        self._buzzer_running = False
+                        break
+                    logger.warning("蜂鸣器脉冲：单次 DO 写入失败（连续 %d 次），"
+                                   "保持线程重试", self._fail_streak)
                 time.sleep(on_time)
                 if not self._buzzer_running:
                     break
                 with self._io_lock:
                     ok = self._write_do(self.do_buzzer, False)
                 if not ok:
-                    logger.error("蜂鸣器脉冲：关闭 DO 写入失败，停止脉冲"
-                                 "（现场可能一直常响，请检查 DO 通道）")
-                    self._buzzer_running = False
-                    break
+                    if self._circuit_is_open():
+                        logger.error("蜂鸣器脉冲：关闭 DO 连续失败已熔断，停止脉冲"
+                                     "（现场可能一直常响，请检查 DO 通道）")
+                        aborted_by_fault = True
+                        self._buzzer_running = False
+                        break
+                    logger.warning("蜂鸣器脉冲：单次关闭 DO 失败（连续 %d 次），"
+                                   "保持线程重试", self._fail_streak)
                 time.sleep(off_time)
         finally:
             # 退出时关蜂鸣器
@@ -654,7 +681,12 @@ class AlarmOutput:
             # 线程退出后再没有人会写这个 DO，蜂鸣器一旦没关掉就会**一直响**，
             # 而 `get_status()['state']['buzzer']` 已经显示 False（意图），
             # 现场只能靠人去拔电源。
-            self._shutdown_do(self.do_buzzer, '蜂鸣器（退出时关闭）')
+            if aborted_by_fault:
+                # 通信中断：保持鸣响（fail-closed），绝不主动静音。
+                with self._io_lock:
+                    self._write_do(self.do_buzzer, True)
+            else:
+                self._shutdown_do(self.do_buzzer, '蜂鸣器（退出时关闭）')
 
     # ==================== 闪烁控制 ====================
 
@@ -685,6 +717,11 @@ class AlarmOutput:
             return
 
         # round 381：退出灭灯放进 finally，异常路径也不能把灯留在常亮。
+        # 但单次写失败不等于通道故障（变频器/焊机干扰很常见）：直接 break 会
+        # 在链路恢复瞬间由 finally 把红灯**主动写 False**，而 current_state 仍是
+        # critical/red=True —— 同级去重把后续 critical 全部吃掉，红灯永久熄灭。
+        # 只有连续失败到熔断阈值才放弃；放弃时绝不主动灭灯（fail-closed）。
+        aborted_by_fault = False
         try:
             while self._flash_running:
                 self._flash_state = not self._flash_state
@@ -692,18 +729,27 @@ class AlarmOutput:
                 with self._io_lock:
                     ok = self._write_do(do_addr, self._flash_state)
                 if not ok:
-                    # round 308：与脉冲循环同理 —— 写失败时闪烁线程空转，
-                    # 而界面状态机仍显示"红灯在闪"。
-                    logger.error("报警灯闪烁：DO 写入失败，停止闪烁"
-                                 "（现场指示灯可能停在原状态，请检查 DO 通道）")
-                    self._flash_running = False
-                    break
+                    if self._circuit_is_open():
+                        # round 308：持续失败时线程空转会让界面显示"红灯在闪"，
+                        # 必须退出到可诊断的失败态。
+                        logger.error("报警灯闪烁：DO 通道连续失败已熔断，停止闪烁"
+                                     "（现场指示灯保持最后状态，请检查 DO 通道）")
+                        aborted_by_fault = True
+                        self._flash_running = False
+                        break
+                    logger.warning("报警灯闪烁：单次 DO 写入失败（连续 %d 次），"
+                                   "保持线程重试", self._fail_streak)
                 time.sleep(interval)
         finally:
-            # 退出时灭灯（加锁）
-            # round 309：与蜂鸣器同理 —— 线程退出后没人再写这个 DO，
-            # 灭灯失败就是**灯一直亮着**，而界面已经显示"正常"。
-            self._shutdown_do(do_addr, f'{color} 灯（退出时熄灭）')
+            if aborted_by_fault:
+                # 通信中断时保持报警可见：尝试把灯写常亮，绝不写 False。
+                with self._io_lock:
+                    self._write_do(do_addr, True)
+            else:
+                # 退出时灭灯（加锁）
+                # round 309：与蜂鸣器同理 —— 线程退出后没人再写这个 DO，
+                # 灭灯失败就是**灯一直亮着**，而界面已经显示"正常"。
+                self._shutdown_do(do_addr, f'{color} 灯（退出时熄灭）')
 
     # ==================== 接口兼容 ====================
 
