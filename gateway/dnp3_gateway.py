@@ -542,6 +542,31 @@ class DNP3Parser:
 # DNP3 客户端
 # ──────────────────────────────────────────────
 
+class ControlStatus:
+    """遥控结果三分类（round 394）。
+
+    现场需要能区分「读了反馈点且一致」「指令发出但从站没给可验证的反馈」
+    与「失败」—— 把前两者都叫"成功"会让值班员误以为断路器已到位。
+    """
+    VERIFIED = 'VERIFIED'                 # 从站回执 0 且反馈点回读一致
+    SENT_UNVERIFIED = 'SENT_UNVERIFIED'   # 从站回执 0，未配置反馈点，未验证
+    FAILED = 'FAILED'                     # 未连接/从站拒绝/读回不一致/超时
+
+
+class ControlOutcome(dict):
+    """遥控结果。
+
+    历史返回 ``bool``。改成字典后，``if gw.write_register(...)`` 对
+    ``{'success': False}`` 仍然为真（仓库里反复出现的假成功陷阱），
+    因此覆写 ``__bool__`` 保持「真值 == 成功」的旧契约。
+    """
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.get('success'))
+
+
 class DNP3Client:
     """
     DNP3客户端 — 管理与DNP3从站/Outstation的TCP连接
@@ -828,7 +853,14 @@ class DNP3Gateway(BaseGateway):
                 "registers": [
                     {"name": "voltage", "index": 0, "group": "ai"},
                     {"name": "current", "index": 1, "group": "ai"},
-                    {"name": "breaker_status", "index": 0, "group": "bi"}
+                    {"name": "breaker_status", "index": 0, "group": "bi"},
+                    # 遥控点（round 394）：
+                    #   feedback_index   —— 回读的**遥信**索引（显式指定，
+                    #                       绝不默认等于输出索引）；不配则不回读
+                    #   require_feedback —— true 时必须配 feedback_index，
+                    #                       否则下发前直接拒绝
+                    {"name": "breaker_cmd", "index": 5, "group": "bo",
+                     "feedback_index": 20, "require_feedback": True}
                 ]
             }
         ]
@@ -847,6 +879,11 @@ class DNP3Gateway(BaseGateway):
         # 反向映射: device_id -> {(group, index): register_name}
         self._reverse_maps: dict[str, dict[tuple[int, int], str]] = {}
 
+        # 遥控点配置原始条目: device_id -> {register_name: reg_dict}
+        # round 394：feedback_index / require_feedback 是**每个遥控点**的配置，
+        # 写命令只带 index，必须能从这里反查到该点的反馈策略。
+        self._register_configs: dict[str, dict[str, dict]] = {}
+
         #: 遥控写后回读的等待上限（秒）
         self.readback_timeout = 3.0
 
@@ -863,6 +900,7 @@ class DNP3Gateway(BaseGateway):
             if not device_id:
                 continue
             reg_map: dict[str, tuple[int, int]] = {}
+            reg_cfgs: dict[str, dict] = {}
             for reg in device_config.get('registers', []):
                 name = reg.get('name', '')
                 index = reg.get('index', 0)
@@ -871,8 +909,10 @@ class DNP3Gateway(BaseGateway):
                 group = group_map.get(group_str, DNP3ObjectGroup.AI)
                 if name:
                     reg_map[name] = (group, index)
+                    reg_cfgs[name] = reg
             self._register_maps[device_id] = reg_map
             self._reverse_maps[device_id] = {v: k for k, v in reg_map.items()}
+            self._register_configs[device_id] = reg_cfgs
 
     def connect(self) -> bool:
         """连接所有DNP3设备"""
@@ -994,57 +1034,170 @@ class DNP3Gateway(BaseGateway):
         telemetry.Protocol = ProtocolType.DNP3.value
         return telemetry
 
-    def write_register(self, device_id: str, index: int, value: int) -> bool:
+    def _control_failure(self, device_id: str, index: int, message: str,
+                         value: int | None = None) -> ControlOutcome:
+        self.logger.error("遥控失败：设备 %s 索引 %s —— %s", device_id, index, message)
+        return ControlOutcome(
+            success=False,
+            status=ControlStatus.FAILED,
+            verified=False,
+            device_id=device_id,
+            index=index,
+            value=value,
+            message=message,
+        )
+
+    def write_register(self, device_id: str, index: int, value: int) -> ControlOutcome:
         """
-        发送控制命令
+        发送控制命令（直接操作），返回**三分类**结果。
 
         Args:
             device_id: 设备ID
-            index: DNP3对象索引
+            index: DNP3 对象索引
             value: 控制值 (0/1)
+
+        Returns:
+            ControlOutcome（dict 子类，``bool()`` 仅成功为真）：
+              · ``status == VERIFIED``        —— 从站回执 0 且反馈点读回一致
+              · ``status == SENT_UNVERIFIED`` —— 从站回执 0，但该点未配反馈点
+              · ``status == FAILED``          —— 未连接/被拒/回读不一致/超时
+
+        round 394（方案 C）：不再「没有反馈点就跳过校验并报成功」。是否回读由
+        **显式配置**决定：``feedback_index`` 指定反馈点，``require_feedback``
+        强制要求反馈。两者都没有时如实返回 `SENT_UNVERIFIED`，而不是 VERIFIED。
         """
         client = self._clients.get(device_id)
         if not client or not client.connected:
-            self.logger.error(f"设备 {device_id} 未连接")
-            return False
+            return self._control_failure(device_id, index, f'设备 {device_id} 未连接',
+                                         value=1 if value else 0)
 
         # 前置校验：只有配置成遥控点（group=bo）的索引才允许下发。
         # 否则把模拟量/AI 索引误当遥控点，等于对一个不存在或无关的对象发命令。
-        if (DNP3ObjectGroup.BO, index) not in self._reverse_maps.get(device_id, {}):
-            self.logger.error(
-                "拒绝遥控：设备 %s 的索引 %s 未配置为遥控点（group=bo）",
-                device_id, index)
-            return False
+        name = self._reverse_maps.get(device_id, {}).get(
+            (DNP3ObjectGroup.BO, index))
+        if name is None:
+            return self._control_failure(
+                device_id, index,
+                f'索引 {index} 未配置为遥控点（group=bo），拒绝下发',
+                value=1 if value else 0)
+
+        # ---- 反馈策略（每点配置，round 394）----
+        cfg = self._register_configs.get(device_id, {}).get(name, {})
+        raw_feedback = cfg.get('feedback_index')
+        if raw_feedback is None:
+            feedback_index: int | None = None
+        elif isinstance(raw_feedback, bool) or not isinstance(raw_feedback, int) \
+                or raw_feedback < 0:
+            return self._control_failure(
+                device_id, index,
+                f'点位 {name!r} 的 feedback_index={raw_feedback!r} 非法'
+                f'（必须是 ≥0 的整数），拒绝下发',
+                value=1 if value else 0)
+        else:
+            feedback_index = raw_feedback
+
+        raw_require = cfg.get('require_feedback', False)
+        if not isinstance(raw_require, bool):
+            return self._control_failure(
+                device_id, index,
+                f'点位 {name!r} 的 require_feedback={raw_require!r} 非法'
+                f'（必须是布尔值），拒绝下发',
+                value=1 if value else 0)
+        require_feedback = raw_require
+
+        # require_feedback=True 却没有反馈点 → 下发前就拒绝（配置错误，
+        # 硬发出去只会得到一个无法自证的"成功"）。
+        if require_feedback and feedback_index is None:
+            return self._control_failure(
+                device_id, index,
+                f'点位 {name!r} 配置了 require_feedback=true 但未配置 '
+                f'feedback_index，拒绝下发',
+                value=1 if value else 0)
 
         bit = 1 if value else 0
-        if not client.send_control(index, bit):
-            return False
-        return self._verify_readback(device_id, client, index, bit)
+        sent_at = time.time()
+        try:
+            sent = client.send_control(index, bit)
+        except Exception as e:      # noqa: BLE001 —— 通信异常一律按失败
+            return self._control_failure(
+                device_id, index, f'遥控下发异常: {type(e).__name__}: {e}', value=bit)
+        if not sent:
+            # send_control 只在「连接未建立 / 无回执 / 从站状态非 0」时返回 False
+            return self._control_failure(
+                device_id, index,
+                '从站未确认控制命令（无回执 / 状态非 0 / 连接中断）',
+                value=bit)
+
+        if feedback_index is None:
+            # 从站回执 0，但没有可读回的反馈点：**只代表已下发**。
+            # 不能与闭环确认共用"成功"语义，否则值班员会把"发出去了"
+            # 当成"断路器已到位"。
+            self.logger.warning(
+                "设备 %s 点位 %r 遥控已下发，但未配置 feedback_index，"
+                "结果未验证（SENT_UNVERIFIED）", device_id, name)
+            return ControlOutcome(
+                success=True,
+                status=ControlStatus.SENT_UNVERIFIED,
+                verified=None,
+                device_id=device_id,
+                index=index,
+                value=bit,
+                message='已下发（未验证）',
+            )
+
+        if not self._verify_readback(device_id, client, feedback_index, bit, sent_at):
+            return self._control_failure(
+                device_id, index,
+                f'遥控回读校验失败：反馈点 {feedback_index} 期望 {bit}，'
+                f'不一致或 {self.readback_timeout:g}s 内未刷新',
+                value=bit)
+
+        return ControlOutcome(
+            success=True,
+            status=ControlStatus.VERIFIED,
+            verified=True,
+            device_id=device_id,
+            index=index,
+            value=bit,
+            message='已下发并回读确认',
+        )
 
     def _verify_readback(self, device_id: str, client: DNP3Client,
-                         index: int, value: int) -> bool:
-        """写后回读：同一索引的开关量反馈必须与命令一致（fail-closed）。
+                         feedback_index: int, value: int,
+                         sent_at: float) -> bool:
+        """写后回读：**显式配置的反馈点**在超时内刷新且与命令一致（fail-closed）。
 
-        没有反馈点时无法回读，此时只认从站回执并显式告警 —— 这是配置缺失，
-        不是通信正常，必须让人看见。
+        round 394：不再按「同索引的 BI 点」猜反馈点。现场反馈点常与输出不在
+        同一个 DNP3 索引；按同索引猜，运气不好会拿一个无关点当反馈 ——
+        要么恒失败，要么更糟：恰好一致时给出假的 VERIFIED。
+
+        只认**命令发出之后**刷新过的值（``time >= sent_at``），避免用缓存里
+        上一次的旧值蒙混成验证通过。
         """
-        if (DNP3ObjectGroup.BI, index) not in self._reverse_maps.get(device_id, {}):
-            self.logger.warning(
-                "设备 %s 未配置索引 %d 的开关量反馈点，遥控仅以从站回执为准",
-                device_id, index)
-            return True
-
+        key = (DNP3ObjectGroup.BI, feedback_index)
         deadline = time.monotonic() + self.readback_timeout
         while time.monotonic() < deadline:
-            client.request_data()
-            info = client.read_data().get((DNP3ObjectGroup.BI, index))
-            if info is not None and int(info.get('value', 0)) == value:
-                return True
+            try:
+                client.request_data()
+                info = client.read_data().get(key)
+            except Exception as e:      # noqa: BLE001 —— 通信失败绝不能当成功
+                self.logger.error(
+                    "遥控回读读取失败：设备 %s 反馈点 %s: %s",
+                    device_id, feedback_index, e)
+                return False
+            if info is not None:
+                try:
+                    fresh = float(info.get('time') or 0) >= sent_at
+                    actual = int(info.get('value', 0))
+                except (TypeError, ValueError):
+                    return False
+                if fresh and actual == value:
+                    return True
             time.sleep(0.1)
 
         self.logger.error(
-            "遥控回读校验失败：设备 %s 索引 %d 期望 %d，反馈不一致或超时",
-            device_id, index, value)
+            "遥控回读校验失败：设备 %s 反馈点 %s 期望 %s，反馈不一致或超时",
+            device_id, feedback_index, value)
         return False
 
     def reconnect_device(self, device_id: str) -> bool:
