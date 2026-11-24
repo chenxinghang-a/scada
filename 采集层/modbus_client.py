@@ -110,6 +110,12 @@ class ModbusClient:
         #: 会各建一个 client，后者覆盖前者，且可能关掉别人正在用的连接。
         self._reconnect_lock = threading.Lock()
 
+        #: I/O 串行化（round 383）：一条 Modbus TCP/RTU 连接同一时刻只能有一个
+        #: 请求在途。原来读/写各调各的 `self.client`，写后回读的 read 还可能
+        #: 拿到另一个线程的响应（或另一个线程刚写进 last_read_source 的状态），
+        #: "写后回读"因此可能校验到别人的数据。RLock：写入验证内部会调读方法。
+        self._io_lock = threading.RLock()
+
         # Fix 2: 最后已知良好值缓存 — 读取失败时返回缓存值而非 None，
         # 避免重连期间数据断流。key = (address, count), value = list[int]
         self._last_good_values: dict[tuple, list[int]] = {}
@@ -577,44 +583,45 @@ class ModbusClient:
         self._inc_stat('total_reads')
 
         try:
-            result = self.client.read_holding_registers(
-                address=address,
-                count=count,
-                slave=slave
-            )
-
-            if result.isError():
-                # 区分永久错误（配置问题）、瞬态错误（可重试）与其它非重试码（0475）
-                code = getattr(result, 'exception_code', None)
-                if isinstance(result, ExceptionResponse) and code in _PERMANENT_EXCEPTIONS:
-                    logger.error(f"Modbus 永久错误 (0x{code:02X}): {result} — 不重试，检查寄存器配置")
-                elif isinstance(result, ExceptionResponse) and code in _TRANSIENT_EXCEPTIONS:
-                    logger.warning(f"Modbus 瞬态错误: {result} — 可重试")
-                else:
-                    logger.error(f"Modbus 非重试错误 (exception_code={code!r}): {result}")
-                self._inc_stat('failed_reads')
-                with self._stats_lock:
-                    self.stats['last_error'] = str(result)
-                self._log_operation('read_holding_registers', address, count, False, str(result))
-                return self._fallback_to_cache(
-                    cache_key, address, count, f'Modbus 错误响应: {result}'
+            with self._io_lock:
+                result = self.client.read_holding_registers(
+                    address=address,
+                    count=count,
+                    slave=slave
                 )
 
-            # 0480：短应答（寄存器数不足）不能当完整值缓存，后续按 count 解码会索引越界
-            if len(result.registers or []) < count:
-                self._inc_stat('failed_reads')
-                self._log_operation('read_holding_registers', address, count, False, '寄存器数量不足')
-                return self._fallback_to_cache(cache_key, address, count, '寄存器数量不足')
+                if result.isError():
+                    # 区分永久错误（配置问题）、瞬态错误（可重试）与其它非重试码（0475）
+                    code = getattr(result, 'exception_code', None)
+                    if isinstance(result, ExceptionResponse) and code in _PERMANENT_EXCEPTIONS:
+                        logger.error(f"Modbus 永久错误 (0x{code:02X}): {result} — 不重试，检查寄存器配置")
+                    elif isinstance(result, ExceptionResponse) and code in _TRANSIENT_EXCEPTIONS:
+                        logger.warning(f"Modbus 瞬态错误: {result} — 可重试")
+                    else:
+                        logger.error(f"Modbus 非重试错误 (exception_code={code!r}): {result}")
+                    self._inc_stat('failed_reads')
+                    with self._stats_lock:
+                        self.stats['last_error'] = str(result)
+                    self._log_operation('read_holding_registers', address, count, False, str(result))
+                    return self._fallback_to_cache(
+                        cache_key, address, count, f'Modbus 错误响应: {result}'
+                    )
 
-            self._inc_stat('successful_reads')
-            self._consecutive_failures = 0  # 成功读取，重置失败计数
-            with self._stats_lock:
-                self.stats['last_read_time'] = time.time()
-            self._log_operation('read_holding_registers', address, count, True)
+                # 0480：短应答（寄存器数不足）不能当完整值缓存，后续按 count 解码会索引越界
+                if len(result.registers or []) < count:
+                    self._inc_stat('failed_reads')
+                    self._log_operation('read_holding_registers', address, count, False, '寄存器数量不足')
+                    return self._fallback_to_cache(cache_key, address, count, '寄存器数量不足')
 
-            # Fix 2: 缓存成功读取的值（含时间戳），并标记本次为新鲜数据
-            self._mark_read_fresh(cache_key, result.registers)
-            return result.registers
+                self._inc_stat('successful_reads')
+                self._consecutive_failures = 0  # 成功读取，重置失败计数
+                with self._stats_lock:
+                    self.stats['last_read_time'] = time.time()
+                self._log_operation('read_holding_registers', address, count, True)
+
+                # Fix 2: 缓存成功读取的值（含时间戳），并标记本次为新鲜数据
+                self._mark_read_fresh(cache_key, result.registers)
+                return result.registers
 
         except ConnectionException as e:
             self._consecutive_failures += 1
@@ -706,37 +713,38 @@ class ModbusClient:
         self._inc_stat('total_reads')
 
         try:
-            result = self.client.read_input_registers(
-                address=address,
-                count=count,
-                slave=slave
-            )
-
-            if result.isError():
-                logger.error(f"读取输入寄存器失败: {result}")
-                self._inc_stat('failed_reads')
-                self._log_operation('read_input_registers', address, count, False, str(result))
-                return self._fallback_to_cache(
-                    cache_key, address, count, f'Modbus 错误响应: {result}'
+            with self._io_lock:
+                result = self.client.read_input_registers(
+                    address=address,
+                    count=count,
+                    slave=slave
                 )
 
-            if len(result.registers or []) < count:
-                self._inc_stat('failed_reads')
-                self._log_operation('read_input_registers', address, count,
-                                    False, '寄存器数量不足')
-                return self._fallback_to_cache(
-                    cache_key, address, count, '寄存器数量不足'
-                )
+                if result.isError():
+                    logger.error(f"读取输入寄存器失败: {result}")
+                    self._inc_stat('failed_reads')
+                    self._log_operation('read_input_registers', address, count, False, str(result))
+                    return self._fallback_to_cache(
+                        cache_key, address, count, f'Modbus 错误响应: {result}'
+                    )
 
-            self._inc_stat('successful_reads')
-            self._consecutive_failures = 0  # 成功读取，重置失败计数
-            with self._stats_lock:
-                self.stats['last_read_time'] = time.time()
-            self._log_operation('read_input_registers', address, count, True)
+                if len(result.registers or []) < count:
+                    self._inc_stat('failed_reads')
+                    self._log_operation('read_input_registers', address, count,
+                                        False, '寄存器数量不足')
+                    return self._fallback_to_cache(
+                        cache_key, address, count, '寄存器数量不足'
+                    )
 
-            # Fix 2: 缓存成功读取的值（含时间戳），并标记本次为新鲜数据
-            self._mark_read_fresh(cache_key, result.registers)
-            return result.registers
+                self._inc_stat('successful_reads')
+                self._consecutive_failures = 0  # 成功读取，重置失败计数
+                with self._stats_lock:
+                    self.stats['last_read_time'] = time.time()
+                self._log_operation('read_input_registers', address, count, True)
+
+                # Fix 2: 缓存成功读取的值（含时间戳），并标记本次为新鲜数据
+                self._mark_read_fresh(cache_key, result.registers)
+                return result.registers
 
         except ConnectionException as e:
             self._consecutive_failures += 1
@@ -791,18 +799,19 @@ class ModbusClient:
             return None
 
         try:
-            result = self.client.read_coils(
-                address=address,
-                count=count,
-                slave=slave
-            )
+            with self._io_lock:
+                result = self.client.read_coils(
+                    address=address,
+                    count=count,
+                    slave=slave
+                )
 
-            if result.isError():
-                self._log_operation('read_coils', address, count, False, str(result))
-                return None
+                if result.isError():
+                    self._log_operation('read_coils', address, count, False, str(result))
+                    return None
 
-            self._log_operation('read_coils', address, count, True)
-            return result.bits[:count]
+                self._log_operation('read_coils', address, count, True)
+                return result.bits[:count]
 
         except Exception as e:
             logger.error(f"读取线圈异常: {e}")
@@ -838,18 +847,19 @@ class ModbusClient:
             return None
 
         try:
-            result = self.client.read_discrete_inputs(
-                address=address,
-                count=count,
-                slave=slave
-            )
+            with self._io_lock:
+                result = self.client.read_discrete_inputs(
+                    address=address,
+                    count=count,
+                    slave=slave
+                )
 
-            if result.isError():
-                self._log_operation('read_discrete_inputs', address, count, False, str(result))
-                return None
+                if result.isError():
+                    self._log_operation('read_discrete_inputs', address, count, False, str(result))
+                    return None
 
-            self._log_operation('read_discrete_inputs', address, count, True)
-            return result.bits[:count]
+                self._log_operation('read_discrete_inputs', address, count, True)
+                return result.bits[:count]
 
         except Exception as e:
             logger.error(f"读取离散输入异常: {e}")
@@ -896,57 +906,61 @@ class ModbusClient:
         self._inc_stat('total_writes')
 
         try:
-            result = self.client.write_register(
-                address=address,
-                value=value,
-                slave=slave
-            )
+            # round 383：写入 + 回读验证必须整体持有 I/O 锁。原来回读在锁外，
+            # 另一个采集线程的读可能插进来，把 `last_read_source` 改成它自己的
+            # 结果，写入验证于是校验到别人的响应。
+            with self._io_lock:
+                result = self.client.write_register(
+                    address=address,
+                    value=value,
+                    slave=slave
+                )
 
-            if isinstance(result, ExceptionResponse):
-                logger.error(f"写入寄存器异常码 0x{result.exception_code:02X}")
-                self._inc_stat('failed_writes')
-                self._log_operation('write_single_register', address, 1, False, f"异常码 0x{result.exception_code:02X}")
-                return False
-
-            if result.isError():
-                logger.error(f"写入寄存器失败: {result}")
-                self._inc_stat('failed_writes')
-                self._log_operation('write_single_register', address, 1, False, str(result))
-                return False
-
-            # 写后回读验证
-            if verify:
-                time.sleep(0.05)
-                read_back = self.read_holding_registers(address, 1, slave_id=slave)
-                # ⚠️ 回读**必须是新鲜数据**（round 327）。
-                # `read_holding_registers` 在读取失败时会返回**陈旧缓存值**
-                # （见其 docstring 的 Warning），且返回值本身无法区分。
-                # 于是「写入后回读超时 + 缓存里恰好存着同一个值」会被判成
-                # 验证通过 —— 设备根本没写进去，系统却报"写入成功且已校验"。
-                # 实测复现：回读抛异常、缓存预置 [42]、写入 42 → 返回 True。
-                if self.last_read_source != 'fresh':
-                    logger.warning(
-                        f"写入验证失败: addr={address}, 写入={value}, "
-                        f"回读不是新鲜数据（source={self.last_read_source}）— "
-                        f"无法确认设备是否真的写进去了")
+                if isinstance(result, ExceptionResponse):
+                    logger.error(f"写入寄存器异常码 0x{result.exception_code:02X}")
                     self._inc_stat('failed_writes')
-                    self._log_operation(
-                        'write_single_register', address, 1, False,
-                        f'回读非新鲜数据(source={self.last_read_source})')
-                    return False
-                if read_back and read_back[0] == value:
-                    logger.debug(f"写入验证通过: addr={address}, value={value}")
-                else:
-                    logger.warning(f"写入验证失败: addr={address}, 写入={value}, 回读={read_back}")
-                    self._inc_stat('failed_writes')
-                    self._log_operation('write_single_register', address, 1, False, '回读验证失败')
+                    self._log_operation('write_single_register', address, 1, False, f"异常码 0x{result.exception_code:02X}")
                     return False
 
-            self._inc_stat('successful_writes')
-            with self._stats_lock:
-                self.stats['last_write_time'] = time.time()
-            self._log_operation('write_single_register', address, 1, True)
-            return True
+                if result.isError():
+                    logger.error(f"写入寄存器失败: {result}")
+                    self._inc_stat('failed_writes')
+                    self._log_operation('write_single_register', address, 1, False, str(result))
+                    return False
+
+                # 写后回读验证
+                if verify:
+                    time.sleep(0.05)
+                    read_back = self.read_holding_registers(address, 1, slave_id=slave)
+                    # ⚠️ 回读**必须是新鲜数据**（round 327）。
+                    # `read_holding_registers` 在读取失败时会返回**陈旧缓存值**
+                    # （见其 docstring 的 Warning），且返回值本身无法区分。
+                    # 于是「写入后回读超时 + 缓存里恰好存着同一个值」会被判成
+                    # 验证通过 —— 设备根本没写进去，系统却报"写入成功且已校验"。
+                    # 实测复现：回读抛异常、缓存预置 [42]、写入 42 → 返回 True。
+                    if self.last_read_source != 'fresh':
+                        logger.warning(
+                            f"写入验证失败: addr={address}, 写入={value}, "
+                            f"回读不是新鲜数据（source={self.last_read_source}）— "
+                            f"无法确认设备是否真的写进去了")
+                        self._inc_stat('failed_writes')
+                        self._log_operation(
+                            'write_single_register', address, 1, False,
+                            f'回读非新鲜数据(source={self.last_read_source})')
+                        return False
+                    if read_back and read_back[0] == value:
+                        logger.debug(f"写入验证通过: addr={address}, value={value}")
+                    else:
+                        logger.warning(f"写入验证失败: addr={address}, 写入={value}, 回读={read_back}")
+                        self._inc_stat('failed_writes')
+                        self._log_operation('write_single_register', address, 1, False, '回读验证失败')
+                        return False
+
+                self._inc_stat('successful_writes')
+                with self._stats_lock:
+                    self.stats['last_write_time'] = time.time()
+                self._log_operation('write_single_register', address, 1, True)
+                return True
 
         except Exception as e:
             logger.error(f"写入寄存器异常: {e}")
@@ -986,41 +1000,43 @@ class ModbusClient:
         self._inc_stat('total_writes')
 
         try:
-            result = self.client.write_coil(
-                address=address,
-                value=value,
-                slave=slave
-            )
+            # round 383：写 + 回读整体持有 I/O 锁，避免回读被别的线程插队
+            with self._io_lock:
+                result = self.client.write_coil(
+                    address=address,
+                    value=value,
+                    slave=slave
+                )
 
-            if isinstance(result, ExceptionResponse):
-                logger.error(f"写入线圈异常码 0x{result.exception_code:02X}")
-                self._inc_stat('failed_writes')
-                self._log_operation('write_single_coil', address, 1, False, f"异常码 0x{result.exception_code:02X}")
-                return False
-
-            if result.isError():
-                logger.error(f"写入线圈失败: {result}")
-                self._inc_stat('failed_writes')
-                self._log_operation('write_single_coil', address, 1, False, str(result))
-                return False
-
-            # 写后回读验证
-            if verify:
-                time.sleep(0.05)
-                read_back = self.read_coils(address, 1, slave_id=slave)
-                if read_back and read_back[0] == value:
-                    logger.debug(f"线圈写入验证通过: addr={address}, value={value}")
-                else:
-                    logger.warning(f"线圈写入验证失败: addr={address}, 写入={value}, 回读={read_back}")
+                if isinstance(result, ExceptionResponse):
+                    logger.error(f"写入线圈异常码 0x{result.exception_code:02X}")
                     self._inc_stat('failed_writes')
-                    self._log_operation('write_single_coil', address, 1, False, '回读验证失败')
+                    self._log_operation('write_single_coil', address, 1, False, f"异常码 0x{result.exception_code:02X}")
                     return False
 
-            self._inc_stat('successful_writes')
-            with self._stats_lock:
-                self.stats['last_write_time'] = time.time()
-            self._log_operation('write_single_coil', address, 1, True)
-            return True
+                if result.isError():
+                    logger.error(f"写入线圈失败: {result}")
+                    self._inc_stat('failed_writes')
+                    self._log_operation('write_single_coil', address, 1, False, str(result))
+                    return False
+
+                # 写后回读验证
+                if verify:
+                    time.sleep(0.05)
+                    read_back = self.read_coils(address, 1, slave_id=slave)
+                    if read_back and read_back[0] == value:
+                        logger.debug(f"线圈写入验证通过: addr={address}, value={value}")
+                    else:
+                        logger.warning(f"线圈写入验证失败: addr={address}, 写入={value}, 回读={read_back}")
+                        self._inc_stat('failed_writes')
+                        self._log_operation('write_single_coil', address, 1, False, '回读验证失败')
+                        return False
+
+                self._inc_stat('successful_writes')
+                with self._stats_lock:
+                    self.stats['last_write_time'] = time.time()
+                self._log_operation('write_single_coil', address, 1, True)
+                return True
 
         except Exception as e:
             logger.error(f"写入线圈异常: {e}")
@@ -1075,29 +1091,30 @@ class ModbusClient:
         self._inc_stat('total_writes')
 
         try:
-            result = self.client.write_registers(
-                address=address,
-                values=values,
-                slave=slave
-            )
+            with self._io_lock:
+                result = self.client.write_registers(
+                    address=address,
+                    values=values,
+                    slave=slave
+                )
 
-            if isinstance(result, ExceptionResponse):
-                logger.error(f"批量写入异常码 0x{result.exception_code:02X}")
-                self._inc_stat('failed_writes')
-                self._log_operation('write_multiple_registers', address, count, False, f"异常码 0x{result.exception_code:02X}")
-                return False
+                if isinstance(result, ExceptionResponse):
+                    logger.error(f"批量写入异常码 0x{result.exception_code:02X}")
+                    self._inc_stat('failed_writes')
+                    self._log_operation('write_multiple_registers', address, count, False, f"异常码 0x{result.exception_code:02X}")
+                    return False
 
-            if result.isError():
-                logger.error(f"批量写入失败: {result}")
-                self._inc_stat('failed_writes')
-                self._log_operation('write_multiple_registers', address, count, False, str(result))
-                return False
+                if result.isError():
+                    logger.error(f"批量写入失败: {result}")
+                    self._inc_stat('failed_writes')
+                    self._log_operation('write_multiple_registers', address, count, False, str(result))
+                    return False
 
-            self._inc_stat('successful_writes')
-            with self._stats_lock:
-                self.stats['last_write_time'] = time.time()
-            self._log_operation('write_multiple_registers', address, count, True)
-            return True
+                self._inc_stat('successful_writes')
+                with self._stats_lock:
+                    self.stats['last_write_time'] = time.time()
+                self._log_operation('write_multiple_registers', address, count, True)
+                return True
 
         except Exception as e:
             logger.error(f"批量写入异常: {e}")
@@ -1136,29 +1153,30 @@ class ModbusClient:
         self._inc_stat('total_writes')
 
         try:
-            result = self.client.write_coils(
-                address=address,
-                values=values,
-                slave=slave
-            )
+            with self._io_lock:
+                result = self.client.write_coils(
+                    address=address,
+                    values=values,
+                    slave=slave
+                )
 
-            if isinstance(result, ExceptionResponse):
-                logger.error(f"批量写入线圈异常码 0x{result.exception_code:02X}")
-                self._inc_stat('failed_writes')
-                self._log_operation('write_multiple_coils', address, count, False, f"异常码 0x{result.exception_code:02X}")
-                return False
+                if isinstance(result, ExceptionResponse):
+                    logger.error(f"批量写入线圈异常码 0x{result.exception_code:02X}")
+                    self._inc_stat('failed_writes')
+                    self._log_operation('write_multiple_coils', address, count, False, f"异常码 0x{result.exception_code:02X}")
+                    return False
 
-            if result.isError():
-                logger.error(f"批量写入线圈失败: {result}")
-                self._inc_stat('failed_writes')
-                self._log_operation('write_multiple_coils', address, count, False, str(result))
-                return False
+                if result.isError():
+                    logger.error(f"批量写入线圈失败: {result}")
+                    self._inc_stat('failed_writes')
+                    self._log_operation('write_multiple_coils', address, count, False, str(result))
+                    return False
 
-            self._inc_stat('successful_writes')
-            with self._stats_lock:
-                self.stats['last_write_time'] = time.time()
-            self._log_operation('write_multiple_coils', address, count, True)
-            return True
+                self._inc_stat('successful_writes')
+                with self._stats_lock:
+                    self.stats['last_write_time'] = time.time()
+                self._log_operation('write_multiple_coils', address, count, True)
+                return True
 
         except Exception as e:
             logger.error(f"批量写入线圈异常: {e}")
@@ -1209,23 +1227,24 @@ class ModbusClient:
             return None
 
         try:
-            result = self.client.readwrite_registers(
-                read_address=read_address,
-                read_count=read_count,
-                write_address=write_address,
-                write_registers=write_values,
-                slave=slave
-            )
+            with self._io_lock:
+                result = self.client.readwrite_registers(
+                    read_address=read_address,
+                    read_count=read_count,
+                    write_address=write_address,
+                    write_registers=write_values,
+                    slave=slave
+                )
 
-            if isinstance(result, ExceptionResponse):
-                logger.error(f"读写寄存器异常码 0x{result.exception_code:02X}")
-                return None
+                if isinstance(result, ExceptionResponse):
+                    logger.error(f"读写寄存器异常码 0x{result.exception_code:02X}")
+                    return None
 
-            if result.isError():
-                logger.error(f"读写寄存器失败: {result}")
-                return None
+                if result.isError():
+                    logger.error(f"读写寄存器失败: {result}")
+                    return None
 
-            return result.registers
+                return result.registers
 
         except Exception as e:
             logger.error(f"读写寄存器异常: {e}")

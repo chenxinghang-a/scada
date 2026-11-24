@@ -105,10 +105,21 @@ class RESTDeviceClient:
         self._session: requests.Session | None = None
 
         # 熔断器（保护外部HTTP调用）
-        self._circuit_breaker = get_circuit_breaker(
+        # round 383：读/写拆成**固定两把**。原来共用一把：轮询读连续失败把
+        # 熔断器打开后，写控制命令也被一并拒绝（"采集不到"变成"也不能控"）；
+        # 反过来写失败也会把读路径一起熔断。两把的名字固定，不按端点动态创建
+        # （动态命名会让全局单例只增不减）。
+        breaker_threshold = config.get('circuit_breaker_threshold', 5)
+        breaker_timeout = config.get('circuit_breaker_timeout', 60)
+        self._read_breaker = get_circuit_breaker(
             name=f"rest_client_{self.device_id}",
-            failure_threshold=config.get('circuit_breaker_threshold', 5),
-            timeout_seconds=config.get('circuit_breaker_timeout', 60),
+            failure_threshold=breaker_threshold,
+            timeout_seconds=breaker_timeout,
+        )
+        self._write_breaker = get_circuit_breaker(
+            name=f"rest_client_{self.device_id}_write",
+            failure_threshold=breaker_threshold,
+            timeout_seconds=breaker_timeout,
         )
 
         # 统计
@@ -281,7 +292,7 @@ class RESTDeviceClient:
                 resp.raise_for_status()
                 return resp.json()
 
-            data = self._circuit_breaker.call(_do_request)
+            data = self._read_breaker.call(_do_request)
 
             self.stats['total_requests'] += 1
             self.stats['successful_requests'] += 1
@@ -356,13 +367,18 @@ class RESTDeviceClient:
                 method=write_method,
                 url=url,
                 json=body,
-                timeout=getattr(self, '_timeout', (3, 5))
+                timeout=getattr(self, '_timeout', (3, 5)),
+                # round 383：写操作**不跟随重定向**。原来 requests 默认跟随
+                # 301/302，POST 控制命令被 3xx 改写成 GET 发到别的地址，
+                # 设备其实没收到写入，客户端却拿到 200 判"成功"（fail-open）。
+                allow_redirects=False,
             )
             resp.raise_for_status()
             return resp
 
         try:
-            self._circuit_breaker.call(_do_write)
+            # 写路径用独立的写熔断器：读失败不能顺带把控制通道熔断
+            self._write_breaker.call(_do_write)
             self.stats['total_requests'] += 1
             self.stats['successful_requests'] += 1
             self.stats['writes'] = self.stats.get('writes', 0) + 1
