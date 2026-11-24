@@ -67,6 +67,57 @@ def decode_float64_registers(registers: list[int],
     return struct.unpack('>d', raw)[0]
 
 
+def decode_float64(registers: list[int], *, word_order: str = 'big',
+                   byte_swap_in_word: bool = False) -> float:
+    """按「字序 + 字内字节序」两个正交维度解码 float64（4 个寄存器）。
+
+    ### 为什么要有这个函数
+
+    现行 ``decode_float64_registers`` 用 ``ABCD/BADC/CDAB/DCBA`` 四个字母表达
+    排列，但这套命名在 64 位下没有统一行业定义，而且**与 32 位的含义不同**：
+
+        32 位 BADC = 两个字节交换（字内）
+        64 位 BADC = 本项目定义为「字交换」[w1, w0, w3, w2]
+
+    同一个缩写两种含义，现场工程师按 32 位的理解配 64 位，数值就会跳成乱码。
+    这里把两件事拆开说：
+
+        word_order           含义                   寄存器下标序列
+        big                  原样（西门子 S7 大端）  [0, 1, 2, 3]
+        little               整段反转（三菱低字在前） [3, 2, 1, 0]
+        pair_swap            相邻字两两互换           [1, 0, 3, 2]  ← 旧 BADC
+        dword_swap           前后双字互换             [2, 3, 0, 1]  ← 旧 CDAB
+
+        byte_swap_in_word    True 时再对每个 16 位字做字节交换（真 BADC）
+
+    两种维度可以叠加，所以不会再有「BADC 到底是哪种」的歧义。
+
+    ### 现场怎么核对
+
+    `1.0` 的 IEEE-754 双精度是 ``0x3FF0000000000000``，拆成 4 个 16 位寄存器：
+    ``[0x3FF0, 0x0000, 0x0000, 0x0000]``。抓一帧读到这个值，就说明是 word_order
+    ``big``；读到 ``[0x0000, 0x0000, 0x0000, 0x3FF0]`` 则是 ``little``。
+    这一招比翻厂商手册快，也不用猜。
+    """
+    order = str(word_order or 'big').lower()
+    index_map = {
+        'big': (0, 1, 2, 3),
+        'little': (3, 2, 1, 0),
+        'pair_swap': (1, 0, 3, 2),
+        'dword_swap': (2, 3, 0, 1),
+    }.get(order)
+    if index_map is None:
+        raise ValueError(f"未知 word_order: {word_order!r}"
+                         f"（可选 big/little/pair_swap/dword_swap）")
+    if len(registers) < 4:
+        raise ValueError(f'float64 需要 4 个寄存器，只收到 {len(registers)} 个')
+
+    words = [registers[i] & 0xFFFF for i in index_map]
+    if byte_swap_in_word:
+        words = [_swap16(w) for w in words]
+    return struct.unpack('>d', struct.pack('>HHHH', *words))[0]
+
+
 class ByteOrderCapableDecoder:
     """为寄存器型客户端提供「按设备配置 byte_order 解码」的 mixin。
 
