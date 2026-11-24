@@ -387,7 +387,10 @@ class DNP3Parser:
 
         # 同 build_read_request：链路层头与 LENGTH 由 build_dnp3_frame 统一构造
         #   （LENGTH = 5 + 用户数据长度，不含 CRC）。
-        control = 0xC0
+        # DIR(0x80)+PRM(0x40)+FUNC=4（UNCONFIRMED_USER_DATA）→ 0xC4。
+        # 0xC0 是 FUNC=0（RESET_LINK）：从站只做链路复位，把遥控载荷直接丢掉，
+        # 而 send_control 仍回 True —— 断路器没动，画面显示"操作成功"。
+        control = 0xC4
         return build_dnp3_frame(control, destination, source, app_data)
 
     @staticmethod
@@ -578,6 +581,15 @@ class DNP3Client:
         # AttributeError，或者读到 0 而误判「从没坏过」）。
         self._invalid_frames = 0
 
+        # 遥控回执（条目 6）：DIRECT_OPERATE 发出后必须等到从站的应用层确认。
+        # 无回执 = 命令没被接受，绝不能向上报"已下发"（假成功）。
+        self._operate_status: int | None = None
+        self._operate_event = threading.Event()
+        self.control_timeout = 5.0
+        #: 缓存数据的最长可用时长。超过即视为通信中断（fail-closed），
+        #: 由 `DNP3Gateway.read_device_data` 判定，绝不把旧值当 GOOD 上报。
+        self.data_max_age = 15.0
+
     # ── 连接管理 ──────────────────────────────
 
     def connect(self) -> bool:
@@ -654,9 +666,24 @@ class DNP3Client:
                 frame = DNP3Parser.build_direct_operate(
                     self.local_addr, self.remote_addr,
                     index, value)
+                self._operate_status = None
+                self._operate_event.clear()
                 # sendall：send 在发送缓冲区满时会只写一部分（半包截断），
                 # 对端解析会直接错帧。
                 self.socket.sendall(frame)
+                # 写后确认：等到从站对 DIRECT_OPERATE 的响应（CROB 状态）。
+                # 只 sendall 成功就 return True，等于把"帧发出去了"当成
+                # "命令被执行了" —— 现场断路器不动，画面却报成功。
+                if not self._operate_event.wait(self.control_timeout):
+                    self.logger.error(
+                        "控制命令无回执：从站 %.1fs 内未确认（index=%s, value=%s）",
+                        self.control_timeout, index, value)
+                    return False
+                if self._operate_status not in (0, None):
+                    self.logger.error(
+                        "控制命令被从站拒绝：CROB 状态=0x%02X（index=%s, value=%s）",
+                        self._operate_status, index, value)
+                    return False
                 self.logger.info(f"发送控制命令: index={index}, value={value}")
                 return True
             except Exception as e:
@@ -735,6 +762,10 @@ class DNP3Client:
         fc = parsed.get('function_code', 0)
         # DNP3 outstation只发送RESPONSE(0x81)，不会发送READ(0x01)
         if fc == DNP3FunctionCode.RESPONSE:
+            op_status = self._extract_operate_status(parsed.get('data', b''))
+            if op_status is not None:
+                self._operate_status = op_status
+                self._operate_event.set()
             objects, parse_error = DNP3Parser.parse_response_ex(parsed.get('data', b''))
             if parse_error:
                 # round 324：解析不了**必须计数并告警**，不能静默返回空列表。
@@ -754,6 +785,17 @@ class DNP3Client:
                     'index': obj['index'],
                     'time': time.time(),
                 }
+
+    @staticmethod
+    def _extract_operate_status(app_data: bytes) -> int | None:
+        """从 DIRECT_OPERATE 的响应里取 CROB 状态字节；不是遥控响应则返回 None。
+
+        响应对象头：Group(0x0C) + Variation + Qualifier + [索引] + 11 字节 CROB，
+        CROB 的最后 1 字节是状态（0 = SUCCESS）。本实现的响应只带单个 CROB。
+        """
+        if len(app_data) < 14 or app_data[0] != DNP3ObjectGroup.BO:
+            return None
+        return app_data[-1]
 
     # ── 公共接口 ──────────────────────────────
 
@@ -804,6 +846,9 @@ class DNP3Gateway(BaseGateway):
 
         # 反向映射: device_id -> {(group, index): register_name}
         self._reverse_maps: dict[str, dict[tuple[int, int], str]] = {}
+
+        #: 遥控写后回读的等待上限（秒）
+        self.readback_timeout = 3.0
 
         # 解析设备配置
         group_map = {
@@ -899,6 +944,30 @@ class DNP3Gateway(BaseGateway):
             self._note_read_failure(device_id, "*", "client.read_data() 返回空")
             return None
 
+        # 通信中断 fail-closed：`read_data()` 只是"最后一次响应"的缓存，
+        # 断链/RTU 死机/帧全坏时它**不会自己失效** —— 原来直接把缓存值当
+        # 本轮读取成功返回，界面永远显示最后一次的"正常值"。
+        # 这里按新鲜度判：超过 data_max_age 未刷新的点一律视为本轮失败。
+        now = time.time()
+        max_age = getattr(client, 'data_max_age', 15.0)
+        stale = [k for k, v in data.items()
+                 if now - float(v.get('time') or 0) > max_age]
+        if stale:
+            self._note_read_failure(
+                device_id, "*",
+                f"缓存数据过期：{len(stale)} 个点超过 {max_age:.0f}s 未刷新"
+                f"（最后刷新 {now - max(v.get('time') or 0 for v in data.values()):.0f}s 前）")
+            return None
+
+        # 质量位不能忽略：DNP3 标志字节 bit0 = ONLINE，0 表示从站自己说它离线。
+        offline = [k for k, v in data.items()
+                   if not (int(v.get('quality') or 0) & 0x01)]
+        if offline:
+            self._note_read_failure(
+                device_id, "*",
+                f"质量位为 OFFLINE 的点 {len(offline)} 个，拒绝把该设备判为在线")
+            return None
+
         reverse_map = self._reverse_maps.get(device_id, {})
         result: dict[str, float] = {}
 
@@ -935,10 +1004,48 @@ class DNP3Gateway(BaseGateway):
             value: 控制值 (0/1)
         """
         client = self._clients.get(device_id)
-        if not client:
+        if not client or not client.connected:
             self.logger.error(f"设备 {device_id} 未连接")
             return False
-        return client.send_control(index, value)
+
+        # 前置校验：只有配置成遥控点（group=bo）的索引才允许下发。
+        # 否则把模拟量/AI 索引误当遥控点，等于对一个不存在或无关的对象发命令。
+        if (DNP3ObjectGroup.BO, index) not in self._reverse_maps.get(device_id, {}):
+            self.logger.error(
+                "拒绝遥控：设备 %s 的索引 %s 未配置为遥控点（group=bo）",
+                device_id, index)
+            return False
+
+        bit = 1 if value else 0
+        if not client.send_control(index, bit):
+            return False
+        return self._verify_readback(device_id, client, index, bit)
+
+    def _verify_readback(self, device_id: str, client: DNP3Client,
+                         index: int, value: int) -> bool:
+        """写后回读：同一索引的开关量反馈必须与命令一致（fail-closed）。
+
+        没有反馈点时无法回读，此时只认从站回执并显式告警 —— 这是配置缺失，
+        不是通信正常，必须让人看见。
+        """
+        if (DNP3ObjectGroup.BI, index) not in self._reverse_maps.get(device_id, {}):
+            self.logger.warning(
+                "设备 %s 未配置索引 %d 的开关量反馈点，遥控仅以从站回执为准",
+                device_id, index)
+            return True
+
+        deadline = time.monotonic() + self.readback_timeout
+        while time.monotonic() < deadline:
+            client.request_data()
+            info = client.read_data().get((DNP3ObjectGroup.BI, index))
+            if info is not None and int(info.get('value', 0)) == value:
+                return True
+            time.sleep(0.1)
+
+        self.logger.error(
+            "遥控回读校验失败：设备 %s 索引 %d 期望 %d，反馈不一致或超时",
+            device_id, index, value)
+        return False
 
     def reconnect_device(self, device_id: str) -> bool:
         """重连单个设备"""

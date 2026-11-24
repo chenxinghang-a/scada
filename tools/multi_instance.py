@@ -12,7 +12,9 @@
 
 import os
 import sys
+import re
 import json
+import shlex
 import shutil
 import argparse
 import subprocess
@@ -38,9 +40,21 @@ class MultiInstanceManager:
         self.instances_dir = INSTANCES_DIR
         self.instances_dir.mkdir(parents=True, exist_ok=True)
 
+    def _validate_name(self, name: str) -> str:
+        """校验实例名称"""
+        if not isinstance(name, str) or not re.fullmatch(r'^[A-Za-z0-9_-]{1,64}$', name):
+            raise ValueError(f"非法实例名称: {name!r}")
+        return name
+
     def get_instance_dir(self, name: str) -> Path:
         """获取实例目录"""
-        return self.instances_dir / name
+        self._validate_name(name)
+        base_dir = self.instances_dir.resolve()
+        target = self.instances_dir / name
+        resolved = target.resolve()
+        if resolved.parent != base_dir or target.is_symlink():
+            raise ValueError(f"实例目录越界: {name!r}")
+        return target
 
     def get_instance_config(self, name: str) -> Optional[Dict]:
         """获取实例配置"""
@@ -136,6 +150,16 @@ class MultiInstanceManager:
         """
         instance_dir = self.get_instance_dir(name)
 
+        for val in (
+            str(project_root),
+            str(config['port']),
+            str(config['data_dir']),
+            str(config['config_dir']),
+            str(config['log_dir']),
+        ):
+            if any(ch in val for ch in '&|<>^%"!\r\n'):
+                raise ValueError(f"启动脚本参数包含非法字符: {val!r}")
+
         # Windows启动脚本
         bat_content = f'''@echo off
 cd /d "{project_root}"
@@ -150,11 +174,11 @@ python run.py
 
         # Linux启动脚本
         sh_content = f'''#!/bin/bash
-cd "{project_root}"
-export SCADA_PORT="{config['port']}"
-export SCADA_DATA_DIR="{config['data_dir']}"
-export SCADA_CONFIG_DIR="{config['config_dir']}"
-export SCADA_LOG_DIR="{config['log_dir']}"
+cd {shlex.quote(str(project_root))}
+export SCADA_PORT={shlex.quote(str(config['port']))}
+export SCADA_DATA_DIR={shlex.quote(str(config['data_dir']))}
+export SCADA_CONFIG_DIR={shlex.quote(str(config['config_dir']))}
+export SCADA_LOG_DIR={shlex.quote(str(config['log_dir']))}
 python run.py
 '''
         sh_file = instance_dir / 'start.sh'
@@ -278,6 +302,10 @@ python run.py
 
         if not instance_dir.exists():
             print(f"实例 '{name}' 不存在")
+            return False
+
+        if not (instance_dir / 'instance.json').is_file():
+            print(f"目录 '{instance_dir}' 缺少 instance.json，拒绝删除")
             return False
 
         config = self.get_instance_config(name)

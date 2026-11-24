@@ -13,6 +13,8 @@ import os
 import sys
 import json
 import shutil
+import logging
+import sqlite3
 import argparse
 import subprocess
 from datetime import datetime
@@ -24,6 +26,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import paths  # round 213：库名/库模式的单一真源（禁止再写死 scada*.db）
+
+logger = logging.getLogger(__name__)
 
 
 class Deployer:
@@ -173,19 +177,48 @@ class Deployer:
                 result['files'].append('配置')
 
             # 备份数据库
+            db_table_counts: Dict[str, int] = {}
             db_path = self.db_path
             if db_path.exists():
                 data_backup = backup_path / 'data'
                 data_backup.mkdir(exist_ok=True)
                 # round 213：备份文件名跟随真实库名（备份的是哪个库就叫什么）
-                shutil.copy2(db_path, data_backup / db_path.name)
+                dst_db = data_backup / db_path.name
+                src_conn = sqlite3.connect(str(db_path), timeout=10)
+                try:
+                    dst_conn = sqlite3.connect(str(dst_db))
+                    try:
+                        src_conn.backup(dst_conn)
+                    finally:
+                        dst_conn.close()
+                finally:
+                    src_conn.close()
+                verify_conn = sqlite3.connect(str(dst_db), timeout=10)
+                try:
+                    integrity = verify_conn.execute("PRAGMA integrity_check").fetchone()[0]
+                    if integrity != 'ok':
+                        raise RuntimeError(f'数据库备份完整性校验失败: {integrity}')
+                    tables = [
+                        row[0] for row in verify_conn.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                        ).fetchall()
+                    ]
+                    for table in tables:
+                        quoted = table.replace('"', '""')
+                        db_table_counts[table] = verify_conn.execute(
+                            f'SELECT COUNT(*) FROM "{quoted}"'
+                        ).fetchone()[0]
+                finally:
+                    verify_conn.close()
                 result['files'].append(f'data/{db_path.name}')
 
             # 保存版本信息
             version_info = {
                 'tag': tag,
                 'timestamp': timestamp,
+                'created_at': result['timestamp'],
                 'files': result['files'],
+                'db_table_counts': db_table_counts,
             }
             (backup_path / 'version.json').write_text(
                 json.dumps(version_info, indent=2), encoding='utf-8'
@@ -223,12 +256,17 @@ class Deployer:
             return result
 
         # 2. 备份
-        backup_result = self.backup('pre_deploy')
+        backup_tag = f'pre_deploy_{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+        backup_result = self.backup(backup_tag)
         result['steps'].append({
             'name': '备份',
             'status': backup_result['status'],
             'details': backup_result,
         })
+        if backup_result.get('status') != 'success':
+            result['status'] = 'failed'
+            result['error'] = f"备份失败: {backup_result.get('error')}"
+            return result
 
         # 3. 安装依赖
         try:
@@ -295,23 +333,97 @@ class Deployer:
         }
 
         # 找到最近的备份
-        backups = sorted(self.backup_dir.glob('backup_*'), reverse=True)
+        backups = [p for p in self.backup_dir.glob('backup_*') if p.is_dir()]
         if not backups:
             result['status'] = 'error'
             result['error'] = '没有可用的备份'
             return result
 
-        latest_backup = backups[0]
-        version_file = latest_backup / 'version.json'
+        valid_backups = []
+        for candidate in backups:
+            vf = candidate / 'version.json'
+            if not vf.exists():
+                continue
+            try:
+                meta = json.loads(vf.read_text(encoding='utf-8'))
+            except Exception:
+                continue
+            if not isinstance(meta, dict):
+                continue
+            valid_backups.append((candidate, meta))
 
-        if not version_file.exists():
+        if not valid_backups:
             result['status'] = 'error'
             result['error'] = '备份版本信息不存在'
             return result
 
+        def _backup_sort_key(item):
+            path, meta = item
+            mtime_ns = path.stat().st_mtime_ns
+            ts_str = meta.get('created_at') or meta.get('timestamp')
+            if isinstance(ts_str, str) and ts_str:
+                try:
+                    return (datetime.strptime(ts_str, '%Y%m%d_%H%M%S').timestamp(), mtime_ns)
+                except ValueError:
+                    pass
+                try:
+                    return (datetime.fromisoformat(ts_str).timestamp(), mtime_ns)
+                except ValueError:
+                    pass
+            return (mtime_ns / 1e9, mtime_ns)
+
+        valid_backups.sort(key=_backup_sort_key, reverse=True)
+        latest_backup, version_info = valid_backups[0]
+
         try:
-            # 恢复源代码
             src_backup = latest_backup / 'src'
+            config_backup = latest_backup / '配置'
+            recorded_files = version_info.get('files', [])
+            if not isinstance(recorded_files, list):
+                recorded_files = []
+
+            for dir_name in ['展示层', '存储层', '采集层', '报警层', '智能层', '用户层', 'core', 'tools']:
+                if dir_name in recorded_files and not (src_backup / dir_name).is_dir():
+                    result['status'] = 'error'
+                    result['error'] = f'备份缺少源码目录: {dir_name}'
+                    return result
+
+            if '配置' in recorded_files and not config_backup.is_dir():
+                result['status'] = 'error'
+                result['error'] = '备份缺少配置目录'
+                return result
+
+            # round 213：备份名跟随真源库名；**兼容旧格式备份**（早先写死 scada.db）
+            db_backup = latest_backup / 'data' / self.db_path.name
+            if not db_backup.exists():
+                legacy = latest_backup / 'data' / 'scada.db'
+                if legacy.exists():
+                    logger.warning(
+                        "备份目录里没有 %s，回退到旧格式备份 %s",
+                        self.db_path.name, legacy.name)
+                    db_backup = legacy
+
+            expects_db = any(
+                isinstance(item, str) and item.startswith('data/')
+                for item in recorded_files
+            )
+            if expects_db and not db_backup.exists():
+                result['status'] = 'error'
+                result['error'] = f'备份缺少数据库文件: {self.db_path.name}'
+                return result
+
+            if db_backup.exists():
+                check_conn = sqlite3.connect(str(db_backup), timeout=10)
+                try:
+                    integrity = check_conn.execute("PRAGMA integrity_check").fetchone()[0]
+                finally:
+                    check_conn.close()
+                if integrity != 'ok':
+                    result['status'] = 'error'
+                    result['error'] = f'备份数据库完整性校验失败: {integrity}'
+                    return result
+
+            # 恢复源代码
             if src_backup.exists():
                 for dir_name in ['展示层', '存储层', '采集层', '报警层', '智能层', '用户层', 'core', 'tools']:
                     src_dir = src_backup / dir_name
@@ -322,7 +434,6 @@ class Deployer:
                         shutil.copytree(src_dir, dest_dir)
 
             # 恢复配置
-            config_backup = latest_backup / '配置'
             if config_backup.exists():
                 dest_config = self.project_root / '配置'
                 if dest_config.exists():
@@ -330,18 +441,21 @@ class Deployer:
                 shutil.copytree(config_backup, dest_config)
 
             # 恢复数据库
-            # round 213：备份名跟随真源库名；**兼容旧格式备份**（早先写死 scada.db）
-            db_backup = latest_backup / 'data' / self.db_path.name
-            if not db_backup.exists():
-                legacy = latest_backup / 'data' / 'scada.db'
-                if legacy.exists():
-                    logger.warning(
-                        "备份目录里没有 %s，回退到旧格式备份 %s",
-                        self.db_path.name, legacy.name)
-                    db_backup = legacy
             if db_backup.exists():
                 dest_db = self.db_path
-                shutil.copy2(db_backup, dest_db)
+                dest_db.parent.mkdir(parents=True, exist_ok=True)
+                tmp_db = dest_db.parent / f'.{dest_db.name}.rollback.tmp'
+                try:
+                    shutil.copy2(db_backup, tmp_db)
+                    for suffix in ('-wal', '-shm'):
+                        sidecar = dest_db.with_name(f'{dest_db.name}{suffix}')
+                        if sidecar.exists():
+                            sidecar.unlink()
+                    os.replace(tmp_db, dest_db)
+                except Exception:
+                    if tmp_db.exists():
+                        tmp_db.unlink()
+                    raise
 
             result['status'] = 'success'
             result['backup_used'] = str(latest_backup)
@@ -381,6 +495,14 @@ def format_report(result: Dict[str, Any]) -> str:
         lines.append(f"状态: {result.get('status', 'unknown').upper()}")
         lines.append(f"大小: {result.get('size_mb', '?')}MB")
         lines.append(f"文件: {', '.join(result.get('files', []))}")
+    elif 'backup_used' in result or result.get('status') == 'error':
+        lines.append("回滚报告")
+        lines.append(f"时间: {result.get('timestamp', '')}")
+        lines.append(f"状态: {result.get('status', 'unknown').upper()}")
+        if result.get('backup_used'):
+            lines.append(f"备份路径: {result['backup_used']}")
+        if result.get('error'):
+            lines.append(f"错误: {result['error']}")
 
     lines.append("=" * 60)
     return "\n".join(lines)
@@ -416,6 +538,9 @@ def main():
         json.dump(result, f, indent=2, ensure_ascii=False, default=str)
 
     print(f"\n日志已保存: {log_file}")
+
+    if result.get('status') in ('error', 'failed'):
+        sys.exit(1)
 
 
 if __name__ == '__main__':

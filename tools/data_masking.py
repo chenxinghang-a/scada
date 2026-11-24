@@ -149,6 +149,12 @@ class DataMasker:
 
         return result
 
+    @staticmethod
+    def _quote_ident(name: str) -> str:
+        if not isinstance(name, str) or '\x00' in name:
+            raise ValueError(f"非法SQL标识符: {name!r}")
+        return '"' + name.replace('"', '""') + '"'
+
     def mask_database(self, db_path: str, output_path: str, tables: List[str] = None):
         """对数据库进行脱敏"""
         conn = sqlite3.connect(db_path)
@@ -164,17 +170,21 @@ class DataMasker:
         out_conn = sqlite3.connect(output_path)
 
         for table in all_tables:
+            quoted = self._quote_ident(table)
             # 获取表结构
-            cursor = conn.execute(f"PRAGMA table_info({table})")
+            cursor = conn.execute(f"PRAGMA table_info({quoted})")
             columns = [row[1] for row in cursor.fetchall()]
 
             # 复制表结构
-            cursor = conn.execute(f"SELECT sql FROM sqlite_master WHERE name='{table}'")
+            cursor = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            )
             create_sql = cursor.fetchone()[0]
             out_conn.execute(create_sql)
 
             # 复制并脱敏数据
-            cursor = conn.execute(f"SELECT * FROM {table}")
+            cursor = conn.execute(f"SELECT * FROM {quoted}")
             rows = cursor.fetchall()
 
             for row in rows:
@@ -186,7 +196,7 @@ class DataMasker:
                         masked_row.append(value)
 
                 placeholders = ','.join(['?' for _ in columns])
-                out_conn.execute(f"INSERT INTO {table} VALUES ({placeholders})", masked_row)
+                out_conn.execute(f"INSERT INTO {quoted} VALUES ({placeholders})", masked_row)
 
             out_conn.commit()
 
