@@ -834,6 +834,114 @@ class DeviceControlSafety:
         except Exception as e:
             logger.error(f"刷新设备健康数据失败: {e}")
 
+    # ==================== 联锁归属判定（round 386） ====================
+
+    @staticmethod
+    def _collect_interlock_device_ids(node: Any, out: set[str]) -> None:
+        """递归收集联锁条件/动作里声明过的设备 ID。
+
+        支持的结构：
+          * `condition: {type: threshold, device_id: X, ...}`
+          * `condition: {type: and|or, conditions: [{device_id: X}, {...}]}`
+          * action 里的 `device_id` / `device_ids`
+
+        注意 `key` **不是**设备标识（那是点位/寄存器名），不在此收集；
+        解析不出设备时由 `_interlock_targets()` 按全厂级处理（fail-closed）。
+        """
+        if isinstance(node, dict):
+            for key in ('device_id', 'device_ids'):
+                value = node.get(key)
+                if isinstance(value, str):
+                    if value:
+                        out.add(value)
+                elif isinstance(value, (list, tuple, set, frozenset)):
+                    out.update(v for v in value if isinstance(v, str) and v)
+            if 'conditions' in node:
+                DeviceControlSafety._collect_interlock_device_ids(
+                    node.get('conditions'), out)
+        elif isinstance(node, (list, tuple, set, frozenset)):
+            for item in node:
+                DeviceControlSafety._collect_interlock_device_ids(item, out)
+
+    @staticmethod
+    def _interlock_targets(condition: Any,
+                           action: Any) -> tuple[set[str], bool]:
+        """解析一条**已触发**联锁的归属。
+
+        Returns:
+            (目标设备集合, 是否全厂级)
+
+        判据：
+          * `emergency_stop` **一律全厂级** —— `_execute_interlock_action()`
+            执行的是 `trigger_emergency_stop()`，它停的是所有机械类设备，
+            与 action 里写没写 `device_id` 无关。按单台归属会让其余设备
+            在批量启动时被放行（最高优先级的安全动作被绕过）。
+          * 条件和动作里都解析不出设备（复合条件只给了 `key`、动作没写
+            归属等）→ **全厂级拦截**，绝不默认放行。
+        """
+        act_type = action.get('type') if isinstance(action, dict) else None
+        if act_type == 'emergency_stop':
+            return set(), True
+
+        targets: set[str] = set()
+        DeviceControlSafety._collect_interlock_device_ids(condition, targets)
+        DeviceControlSafety._collect_interlock_device_ids(action, targets)
+        if not targets:
+            return targets, True
+        return targets, False
+
+    def _interlock_blocks(
+            self, action: str, scope: set[str] | None
+    ) -> tuple[dict[str, tuple[str, Any, str]], list[tuple[str, Any, str]]]:
+        """列出**当前已触发**联锁对各设备的阻止项。
+
+        Returns:
+            (device_blocks: device_id -> (rule_id, name, act_type),
+             global_blocks: [(rule_id, name, act_type), ...])
+
+        round 386：归属判定统一走 `_interlock_targets()`。原实现只读
+        `action.device_id` 与 `condition.device_id` 两个字段，于是：
+          · `emergency_stop` 未绑定 device_id 时被归到"条件设备"上，
+            其余设备照常启动 —— 而它实际停的是全厂；
+          · `condition.type == and/or` 的嵌套条件、只给 `key` 的规则
+            解析不出设备，会被漏掉（这里改为全厂级拦截）。
+        """
+        device_blocks: dict[str, tuple[str, Any, str]] = {}
+        global_blocks: list[tuple[str, Any, str]] = []
+
+        # round 373：**锁内取快照再遍历**。`_interlock_rules` 会被
+        # `reload_interlocks()` 整体替换、`_interlock_states` 由采集线程
+        # 更新 —— 直接迭代活字典会抛 `RuntimeError: dictionary changed
+        # size during iteration`，API 侧表现为 500 或"这次批量控制没反应"。
+        with self._lock:
+            items = list(self._interlock_rules.items())
+            states = dict(self._interlock_states)
+            bypass = set(self._interlock_bypass)
+
+        for rule_id, rule in items:
+            if rule_id in bypass:
+                continue
+            if not states.get(rule_id, False):
+                continue
+            # 已停用的规则即使残留 True，也不该阻止操作
+            # （`check_interlocks` 已跳过 disabled，这里再挡一道）。
+            if not rule.get('enabled', True):
+                continue
+            act = rule.get('action')
+            act = act if isinstance(act, dict) else {}
+            act_type = act.get('type')
+            targets, plant_wide = self._interlock_targets(
+                rule.get('condition'), act)
+            entry = (rule_id, rule.get('name'), act_type)
+            if plant_wide:
+                global_blocks.append(entry)
+                continue
+            relevant = targets if scope is None else (targets & scope)
+            for did in relevant:
+                device_blocks.setdefault(did, entry)
+
+        return device_blocks, global_blocks
+
     def batch_control(self, action: str, operator: str = 'system', device_ids: list[str] | None = None) -> dict[str, Any]:
         """
         批量控制设备
@@ -874,35 +982,20 @@ class DeviceControlSafety:
         #      任何一台设备的局部联锁都会在进入循环前把**整个工厂**一刀切拒绝。
         #      现在把联锁归属到具体设备：只跳过被该联锁覆盖的设备，其余设备
         #      照常执行；只有当规则确实没有绑定任何设备（全厂级）时才整体拦。
+        # round 386：**归属判定搬到 `_interlock_blocks()`**（原来在这里
+        # 内联，只读 `action.device_id` / `condition.device_id` 两个字段）。
+        #
+        # 本轮收紧的三处：
+        #   ① `emergency_stop` 联锁一律全厂级 —— 它执行的是
+        #      `trigger_emergency_stop()`，停的是所有机械类设备；原来没绑
+        #      `device_id` 时反而被归到"条件设备"上，其余设备照常启动；
+        #   ② `condition.type == and/or` 的复合条件递归解析嵌套设备；
+        #   ③ 条件只给 `key`（点位名）没给设备 → 解析不出归属 → 按全厂级拦。
+        #      **漏掉的规则绝不默认放行**（fail-closed）。
         device_blocks: dict[str, tuple[str, Any, str]] = {}
         if action in ('start', 'reset'):
             scope = set(device_ids) if device_ids is not None else None
-            global_blocks: list[tuple[str, Any, str]] = []
-            # round 373：**锁内取快照再遍历**。`_interlock_rules` 会被
-            # `reload_interlocks()` 整体替换、`_interlock_states` 由采集线程
-            # 更新 —— 直接迭代活字典会抛 `RuntimeError: dictionary changed
-            # size during iteration`，API 侧表现为 500 或"这次批量控制没反应"。
-            with self._lock:
-                interlock_items = list(self._interlock_rules.items())
-            for rule_id, rule in interlock_items:
-                if rule_id in self._interlock_bypass:
-                    continue
-                if not self._interlock_states.get(rule_id, False):
-                    continue
-                act = rule.get('action', {}) or {}
-                cond = rule.get('condition', {}) or {}
-                act_type = act.get('type')
-                # 与 api_control 的判定口径一致：动作目标**和**条件设备
-                # 都算这条联锁的相关设备。
-                targets = {t for t in (act.get('device_id'), cond.get('device_id'))
-                           if t}
-                if not targets:
-                    global_blocks.append((rule_id, rule.get('name'), act_type))
-                    continue
-                relevant = targets if scope is None else (targets & scope)
-                for did in relevant:
-                    device_blocks.setdefault(
-                        did, (rule_id, rule.get('name'), act_type))
+            device_blocks, global_blocks = self._interlock_blocks(action, scope)
             if global_blocks:
                 names = '、'.join(f'{rid}({name}/{t})'
                                   for rid, name, t in global_blocks)
@@ -2509,10 +2602,16 @@ class DeviceControlSafety:
 
         # 4. 联锁阻止检查
         # round 373：锁内快照（理由同 batch_control）。
+        # round 386：与批量入口同口径 —— 已经停用（enabled: false）的规则
+        # 即使 `_interlock_states` 里残留 True，也不得阻止合法启动/复位。
         with self._lock:
             interlock_rules = list(self._interlock_rules.items())
+            interlock_states = dict(self._interlock_states)
+            interlock_bypass = set(self._interlock_bypass)
         for rule_id, rule in interlock_rules:
-            if rule_id in self._interlock_bypass:
+            if rule_id in interlock_bypass:
+                continue
+            if not rule.get('enabled', True):
                 continue
             action = rule.get('action', {})
             if action.get('type') == 'block_start':
@@ -2527,7 +2626,7 @@ class DeviceControlSafety:
                            or action_device is None)
                 if blocked:
                     # 检查联锁是否触发
-                    if self._interlock_states.get(rule_id, False):
+                    if interlock_states.get(rule_id, False):
                         result['allowed'] = False
                         result['reason'] = f'联锁 {rule_id} ({rule.get("name")}) 阻止操作'
                         return result
@@ -2580,6 +2679,42 @@ class DeviceControlSafety:
 
     # ==================== 紧急停机 ====================
 
+    def _device_was_stopped(self, device_id: str) -> bool:
+        """设备在**急停生效前**是否已经处于停止状态（round 386）。
+
+        必须在置急停标志 / `set_estop_override(True)` **之前**采样：
+        急停生效后 `get_device_status()` 会把所有 mechanical 都报成 stopped。
+
+        取不到状态时按"已停机"返回 —— fail-safe：宁可少拉一台，
+        也不能把检修/联锁停机的设备当成急停停下的设备自动重启。
+        """
+        dm = self.device_manager
+        if dm is None:
+            return False
+        fn = getattr(dm, 'get_device_status', None)
+        if callable(fn):
+            try:
+                status = fn(device_id)
+                if isinstance(status, dict) and 'stopped' in status \
+                        and not status.get('error'):
+                    return bool(status['stopped'])
+            except Exception as e:      # noqa: BLE001
+                logger.warning("读取设备 %s 停机状态失败: %s", device_id, e)
+        stopped_set = getattr(dm, '_stopped_devices', None)
+        if stopped_set is not None:
+            try:
+                return device_id in stopped_set
+            except Exception as e:      # noqa: BLE001 —— 换用下面的兜底判据
+                logger.warning("读取设备 %s 的 _stopped_devices 失败: %s",
+                               device_id, e)
+        try:
+            from 采集层.simulated_client import is_device_stopped
+            return bool(is_device_stopped(device_id))
+        except Exception as e:          # noqa: BLE001
+            logger.error("无法判定设备 %s 的停机状态，按已停机处理: %s",
+                         device_id, e)
+            return True
+
     def trigger_emergency_stop(self, reason: str = '手动触发') -> dict[str, Any]:
         """
         触发紧急停机
@@ -2591,11 +2726,40 @@ class DeviceControlSafety:
         4. 触发全厂广播
         5. 记录审计日志
         """
+        # round 386：**先置急停标志（安全侧），再采样"本来就已经停了"的设备**。
+        #
+        # 标志必须先生效：设备清单枚举/状态查询都可能抛异常，急停不能因为
+        # "读清单失败"而没进入急停态。
+        # 采样必须在 `set_estop_override(True)` **之前**：急停生效后
+        # `get_device_status()` 会把所有 mechanical 都报成 stopped。
         self._estop_active = True
         self._estop_time = datetime.now()
         self._estop_reason = reason
 
         logger.critical(f"紧急停机触发: {reason}")
+
+        # 原来 `_estop_devices` 记录的是"stop_device 返回 True"的所有机械类
+        # 设备 —— 对一台**已经停机**的设备再发一次 stop 同样返回 True，
+        # 于是检修停机 / 人为停机 / 联锁停机的设备全被算进"急停停下的名单"，
+        # `reset_emergency_stop()` 解除时会把它们统统拉起来。急停只应恢复
+        # 自己实际停下的那一批。
+        mechanical: list[str] = []
+        pre_stopped: set[str] = set()
+        enum_error: str | None = None
+        if self.device_manager:
+            try:
+                from 采集层.interfaces import IDeviceManager
+                all_devices = self.device_manager.get_all_devices()
+                mechanical = [did for did, cfg in all_devices.items()
+                              if IDeviceManager.get_device_category(cfg) == 'mechanical']
+                for device_id in mechanical:
+                    if self._device_was_stopped(device_id):
+                        pre_stopped.add(device_id)
+            except Exception as e:      # noqa: BLE001 —— 枚举失败不能吞掉急停
+                enum_error = f'{type(e).__name__}: {e}'
+                logger.critical(
+                    "急停：设备清单枚举失败，无法下发停机指令 —— %s", enum_error,
+                    exc_info=True)
 
         # 通知设备管理器（模拟层停止机械类数据，真实层记录状态）
         if self.device_manager:
@@ -2605,11 +2769,7 @@ class DeviceControlSafety:
         stopped_devices = []
         failed_devices = []
         if self.device_manager:
-            from 采集层.interfaces import IDeviceManager
-            all_devices = self.device_manager.get_all_devices()
-            mechanical = [did for did, cfg in all_devices.items()
-                         if IDeviceManager.get_device_category(cfg) == 'mechanical']
-            logger.warning(f"紧急停机: 停止 {len(mechanical)} 个机械类设备（共 {len(all_devices)} 个设备）")
+            logger.warning(f"紧急停机: 停止 {len(mechanical)} 个机械类设备")
             for device_id in mechanical:
                 try:
                     if self.device_manager.stop_device(device_id):
@@ -2627,7 +2787,9 @@ class DeviceControlSafety:
                     failed_devices.append(device_id)
                     logger.error(f"紧急停机失败 {device_id}: {e}")
 
-        self._estop_devices = stopped_devices
+        # round 386：**只记录急停真正停下的那一批** —— 原本已停机的设备
+        # （检修/人为/联锁停机）不在名单里，解除时不会被自动拉起。
+        self._estop_devices = [d for d in stopped_devices if d not in pre_stopped]
 
         # round 315：落库 —— 重启后必须仍然处于急停（否则写操作会被放行）
         self._persist_estop()
@@ -2648,18 +2810,29 @@ class DeviceControlSafety:
         self._audit('emergency_stop', 'system',
                     f'紧急停机: {reason}，已停 {len(stopped_devices)} 台'
                     + (f'，**停机失败 {len(failed_devices)} 台: {failed_devices}**'
-                       if failed_devices else ''))
+                       if failed_devices else '')
+                    + (f'，**设备清单枚举失败: {enum_error}**'
+                       if enum_error else ''))
 
+        estop_ok = not failed_devices and not enum_error
         return {
             # round 352：**有设备没停下来就不能叫成功**。
             # 急停的语义是"所有机械类设备停止"，部分成功等于没成功 ——
             # 下游联锁与界面都据此判断是否进入安全态。
-            'success': not failed_devices,
-            'message': (f'紧急停机已触发: {reason}' if not failed_devices
-                        else f'紧急停机部分失败: {reason}'
-                             f'（{len(failed_devices)} 台未能停止，请立即现场确认）'),
+            'success': estop_ok,
+            'message': (f'紧急停机已触发: {reason}' if estop_ok
+                        else f'紧急停机部分失败: {reason}（'
+                             + '；'.join(item for item in (
+                                 f'{len(failed_devices)} 台未能停止'
+                                 if failed_devices else '',
+                                 f'设备清单枚举失败 {enum_error}'
+                                 if enum_error else '',
+                             ) if item)
+                             + '，请立即现场确认）'),
             'stopped_devices': stopped_devices,
             'failed_devices': failed_devices,
+            #: 急停前就已经停着的设备（不会被解除时的自动重启拉起）
+            'already_stopped': sorted(pre_stopped),
             'timestamp': self._estop_time.isoformat()
         }
 
@@ -2718,23 +2891,57 @@ class DeviceControlSafety:
         # 异常也只打日志，然后 `self._estop_devices = []` 一把清空 ——
         # 结果：10 台里 3 台没起来，接口照样回 `success: True`
         # "系统恢复正常"，而那 3 台**再也不会被重试**（名单已被抹掉）。
+        #
+        # round 386：只恢复 `_estop_devices`（急停**实际停掉**的那批）。
+        # 原本已停机的设备（检修/人为/联锁停机）在 trigger 时就被排除，
+        # 解除时不会再被"顺手拉起来"。联锁正在触发的设备逐台跳过并记录原因。
         restarted_devices: list[str] = []
         failed_devices: list[str] = []
+        failure_details: list[dict[str, Any]] = []
+        skipped_devices: list[dict[str, Any]] = []
+        to_restore = list(getattr(self, '_estop_devices', []) or [])
         if self.device_manager:
             self.device_manager.set_estop_override(False)
-            for device_id in list(getattr(self, '_estop_devices', []) or []):
+            # 上面的整体联锁检查与这里的逐台启动之间存在时间窗；启动准入必须
+            # 与 `batch_control` 用同一口径（`_interlock_blocks`）再复核一次。
+            blocked_devices, blocked_global = self._interlock_blocks(
+                'start', set(to_restore))
+            for device_id in to_restore:
+                if blocked_global:
+                    reason = ('联锁触发中（全厂级）: ' + '、'.join(
+                        f'{rid}({name})' for rid, name, _ in blocked_global))
+                    skipped_devices.append({'device_id': device_id, 'reason': reason})
+                    logger.warning("解除急停：跳过 %s —— %s", device_id, reason)
+                    continue
+                blocked = blocked_devices.get(device_id)
+                if blocked:
+                    rid, rule_name, act_type = blocked
+                    reason = (f'联锁 {rid}({rule_name}/{act_type}) 触发中，'
+                              f'不自动启动')
+                    skipped_devices.append({'device_id': device_id, 'reason': reason})
+                    logger.warning("解除急停：跳过 %s —— %s", device_id, reason)
+                    continue
                 try:
                     if self.device_manager.start_device(device_id):
                         restarted_devices.append(device_id)
                     else:
                         failed_devices.append(device_id)
+                        failure_details.append({
+                            'device_id': device_id,
+                            'reason': 'start_device 返回 False（现场设备未恢复运行）',
+                        })
                         logger.error("解除停机失败 %s：start_device 返回 False"
                                      "（现场设备未恢复运行）", device_id)
                 except Exception as e:
                     failed_devices.append(device_id)
+                    failure_details.append({
+                        'device_id': device_id,
+                        'reason': f'{type(e).__name__}: {e}',
+                    })
                     logger.error(f"解除停机异常 {device_id}: {type(e).__name__}: {e}")
-            # 只把**已成功恢复**的移出名单；失败的留着，下次还能重试
-            self._estop_devices = failed_devices
+            # 只把**启动失败**的留在名单里，下次还能重试；因联锁跳过的不再
+            # 归急停管（它们是被联锁停住的，联锁解除后由人工确认启动）。
+            self._estop_devices = list(failed_devices)
 
         # 复位声光报警
         #
@@ -2780,7 +2987,10 @@ class DeviceControlSafety:
 
         detail = (f'紧急停机已解除：恢复 {len(restarted_devices)} 台'
                   + (f'，**启动失败 {len(failed_devices)} 台: {failed_devices}**'
-                     if failed_devices else ''))
+                     if failed_devices else '')
+                  + (f'，**因联锁跳过 {len(skipped_devices)} 台: '
+                     f'{[d["device_id"] for d in skipped_devices]}**'
+                     if skipped_devices else ''))
         if not self._audit('estop_reset', operator, detail):
             warnings.append('解除结果审计写入失败（操作已执行，但日志缺失）')
         logger.info("紧急停机已解除 by %s（恢复 %d 台，失败 %d 台）",
@@ -2793,6 +3003,11 @@ class DeviceControlSafety:
             reset_problems.append(
                 f'{len(failed_devices)} 台设备未能恢复启动，'
                 f'请现场确认：{"、".join(failed_devices)}')
+        if skipped_devices:
+            reset_problems.append(
+                f'{len(skipped_devices)} 台设备因联锁触发未自动启动'
+                f'（{", ".join(d["device_id"] for d in skipped_devices)}），'
+                f'联锁解除后请人工确认')
         if tower_reset is False:
             reset_problems.append(
                 '声光报警塔复位失败（红灯/蜂鸣器可能仍在动作），请现场确认')
@@ -2805,6 +3020,8 @@ class DeviceControlSafety:
             'operator': operator,
             'restarted_devices': restarted_devices,
             'failed_devices': failed_devices,
+            'failure_details': failure_details,
+            'skipped_devices': skipped_devices,
             'warnings': warnings,
         }
 
