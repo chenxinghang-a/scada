@@ -502,8 +502,10 @@ class DeviceManager:
         with self._lock:
             old_ids = set(self.devices.keys())
             # round 381：连接参数签名必须在替换前取 —— 替换后再拿旧配置就没了。
+            # 取快照（list）再遍历：add_device/remove_device 可能在别的线程同时
+            # 增删，直接迭代 dict 的活视图会抛 RuntimeError: dictionary changed size。
             old_signatures = {did: _connection_signature(cfg)
-                              for did, cfg in self.devices.items()}
+                              for did, cfg in list(self.devices.items())}
 
         new_devices: dict[str, Any] = {}
         if not self._load_config_into(new_devices):

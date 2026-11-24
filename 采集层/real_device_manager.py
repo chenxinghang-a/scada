@@ -1227,6 +1227,10 @@ class RealDeviceManager(IDeviceManager):
             logger.info(f"[真实] 移除设备: {device_id}")
             # 同名设备重建时不得继承旧的“已停止”状态。
             self._stopped_devices.discard(device_id)
+            # 按设备的写锁也要一起回收，否则删了再加同名设备会沿用旧锁，
+            # 且容器只增不减（round 388 的设备状态清理闸门）。
+            with self._device_locks_guard:
+                self._device_locks.pop(device_id, None)
             notify_device_removed(device_id)      # round 312
             return True
         except Exception as e:

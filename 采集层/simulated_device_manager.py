@@ -920,6 +920,10 @@ class SimulatedDeviceManager(IDeviceManager):
                 return False
 
             logger.info(f"[模拟] 移除设备: {device_id}")
+            # 按设备的写锁一起回收（同 real_device_manager，round 388 的
+            # 设备状态清理闸门要求 device_id 键控容器必须有删除点）。
+            with self._device_locks_guard:
+                self._device_locks.pop(device_id, None)
             # round 312：落盘成功之后才通知 —— 通知里各模块会清掉该设备的
             # 健康/失败计数/报表状态，回滚的设备不能清。
             notify_device_removed(device_id)
