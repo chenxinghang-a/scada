@@ -58,8 +58,8 @@ DEVICE_CODES = {
 # 子命令码
 SUBCMD_BIT_READ = 0x0001      # 位设备批量读取
 SUBCMD_WORD_READ = 0x0000     # 字设备批量读取
-SUBCMD_BIT_WRITE = 0x0003     # 位设备批量写入
-SUBCMD_WORD_WRITE = 0x0002    # 字设备批量写入
+SUBCMD_BIT_WRITE = 0x0001     # 位设备批量写入
+SUBCMD_WORD_WRITE = 0x0000    # 字设备批量写入
 SUBCMD_RANDOM_READ = 0x0006   # 随机读取
 SUBCMD_RANDOM_WRITE = 0x0007  # 随机写入
 
@@ -393,9 +393,9 @@ class MCClient(ByteOrderCapableDecoder):
             if byte_idx < len(resp):
                 byte_val = resp[byte_idx]
                 if i % 2 == 0:
-                    values.append((byte_val & 0x01) != 0)
-                else:
                     values.append((byte_val & 0x10) != 0)
+                else:
+                    values.append((byte_val & 0x01) != 0)
             else:
                 values.append(False)
 

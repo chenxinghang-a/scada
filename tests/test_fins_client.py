@@ -61,8 +61,9 @@ class TestFINSClientConnect:
     def test_connect_success(self, mock_socket_cls, fins_client):
         mock_sock = MagicMock()
         mock_socket_cls.return_value = mock_sock
-        # FINS handshake: send 16 bytes, recv 24 bytes
-        handshake_resp = struct.pack('>IIIII', 8, 0, 0, 1, 2) + b'\x00' * 4
+        # FINS/TCP 握手响应：magic(4) + length(4)=16 + command(4)=1
+        #                    + error(4) + client_node(4) + server_node(4) = 24 字节
+        handshake_resp = struct.pack('>4sIIIII', b'FINS', 16, 1, 0, 1, 2)
         mock_sock.recv.return_value = handshake_resp
 
         result = fins_client.connect()
@@ -77,8 +78,8 @@ class TestFINSClientConnect:
     def test_connect_handshake_error(self, mock_socket_cls, fins_client):
         mock_sock = MagicMock()
         mock_socket_cls.return_value = mock_sock
-        # Handshake with error code
-        handshake_resp = struct.pack('>IIIII', 8, 0, 1, 0, 0) + b'\x00' * 4
+        # Handshake with error code（error_code=1，帧头仍是标准 24 字节）
+        handshake_resp = struct.pack('>4sIIIII', b'FINS', 16, 1, 1, 0, 0)
         mock_sock.recv.return_value = handshake_resp
 
         result = fins_client.connect()

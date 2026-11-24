@@ -135,20 +135,35 @@ class FINSClient(ByteOrderCapableDecoder):
         try:
             # 发送FINS Node Address请求
             # [长度(4)] [命令(4)] [错误码(4)] [客户端节点(4)]
-            request = struct.pack('>IIII', 8, 0, 0, 0)
-            self._sock.send(request)
+            request = struct.pack('>4sIIII', b'FINS', 12, 0, 0, 0)
+            self._sock.sendall(request)
 
             # 接收响应
-            response = self._sock.recv(24)
-            if len(response) < 24:
-                return False
+            response = b''
+            while len(response) < 24:
+                chunk = self._sock.recv(24 - len(response))
+                if not chunk:
+                    return False
+                response += chunk
 
             # 解析响应
-            length, command, error_code, client_node, server_node = \
-                struct.unpack('>IIIII', response[:20])
+            magic, length, command, error_code, client_node, server_node = \
+                struct.unpack('>4sIIIII', response)
+
+            if magic != b'FINS' or length != 16 or command != 1:
+                logger.error(
+                    f"[FINS] 握手响应头异常: magic={magic!r}, length={length}, command={command}"
+                )
+                return False
 
             if error_code != 0:
                 logger.error(f"[FINS] 握手错误码: {error_code}")
+                return False
+
+            if not (0 <= client_node <= 255 and 0 <= server_node <= 255):
+                logger.error(
+                    f"[FINS] 握手节点号越界: client={client_node}, server={server_node}"
+                )
                 return False
 
             self._local_node = client_node
@@ -200,7 +215,7 @@ class FINSClient(ByteOrderCapableDecoder):
         fins_cmd = fins_header + struct.pack('>H', command) + data
 
         # FINS/TCP帧
-        tcp_header = struct.pack('>III', len(fins_cmd), 0, 0)
+        tcp_header = struct.pack('>4sIII', b'FINS', 8 + len(fins_cmd), 2, 0)
 
         return tcp_header + fins_cmd
 
