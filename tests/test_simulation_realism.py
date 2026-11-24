@@ -357,13 +357,20 @@ class TestDeviceStateMachine:
         sim.handle_write_register(100, 1)
         assert sim.state == DeviceState.RUNNING
 
-    def test_write_stop_register_transitions_to_stopped(self):
-        """Writing value=0 to address 100 transitions RUNNING to STOPPED."""
+    def test_write_stop_register_transitions_to_idle(self):
+        """round 395（Q7）：STOP 锁存 → IDLE，5 秒自动回切被抑制。
+
+        原来这里断言 STOPPED：状态机只在 IDLE 上做自动调度，而 STOP 直接
+        落到 STOPPED，看起来"停住了"，但真正会自启的是演示里另一条把设备
+        置回 IDLE 的路径。架构评审定的语义是「STOP/ESTOP → 置锁存 → IDLE」，
+        所以断言改为 IDLE + external_stopped。
+        """
         from 采集层.device_behavior_simulator import DeviceState
         sim = _make_sim('generic')
         sim.state = DeviceState.RUNNING
         sim.handle_write_register(100, 0)
-        assert sim.state == DeviceState.STOPPED
+        assert sim.state == DeviceState.IDLE, 'STOP 后应进入 IDLE'
+        assert sim.external_stopped is True, 'STOP 未置停机锁存位'
 
     def test_reset_register_clears_faults(self):
         """Writing value=1 to address 101 clears faults and goes to IDLE."""
@@ -384,12 +391,13 @@ class TestDeviceStateMachine:
         assert sim.state == DeviceState.RUNNING
 
     def test_coil_0_stops_device(self):
-        """Writing False to coil 0 transitions to STOPPED."""
+        """round 395（Q7）：线圈 STOP 同样 → IDLE + 锁存。"""
         from 采集层.device_behavior_simulator import DeviceState
         sim = _make_sim('generic')
         sim.state = DeviceState.RUNNING
         sim.handle_write_coil(0, False)
-        assert sim.state == DeviceState.STOPPED
+        assert sim.state == DeviceState.IDLE, '线圈 STOP 后应进入 IDLE'
+        assert sim.external_stopped is True, '线圈 STOP 未置停机锁存位'
 
     def test_monitoring_device_ignores_stop_command(self):
         """Monitoring devices (sensors) ignore stop commands."""

@@ -184,6 +184,10 @@ class DeviceBehaviorSimulator:
     SPEED_MAX = 3600.0        # RPM - 最大转速
     POWER_MAX_KW = 100.0      # kW - 最大功率
 
+    #: 时钟源。默认取墙钟；测试可以给实例注入假时钟（`sim._clock = fake`），
+    #: 避免为了验证「停机 30 秒不自启」真的 sleep 半分钟。
+    _clock = staticmethod(time.time)
+
     def __init__(self, device_id: str, device_config: Dict[str, Any]):
         """
         初始化设备行为模拟器
@@ -209,6 +213,17 @@ class DeviceBehaviorSimulator:
         self.state = DeviceState.IDLE
         self.state_start_time = time.time()
         self.state_history: List[Dict[str, Any]] = []
+
+        # ===== round 395（Q7）：外部停机锁存 =====
+        # 操作员按下 STOP / 急停后，设备必须一直停着。状态机里 IDLE→RUNNING
+        # 的自动调度（5 秒回切 / 120 秒随机恢复）只在**没有外部停机**时生效；
+        # 否则演示时「刚点停止、5 秒后又自己转起来」，值班员分不清是
+        # 指令没生效还是仿真自动复位。
+        self.external_stopped = False
+        #: 锁存是否跟随模拟层全局停机（`set_device_stopped`）。后者只由
+        #: 显式 `start_device()` 解除 —— 解除时这里也要跟着放行，否则
+        #: 「人工停止后彻底无法再启」。
+        self._latch_follows_global_stop = False
         
         # 设备健康
         self.health = DeviceHealth()
@@ -255,6 +270,9 @@ class DeviceBehaviorSimulator:
         # ===== 设备角色：监测设备 vs 工作设备 =====
         # 监测设备（传感器/分析仪）不受停机命令影响，始终运行
         self._is_monitoring_device = self._detect_monitoring_device()
+        # 三分类里**只有 mechanical 参与启停**（instrument/safety 不参与），
+        # 停机锁存也只应作用在 mechanical 上。
+        self._is_mechanical_device = self._detect_mechanical_device()
         
         # 数据回调
         self._data_callbacks: List[Callable] = []
@@ -328,6 +346,85 @@ class DeviceBehaviorSimulator:
     def is_monitoring_device(self) -> bool:
         """是否为监测设备（传感器/分析仪），监测设备不受停机命令影响"""
         return self._is_monitoring_device
+
+    @property
+    def is_mechanical_device(self) -> bool:
+        """是否为三分类里的 mechanical（唯一可被启停的一类）"""
+        return self._is_mechanical_device
+
+    def _detect_mechanical_device(self) -> bool:
+        """按设备三分类判断是否 mechanical。
+
+        不能简单用 `not _is_monitoring_device` 取反：instrument 与 safety
+        **都不参与启停**，只是监测设备的识别是关键词推断，未必能覆盖全部
+        仪表。分类统一走 `IDeviceManager.get_device_category()`（显式
+        device_category / role / 点位名三级推断），避免两套判定打架。
+        """
+        try:
+            from .interfaces import IDeviceManager
+            category = IDeviceManager.get_device_category(self.device_config or {})
+        except Exception as exc:      # noqa: BLE001 - 分类失败不该让设备起不来
+            logger.warning("[行为模拟] %s: 设备分类失败（按监测设备判定）: %s",
+                           self.device_name, exc)
+            return not self._is_monitoring_device
+        return category == 'mechanical'
+
+    def _now(self) -> float:
+        """当前时间（秒）。测试可替换 `_clock` 注入假时钟。"""
+        return self._clock()
+
+    def _latch_external_stop(self, source: str) -> None:
+        """置外部停机锁存位（仅 mechanical），并抑制状态机自动启动。"""
+        if not self._is_mechanical_device:
+            return
+        if not self.external_stopped:
+            logger.info("[行为模拟] 设备 %s 外部停机锁存（%s），"
+                        "状态机自动启动被抑制", self.device_name, source)
+        self.external_stopped = True
+        self._idle_since = None
+
+    def _release_external_stop(self, source: str) -> None:
+        """解除外部停机锁存（只应由显式 START 调用）。"""
+        if self.external_stopped:
+            logger.info("[行为模拟] 设备 %s 外部停机锁存解除（%s）",
+                        self.device_name, source)
+        self.external_stopped = False
+        self._latch_follows_global_stop = False
+
+    def _sync_external_stop_state(self) -> None:
+        """把模拟层的整机停机 / E-STOP 全局标志收敛到本设备的锁存位。
+
+        `device_manager.stop_device()` / `set_estop_override()` 只改
+        `simulated_client` 里的模块级标志，并不写寄存器 —— 行为模拟器
+        原来完全感知不到，于是内部状态机照常 5 秒自动回切 RUNNING，
+        急停解除后看起来"自己复活"。
+
+        三分类：只对 mechanical 生效，instrument/safety 原样返回。
+        """
+        if not self._is_mechanical_device:
+            return
+        try:
+            from .simulated_client import _ESTOP_ACTIVE, is_device_stopped
+            device_stopped = bool(is_device_stopped(self.device_id))
+            estop_active = bool(_ESTOP_ACTIVE)
+        except Exception as exc:      # noqa: BLE001 - 采集链不能因判定失败中断
+            logger.debug("[行为模拟] %s: 读取全局停机标志失败（已忽略）: %s",
+                         self.device_name, exc)
+            return
+
+        if device_stopped:
+            # 这条锁存跟随全局标志：它被 `start_device()` 清掉时同步放行
+            self._latch_follows_global_stop = True
+
+        if device_stopped or estop_active:
+            self._latch_external_stop('ESTOP' if estop_active else 'STOP（全局标志）')
+            if self.state != DeviceState.IDLE:
+                self._change_state(DeviceState.IDLE)
+        elif self._latch_follows_global_stop and self.external_stopped:
+            # `set_device_stopped(False)` 只可能来自显式 `start_device()`
+            self._release_external_stop('START（全局停机解除）')
+            if self.state in (DeviceState.IDLE, DeviceState.STOPPED):
+                self._change_state(DeviceState.RUNNING)
 
     def _configure_process_model(self):
         """根据设备类型配置过程模型"""
@@ -881,13 +978,23 @@ class DeviceBehaviorSimulator:
                 return
             
             if value == 1:
-                # 启动命令
+                # 启动命令：显式 START 是解除外部停机锁存的**唯一**入口
+                self._release_external_stop('START（寄存器 100）')
                 if self.state in (DeviceState.STOPPED, DeviceState.IDLE):
                     self._change_state(DeviceState.RUNNING)
                     logger.info(f"[行为模拟] 设备 {self.device_name} 收到启动命令，状态→RUNNING")
             elif value == 0:
                 # 停止命令
-                if self.state in (DeviceState.RUNNING, DeviceState.FAULT):
+                if self._is_mechanical_device:
+                    # round 395（Q7）：停机锁存 + 切入 IDLE，之后状态机的
+                    # 5 秒自动回切/120 秒随机恢复都被锁存位挡住。
+                    self._latch_external_stop('STOP（寄存器 100）')
+                    if self.state != DeviceState.IDLE:
+                        self._change_state(DeviceState.IDLE)
+                        logger.info(f"[行为模拟] 设备 {self.device_name} 收到停止命令，"
+                                    f"状态→IDLE（已锁存，不再自启）")
+                elif self.state in (DeviceState.RUNNING, DeviceState.FAULT):
+                    # 非 mechanical 保持原有停机语义，不引入锁存
                     self._change_state(DeviceState.STOPPED)
                     logger.info(f"[行为模拟] 设备 {self.device_name} 收到停止命令，状态→STOPPED")
             return
@@ -1004,11 +1111,20 @@ class DeviceBehaviorSimulator:
                 return
             
             if value:
+                # 显式 START 解除停机锁存
+                self._release_external_stop('START（线圈 0）')
                 if self.state in (DeviceState.STOPPED, DeviceState.IDLE):
                     self._change_state(DeviceState.RUNNING)
                     logger.info(f"[行为模拟] 设备 {self.device_name} 线圈启动，状态→RUNNING")
             else:
-                if self.state in (DeviceState.RUNNING, DeviceState.FAULT):
+                if self._is_mechanical_device:
+                    # round 395（Q7）：同寄存器停止分支，锁存 + IDLE
+                    self._latch_external_stop('STOP（线圈 0）')
+                    if self.state != DeviceState.IDLE:
+                        self._change_state(DeviceState.IDLE)
+                        logger.info(f"[行为模拟] 设备 {self.device_name} 线圈停止，"
+                                    f"状态→IDLE（已锁存，不再自启）")
+                elif self.state in (DeviceState.RUNNING, DeviceState.FAULT):
                     self._change_state(DeviceState.STOPPED)
                     logger.info(f"[行为模拟] 设备 {self.device_name} 线圈停止，状态→STOPPED")
             return
@@ -1035,10 +1151,16 @@ class DeviceBehaviorSimulator:
         self._data_callbacks.append(callback)
     
     def start(self):
-        """启动模拟器"""
+        """启动模拟器（只恢复数据更新，不解除外部停机锁存）"""
         self._running = True
+        if self.external_stopped:
+            # 锁存期间重新连接/重启更新线程不得把设备"转起来"，
+            # 只有显式 START 才解除（见 handle_write_register/coil）。
+            logger.info(f"[行为模拟] 设备 {self.device_name} 启动更新循环，"
+                        f"但停机锁存中，状态保持 {self.state.name}")
+            return
         self.state = DeviceState.RUNNING
-        self.state_start_time = time.time()
+        self.state_start_time = self._now()
         logger.info(f"[行为模拟] 设备 {self.device_name} 开始运行")
     
     def stop(self):
@@ -1060,8 +1182,13 @@ class DeviceBehaviorSimulator:
         if not self._running:
             return {}
 
-        current_time = time.time()
+        current_time = self._now()
         self._dt = dt  # store for fault probability calculations
+
+        # round 395（Q7）：模拟层的全局停机 / E-STOP 是另一条停机入口
+        # （device_manager.stop_device 只改全局标志，不写寄存器），
+        # 必须在步进时收敛到本设备的锁存位，否则急停解除后 5 秒又自启。
+        self._sync_external_stop_state()
 
         # 模拟模式自动启动：IDLE状态超过5秒自动转RUNNING
         if self.state == DeviceState.IDLE:
@@ -1070,6 +1197,9 @@ class DeviceBehaviorSimulator:
             # TypeError，更新循环每周期失败，该设备从此无数据。
             if getattr(self, '_idle_since', None) is None:
                 self._idle_since = current_time
+            elif self.external_stopped:
+                # 外部停机锁存：原有自动调度保留，但被锁存位挡住
+                pass
             elif current_time - self._idle_since > 5:
                 self._change_state(DeviceState.RUNNING)
                 logger.info(f"[行为模拟] 设备 {self.device_name} 自动启动，状态→RUNNING")
@@ -1571,7 +1701,7 @@ class DeviceBehaviorSimulator:
         - FAULT: 故障，超时后自动恢复或进入维护
         - MAINTENANCE: 维护，完成后恢复
         """
-        state_duration = time.time() - self.state_start_time
+        state_duration = self._now() - self.state_start_time
         
         if self.state == DeviceState.RUNNING:
             # 运行时健康度过低→维护
@@ -1584,7 +1714,9 @@ class DeviceBehaviorSimulator:
         
         elif self.state == DeviceState.IDLE:
             # 空闲一段时间后自动恢复运行（模拟自动调度）
-            if state_duration > 120 and random.random() < min(1.0, 0.02 * dt):
+            # round 395（Q7）：外部停机锁存期间不参与这条自动调度
+            if (not self.external_stopped and state_duration > 120
+                    and random.random() < min(1.0, 0.02 * dt)):
                 self._change_state(DeviceState.RUNNING)
         
         elif self.state == DeviceState.STOPPED:
@@ -1618,14 +1750,15 @@ class DeviceBehaviorSimulator:
         """改变设备状态"""
         old_state = self.state
         old_start = self.state_start_time  # Capture before update
+        now = self._now()
         self.state = new_state
-        self.state_start_time = time.time()
+        self.state_start_time = now
 
         self.state_history.append({
             'from': old_state.value,
             'to': new_state.value,
             'time': datetime.now().isoformat(),
-            'duration': time.time() - old_start  # Use old start time
+            'duration': now - old_start  # Use old start time
         })
         
         # 保留最近100条状态历史
