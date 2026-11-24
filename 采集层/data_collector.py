@@ -280,6 +280,13 @@ FALLBACK_SIMULATION_ENABLED = False
 #: 又远小于「一天」这种运行尺度。裁剪条件见 `_prune_cancelled()`。
 CANCELLED_RETENTION_S = 300.0
 
+#: 连续写时序库失败多少次触发系统告警（round 392 / Q8）。
+#: 单次抖动（DB 正在 checkpoint、磁盘瞬时繁忙）不该打扰值班员，
+#: 连续 3 个批次都失败才是"历史数据开始有缺口"。
+HISTORIAN_ALARM_THRESHOLD = 3
+#: 系统告警 ID —— 必须稳定，报警管理层的去重按 ID 生效。
+HISTORIAN_ALARM_ID = 'HISTORIAN_WRITE_ERROR'
+
 
 def _has_keyword(register_name: str, keywords: tuple) -> bool:
     """检查寄存器名是否包含指定关键字"""
@@ -762,6 +769,15 @@ class DataCollector:
         # 共享字典锁（_failure_counts/_circuit_state/_last_values/_last_times 多线程访问）
         self._tracking_lock = threading.Lock()
 
+        # === 时序库写入健康（round 392 / Q8） ===
+        #
+        # 控制平面与数据平面隔离：写库失败**不停止联锁**（联锁是实时保护，
+        # 不能因为时序库拥堵/断连/磁盘满就失效），但必须让值班员知道
+        # 这段时间历史数据有缺口 —— 连续失败到阈值时发一条系统告警。
+        self._historian_consecutive_failures = 0
+        self._historian_alarm_active = False
+        self._historian_lock = threading.Lock()
+
         # 线程池（限制并发采集连接数，支持100+设备）
         #
         # ⚠️ 上限来自 `配置/system.yaml` 的 `collection.max_concurrent`（round 210）。
@@ -837,6 +853,8 @@ class DataCollector:
             'requeued_db_retry': 0,      # 写库失败后成功重新入队、等待重试的条数
             'dropped_db_retry': 0,       # 重试后仍失败、被丢弃的条数（= 数据丢失）
             'requeue_full_db_retry': 0,  # 队列满导致没能重新入队的条数
+            # 时序库健康（round 392）：累计失败批次数，监控可据此画趋势
+            'historian_write_failures': 0,
             'protocols_active': {}
         }
 
@@ -854,6 +872,90 @@ class DataCollector:
                 self.stats['total_collections'] = (
                     self.stats.get('total_collections', 0) + amount)
 
+    def _note_historian_write(self, ok: bool, reason: str = '') -> None:
+        """记录一次时序库批量写入结果；连续失败到阈值时告警、恢复后消警。
+
+        round 392（Q8）：控制平面与数据平面隔离 —— 写库失败**不改变**采集
+        主循环的顺序，联锁照常在本周期内执行（round 385）；这里只补
+        "让值班员知道历史数据有缺口"的可观测性：
+
+          * 每失败一次 ``historian_write_failures`` +1（监控可画趋势）；
+          * **连续** 3 次失败发一条 ``HISTORIAN_WRITE_ERROR`` 系统告警；
+          * 之后持续失败不再重复发（同一事件不刷屏）；
+          * 任意一次写入成功 → 计数归零，若告警仍在则自动消警。
+
+        刻意**不**把写库失败升级成停机/停联锁：那会把"存储故障"放大成
+        "安全功能失效"，方向完全相反。
+        """
+        should_raise = False
+        should_clear = False
+        failures = 0
+        # 惰性创建：部分测试用 `__new__` 绕过 __init__ 构造采集器
+        lock = getattr(self, '_historian_lock', None)
+        if lock is None:
+            lock = self._historian_lock = threading.Lock()
+        with lock:
+            if ok:
+                was_failing = getattr(self, '_historian_consecutive_failures', 0)
+                self._historian_consecutive_failures = 0
+                if getattr(self, '_historian_alarm_active', False):
+                    self._historian_alarm_active = False
+                    should_clear = True
+                if was_failing:
+                    # 只在"从失败恢复"时打日志；每批都打会把采集日志刷满
+                    logger.info("时序库写入恢复正常（此前连续失败 %d 批）", was_failing)
+            else:
+                failures = getattr(self, '_historian_consecutive_failures', 0) + 1
+                self._historian_consecutive_failures = failures
+                if (failures >= HISTORIAN_ALARM_THRESHOLD
+                        and not getattr(self, '_historian_alarm_active', False)):
+                    self._historian_alarm_active = True
+                    should_raise = True
+
+        if not ok:
+            self._inc_stat('historian_write_failures')
+            if should_raise:
+                self._raise_historian_alarm(failures, reason)
+            else:
+                logger.warning(
+                    "时序库写入失败（连续 %d 次，阈值 %d）: %s",
+                    failures, HISTORIAN_ALARM_THRESHOLD, reason or '未知原因')
+            return
+
+        if should_clear:
+            self._clear_historian_alarm()
+
+    def _raise_historian_alarm(self, failures: int, reason: str) -> None:
+        """发系统告警（不依赖具体报警层实现，失败只记日志）。"""
+        message = (
+            f"时序库连续 {failures} 个批次写库失败，历史数据正在出现缺口，"
+            f"联锁/保护不受影响但趋势与统计会缺失；最近错误：{reason or '未知'}")
+        logger.error(message)
+        manager = getattr(self, 'alarm_manager', None)
+        raise_fn = getattr(manager, 'raise_external_alarm', None)
+        if not callable(raise_fn):
+            # 报警层未装配/是精简替身：日志已经给出同样信息，不阻断采集
+            logger.warning("报警层不支持 raise_external_alarm，"
+                           "%s 仅记录日志", HISTORIAN_ALARM_ID)
+            return
+        try:
+            raise_fn(HISTORIAN_ALARM_ID, message, 'warning',
+                     device_id='historian', register_name='write')
+        except Exception as e:      # noqa: BLE001 —— 告警失败不能带走数据线程
+            logger.error("发送 %s 告警失败: %s", HISTORIAN_ALARM_ID, e)
+
+    def _clear_historian_alarm(self) -> None:
+        """写库恢复后自动消警。"""
+        manager = getattr(self, 'alarm_manager', None)
+        clear_fn = getattr(manager, 'clear_external_alarm', None)
+        if not callable(clear_fn):
+            return
+        try:
+            clear_fn(HISTORIAN_ALARM_ID, device_id='historian',
+                     register_name='write')
+            logger.info("%s 已自动消除（时序库写入恢复）", HISTORIAN_ALARM_ID)
+        except Exception as e:      # noqa: BLE001
+            logger.error("消除 %s 告警失败: %s", HISTORIAN_ALARM_ID, e)
 
     def _protocol_of(self, device_id: str) -> str:
         """设备协议（带缓存）。指标标签用，避免每次读数都查设备配置。
@@ -2405,6 +2507,9 @@ class DataCollector:
                     written = self.database.insert_data_batch(batch)
                     if not written:
                         db_write_ok = False
+                        # round 392（Q8）：写库失败只影响"非幂等下游"是否喂数，
+                        # 不影响联锁（本周期内照常执行，见下方 intel 段）。
+                        self._note_historian_write(False, '落库层拒绝整批')
                         logger.warning(
                             "批量写入数据库返回 0 条（%d 条全被落库层拒绝），"
                             "保留磁盘副本待重试", len(batch))
@@ -2421,12 +2526,21 @@ class DataCollector:
                         # 整批持久化文件，并在指标里把“丢了多少”显式记出来。
                         dropped = len(batch) - written
                         self._inc_stat('dropped_invalid_value', dropped)
+                        # 链路本身是通的（有数据落库成功），不算时序库故障；
+                        # 部分被拒属于数据质量问题，另有 dropped_invalid_value 计数。
+                        self._note_historian_write(True)
                         logger.warning(
                             "批量写入只成功 %d/%d 条（%d 条被落库层拒绝），"
                             "保留磁盘副本以防未写入部分丢失",
                             written, len(batch), dropped)
+                    else:
+                        # 整批落库成功 → 写库健康，连续失败计数归零/自动消警
+                        self._note_historian_write(True)
                 except Exception as e:
                     db_write_ok = False
+                    # round 392（Q8）：连续 3 次写失败发 HISTORIAN_WRITE_ERROR，
+                    # 让值班员知道这段时间历史数据有缺口；恢复后自动消警。
+                    self._note_historian_write(False, str(e))
                     logger.warning(f"批量写入数据库失败 ({len(batch)} 条): {e}")
                     # 失败数据重新入队（标记 _db_retry 防止无限重试）。
                     # 计数不变式：retried + dropped + requeue_full == len(batch)
