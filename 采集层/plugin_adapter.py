@@ -422,6 +422,9 @@ class PluginAdapterClient:
                 if failures >= 3:
                     # 连续失败说明链路已断，不能一直对外报 connected=True
                     self.connected = False
+                # round 385：读失败时缓存里的值是上一次的旧值，不能再以
+                # quality=192（Good）交付 —— 上层会把它当成新鲜数据参与报警/联锁。
+                self._mark_quality_bad()
                 logger.warning("插件适配器读取失败 device=%s: %s（连续 %d 次）",
                                self.device_id, exc, failures)
             self._stop_event.wait(self.poll_interval)
@@ -456,7 +459,18 @@ class PluginAdapterClient:
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
         with self._lock:
-            return {name: dict(item) for name, item in self.latest_data.items()}
+            data = {name: dict(item) for name, item in self.latest_data.items()}
+        # round 385：已断线时快照只能以 quality=0（Bad）交付，不得冒充 Good
+        if not self.connected:
+            for item in data.values():
+                item['quality'] = 0
+        return data
+
+    def _mark_quality_bad(self) -> None:
+        """把当前缓存的质量码降为 0（Bad），值保留便于排查。"""
+        with self._lock:
+            for item in self.latest_data.values():
+                item['quality'] = 0
 
     def add_data_callback(self, callback: Callable[..., Any]):
         self._data_callbacks.append(callback)

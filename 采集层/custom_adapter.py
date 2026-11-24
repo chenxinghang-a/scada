@@ -200,11 +200,15 @@ class CustomAdapterClient:
             except CircuitBreakerOpenError as exc:
                 self.stats['failed_requests'] += 1
                 self.stats['last_error'] = f'熔断器打开: {exc}'
+                # round 385：熔断期间缓存里的旧值不能再报 quality=192（Good），
+                # 否则上层把熔断前的数据当新鲜数据使用（fail-open）。
+                self._mark_quality_bad()
                 logger.warning("自定义适配器请求被熔断 device=%s: %s",
                                self.device_id, exc)
             except Exception as exc:      # noqa: BLE001 —— 单轮失败不能停线程
                 self.stats['failed_requests'] += 1
                 self.stats['last_error'] = str(exc)
+                self._mark_quality_bad()
                 logger.warning("自定义适配器采集失败 device=%s: %s",
                                self.device_id, exc)
             self._stop_event.wait(self.poll_interval)
@@ -273,7 +277,18 @@ class CustomAdapterClient:
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
         with self._lock:
-            return {name: dict(item) for name, item in self.latest_data.items()}
+            data = {name: dict(item) for name, item in self.latest_data.items()}
+        # round 385：断线后快照只能以 quality=0（Bad）交付
+        if not self.connected:
+            for item in data.values():
+                item['quality'] = 0
+        return data
+
+    def _mark_quality_bad(self) -> None:
+        """把当前缓存的质量码降为 0（Bad），值保留便于排查。"""
+        with self._lock:
+            for item in self.latest_data.values():
+                item['quality'] = 0
 
     def add_data_callback(self, callback: Callable[..., Any]):
         self._data_callbacks.append(callback)
@@ -295,6 +310,17 @@ class CustomAdapterClient:
             logger.warning("设备 %s 未配置 adapter.write，拒绝写入 %s",
                            self.device_id, name)
             return False
+
+        # round 385：NaN/±Infinity 一律拒绝。`requests` 会把它们序列化成
+        # 非法的 `NaN`/`Infinity` 字面量；部分网关照收并写进寄存器，
+        # 等于把"没有数值"当成设定值下发（与 safe_numeric 的统一口径一致）。
+        if not isinstance(value, bool) and isinstance(value, (int, float)):
+            if try_finite_float(value) is None:
+                self.stats['failed_requests'] += 1
+                self.stats['last_error'] = f'写入值不是有限数值: {value!r}'
+                logger.error("自定义适配器拒绝非有限写入值 %s/%s=%r",
+                             self.device_id, name, value)
+                return False
 
         context = {'device_id': self.device_id, 'name': str(name), 'value': value}
         try:

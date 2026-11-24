@@ -2359,7 +2359,26 @@ class DataCollector:
                             logger.error(f"TDengine桥接异常: {e}")
 
                 # === 智能层：扔进异步队列 ===
-                for data in (batch if db_write_ok else ()):
+                # round 385：安全联锁与其余智能模块**拆开**处理。
+                # * 其余模块（预测维护/OEE/SPC…）非幂等，必须"落库成功后再喂"，
+                #   否则重试批次会重复计数（round 382），保持不变；
+                # * 安全联锁是安全功能，写库失败/队列满时**仍然必须执行**。
+                #   原来 `batch if db_write_ok else ()` 把联锁一起挡在写库之后 ——
+                #   数据库一抖，整批联锁判定就静默消失。
+                for data in batch:
+                    if not db_write_ok:
+                        # 写库失败的这一轮补跑联锁；成功后仍走 intel_queue 的
+                        # 统一路径（`_dispatch_intelligence`），用标记防重复执行。
+                        if data.get('_interlock_done'):
+                            continue
+                        if self.device_control:
+                            self._safe_intel(
+                                'device_control',
+                                self.device_control.check_interlocks,
+                                data['device_id'], data['register_name'], data['value'],
+                            )
+                        data['_interlock_done'] = True
+                        continue
                     try:
                         if not intel_queue.full():
                             intel_queue.put_nowait(data)
@@ -2491,7 +2510,9 @@ class DataCollector:
         name_lower = register_name.lower()
 
         # 安全联锁 —— 永远第一个，且不受降级影响
-        if self.device_control:
+        # round 385：写库失败的那一轮已由批处理循环直接补跑过联锁（并打了
+        # `_interlock_done` 标记），重试落库成功后再走这里时不能重复执行。
+        if self.device_control and not data.get('_interlock_done'):
             self._safe_intel(
                 'device_control', self.device_control.check_interlocks,
                 device_id, register_name, value,
