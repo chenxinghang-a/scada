@@ -309,6 +309,15 @@ class DeviceControlSafety:
         self._estop_time: datetime | None = None
         self._estop_reason = ''
         self._estop_devices: list[str] = []  # 需要停机的设备列表
+        #: round 396：急停的**内存快速闸门**。
+        #:
+        #: `_estop_active`（以及落库状态）是"读一次要拿锁 / 读库"的慢路径，
+        #: 已经通过校验、只等设备锁的在途写入会在这段窗口里把值下发出去。
+        #: `trigger_emergency_stop` **第一件事**就是 `.set()`（不拿任何锁，
+        #: 急停不该排在慢速总线/设备锁后面），每条真正下发的写入在动手前
+        #: 无锁 `is_set()`。它与持久化/内存状态是**与**关系：
+        #: 重启后由 `_restore_persisted_state()` 重新 `.set()`，跨重启锁定不丢。
+        self._estop_signal = threading.Event()
 
         # ===== 故障降级 =====
         self._device_health: dict[str, dict[str, Any]] = {}  # device_id -> health info
@@ -975,10 +984,14 @@ class DeviceControlSafety:
         # （解除走 `reset_emergency_stop()`，只改标志位、不碰 PLC）。
         # 急停锁死时还允许向 PLC 发复位，等于给设备一个"重启"的机会。
         # 正确顺序：先 `reset_emergency_stop()` 解除急停，再单独复位 PLC。
-        if self._estop_active:
+        # round 396：内存急停信号与持久化状态是**与**关系 —— 任一置位都拦截。
+        # 信号在 `trigger_emergency_stop` 的最开头置位，早于 `_estop_active`
+        # 的赋值；这里一起判，批量入口不必等状态落库。
+        if self._estop_active or self._estop_signal.is_set():
             return {
                 'success': False,
                 'message': '紧急停机状态中，请先解除紧急停机再操作设备',
+                'reason_code': 'ESTOP_ACTIVE',
                 'results': {}
             }
 
@@ -1375,6 +1388,10 @@ class DeviceControlSafety:
         estop = db.get_system_state(self.STATE_KEY_ESTOP)
         if isinstance(estop, dict) and estop.get('active'):
             self._estop_active = True
+            # round 396：内存闸门必须与持久化状态同步置位，否则重启后
+            # 写入入口的无锁检查看到的是"未急停"，直到第一笔写入撞上
+            # `_estop_active` 的带锁检查。
+            self._estop_signal.set()
             raw_time = estop.get('time')
             try:
                 self._estop_time = (datetime.fromisoformat(raw_time)
@@ -2593,9 +2610,12 @@ class DeviceControlSafety:
                 return result
 
         # 1. 紧急停机检查
-        if self._estop_active:
+        #    round 396：带原因码 —— 写入链路上游（复核失败/批量结果）不再
+        #    只能靠中文文案区分"急停"与"量程/联锁"。
+        if self._estop_active or self._estop_signal.is_set():
             result['allowed'] = False
             result['reason'] = '紧急停机状态中，禁止所有写操作'
+            result['reason_code'] = 'ESTOP_ACTIVE'
             return result
 
         # 2. 设备健康检查
@@ -2790,6 +2810,14 @@ class DeviceControlSafety:
         4. 触发全厂广播
         5. 记录审计日志
         """
+        # round 396：**第一件事**置内存急停信号，且**不拿任何锁**。
+        #
+        # 急停是最高优先级动作，不能排在设备锁 / 慢速总线超时后面；同时
+        # 这个动作必须发生在"写操作通过校验"与"真正下发"之间的毫秒级窗口
+        # 之前，否则那条写入仍会落地。此后才更新持久化状态、再向 mechanical
+        # 设备下发停机 —— 顺序不能颠倒：标志晚置一秒，就多一秒的在途写入。
+        self._estop_signal.set()
+
         # round 386：**先置急停标志（安全侧），再采样"本来就已经停了"的设备**。
         #
         # 标志必须先生效：设备清单枚举/状态查询都可能抛异常，急停不能因为
@@ -2900,6 +2928,32 @@ class DeviceControlSafety:
             'timestamp': self._estop_time.isoformat()
         }
 
+    def _estop_signal_rejection(self, operator: str, device_id: str,
+                                address: Any, value: Any,
+                                stage: str) -> dict[str, Any] | None:
+        """写入路径的急停内存闸门（round 396）。
+
+        只读一个 `threading.Event`，**不拿设备锁、不读持久化状态** ——
+        这正是"校验通过、尚未下发"这段窗口里唯一来得及生效的检查。
+
+        Returns:
+            None 表示可以继续下发；否则为**明确拒绝**的返回体。
+        """
+        if not self._estop_signal.is_set():
+            return None
+        reason = ('紧急停机已生效（内存急停信号），拒绝下发写入：'
+                  '不等设备锁、不依赖持久化状态读取')
+        # 审计失败不能反过来放行急停 —— 拒绝就是拒绝。
+        self._audit('write_blocked', operator,
+                    f'写入被急停内存信号阻止（{stage}）: '
+                    f'{device_id}/{address}={value}')
+        return {
+            'success': False,
+            'message': reason,
+            'reason_code': 'ESTOP_ACTIVE',
+            'blocked_by': 'estop_signal',
+        }
+
     def reset_emergency_stop(self, operator: str) -> dict[str, Any]:
         """
         解除紧急停机（需要工程师权限+确认）
@@ -3006,6 +3060,13 @@ class DeviceControlSafety:
             # 只把**启动失败**的留在名单里，下次还能重试；因联锁跳过的不再
             # 归急停管（它们是被联锁停住的，联锁解除后由人工确认启动）。
             self._estop_devices = list(failed_devices)
+
+        # round 396：**硬件复位动作做完之后**才打开内存闸门。
+        #
+        # 提前 `.clear()` 会让"已解除急停、设备还没复位"这段窗口里的写入
+        # 直接落到现场。放这里也保证了一个顺序：联锁检查（函数入口）不过
+        # 时**不 clear**，闸门保持关闭。
+        self._estop_signal.clear()
 
         # 复位声光报警
         #
@@ -3628,6 +3689,13 @@ class DeviceControlSafety:
                 同步启停标志）。此时不再重复 `acquire_device_lock` —— 那是
                 非重入锁，会把自己锁死；也**不由本方法释放**。
         """
+        # round 396：**进入即查内存急停信号**（无锁）。
+        # 放在 HITL 提案之前：急停期间连"排队等审批"都不该发生。
+        estop_reject = self._estop_signal_rejection(
+            operator, device_id, address, value, stage='entry')
+        if estop_reject is not None:
+            return estop_reject
+
         # HITL：自动来源在当前策略下不能直接执行时，**不是拒绝，而是提案**。
         # manual / 未武装的 supervised 都把动作排进待审批队列，由人批准、
         # 改值或驳回 —— 这才是"人在回路"，而不是"人盯着看"。
@@ -3710,6 +3778,7 @@ class DeviceControlSafety:
                     'message': f'写入前复核未通过：{recheck["reason"]}',
                     'validation': recheck,
                     'rechecked': True,
+                    'reason_code': recheck.get('reason_code') or 'WRITE_RECHECK_FAILED',
                 }
 
             # round 322：**执行前先落一条 attempt 审计**。
@@ -3806,6 +3875,18 @@ class DeviceControlSafety:
                             f'{int(_fv)} —— 已拒绝。若该点位是 float32，'
                             f'需要按双寄存器编码写入，当前接口不支持。'),
                     }
+
+            # round 396：**真正下发前的最后一次无锁检查**。
+            #
+            # 上面的 `validate_write` 复核（round 303）仍要读持久化/带锁状态，
+            # 从复核通过到这一行之间还有一次 client 查询与审计写入。急停此刻
+            # 生效时，`_estop_signal` 已在不拿锁的情况下被置位 —— 这里直接
+            # 拒绝，不进入 `client.write_*`。这是"校验通过但还没下发"的
+            # 毫秒级窗口的最终闸门。
+            estop_reject = self._estop_signal_rejection(
+                operator, device_id, address, value, stage='pre-dispatch')
+            if estop_reject is not None:
+                return estop_reject
 
             for attempt in range(max_retries + 1):
                 try:
