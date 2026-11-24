@@ -26,32 +26,48 @@ from .base_client import ByteOrderCapableDecoder
 
 logger = logging.getLogger(__name__)
 
-# 内存区域代码
-MEMORY_AREA_CODES = {
-    'D': 0x02,     # DM区（数据存储器）
-    'E0': 0x20,    # EM区（扩展数据存储器）Bank 0
-    'E1': 0x21,    # EM区 Bank 1
-    'E2': 0x22,    # EM区 Bank 2
-    'E3': 0x23,    # EM区 Bank 3
-    'E4': 0x24,    # EM区 Bank 4
-    'E5': 0x25,    # EM区 Bank 5
-    'E6': 0x26,    # EM区 Bank 6
-    'E7': 0x27,    # EM区 Bank 7
-    'E8': 0x28,    # EM区 Bank 8
-    'E9': 0x29,    # EM区 Bank 9
-    'EA': 0x2A,    # EM区 Bank A
-    'EB': 0x2B,    # EM区 Bank B
-    'EC': 0x2C,    # EM区 Bank C
-    'ED': 0x2D,    # EM区 Bank D
-    'EE': 0x2E,    # EM区 Bank E
-    'EF': 0x2F,    # EM区 Bank F
-    'CIO': 0x30,   # CIO区（I/O区）
-    'W': 0x31,     # W区（内部辅助继电器）
-    'H': 0x32,     # H区（保持继电器）
-    'A': 0x33,     # A区（辅助存储器）
-    'T': 0x09,     # T区（定时器当前值）
-    'C': 0x0A,     # C区（计数器当前值）
+# 内存区域代码 —— **必须分成字访问与位访问两张表**。
+#
+# FINS 命令 0x0101（MEMORY AREA READ）的区域码字节在两种访问方式下不是一个值：
+# 同一张表同时被 read_words 和 read_bits 用，等于让读字函数发出位访问码，
+# 从站要么返回错位数据、要么直接报协议错误。原表的 CIO/W/H/A/T/C 六项填的
+# 全是位访问码，导致「读 CIO 区的字」在生产环境从来没成功过。
+#
+# 规范值（OMRON W227 / CS-CJ 系列手册 MEMORY AREA READ）：
+#            字访问      位访问
+#   CIO      0xB0        0x30
+#   W(WR)    0xB1        0x31
+#   H(HR)    0xB2        0x32
+#   A(AR)    0xB3        0x33
+#   D(DM)    0x02        0x02   ← D 区两种访问共用同一码，靠 bit 字段区分
+#   EM0-15   0xA0-0xAF   0xA0-0xAF
+#   T(TIM)   0x89        0x09
+#   C(CNT)   0x8A        0x0A
+WORD_AREA_CODES = {
+    'D': 0x02,     # DM 区（数据存储器）
+    **{f'E{i:X}': 0xA0 + i for i in range(16)},   # EM 区 Bank 0..F
+    'CIO': 0xB0,   # CIO 区（I/O 区），字访问
+    'W': 0xB1,     # W 区（内部辅助继电器），字访问
+    'H': 0xB2,     # H 区（保持继电器），字访问
+    'A': 0xB3,     # A 区（辅助存储器），字访问
+    'T': 0x89,     # T 区（定时器当前值），字访问
+    'C': 0x8A,     # C 区（计数器当前值），字访问
 }
+
+BIT_AREA_CODES = {
+    'D': 0x02,
+    **{f'E{i:X}': 0xA0 + i for i in range(16)},
+    'CIO': 0x30,
+    'W': 0x31,
+    'H': 0x32,
+    'A': 0x33,
+    'T': 0x09,
+    'C': 0x0A,
+}
+
+# 兼容旧引用（外部只做「键是否存在」的检查，语义上等同于支持的区域集合）。
+# 新代码请直接引用上面两张表，不要再用这一个。
+MEMORY_AREA_CODES = WORD_AREA_CODES
 
 # 位/字区域标识
 BIT_AREAS = {'CIO', 'W', 'H', 'A', 'T', 'C'}
@@ -282,11 +298,11 @@ class FINSClient(ByteOrderCapableDecoder):
             return None
 
         area_upper = area.upper()
-        if area_upper not in MEMORY_AREA_CODES:
-            logger.error(f"[FINS] 不支持的区域: {area}，支持: {list(MEMORY_AREA_CODES.keys())}")
+        if area_upper not in WORD_AREA_CODES:
+            logger.error(f"[FINS] 不支持的区域: {area}，支持: {list(WORD_AREA_CODES.keys())}")
             return None
 
-        area_code = MEMORY_AREA_CODES[area_upper]
+        area_code = WORD_AREA_CODES[area_upper]
 
         # 命令数据：[内存区代码(1)] [起始地址(2)] [起始位(1)] [读取数量(2)]
         data = struct.pack('B', area_code)
@@ -330,10 +346,10 @@ class FINSClient(ByteOrderCapableDecoder):
             return False
 
         area_upper = area.upper()
-        if area_upper not in MEMORY_AREA_CODES:
+        if area_upper not in WORD_AREA_CODES:
             return False
 
-        area_code = MEMORY_AREA_CODES[area_upper]
+        area_code = WORD_AREA_CODES[area_upper]
         count = len(values)
 
         data = struct.pack('B', area_code)
@@ -516,10 +532,10 @@ class FINSClient(ByteOrderCapableDecoder):
             return None
 
         area_upper = area.upper()
-        if area_upper not in MEMORY_AREA_CODES:
+        if area_upper not in BIT_AREA_CODES:
             return None
 
-        area_code = MEMORY_AREA_CODES[area_upper]
+        area_code = BIT_AREA_CODES[area_upper]
 
         data = struct.pack('B', area_code)
         data += struct.pack('>H', address)
@@ -551,10 +567,10 @@ class FINSClient(ByteOrderCapableDecoder):
             return False
 
         area_upper = area.upper()
-        if area_upper not in MEMORY_AREA_CODES:
+        if area_upper not in BIT_AREA_CODES:
             return False
 
-        area_code = MEMORY_AREA_CODES[area_upper]
+        area_code = BIT_AREA_CODES[area_upper]
         count = len(values)
 
         data = struct.pack('B', area_code)

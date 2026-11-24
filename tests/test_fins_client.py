@@ -453,3 +453,72 @@ class TestFINSConstants:
     def test_bit_and_word_areas(self):
         assert 'CIO' in BIT_AREAS
         assert 'D' in WORD_AREAS
+
+
+class TestFinsAreaCodesSplit:
+    """字访问与位访问的区域码必须是两张表 —— 混用会让读字发出位访问码。
+
+    FINS 规范里 CIO 字访问是 0xB0、位访问是 0x30；原来一张表填的全是位访问码，
+    所以「读 CIO 区的字」这条路径在生产环境从来没成功过（从站回错位数据或报协议错）。
+    """
+
+    def test_word_and_bit_tables_differ(self):
+        from 采集层.fins_client import WORD_AREA_CODES, BIT_AREA_CODES
+        for area in ('CIO', 'W', 'H', 'A', 'T', 'C'):
+            assert WORD_AREA_CODES[area] != BIT_AREA_CODES[area], \
+                f'{area} 区字/位访问码相同，说明又合并回一张表了'
+
+    def test_word_codes_match_spec(self):
+        from 采集层.fins_client import WORD_AREA_CODES
+        assert WORD_AREA_CODES['CIO'] == 0xB0
+        assert WORD_AREA_CODES['W'] == 0xB1
+        assert WORD_AREA_CODES['H'] == 0xB2
+        assert WORD_AREA_CODES['A'] == 0xB3
+        assert WORD_AREA_CODES['T'] == 0x89
+        assert WORD_AREA_CODES['C'] == 0x8A
+        # D 区字/位共用 0x02，靠 bit 字段区分
+        assert WORD_AREA_CODES['D'] == 0x02
+
+    def test_bit_codes_match_spec(self):
+        from 采集层.fins_client import BIT_AREA_CODES
+        assert BIT_AREA_CODES['CIO'] == 0x30
+        assert BIT_AREA_CODES['W'] == 0x31
+        assert BIT_AREA_CODES['H'] == 0x32
+        assert BIT_AREA_CODES['A'] == 0x33
+        assert BIT_AREA_CODES['T'] == 0x09
+        assert BIT_AREA_CODES['C'] == 0x0A
+        assert BIT_AREA_CODES['D'] == 0x02
+
+    def test_em_area_codes(self):
+        """EM0-EM15 是连续 16 个 bank：字/位访问都是 0xA0-0xAF。"""
+        from 采集层.fins_client import WORD_AREA_CODES, BIT_AREA_CODES
+        for i in range(16):
+            key = f'E{i:X}'
+            assert WORD_AREA_CODES[key] == 0xA0 + i
+            assert BIT_AREA_CODES[key] == 0xA0 + i
+
+    def test_read_words_sends_word_area_code(self, fins_client):
+        """真正发出去的帧里，区域码字节必须是字访问码。"""
+        fins_client.connected = True
+        captured = {}
+
+        def grab(frame):
+            captured['f'] = frame
+            return None
+
+        with patch.object(fins_client, '_send_recv', side_effect=grab):
+            fins_client.read_words('CIO', 0, 1)
+        # FINS/TCP 头 16（4s+III）+ FINS 头 10 + MRC/SRC 2 → 区域码在偏移 28
+        assert captured['f'][28] == 0xB0, f"实发区域码 0x{captured['f'][28]:02X}"
+
+    def test_read_bits_sends_bit_area_code(self, fins_client):
+        fins_client.connected = True
+        captured = {}
+
+        def grab(frame):
+            captured['f'] = frame
+            return None
+
+        with patch.object(fins_client, '_send_recv', side_effect=grab):
+            fins_client.read_bits('CIO', 0, 0, 1)
+        assert captured['f'][28] == 0x30, f"实发区域码 0x{captured['f'][28]:02X}"

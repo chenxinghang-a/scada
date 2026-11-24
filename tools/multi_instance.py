@@ -22,6 +22,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Windows 保留设备名：即使加扩展名也不能用作目录名
+_WINDOWS_RESERVED_NAMES = {
+    'CON', 'PRN', 'AUX', 'NUL',
+    'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+    'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+}
+
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -41,10 +48,30 @@ class MultiInstanceManager:
         self.instances_dir.mkdir(parents=True, exist_ok=True)
 
     def _validate_name(self, name: str) -> str:
-        """校验实例名称"""
-        if not isinstance(name, str) or not re.fullmatch(r'^[A-Za-z0-9_-]{1,64}$', name):
+        """校验实例名称 —— 只允许 ASCII。
+
+        实例名不只是目录名：它同时被当成服务标识、批处理脚本参数，很多部署里
+        还直接用作 TDengine 库名 / Docker 容器名。中文在 Windows 批处理编码、
+        容器名规则、库名规则上都有坑，靠 `shlex.quote` 解决不了。
+
+        想显示中文产线名请用 `display_name`（只进界面，不进任何路径/命令/库名）。
+
+        拒绝：路径分隔符、Windows 非法字符、控制字符、`.` 开头、`..`、保留设备名。
+        """
+        if not isinstance(name, str):
             raise ValueError(f"非法实例名称: {name!r}")
-        return name
+        cleaned = name.strip()
+        if not cleaned or len(cleaned) > 64:
+            raise ValueError(f"非法实例名称（长度 1-64）: {name!r}")
+        if cleaned.startswith('.') or '..' in cleaned:
+            raise ValueError(f"非法实例名称（不允许以 . 开头或包含 ..）: {name!r}")
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', cleaned):
+            raise ValueError(
+                f"非法实例名称: {name!r} —— 只能用小写/大写字母、数字、下划线、连字符"
+                f"（例如 line1_workshop）；中文名称请填 display_name 字段")
+        if cleaned.upper() in _WINDOWS_RESERVED_NAMES:
+            raise ValueError(f"非法实例名称（系统保留名）: {name!r}")
+        return cleaned
 
     def get_instance_dir(self, name: str) -> Path:
         """获取实例目录"""
