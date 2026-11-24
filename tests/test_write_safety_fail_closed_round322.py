@@ -148,7 +148,13 @@ class _RecordingModbus:
         return MagicMock(isError=lambda: False)
 
     def read_holding_registers(self, address, count, slave=None):
-        return [self.read_value]
+        # `ModbusClient` 期望 pymodbus 风格响应（`.isError()` + `.registers`）。
+        # 直接返回 list 会让回读走异常分支 → round 386 起按"未验证=失败"，
+        # 本用例测的是审计顺序，不该被回读形态绊倒。
+        response = MagicMock()
+        response.isError.return_value = False
+        response.registers = [self.read_value]
+        return response
 
 
 def _modbus_client():

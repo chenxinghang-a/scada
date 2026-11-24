@@ -21,6 +21,8 @@ def _dc(devices):
     dm.simulation_mode = True          # 跳过“零联锁 fail-closed”，专测自主等级
     client = MagicMock()
     client.connected = True
+    # round 386：回读必须是新鲜数据，否则写入按"未验证=失败"处理
+    client.last_read_source = 'fresh'
     client.write_single_register = MagicMock(return_value=True)
     client.write_single_coil = MagicMock(return_value=True)
     client.read_holding_registers = MagicMock(return_value=[7])

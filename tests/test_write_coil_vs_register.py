@@ -26,7 +26,8 @@
 1. `write_with_verification(..., kind='register'|'coil')`，由调用方明确指定；
 2. 写入按 kind 走对应方法；客户端不支持时**明确报错**，不再静默失败；
 3. 回读读**同一种对象**；
-4. 拿不到回读值（不支持/异常）→ `verified=None`（**未验证**），不再当通过；
+4. 拿不到回读值（不支持/异常/陈旧缓存）→ `verified=None`（**未验证**），
+   且 `success=False`、`effective=False`（round 386 起未验证一律不算成功）；
 5. 寄存器按**精确值**比对；返回值新增 `verified` 字段。
 """
 
@@ -183,16 +184,23 @@ def test_register_readback_is_exact_not_tolerance():
     )
 
 
-def test_readback_failure_is_unverified_not_success():
-    """回读异常（通信断了）不能算「验证通过」。"""
+def test_readback_failure_is_unverified_and_fails():
+    """回读异常（通信断了）→ 未验证 = **失败**（round 386）。
+
+    原来这里只把 `verified` 记成 None 而 `success` 仍为 True ——
+    调用方（批量启停 / 联锁动作 / API）只看 success，会认为设备已经动作。
+    读不到回读就无法证明"设备变了"，必须带原因返回失败。
+    """
     dc = _dc(_FakeClient(fail_read=True))
     res = dc.write_with_verification('dev1', 1, 100, 'op')
 
-    assert res['success'] is True, '写入本身是成功的'
+    assert res['success'] is False, (
+        '回读未验证却报成功 —— 调用方会以为设备已按期望值动作')
     assert res['verified'] is None, (
         f"回读失败却给出 verified={res['verified']!r} —— 未验证不能当通过"
     )
-    assert '无法回读验证' in res['message']
+    assert res['effective'] is False
+    assert '未验证' in res['message'] and '模拟通信中断' in res['message']
     assert res['warnings']
 
 

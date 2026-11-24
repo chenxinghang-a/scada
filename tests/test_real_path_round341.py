@@ -256,7 +256,12 @@ class TestReadbackFreshness:
             '回读没有判新鲜度：写失败+缓存同值会判通过，写成功+回读超时会判失败')
 
     def test_stale_readback_yields_unverified(self):
-        """回读走缓存时 `verified` 必须是 None（未验证），既不算通过也不算失败。"""
+        """回读走缓存时 `verified` 必须是 None（未验证）。
+
+        round 386 起：未验证在返回契约上等同于失败 —— `success=False`、
+        `effective=False`。原来 `effective` 为 `verified is not False`，
+        读缓存反而成了"现场已生效"。
+        """
         from unittest.mock import MagicMock
 
         from 智能层.device_control import DeviceControlSafety
@@ -284,6 +289,9 @@ class TestReadbackFreshness:
         result = real(fake_self, 'dev', 10, 42, 'op', kind='register')
         assert result.get('verified') is None, (
             f'陈旧缓存被当成验证结果: {result}')
+        assert result.get('success') is False, (
+            f'陈旧缓存回读仍报成功 —— 无法证明设备已生效: {result}')
+        assert result.get('effective') is False
 
 
 # ============================================================

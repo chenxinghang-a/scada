@@ -76,6 +76,21 @@ LEGACY_FALLBACK_CONTROL_POINTS = {
 # 未显式给出 value 时，各动作的默认写入值
 _DEFAULT_ACTION_VALUES = {'start': True, 'stop': False, 'reset': 0}
 
+
+def _coerce_control_value(point: dict[str, Any]) -> Any:
+    """把控制点位配置里的 value 转成要下发的类型。
+
+    `bool("0")` / `bool("false")` 都是 True —— 配置里字符串形式的关闭值
+    会被下发成开启。线圈按字面量解析，寄存器按整数。
+    """
+    value = point.get('value')
+    if str(point.get('type', 'coil')).lower() == 'coil':
+        if isinstance(value, str):
+            return value.strip().lower() not in (
+                '0', 'false', 'no', 'off', 'disabled', '')
+        return bool(value)
+    return int(value)
+
 # 从设备点位名推断启停点用的语义词。
 # 现场设备是人自己接线、自己命名的，不能要求每台都额外写一段 control 配置；
 # 只要该设备本来就有一个叫 motor_start / run_cmd / 停止 的可写点位，就该能用。
@@ -1076,126 +1091,175 @@ class DeviceControlSafety:
                                 f'批量{action}设备 {device_id}: 无可用控制点位，已拒绝写入')
                     continue
 
-                # round 330：**先写审计、再下发**（round 322 的 fail-closed 原则）。
-                # 原来审计是在写完之后调的（第 768 行附近），而且不看返回值 ——
-                # 磁盘满 / 目录只读时会出现「指令已经发给 PLC、记录却没有」，
-                # 事故调查时无法自证「谁在什么时候下发了什么」。
-                if not self._audit(
-                        f'batch_{action}_attempt', operator,
-                        f'批量{action}设备 {device_id}: 即将写 '
-                        f'{point["type"]}#{point["address"]}={point["value"]}'):
+                _pv = _coerce_control_value(point)
+
+                # round 386：**写入 + 回读 + 同步状态标志 + 审计 同一临界区**。
+                #
+                # 原来 `write_with_verification` 只在"写 + 回读"期间持设备锁，
+                # 紧随其后的 `start_device(write=False)`（同步 `_stopped_devices`
+                # / 模拟停机标志）在锁外执行。于是：
+                #   · 写 PLC 成功、状态同步失败 → 设备**实际在转**，系统认为已停，
+                #     下一次批量启动会跳过它（以为不需要启动），急停名单也可能漏算；
+                #   · 写 PLC 失败、标志却已同步 → 系统认为在跑，实际没动。
+                # 两者都会让"系统状态"和"现场状态"长期错位。现在整段持锁，
+                # 任一步失败要么回滚另一边，要么在返回值/审计里显式标记不一致。
+                if not self.acquire_device_lock(device_id, operator):
                     results[device_id] = {
                         'success': False,
-                        'message': '审计写入失败，拒绝下发（无法自证的操作不允许执行）',
-                    }
-                    continue
-
-                # 按点位类型走对应写法，**不允许跨类型退回**：
-                # 线圈和寄存器在现场是两个对象，退回写等于写错地方，
-                # 而调用方只会看到「成功」。不支持就明确失败。
-                #
-                # round 369：**批量写也必须走安全通道**。
-                # 原来这里直接 `client.write_single_coil/register(...)` ——
-                # 绕过了 `acquire_device_lock`（与单点写并发时互斥失效）、
-                # `validate_write`（急停/联锁/量程/旁路）与回读验证：
-                # 同一台设备，单点写要过三道闸门，批量写一路绿灯。
-                # 而批量恰恰是"一次动一片"的动作，风险只高不低。
-                unsupported = None
-                if point['type'] == 'coil':
-                    if not hasattr(client, 'write_single_coil'):
-                        unsupported = '客户端不支持线圈写入'
-                else:  # register
-                    if not hasattr(client, 'write_single_register'):
-                        unsupported = '客户端不支持寄存器写入'
-
-                if unsupported:
-                    results[device_id] = {'success': False, 'message': unsupported}
-                    self._audit(f'batch_{action}', operator,
-                                f'批量{action}设备 {device_id}: {unsupported}')
-                    continue
-
-                _pv = point['value']
-                if point['type'] == 'coil':
-                    # bool("0")/bool("false") 都是 True —— 配置里的字符串关闭
-                    # 会被下发成开启。按字面量解析。
-                    if isinstance(_pv, str):
-                        _pv = _pv.strip().lower() not in (
-                            '0', 'false', 'no', 'off', 'disabled', '')
-                    else:
-                        _pv = bool(_pv)
-                else:
-                    _pv = int(_pv)
-                write_res = self.write_with_verification(
-                    device_id,
-                    int(point['address']),
-                    _pv,
-                    operator,
-                    kind='coil' if point['type'] == 'coil' else 'register',
-                    # 控制点位来自 devices 配置白名单，不套 write_limits
-                    control_point=True,
-                )
-                success = bool(write_res.get('success'))
-                if not success:
-                    msg = write_res.get('message') or f'{action}写入失败'
-                    results[device_id] = {
-                        'success': False,
-                        'message': msg,
-                        'verified': write_res.get('verified'),
+                        'message': f'无法获取设备 {device_id} 的操作锁'
+                                   f'（另一操作正在进行，请稍后重试）',
                     }
                     self._audit(f'batch_{action}', operator,
-                                f'批量{action}设备 {device_id}: 安全通道拒绝/失败 — {msg}')
+                                f'批量{action}设备 {device_id}: 获取设备锁失败，未下发')
                     continue
+                try:
+                    # round 330：**先写审计、再下发**（round 322 的 fail-closed 原则）。
+                    # 原来审计是在写完之后调的（第 768 行附近），而且不看返回值 ——
+                    # 磁盘满 / 目录只读时会出现「指令已经发给 PLC、记录却没有」，
+                    # 事故调查时无法自证「谁在什么时候下发了什么」。
+                    if not self._audit(
+                            f'batch_{action}_attempt', operator,
+                            f'批量{action}设备 {device_id}: 即将写 '
+                            f'{point["type"]}#{point["address"]}={point["value"]}'):
+                        results[device_id] = {
+                            'success': False,
+                            'message': '审计写入失败，拒绝下发（无法自证的操作不允许执行）',
+                        }
+                        continue
 
-                # round 369：**不要再让管理器重复下发一次**。
-                #
-                # 上面 `write_with_verification` 已经把 control.start / control.stop
-                # 点位写进 PLC 了；而 RealDeviceManager.start_device/stop_device
-                # 内部会**再调一次 `_write_control`** —— 同一根点位一次批量
-                # 操作连写两遍（继电器/启停位抖动），且这里原来完全丢弃了
-                # 布尔返回值，同步失败也照样报成功。
-                # `write=False` 只同步本地状态（_stopped_devices / 模拟标志），
-                # 不再碰硬件；返回值仍然必须检查。
-                if success and self.device_manager and action in ('start', 'stop'):
-                    fn = getattr(self.device_manager,
-                                 'start_device' if action == 'start' else 'stop_device',
-                                 None)
-                    if fn is not None:
-                        import inspect
-                        accepts_write = 'write' in inspect.signature(fn).parameters
-                        state_ok = None
-                        if accepts_write:
-                            try:
-                                state_ok = fn(device_id, write=False)
-                            except Exception as e:
-                                logger.error("批量%s 状态同步异常 device=%s: %s",
-                                             action, device_id, e)
-                                state_ok = False
+                    # 按点位类型走对应写法，**不允许跨类型退回**：
+                    # 线圈和寄存器在现场是两个对象，退回写等于写错地方，
+                    # 而调用方只会看到「成功」。不支持就明确失败。
+                    #
+                    # round 369：**批量写也必须走安全通道**。
+                    # 原来这里直接 `client.write_single_coil/register(...)` ——
+                    # 绕过了 `acquire_device_lock`（与单点写并发时互斥失效）、
+                    # `validate_write`（急停/联锁/量程/旁路）与回读验证：
+                    # 同一台设备，单点写要过三道闸门，批量写一路绿灯。
+                    # 而批量恰恰是"一次动一片"的动作，风险只高不低。
+                    unsupported = None
+                    if point['type'] == 'coil':
+                        if not hasattr(client, 'write_single_coil'):
+                            unsupported = '客户端不支持线圈写入'
+                    else:  # register
+                        if not hasattr(client, 'write_single_register'):
+                            unsupported = '客户端不支持寄存器写入'
+
+                    if unsupported:
+                        results[device_id] = {'success': False, 'message': unsupported}
+                        self._audit(f'batch_{action}', operator,
+                                    f'批量{action}设备 {device_id}: {unsupported}')
+                        continue
+
+                    write_res = self.write_with_verification(
+                        device_id,
+                        int(point['address']),
+                        _pv,
+                        operator,
+                        kind='coil' if point['type'] == 'coil' else 'register',
+                        # 控制点位来自 devices 配置白名单，不套 write_limits
+                        control_point=True,
+                        # 设备锁已在上方获取，重复获取（非重入锁）会自锁
+                        device_lock_held=True,
+                    )
+                    success = bool(write_res.get('success'))
+                    if not success:
+                        msg = write_res.get('message') or f'{action}写入失败'
+                        results[device_id] = {
+                            'success': False,
+                            'message': msg,
+                            'verified': write_res.get('verified'),
+                            'effective': write_res.get('effective', False),
+                        }
+                        self._audit(f'batch_{action}', operator,
+                                    f'批量{action}设备 {device_id}: 安全通道拒绝/失败 — {msg}')
+                        continue
+
+                    # round 369：**不要再让管理器重复下发一次**。
+                    #
+                    # 上面 `write_with_verification` 已经把 control.start / control.stop
+                    # 点位写进 PLC 了；而 RealDeviceManager.start_device/stop_device
+                    # 内部会**再调一次 `_write_control`** —— 同一根点位一次批量
+                    # 操作连写两遍（继电器/启停位抖动），且这里原来完全丢弃了
+                    # 布尔返回值，同步失败也照样报成功。
+                    # `write=False` 只同步本地状态（_stopped_devices / 模拟标志），
+                    # 不再碰硬件；返回值仍然必须检查。
+                    state_failure = None
+                    if self.device_manager and action in ('start', 'stop'):
+                        fn = getattr(self.device_manager,
+                                     'start_device' if action == 'start' else 'stop_device',
+                                     None)
+                        if fn is not None:
+                            import inspect
+                            accepts_write = 'write' in inspect.signature(fn).parameters
+                            state_ok = None
+                            if accepts_write:
+                                try:
+                                    state_ok = fn(device_id, write=False)
+                                except Exception as e:
+                                    logger.error("批量%s 状态同步异常 device=%s: %s",
+                                                 action, device_id, e)
+                                    state_ok = False
+                            else:
+                                # 不支持 write 参数的管理器：宁可不同步状态，
+                                # 也不能向同一根点位重复下发。
+                                logger.warning(
+                                    "管理器 %s 不支持 write=False，跳过状态同步以避免"
+                                    "重复下发（device=%s, action=%s）",
+                                    type(self.device_manager).__name__, device_id, action)
+                            if state_ok is False:
+                                state_failure = f'设备状态同步失败（{action}）'
+
+                    if state_failure:
+                        # 点位已写、标志没同步 —— 两边必须有一边被纠正。
+                        # start 方向回写停止点位（回到安全侧）；stop 方向不回滚
+                        # （设备已实际停止，"状态一致"不值得把它重新拉起来）。
+                        rolled_back = False
+                        rollback_msg = ''
+                        if action == 'start' and not self._estop_active:
+                            rollback = self._rollback_control_start(device_id, operator)
+                            rolled_back = bool(rollback.get('success'))
+                            rollback_msg = rollback.get('message') or ''
+                        if self._estop_active:
+                            message = ('点位已写入但状态同步失败；急停已生效，'
+                                       '设备由急停停止（不再单独回滚）')
+                            inconsistent = False
+                        elif action == 'start' and rolled_back:
+                            message = ('点位已写入但设备状态同步失败，已回写停止点位'
+                                       '（现场已回到停止状态）')
+                            inconsistent = False
                         else:
-                            # 不支持 write 参数的管理器：宁可不同步状态，
-                            # 也不能向同一根点位重复下发。
-                            logger.warning(
-                                "管理器 %s 不支持 write=False，跳过状态同步以避免"
-                                "重复下发（device=%s, action=%s）",
-                                type(self.device_manager).__name__, device_id, action)
-                        if state_ok is False:
-                            results[device_id] = {
-                                'success': False,
-                                'message': f'点位已写入，但设备状态同步失败（{action}）',
-                                'verified': write_res.get('verified'),
-                            }
-                            self._audit(f'batch_{action}', operator,
-                                        f'批量{action}设备 {device_id}: 点位已写但状态同步失败')
-                            continue
+                            message = (f'点位已写入但{state_failure}，回滚未成功 —— '
+                                       f'现场状态与系统状态不一致，请立即现场确认'
+                                       + (f'（{rollback_msg}）' if rollback_msg else ''))
+                            inconsistent = True
+                            logger.critical(
+                                "【状态不一致】批量%s 设备 %s：点位已写、标志未同步、"
+                                "回滚失败 —— 必须现场确认设备实际状态", action, device_id)
+                        results[device_id] = {
+                            'success': False,
+                            'message': message,
+                            'verified': write_res.get('verified'),
+                            'effective': write_res.get('effective', False),
+                            'state_inconsistent': inconsistent,
+                            'rolled_back': rolled_back,
+                        }
+                        self._audit(f'batch_{action}', operator,
+                                    f'批量{action}设备 {device_id}: {message}')
+                        continue
 
-                results[device_id] = {
-                    'success': success,
-                    'message': f'{action}操作{"成功" if success else "失败"}',
-                    'verified': write_res.get('verified'),
-                }
+                    results[device_id] = {
+                        'success': True,
+                        'message': f'{action}操作成功',
+                        'verified': write_res.get('verified'),
+                        'effective': write_res.get('effective', False),
+                    }
 
-                self._audit(f'batch_{action}', operator,
-                            f'批量{action}设备 {device_id}: {"成功" if success else "失败"}'
-                            f' (点位 {point["type"]}#{point["address"]}={point["value"]})')
+                    self._audit(f'batch_{action}', operator,
+                                f'批量{action}设备 {device_id}: 成功'
+                                f' (点位 {point["type"]}#{point["address"]}={point["value"]})')
+                finally:
+                    self.release_device_lock(device_id)
 
             except Exception as e:
                 results[device_id] = {'success': False, 'message': str(e)}
@@ -3506,12 +3570,40 @@ class DeviceControlSafety:
                                                    int(word) & 0xFFFF)) and ok
         return ok
 
+    def _rollback_control_start(self, device_id: str,
+                                operator: str) -> dict[str, Any]:
+        """启动点位已写、但本地状态同步失败 → 回写**停止**点位。
+
+        只回滚 start：设备已经转起来、系统却认为"已停"是最危险的方向
+        （下次批量启动会跳过它，急停/联锁的名单也可能漏算这一台）。
+        stop 方向不回滚 —— 设备实际已停是安全侧，为了"状态一致"把它重新
+        拉起来才是错的，此时如实标记 `state_inconsistent` 即可。
+
+        调用方必须已持有该设备的操作锁（`device_lock_held=True`）。
+        """
+        point = self._resolve_control_point(device_id, 'stop')
+        if point is None:
+            return {'success': False, 'message': '无法解析停止点位，未能回滚'}
+        try:
+            res = self.write_with_verification(
+                device_id, int(point['address']), _coerce_control_value(point),
+                operator,
+                kind='coil' if point['type'] == 'coil' else 'register',
+                control_point=True,
+                device_lock_held=True,
+            )
+            return {'success': bool(res.get('success')),
+                    'message': res.get('message') or ''}
+        except Exception as e:      # noqa: BLE001 —— 回滚失败要如实上报
+            return {'success': False, 'message': f'{type(e).__name__}: {e}'}
+
     def write_with_verification(self, device_id: str, address: int, value: int,
                                 operator: str, max_retries: int = 2,
                                 kind: str = 'register',
                                 control_point: bool = False,
                                 engineering: bool = False,
-                                origin: str = 'human') -> dict[str, Any]:
+                                origin: str = 'human',
+                                device_lock_held: bool = False) -> dict[str, Any]:
         """
         带回读验证的写操作
 
@@ -3532,6 +3624,9 @@ class DeviceControlSafety:
                 保持寄存器**，而不是线圈。寄存器 0 和线圈 0 在现场是**两个完全
                 不同的对象**（一个数据字 vs 一个开关位），等于操作员以为按下了
                 启动位、实际往数据寄存器里写了个数。
+            device_lock_held: 调用方**已持有**该设备的操作锁（同一临界区里还要
+                同步启停标志）。此时不再重复 `acquire_device_lock` —— 那是
+                非重入锁，会把自己锁死；也**不由本方法释放**。
         """
         # HITL：自动来源在当前策略下不能直接执行时，**不是拒绝，而是提案**。
         # manual / 未武装的 supervised 都把动作排进待审批队列，由人批准、
@@ -3579,11 +3674,18 @@ class DeviceControlSafety:
             }
 
         # 获取设备锁
-        if not self.acquire_device_lock(device_id, operator):
-            return {
-                'success': False,
-                'message': f'无法获取设备 {device_id} 的操作锁'
-            }
+        #
+        # round 386：调用方可能已经把「写入 + 回读 + 同步启停标志 + 审计」
+        # 放进自己的临界区（`batch_control`）。`threading.Lock` 不可重入，
+        # 这里再取一次会把自己锁死，所以由调用方声明 `device_lock_held`。
+        lock_acquired_here = False
+        if not device_lock_held:
+            if not self.acquire_device_lock(device_id, operator):
+                return {
+                    'success': False,
+                    'message': f'无法获取设备 {device_id} 的操作锁'
+                }
+            lock_acquired_here = True
 
         try:
             # round 303：**拿锁之后再复核一次**。
@@ -3755,11 +3857,14 @@ class DeviceControlSafety:
             # ⚠️ 三条都是必须的：
             #   1. 读**同一种对象**：写线圈就读线圈、写寄存器就读寄存器。
             #      原来无论写什么都读保持寄存器 —— 写线圈时校验的是另一个物理对象；
-            #   2. 回读异常/拿不到值 → `verified=None`（**未验证**），不能当通过。
-            #      原来是 `readback_ok=True` 兜底，通信断了也报「写入成功」；
+            #   2. 回读异常/拿不到值/不是新鲜数据 → **未验证 = 失败**（round 386）。
+            #      原来只把 `verified` 记成 None、`success` 仍为 True，等于
+            #      "通信断了也报写入成功"；调用方（批量启停 / 联锁动作 / API）
+            #      只看 success，会据此认为设备已经进入期望状态。
             #   3. 寄存器按**精确值**比对。原来容差 ±1，写 100 读到 99 也算通过。
             verified: bool | None = None
             readback_value = None
+            verify_reason = ''
             try:
                 # ⚠️ round 341：回读**必须是新鲜数据**。
                 #
@@ -3770,42 +3875,51 @@ class DeviceControlSafety:
                 #      → 报「写入成功且已校验」，设备其实没动；
                 #   ② 写成功 + 回读超时 → 缓存里是**旧值** → verified=False
                 #      → 误报失败，上层重试 → 对累加类寄存器**重复下发**。
-                # 判据：读回来不是 fresh，一律按「未验证」处理（None），
-                # 既不算通过也不算失败 —— 交给调用方按通信状态判断。
+                # 判据：读回来不是 fresh，一律按「未验证」处理（None）。round 386
+                # 起未验证在返回契约上等同于失败（带原因），不再默认放行。
                 if kind == 'coil':
-                    if hasattr(client, 'read_coils'):
+                    if not hasattr(client, 'read_coils'):
+                        verify_reason = '客户端不支持线圈回读'
+                    else:
                         raw = client.read_coils(int(address), 1)
-                        fresh = getattr(client, 'last_read_source', 'fresh') == 'fresh'
-                        if raw and fresh:
+                        source = getattr(client, 'last_read_source', 'fresh')
+                        if not raw:
+                            verify_reason = '线圈回读无数据'
+                        elif source != 'fresh':
+                            verify_reason = f'线圈回读来自陈旧缓存（last_read_source={source!r}）'
+                        else:
                             readback_value = bool(raw[0])
                             verified = (readback_value == bool(value))
-                        elif raw:
-                            logger.warning(
-                                "回读来自陈旧缓存，按未验证处理（不能当通过）: %s/%s",
-                                device_id, address)
                 else:
-                    if hasattr(client, 'read_holding_registers'):
+                    if not hasattr(client, 'read_holding_registers'):
+                        verify_reason = '客户端不支持寄存器回读'
+                    else:
                         _count = len(write_words) if write_words else 1
                         raw = client.read_holding_registers(int(address), _count)
-                        fresh = getattr(client, 'last_read_source', 'fresh') == 'fresh'
-                        if raw and fresh:
-                            if write_words is not None:
-                                # 双寄存器点位按**字**比对（解码后比对会引入浮点误差）
-                                readback_value = [int(w) & 0xFFFF for w in raw[:_count]]
-                                verified = readback_value == write_words
-                            else:
-                                readback_value = int(raw[0])
-                                _expected = (expected_raw
-                                             if expected_raw is not None else int(value))
-                                verified = (readback_value == _expected)
-                        elif raw:
-                            logger.warning(
-                                "回读来自陈旧缓存，按未验证处理（不能当通过）: %s/%s",
-                                device_id, address)
+                        source = getattr(client, 'last_read_source', 'fresh')
+                        if not raw:
+                            verify_reason = '寄存器回读无数据'
+                        elif source != 'fresh':
+                            verify_reason = (f'寄存器回读来自陈旧缓存'
+                                             f'（last_read_source={source!r}）')
+                        elif write_words is not None:
+                            # 双寄存器点位按**字**比对（解码后比对会引入浮点误差）
+                            readback_value = [int(w) & 0xFFFF for w in raw[:_count]]
+                            verified = readback_value == write_words
+                        else:
+                            readback_value = int(raw[0])
+                            _expected = (expected_raw
+                                         if expected_raw is not None else int(value))
+                            verified = (readback_value == _expected)
                 if verified is False:
+                    verify_reason = (f'回读值 {readback_value} 与写入值 {value} 不一致')
                     logger.warning(f"回读验证失败: 期望 {value}, 实际 {readback_value}")
+                elif verified is None:
+                    logger.warning("回读未验证（按失败处理）: %s/%s — %s",
+                                   device_id, address, verify_reason or '原因未知')
             except Exception as e:
-                logger.warning(f"回读验证异常（按未验证处理）: {e}")
+                verify_reason = f'回读异常: {type(e).__name__}: {e}'
+                logger.warning("回读验证异常（按未验证=失败处理）: %s", e)
                 verified = None
 
             # 审计
@@ -3824,24 +3938,27 @@ class DeviceControlSafety:
                 audit_head = '写入回读验证失败'
             elif verified is None:
                 audit_action = 'write_unverified'
-                audit_head = '写入成功但未验证'
+                audit_head = '写入已下发但未验证'
             else:
                 audit_action = 'write_success'
                 audit_head = '写入成功'
             self._audit(audit_action, operator,
                         f'{audit_head}({kind}): {device_id}/{address}={value}'
                         f'{f", 回读={readback_value}" if readback_value is not None else ""}'
-                        f', {verify_text}')
+                        f', {verify_text}'
+                        + (f'，原因: {verify_reason}' if verify_reason else ''))
 
+            # round 386：**effective 只在真正验证通过时为 True**。
+            # `success` 同样只有 verified is True 才成立 —— "指令发出去了"
+            # 不等于"设备变了"；读不到/读缓存/读不一致都必须让调用方看到失败。
+            effective = verified is True
             result = {
-                'success': True,
-                'message': '写入成功',
+                'success': effective,
+                'message': '写入成功并已回读验证' if effective else '',
                 'kind': kind,
                 'verified': verified,
-                #: 现场状态是否**确认**已改变。`verified is False` 时为 False。
-                #: 与 `success` 的区别：`success` 表示"指令下发成功"，
-                #: `effective` 表示"设备真的变成了这个值"。
-                'effective': verified is not False,
+                #: 现场状态是否**确认**已改变。只有回读一致才是 True。
+                'effective': effective,
                 'warnings': list(validation.get('warnings', []))
             }
             if verified is False:
@@ -3854,20 +3971,27 @@ class DeviceControlSafety:
                 # 但设备**并没有变成期望的值**。操作员以为设定值改了，
                 # 实际没有 —— 这在联锁/联锁旁路/温控这类场景是能出事的。
                 # 判据：**"没生效"就是失败**，把 `verified` 降级成 warning 是自欺。
-                result['success'] = False
                 result['message'] = (
                     f'写入未生效：回读值为 {readback_value}，与写入值 {value} 不一致'
                     f'（指令已下发，但设备未接受该值）')
                 result['warnings'].append(
                     f'回读值 {readback_value} 与写入值 {value} 不一致')
             elif verified is None:
-                result['message'] = '写入成功，但无法回读验证'
-                result['warnings'].append('未能回读该点位（客户端不支持或回读失败）')
+                # round 386：读不到 / 读到缓存 → 不能报成功。
+                # 原来这里 `success` 仍为 True、`effective` 也是 True
+                # （`verified is not False`），调用方会认为设备已经动作。
+                result['message'] = (
+                    '写入已下发，但回读未验证，无法确认设备已生效'
+                    f'（{verify_reason or "原因未知"}）')
+                result['warnings'].append(
+                    f'回读未验证：{verify_reason or "客户端不支持或回读失败"}')
+                result['unverified_reason'] = verify_reason or '原因未知'
 
             return result
 
         finally:
-            self.release_device_lock(device_id)
+            if lock_acquired_here:
+                self.release_device_lock(device_id)
 
     # ==================== 操作审计 ====================
 

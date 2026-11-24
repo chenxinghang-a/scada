@@ -370,8 +370,29 @@ def _make_dc(devices, client=None):
     dm.simulation_mode = False
     client = client if client is not None else MagicMock()
     client.connected = True
-    client.write_single_coil = MagicMock(return_value=True)
-    client.write_single_register = MagicMock(return_value=True)
+    # round 386：写入**必须**有新鲜回读才算成功。
+    # 这里的假客户端要能"写什么读回什么"，否则批量控制会被判成未验证失败
+    # （这正是生产语义：读不到回读就不许报成功）。用例若自己替换
+    # `write_single_coil/register`，回读仍按最后一次写入的值返回。
+    _coil_state: dict[int, bool] = {}
+    _reg_state: dict[int, int] = {}
+
+    def _write_coil(address, value):
+        _coil_state[int(address)] = bool(value)
+        return True
+
+    def _write_register(address, value):
+        _reg_state[int(address)] = int(value)
+        return True
+
+    client.last_read_source = 'fresh'
+    client.write_single_coil = MagicMock(side_effect=_write_coil)
+    client.write_single_register = MagicMock(side_effect=_write_register)
+    client.read_coils = MagicMock(
+        side_effect=lambda address, count=1: [_coil_state.get(int(address), False)])
+    client.read_holding_registers = MagicMock(
+        side_effect=lambda address, count=1: [
+            _reg_state.get(int(address) + i, 0) for i in range(count)])
     dm.get_client.return_value = client
     dm.start_device = MagicMock()
     dm.stop_device = MagicMock()

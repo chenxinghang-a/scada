@@ -52,6 +52,7 @@ def test_write_proceeds_when_state_unchanged():
     """反向对照：状态没变时必须照常写（别把复核写成"永远拒绝"）。"""
     dc = _dc()
     client = MagicMock()
+    client.last_read_source = 'fresh'      # round 386：回读须为新鲜数据
     client.write_single_register.return_value = True
     client.read_holding_registers.return_value = [1]
     dc.device_manager.get_client.return_value = client
