@@ -38,6 +38,7 @@ from core.safe_numeric import to_finite_float, try_finite_float, try_int
 from core.engineering_units import to_raw
 from core.action_result import is_failure
 from 采集层.base_client import encode_float32_registers, encode_int32_registers
+from 采集层.interfaces import IDeviceManager
 
 try:
     import yaml
@@ -857,7 +858,7 @@ class DeviceControlSafety:
         #      照常执行；只有当规则确实没有绑定任何设备（全厂级）时才整体拦。
         device_blocks: dict[str, tuple[str, Any, str]] = {}
         if action in ('start', 'reset'):
-            scope = set(device_ids) if device_ids else None
+            scope = set(device_ids) if device_ids is not None else None
             global_blocks: list[tuple[str, Any, str]] = []
             # round 373：**锁内取快照再遍历**。`_interlock_rules` 会被
             # `reload_interlocks()` 整体替换、`_interlock_states` 由采集线程
@@ -898,19 +899,17 @@ class DeviceControlSafety:
         results = {}
         controllable = self._get_controllable_devices()
 
-        if not controllable:
-            # 如果没有可识别的可控设备，尝试操作所有设备
-            if self.device_manager:
-                controllable = list(self.device_manager.get_all_devices().keys())
-
         # 如果指定了设备ID列表，过滤可控设备
-        if device_ids and controllable:
+        # round 374：`device_ids=[]`（前端没勾任何设备）是**显式空集**，
+        # 原来写成 `if device_ids and ...` 会把它当假值跳过过滤，
+        # 反而退化成"操作全厂"——传空列表变成了最危险的操作。
+        if device_ids is not None and controllable:
             controllable = [did for did in controllable if did in device_ids]
 
         if not controllable:
             return {
                 'success': False,
-                'message': '没有可控制的设备',
+                'message': '没有可控制的机械类设备',
                 'results': {},
                 'success_count': 0,
                 'total': 0
@@ -2902,11 +2901,25 @@ class DeviceControlSafety:
         return {'type': kind, 'address': address, 'value': value}
 
     def _get_controllable_devices(self) -> list[str]:
-        """获取所有可控设备ID列表"""
+        """获取所有可控设备ID列表
+
+        round 374：**只认 mechanical**。原来用 `access == 'rw'` 或
+        protocol 是 modbus 来判定"可控"，于是 access 为 rw 的仪表（电力
+        分析仪、流量计）和 safety 设备（信号灯塔、继电器）全都进了批量
+        起停与 E-STOP 的名单 —— 急停会把仪表一起"停"掉，违反三分类语义。
+        现在统一走 `IDeviceManager.get_device_category()`，只有 mechanical
+        参与启停；instrument / safety 一律不在此列表内。
+        """
         devices = []
         if self.device_manager:
             for device_id, config in self.device_manager.devices.items():
-                if config.get('access') == 'rw' or config.get('protocol') in ('modbus_tcp', 'modbus_rtu'):
+                try:
+                    category = IDeviceManager.get_device_category(config)
+                except Exception as e:      # 脏配置不得让整批控制瘫掉
+                    logger.warning("设备 %s 分类失败，按 instrument 跳过：%s",
+                                   device_id, e)
+                    continue
+                if category == 'mechanical':
                     devices.append(device_id)
         return devices
 

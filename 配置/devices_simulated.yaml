@@ -3791,6 +3791,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: robot_takeout_01
+  device_category: mechanical
   line: injection_a
   name: 取件机械手1# (威猛W818)
   port: 502
@@ -4479,6 +4480,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: robot_takeout_02
+  device_category: mechanical
   line: injection_b
   name: 取件机械手2# (威猛W808)
   port: 502
@@ -5043,6 +5045,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: spray_robot_01
+  device_category: mechanical
   line: paint_a
   name: 喷涂机器人1# (ABB IRB5500)
   port: 502
@@ -5563,6 +5566,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: spray_robot_02
+  device_category: mechanical
   line: paint_b
   name: 喷涂机器人2# (ABB IRB4600)
   port: 502
@@ -6995,6 +6999,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: metal_detector_01
+  device_category: instrument
   line: pack_b
   name: 金属检测机 (梅特勒Profile)
   port: 502
@@ -7668,6 +7673,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: vision_inspect_01
+  device_category: instrument
   line: assembly_a
   name: 视觉检测 (康耐视In-Sight)
   port: 502
@@ -8110,6 +8116,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: torque_cal_01
+  device_category: instrument
   line: welding
   name: 扭矩校准仪 (诺霸TST)
   port: 502
@@ -9068,6 +9075,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: cmm_01
+  device_category: instrument
   line: cnc_b
   name: 三坐标测量机 (蔡司CONTURA)
   port: 502
@@ -14603,6 +14611,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: gas_detector_01
+  device_category: safety
   line: fire
   name: 可燃气体探测器 (GT-903)
   port: 502
@@ -14712,6 +14721,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: sprinkler_01
+  device_category: safety
   line: fire
   name: 湿式喷淋系统 (DN100)
   port: 502
@@ -14821,6 +14831,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: access_control_01
+  device_category: safety
   line: fire
   name: 门禁控制器 (海康DS-K2604)
   port: 502
@@ -14930,6 +14941,7 @@ devices:
   enabled: true
   host: 192.168.1.1
   id: emergency_lighting_01
+  device_category: safety
   line: fire
   name: 应急照明集中电源 (EPS-3kW)
   port: 502

@@ -219,15 +219,39 @@ class IDeviceManager(ABC):
             if kw in name or kw in desc:
                 return 'safety'
 
+        # 设备清单里的 `role` 是设备级语义（equipment=生产装备、controller=控制器、
+        # instrument=仪表）。设备清单 129 台里有 98 台只标了 `role: equipment`，
+        # 它们的点位名（如 `motor_speed`、`conveyor_run`）不一定能命中机械关键词，
+        # 只按点位猜会把一半生产装备判成仪表 —— 急停与批量停止对它们直接失效。
+        # safety 关键词已在上一步拦掉（继电器/报警器即使挂在装备上也仍归 safety）。
+        role = str(device_config.get('role') or '').lower()
+        if role == 'equipment':
+            return 'mechanical'
+        if role in ('instrument', 'safety'):
+            return role
+
         # 机械类：检查寄存器名
         from .simulated_client import _is_machinery
         # `registers: null` 是合法的 YAML 写法，直接迭代 None 会 TypeError
-        for reg in (device_config.get('registers') or []):
+        points = (
+            list(device_config.get('registers') or [])
+            + list(device_config.get('nodes') or [])
+            + list(device_config.get('topics') or [])
+            + list(device_config.get('endpoints') or [])
+        )
+        for reg in points:
             # 裸字符串点位是合法写法（topics/registers 都见过），
             # 直接 `.get` 会让整台设备分类抛 AttributeError。
-            reg_name = (reg.get('name', '') if isinstance(reg, dict)
-                        else str(reg))
-            if _is_machinery(reg_name):
+            if isinstance(reg, dict):
+                candidates = (
+                    reg.get('name'),
+                    reg.get('node_id'),
+                    reg.get('topic'),
+                    reg.get('path'),
+                )
+                if any(_is_machinery(str(c)) for c in candidates if c):
+                    return 'mechanical'
+            elif _is_machinery(str(reg)):
                 return 'mechanical'
 
         # 默认：仪表

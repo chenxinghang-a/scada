@@ -352,7 +352,18 @@ class TestBypassRequestModel:
 # ============================================================
 
 def _make_dc(devices, client=None):
-    """构造带模拟 device_manager/client 的 DeviceControlSafety"""
+    """构造带模拟 device_manager/client 的 DeviceControlSafety
+
+    夹具里的设备只声明了 protocol/control，没有 role 也没有可命中的点位名，
+    分类会落到 instrument（fail-safe 默认），于是批量控制拿不到任何设备。
+    这些用例测的是"控制点位是否按配置写入"，设备类别统一固定为 mechanical；
+    分类逻辑本身由 test_estop_machinery_scope.py 单独覆盖。
+    """
+    devices = {
+        did: ({**cfg, 'device_category': cfg.get('device_category') or 'mechanical'}
+              if isinstance(cfg, dict) else cfg)
+        for did, cfg in devices.items()
+    }
     from 智能层.device_control import DeviceControlSafety
     dm = MagicMock()
     dm.devices = devices
