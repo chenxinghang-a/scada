@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 _DELETE_CHUNK = 5000
 
 
-def _delete_older_than_chunked(conn, table: str, column: str, cutoff: str) -> int:
+def _delete_older_than_chunked(conn, table: str, column: str, cutoff: str,
+                               extra_where: str = '') -> int:
     """分块删除 ``table`` 中 ``column < cutoff`` 的行，返回删除总数。
 
     与 ``core/ops_tools._delete_older_than`` 同因同法：单条 DELETE 在大表上
@@ -35,6 +36,11 @@ def _delete_older_than_chunked(conn, table: str, column: str, cutoff: str) -> in
     用 ``rowid IN (SELECT ... LIMIT ?)`` 而不是 ``DELETE ... LIMIT``：
     后者需要编译期开启 ``SQLITE_ENABLE_UPDATE_DELETE_LIMIT``，
     不是所有构建都带（本项目不能假设）。
+
+    Args:
+        extra_where: **只能传内部常量**，绝不能包含外部可控字符串 ——
+            这段会原样拼进 SQL（表名/列名同理）。调用方负责保证它是
+            代码里写死的片段。
     """
     # 表名/列名无法用 ? 占位符绑定，只能拼进 SQL —— 先校验标识符，
     # 否则调用方传入外部可控标识即构成注入。
@@ -42,11 +48,15 @@ def _delete_older_than_chunked(conn, table: str, column: str, cutoff: str) -> in
         if not isinstance(_ident, str) or not _ident.isidentifier():
             raise ValueError(f'非法的表名/列名（拒绝拼入 SQL）: {_ident!r}')
 
+    where = f"{column} < ?"
+    if extra_where:
+        where += f" AND ({extra_where})"
+
     total = 0
     while True:
         cursor = conn.execute(
             f"DELETE FROM {table} WHERE rowid IN ("
-            f"SELECT rowid FROM {table} WHERE {column} < ? LIMIT ?)",
+            f"SELECT rowid FROM {table} WHERE {where} LIMIT ?)",
             (cutoff, _DELETE_CHUNK),
         )
         total += cursor.rowcount
@@ -1910,9 +1920,25 @@ class Database:
             # 数据删除」（默认 7 / 30）。原先这里写的是 archive_cutoff，
             # 等于**原始采样只保留 7 天** —— 每天静默丢掉 23 天的明细，
             # 只剩 history_archive 里的日均值，无法再回溯单条采样、无法做审计。
+            #
+            # round 398：**只删已经进过归档表的行**。
+            # 归档与删除分两个事务（round 352，为了不饿死采集），中间那个窗口里
+            # 如果有「迟到回填」的旧数据写进来（时间戳早于 delete_cutoff），
+            # 原语句会把它直接删掉而它从没进过归档 —— 数据永久消失且无法回溯。
+            # 加上「归档表里存在对应日聚合」这个条件后，删除只作用于已归档数据，
+            # 迟到的旧行会留在原表，等下一轮归档把它带走。
+            # 代价是 DELETE 多一个 EXISTS 子查询（走 (device_id, archive_date) 索引），
+            # 换来的是「删之前一定已归档」这条不变量。
+            archived_only = (
+                f"EXISTS (SELECT 1 FROM {ARCHIVE_TABLE} a "
+                f"WHERE a.device_id = history_data.device_id "
+                f"AND a.register_name = history_data.register_name "
+                f"AND a.archive_date = DATE(history_data.timestamp))"
+            )
             deleted_rows = _delete_older_than_chunked(
                 conn, 'history_data', 'timestamp',
-                delete_cutoff.isoformat(sep=' '))
+                delete_cutoff.isoformat(sep=' '),
+                extra_where=archived_only)
 
             # 3. realtime_data 是"最新值"缓存，不按时间清理
             realtime_deleted = 0
