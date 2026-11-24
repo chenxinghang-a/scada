@@ -226,14 +226,32 @@ class TestPowerData:
         assert em.energy_accumulated['dev1']['energy_kwh'] == 3.0, \
             '应累加增量 3.0，而不是把两次读数相加'
 
-    def test_feed_power_data_reading_rollback_is_safe(self, em):
-        """读数回退（换表 / 计量回绕）只重置基线，不产生负增量、也不虚增"""
+    def test_single_frame_drop_does_not_inflate_energy(self, em):
+        """单帧跌落不能改写基线 —— 否则下一帧正常读数会被当成一整段新增能耗。
+
+        电表通信丢一帧读成 0 很常见。原来直接拿 0 覆盖基线，紧接着读到 105 kWh
+        就累加 105 —— 一台表每抖一次，能耗报表和碳排放数据就虚增一次。
+        """
         em.feed_power_data('dev1', power_kw=0, energy_kwh=100.0)
-        em.feed_power_data('dev1', power_kw=0, energy_kwh=5.0)    # 回退
-        assert em.energy_accumulated['dev1']['energy_kwh'] == 0.0, \
-            '读数回退不应产生负增量，也不该把 5.0 当增量加上去'
-        # 回退后基线已重置为 5.0，后续正常递增应继续累加
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=0.0)     # 单帧跌落
+        assert em.energy_accumulated['dev1']['energy_kwh'] == 0.0
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=105.0)   # 读数恢复
+        assert em.energy_accumulated['dev1']['energy_kwh'] == 5.0, \
+            '单帧跌落被当成换表 → 基线被打到 0 → 虚增 105 kWh'
+
+    def test_feed_power_data_reading_rollback_is_safe(self, em):
+        """读数持续回退（换表 / 计量回绕）：连续多帧才认，认了才重置基线"""
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=100.0)
+        # 第 1、2 帧仍可能是毛刺，先不动基线
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=5.0)
         em.feed_power_data('dev1', power_kw=0, energy_kwh=9.0)
+        assert em.energy_accumulated['dev1']['energy_kwh'] == 0.0, \
+            '读数回退不应产生负增量，也不该把 5.0/9.0 当增量加上去'
+        # 第 3 帧仍然远低于旧基线 → 判定换表，基线重置为 12.0
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=12.0)
+        assert em.energy_accumulated['dev1']['energy_kwh'] == 0.0
+        # 换表确认后，后续正常递增继续累加
+        em.feed_power_data('dev1', power_kw=0, energy_kwh=16.0)
         assert em.energy_accumulated['dev1']['energy_kwh'] == 4.0
 
     def test_get_realtime_power(self, em):

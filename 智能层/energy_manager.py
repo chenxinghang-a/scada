@@ -52,6 +52,12 @@ DEFAULT_CONFIG = {
     },
 }
 
+# 电表读数回退时，连续多少帧仍低于旧基线才认定「真的换表/回绕」。
+# 单帧跌落（通信丢包读成 0、从站返回未刷新值）直接重置基线会造成严重虚增：
+# 基线被打到 0 后，下一帧读完 5 kWh 就被算成「用了 5 kWh」，全厂电表每抖一次
+# 就虚增一次能耗，能耗报表和碳排放数据全部失真。
+_ROLLOVER_CONFIRM_FRAMES = 3
+
 
 class EnergyManager:
     """
@@ -99,6 +105,11 @@ class EnergyManager:
         # 电表累积读数基线：device_id -> 上一次的累积电量读数(kWh)
         # 用于把电表的单调递增读数换算成增量（相邻两次读数做差）
         self._last_energy_reading: dict[str, float] = {}
+
+        # 读数回退的候选帧：device_id -> 连续低于旧基线的帧数
+        # 单帧跌落（通信毛刺）不能立刻改写基线，否则下一帧正常读数会被当成
+        # 一整段新增能耗；连续多帧都低才认定换表/回绕。
+        self._pending_rollover: dict[str, int] = {}
 
         # 能耗累积数据
         self.energy_accumulated: dict[str, dict[str, Any]] = defaultdict(lambda: {
@@ -531,7 +542,8 @@ class EnergyManager:
         # round 369：持锁清理（采集/统计线程同时在读写这几个容器）
         with self._lock:
             for container in (self.realtime_power, self._last_energy_reading,
-                              self.energy_baseline, self.energy_accumulated):
+                              self.energy_baseline, self.energy_accumulated,
+                              self._pending_rollover):
                 if device_id in container:
                     container.pop(device_id, None)
                     removed = True
@@ -698,20 +710,35 @@ class EnergyManager:
             if energy_kwh is not None:
                 # 累积电量路径：增量 = 本次读数 - 上次读数
                 last_reading = self._last_energy_reading.get(device_id)
-                self._last_energy_reading[device_id] = energy_kwh
                 if last_reading is None:
+                    self._last_energy_reading[device_id] = energy_kwh
                     logger.debug(f"电量基线建立: {device_id} = {energy_kwh}kWh")
                 elif energy_kwh >= last_reading:
+                    # 正常递增：累加，并清掉回退候选计数
+                    self._pending_rollover.pop(device_id, None)
+                    self._last_energy_reading[device_id] = energy_kwh
                     delta_kwh = energy_kwh - last_reading
                     tariff_type = self._get_tariff_type(now.hour)
                     self.energy_accumulated[device_id]['energy_kwh'] += delta_kwh
                     self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
                 else:
-                    # 表计回绕/换表/读数回退：只重置基线，不累加，避免能耗虚增
-                    logger.warning(
-                        f"电量读数回退（疑似换表/回绕）: {device_id} "
-                        f"{last_reading}kWh -> {energy_kwh}kWh，本次不累加"
-                    )
+                    # 读数回退：单帧跌落（丢包读成 0）与真换表/回绕要分开。
+                    # 只有连续 `_ROLLOVER_CONFIRM_FRAMES` 帧都低于旧基线才改写基线；
+                    # 否则保留旧基线不动 —— 这样下一帧读数恢复正常时增量仍然正确。
+                    pending = self._pending_rollover.get(device_id, 0) + 1
+                    if pending >= _ROLLOVER_CONFIRM_FRAMES:
+                        self._pending_rollover.pop(device_id, None)
+                        self._last_energy_reading[device_id] = energy_kwh
+                        logger.warning(
+                            f"电量读数持续回退（已连续 {pending} 帧），判定为换表/回绕，"
+                            f"基线重置: {device_id} {last_reading}kWh -> {energy_kwh}kWh，本次不累加"
+                        )
+                    else:
+                        self._pending_rollover[device_id] = pending
+                        logger.warning(
+                            f"电量读数回退（疑似单帧跌落，已忽略并保留基线）: {device_id} "
+                            f"{last_reading}kWh -> {energy_kwh}kWh ({pending}/{_ROLLOVER_CONFIRM_FRAMES})"
+                        )
 
             # 实时功率路径：energy_kwh 单独上报（power_kw=0）时不覆盖功率读数
             if energy_kwh is None or power_kw > 0:
