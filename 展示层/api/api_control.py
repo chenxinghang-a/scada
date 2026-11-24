@@ -890,24 +890,53 @@ def get_control_logs():
 def trigger_estop():
     """紧急停机（最高优先级；viewer 只读账号不得触发）
 
-    ⚠️ 口径变更需主人裁决：原设计写的是「任何角色均可触发」，
-    tests/test_api_authorization.py 也把本端点登记在 INTENTIONAL 里。
-    这里按批D-2 收紧到 operator 及以上 —— 只读看板/参观账号误触或
-    令牌泄露即可停全厂，代价是现场最低权限终端失去了急停能力。
+    权限口径（Q3 决策，方案 B）：由「仅要求登录」收紧为 **operator 及以上**。
+
+    理由：车间大屏用的只读账号本不该有写权限 —— 让 viewer 能停全厂既破坏
+    最小权限，也让停机动作无法追责；而靠「长按 3 秒」这类人工延迟兜底，
+    在真实险情下反而有害。现场若需要软停机，应给工位机分配 operator 账号。
+
+    ⚠️ 急停本身仍是**无条件放行**的：不参与幂等、去重、限流。
+    审计写失败也**绝不能**挡住停机 —— 该动作的优先级高于记录。
+
+    TODO(前端)：模板/control.html 的 `#btn-estop` 目前对所有登录角色可见。
+    按角色隐藏按钮需要改该模板（不在本轮授权文件范围内，且可能与其他
+    agent 冲突），此处仅在 API 层保证 viewer 收到 403。
     """
     data = request.get_json() or {}
     reason = data.get('reason', '操作员手动触发紧急停机')
+    username = request.current_user['username']
+    client_ip = request.remote_addr or 'unknown'
+
     device_control = getattr(current_app, 'device_control', None)
     if not device_control:
+        # 连安全模块都没有，仍要留下"谁来按过急停"的痕迹
+        _audit_estop(username, client_ip,
+                     f'紧急停机被拒绝：设备控制安全模块未启用；原因={reason}')
         return api_error('设备控制安全模块未启用', 503)
+
     result = device_control.trigger_emergency_stop(reason) or {}
     ok = bool(result.get('success'))
-    get_auth_manager().log_operation(
-        request.current_user['username'], 'emergency_stop',
-        f'紧急停机: {reason}' if ok else
-        f'紧急停机**部分失败**: {reason}；未停 {result.get("failed_devices")}')
+    _audit_estop(
+        username, client_ip,
+        (f'紧急停机: {reason}' if ok else
+         f'紧急停机**部分失败**: {reason}；未停 {result.get("failed_devices")}'))
     # 部分设备没停下来还回 200，等于告诉运维“全场已停” —— 必须 500。
     return jsonify(result), (200 if ok else 500)
+
+
+def _audit_estop(username: str, client_ip: str, detail: str) -> None:
+    """记一条急停审计（操作者 / 来源 IP / 时间戳由 log_operation 落库）。
+
+    审计失败只记日志、**不向上抛**：急停是无条件放行的，不能因为审计库
+    不可用就把停机拦下来。
+    """
+    try:
+        get_auth_manager().log_operation(
+            username, 'emergency_stop', '急停触发',
+            detail=detail, ip_address=client_ip)
+    except Exception as e:      # noqa: BLE001 —— 见 docstring
+        logger.error("急停审计写入失败（停机动作不受影响）: %s", e, exc_info=True)
 
 
 @control_bp.route('/control/estop/reset', methods=['POST'])

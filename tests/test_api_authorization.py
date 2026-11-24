@@ -25,9 +25,8 @@ INTENTIONAL = {
         '强制改密：靠 body 里的令牌自鉴权，且模型层要求处于强制改密态',
     ('auth_bp', '/auth/register'):
         '注册：自行实现鉴权（无令牌时仅允许首个用户引导，否则必须 admin）',
-    ('control_bp', '/control/estop'):
-        '急停：原设计明确「任何角色均可触发」，属安全设计决策，'
-        '已单独提给主人裁决是否收紧到 operator 以上',
+    # Q3（round 393）：`POST /control/estop` 已从本豁免名单移出 —— 口径由
+    # 「任何角色均可触发」收紧为 operator 及以上（见下方两条断言与决策理由）。
 }
 
 # 有意完全不需要鉴权的端点（(bp, route) -> 理由）
@@ -134,3 +133,81 @@ def test_intentional_exemptions_still_exist(bp, route, reason):
     assert (bp, route) in routes, (
         f'豁免清单里的 {bp} {route} 已不存在，请从 INTENTIONAL 移除'
     )
+
+
+# ---------------------------------------------------------------------------
+# Q3（round 393）：急停权限由「任何角色」收紧为 operator 及以上
+# ---------------------------------------------------------------------------
+#
+# 决策理由（方案 B）：车间大屏用的只读账号本不该有写权限 —— 让 viewer 能停
+# 全厂既破坏最小权限，也让停机动作无法追责；而「长按 3 秒」这类人工延迟在
+# 真实险情下反而有害。现场若需软停机，应给工位机分配 operator 账号。
+#
+# 注意：急停仍是**无条件放行**的（不参与幂等/去重/限流），本轮只收紧角色。
+
+
+def test_estop_requires_operator_or_above():
+    """静态断言：急停路由必须带角色校验，且角色集合含 operator、排除 viewer。"""
+    matches = [row for row in _collect_routes()
+               if row[0] == 'control_bp' and row[1] == '/control/estop']
+    assert matches, '急停路由 /control/estop 不存在了，请检查路由改名'
+    _bp, _route, methods, decs, _line = matches[0]
+    assert 'POST' in methods
+    joined = ' '.join(decs)
+    assert _authz_level(decs) == 'role', (
+        '急停端点退回成「仅要求登录」了 —— 只读账号又能停全厂'
+    )
+    m = re.search(r'role_required\((.*?)\)', joined)
+    assert m, f'急停端点没有显式 role_required：{joined}'
+    roles = set(re.findall(r"'([^']+)'", m.group(1)))
+    assert {'admin', 'engineer', 'operator'} <= roles, f'急停角色集合过窄：{roles}'
+    assert 'viewer' not in roles, '只读 viewer 不得触发急停'
+
+
+def _as_role(app, role: str) -> dict:
+    from 用户层.auth import ROLES
+    app.auth_manager.verify_token.return_value = {
+        'username': f'{role}_probe',
+        'role': role,
+        'display_name': ROLES[role]['name'],
+        'permissions': list(ROLES[role]['permissions']),
+    }
+    return {'Authorization': f'Bearer estop-probe-{role}'}
+
+
+def test_estop_rejects_viewer(client, app):
+    """功能断言：viewer 请求急停必须 403（不能进到触发逻辑）。"""
+    resp = client.post('/api/control/estop', json={'reason': 'probe'},
+                       headers=_as_role(app, 'viewer'))
+    assert resp.status_code == 403, (
+        f'viewer 触发急停返回 {resp.status_code}，应为 403'
+    )
+
+
+def test_estop_allows_operator(client, app):
+    """功能断言：operator 不得被权限层拦下。"""
+    resp = client.post('/api/control/estop', json={'reason': 'probe'},
+                       headers=_as_role(app, 'operator'))
+    assert resp.status_code != 403, (
+        'operator 被权限层拦下了，与 Q3 决策不符'
+    )
+
+
+def test_estop_audit_records_operator_and_source_ip(client, app, auth_headers):
+    """Q3：每次急停都要留审计 —— 操作者 ID、来源 IP、时间戳（落库时生成）。"""
+    from unittest.mock import MagicMock
+
+    dc = MagicMock()
+    dc.trigger_emergency_stop.return_value = {'success': True}
+    app.device_control = dc
+
+    resp = client.post('/api/control/estop', json={'reason': '冒烟测试'},
+                       headers=auth_headers,
+                       environ_base={'REMOTE_ADDR': '10.9.8.7'})
+    assert resp.status_code == 200
+
+    call = app.auth_manager.log_operation.call_args
+    assert call is not None, '急停没有写审计日志'
+    assert call.args[0] == 'testuser', '审计里没有操作者 ID'
+    assert call.args[1] == 'emergency_stop'
+    assert call.kwargs.get('ip_address') == '10.9.8.7', '审计里没有来源 IP'
