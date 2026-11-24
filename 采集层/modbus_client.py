@@ -114,7 +114,9 @@ class ModbusClient:
         #: 请求在途。原来读/写各调各的 `self.client`，写后回读的 read 还可能
         #: 拿到另一个线程的响应（或另一个线程刚写进 last_read_source 的状态），
         #: "写后回读"因此可能校验到别人的数据。RLock：写入验证内部会调读方法。
-        self._io_lock = threading.RLock()
+        #: 实例存储用 `_io_lock_obj`，锁本身由 `_io_lock` 属性惰性创建（兼容
+        #: `object.__new__` 构造的实例，见属性定义）。
+        self._io_lock_obj = threading.RLock()
 
         # Fix 2: 最后已知良好值缓存 — 读取失败时返回缓存值而非 None，
         # 避免重连期间数据断流。key = (address, count), value = list[int]
@@ -158,6 +160,19 @@ class ModbusClient:
             'stats_dir',
             str(Path(__file__).parent.parent / '数据存储' / 'modbus_stats')
         )
+
+    @property
+    def _io_lock(self) -> threading.RLock:
+        """I/O 互斥锁（round 383）；惰性创建以兼容 `object.__new__` 构造的实例。
+
+        测试/反序列化路径可能绕过 ``__init__`` 直接建实例，这类实例没有
+        ``_io_lock_obj``。属性里补建，避免读路径因为缺锁而整条走异常分支。
+        """
+        lock = self.__dict__.get('_io_lock_obj')
+        if lock is None:
+            lock = threading.RLock()
+            self.__dict__['_io_lock_obj'] = lock
+        return lock
 
     def _inc_stat(self, key: str):
         with self._stats_lock:
