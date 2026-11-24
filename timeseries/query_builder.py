@@ -22,6 +22,7 @@ TDengine查询构建器
 
 import re
 from datetime import datetime
+from typing import Any
 
 from core.safe_numeric import try_finite_float, try_int
 
@@ -146,17 +147,58 @@ class QueryBuilder:
 
         Args:
             condition: SQL条件表达式
+
+        Raises:
+            ValueError: 不是严格的 `列 比较符 字面量` 形式（fail-closed）。
         """
-        # `where()` 接受的是**表达式**（无法参数化），至少挡住
-        # 语句分隔符与注释符：这两样一出现就说明不是一条条件，而是注入。
-        # 黑名单挡不住 UNION / OR 1=1；改为只接受 `列 比较符 字面量`。
+        # `where()` 接受的是**表达式**（无法参数化），所以只接受一个受限文法：
+        # 先整串匹配，再**用 `_escape_value` 重新拼**，绝不放行调用方给的原文。
+        #
+        # round 383：原正则 `'[^']*'` 允许字面量里出现**反斜杠**，而 TDengine 把
+        # `\'` 当转义引号 —— `where("device_id = '\\'")` 能通过校验，拼上第二条条件后
+        # 第一条的字符串一路吃到第二条里，形成跨子句注入（`OR 1=1; DROP ...`）。
+        # 因此字面量内禁止 `\` 与控制字符，且重拼时统一走 `_escape_value`。
         text = str(condition or '').strip()
-        if not re.match(
-                r"^[A-Za-z_]\w*\s*(?:=|==|!=|<>|>=|<=|>|<)\s*"
-                r"(?:'[^']*'|-?\d+(?:\.\d+)?)$", text):
+        match = re.fullmatch(
+            r"(?P<col>[A-Za-z_]\w*)\s*(?P<op>=|==|!=|<>|>=|<=|>|<)\s*"
+            r"(?P<lit>'(?:[^'\\\x00\r\n]*)'|-?\d+(?:\.\d+)?)",
+            text,
+        )
+        if not match:
             raise ValueError(
                 f'WHERE 条件非法（只允许 `列 比较符 数字或单引号字符串`）: {condition!r}')
-        self._where_clauses.append(text)
+        col = _require_identifier(match.group('col'), 'WHERE 列名')
+        op = '=' if match.group('op') == '==' else match.group('op')
+        lit = match.group('lit')
+        if lit.startswith("'"):
+            # 字面量已由正则保证不含裸反斜杠/控制字符，这里再转义一次（纵深防御）
+            safe_lit = "'" + _escape_value(lit[1:-1]) + "'"
+        else:
+            num = try_finite_float(lit)
+            if num is None:
+                raise ValueError(
+                    f'WHERE 条件非法（只允许 `列 比较符 数字或单引号字符串`）: {condition!r}')
+            safe_lit = repr(int(num)) if num == int(num) and '.' not in lit else repr(num)
+        self._where_clauses.append(f'{col} {op} {safe_lit}')
+        return self
+
+    def where_eq(self, column: str, value: Any) -> 'QueryBuilder':
+        """结构化等值条件：`column` 走标识符白名单，`value` 走严格转义。
+
+        需要拼用户输入的过滤条件时**用这个**，不要用 `where()` 拼字符串。
+        """
+        col = _require_identifier(column, 'WHERE 列名')
+        if col == '*':
+            raise ValueError(f'WHERE 列名非法: {column!r}')
+        if isinstance(value, bool):
+            raise ValueError(f'WHERE 值类型非法: {value!r}')
+        if isinstance(value, str):
+            self._where_clauses.append(f"{col} = '{_escape_value(value)}'")
+            return self
+        num = try_finite_float(value)
+        if num is None:
+            raise ValueError(f'WHERE 数值非法（必须为有限数）: {value!r}')
+        self._where_clauses.append(f'{col} = {num!r}')
         return self
 
     def where_device(self, device_id: str) -> 'QueryBuilder':

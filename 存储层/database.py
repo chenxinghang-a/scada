@@ -1264,27 +1264,59 @@ class Database:
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
+    #: 读失败时必须 fail-closed 的安全键 → 安全侧回退值（round 315 的两个键）。
+    #: `estop` 回退成「仍在急停」；`interlock_bypass` 回退成「无旁路」（联锁照常生效）。
+    STATE_KEY_FAIL_CLOSED_FALLBACKS: dict[str, Any] = {
+        'estop': {
+            'active': True,
+            'reason': '急停状态读取失败，按急停锁定处理',
+            'read_failed': True,
+        },
+        'interlock_bypass': {},
+    }
+
     def get_system_state(self, key: str) -> Any | None:
         """读进程级 KV 状态（JSON 反序列化）。不存在或解析失败返回 None。
 
         round 315：目前用于 `estop` 与 `interlock_bypass` 两处 ——
         它们都是"必须跨重启保持"的安全状态。
+
+        **fail-closed**：读库异常 / 行内容损坏时不能一律返回 None ——
+        那会让「读取失败」与「未触发急停」无法区分，重启后急停失效开放。
+        安全键（`STATE_KEY_FAIL_CLOSED_FALLBACKS`）返回安全侧回退值；
+        非安全键保持 None（老库缺表、坏 JSON 不许拖垮启动）。
         """
         try:
             with self.get_connection(readonly=True) as conn:
                 cursor = conn.cursor()
                 cursor.execute('SELECT value FROM system_state WHERE key = ?', (key,))
                 row = cursor.fetchone()
-        except Exception as e:      # noqa: BLE001 —— 老库没有这张表时不许炸
-            logger.debug("读取 system_state[%s] 失败: %s", key, e)
-            return None
+        except sqlite3.OperationalError as e:
+            if 'no such table' in str(e).lower():
+                # 老库没有这张表：这不是"读失败"，是"从没写过状态"
+                logger.debug("system_state 表不存在，按无状态处理: %s", e)
+                return None
+            return self._fail_closed_state(key, e)
+        except Exception as e:      # noqa: BLE001 —— 其它 I/O/锁异常也必须往安全侧倒
+            return self._fail_closed_state(key, e)
         if not row:
             return None
         try:
             return json.loads(row[0])
         except (TypeError, ValueError) as e:
-            logger.warning("system_state[%s] 内容不是合法 JSON: %s", key, e)
+            # 行内容损坏等价于"读不到"：安全键按安全侧回退，普通键返回 None
+            return self._fail_closed_state(key, e)
+
+    def _fail_closed_state(self, key: str, exc: BaseException) -> Any | None:
+        """安全键读取失败时返回安全侧回退值；普通键只记日志并返回 None。"""
+        if key not in self.STATE_KEY_FAIL_CLOSED_FALLBACKS:
+            logger.error("读取 system_state[%s] 失败: %s", key, exc)
             return None
+        fallback = self.STATE_KEY_FAIL_CLOSED_FALLBACKS[key]
+        logger.critical(
+            "读取安全状态 system_state[%s] 失败（%s）—— 已按安全侧回退 %r，"
+            "人工确认前不得按正常状态继续运行", key, exc, fallback)
+        return json.loads(json.dumps(fallback))
 
     def set_system_state(self, key: str, value: Any) -> bool:
         """写进程级 KV 状态（value 为 None 表示删除该键）。

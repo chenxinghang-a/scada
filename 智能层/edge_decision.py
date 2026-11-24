@@ -11,6 +11,7 @@
 """
 
 import logging
+import math
 import time
 import threading
 from datetime import datetime
@@ -18,6 +19,7 @@ from typing import Any, Callable
 from collections import deque
 
 from core.action_result import is_failure
+from core.safe_numeric import try_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +69,11 @@ class EdgeDecisionEngine:
         # 那时 dt 是几十分钟，积分项一步就打满限幅。超过这个值视为这一拍不可信，
         # 重新起算而不是硬算（正常采样周期是秒级；采样周期确实更长的部署可调）。
         self._max_pid_dt = float(self.config.get('max_pid_dt_seconds', 60.0))
+        self._max_data_age = float(self.config.get('max_data_age_seconds', 10.0))
 
         # 当前数据快照
         self._data_snapshot: dict[str, float] = {}
+        self._data_quality: dict[str, tuple[str, float]] = {}
 
         # 锁
         self._lock = threading.Lock()
@@ -202,6 +206,25 @@ class EdgeDecisionEngine:
                 logger.error(f"决策引擎异常: {e}", exc_info=True)
             time.sleep(1)  # 1秒决策周期
 
+    def _fresh_snapshot(self) -> dict[str, float]:
+        now = time.monotonic()
+        fresh: dict[str, float] = {}
+        dropped: list[str] = []
+        with self._lock:
+            for k, v in self._data_snapshot.items():
+                meta = self._data_quality.get(k)
+                if meta is None:
+                    fresh[k] = v
+                    continue
+                quality, ts = meta
+                if str(quality).upper() == 'GOOD' and (now - ts) <= self._max_data_age:
+                    fresh[k] = v
+                else:
+                    dropped.append(f"{k}(quality={quality},age={now - ts:.1f}s)")
+        if dropped:
+            logger.error("数据快照剔除坏质量/过期点位（断线或采集异常）: %s", ", ".join(dropped))
+        return fresh
+
     def _execute_cycle(self):
         """
         执行一个决策周期
@@ -214,8 +237,8 @@ class EdgeDecisionEngine:
         规则/联锁列表在锁内取快照后再执行，避免执行期间字典被并发修改，
         同时避免 `_execute_action` 内部再加锁造成死锁。
         """
+        snapshot = self._fresh_snapshot()
         with self._lock:
-            snapshot = dict(self._data_snapshot)
             ordered_interlocks = sorted(
                 self.interlocks.items(), key=lambda kv: kv[1].get('priority', 0)
             )
@@ -260,16 +283,27 @@ class EdgeDecisionEngine:
 
     # ==================== 数据输入 ====================
 
-    def update_data(self, key: str, value: float):
+    def update_data(self, key: str, value: float, quality: str = 'GOOD', ts: float | None = None):
         """
         更新数据快照
 
         Args:
             key: 数据键，格式 "device_id:register_name"
             value: 当前值
+            quality: 数据质量码，默认 'GOOD'
+            ts: 单调时钟时间戳（秒），默认当前时间
         """
+        # 裸 float() 只捕 TypeError/ValueError 挡不住 NaN/Inf（`float("nan")` 不抛、
+        # `float("1e400")` 得到 inf 也不抛），也挡不住 int 路径的 OverflowError。
+        # 统一走项目里的 try_finite_float：解析失败与非有限值都返回 None。
+        numeric_value = try_finite_float(value)
+        if numeric_value is None:
+            logger.error("数据快照拒绝非数值/非有限输入: key=%s, value=%r", key, value)
+            return
+        ts_val = time.monotonic() if ts is None else ts
         with self._lock:
-            self._data_snapshot[key] = value
+            self._data_snapshot[key] = numeric_value
+            self._data_quality[key] = (quality, ts_val)
 
     def register_action(self, action_name: str, callback: Callable[..., Any]):
         """
@@ -418,6 +452,14 @@ class EdgeDecisionEngine:
 
             op = condition.get('operator', 'gt')
             threshold = condition.get('value', 0)
+            _raw_value, _raw_threshold = value, threshold
+            value = try_finite_float(value)
+            threshold = try_finite_float(threshold)
+            if value is None or threshold is None:
+                logger.warning(
+                    "条件评估忽略非数值/非有限输入: key=%s, value=%r, threshold=%r",
+                    key, _raw_value, _raw_threshold)
+                return False
 
             if op == 'gt':
                 return value > threshold
@@ -430,7 +472,11 @@ class EdgeDecisionEngine:
             elif op == 'lte':
                 return value <= threshold
             elif op == 'between':
-                value2 = condition.get('value2', threshold)
+                value2 = try_finite_float(condition.get('value2', threshold))
+                if value2 is None:
+                    logger.warning("条件评估忽略非数值/非有限上界: key=%s, value2=%r",
+                                   key, condition.get('value2'))
+                    return False
                 return threshold <= value <= value2
 
         elif cond_type == 'and':
@@ -593,13 +639,34 @@ class EdgeDecisionEngine:
     def _execute_pid(self, ctrl_id: str, ctrl: dict[str, Any], snapshot: dict[str, Any]):
         """执行PID控制计算"""
         input_key = ctrl['input_key']
+        if input_key not in snapshot:
+            return
         process_value = snapshot.get(input_key)
 
         if process_value is None:
             return
 
         setpoint = ctrl['setpoint']
+        kp = ctrl['kp']
+        ki = ctrl['ki']
+        kd = ctrl['kd']
+        # 同上：统一用 try_finite_float，NaN/Inf/非数值一律 None → 放弃本次下发。
+        _pv = try_finite_float(process_value)
+        _sp = try_finite_float(setpoint)
+        _kp = try_finite_float(kp)
+        _ki = try_finite_float(ki)
+        _kd = try_finite_float(kd)
+        if None in (_pv, _sp, _kp, _ki, _kd):
+            logger.error(
+                "PID控制器 %s 输入或参数非数值/非有限 (pv=%r, sp=%r, kp=%r, ki=%r, kd=%r)，放弃本次计算与下发",
+                ctrl_id, process_value, setpoint, kp, ki, kd,
+            )
+            return
+        process_value, setpoint, kp, ki, kd = _pv, _sp, _kp, _ki, _kd
         error = setpoint - process_value
+        if not math.isfinite(error):
+            logger.error("PID控制器 %s 误差非有限 (%r)，放弃本次计算与下发", ctrl_id, error)
+            return
 
         # round 300：与 prev_time 同源，必须都用单调时钟（理由见 add_pid_controller）
         now = time.monotonic()
@@ -615,20 +682,33 @@ class EdgeDecisionEngine:
 
         # PID计算
         # 比例项
-        p_term = ctrl['kp'] * error
+        p_term = kp * error
 
         # 积分项（带抗饱和）
+        prev_integral = ctrl['integral']
         ctrl['integral'] += error * dt
         # 积分限幅
-        max_integral = (ctrl['output_max'] - ctrl['output_min']) / ctrl['ki'] if ctrl['ki'] > 0 else 1e6
+        max_integral = (ctrl['output_max'] - ctrl['output_min']) / ki if ki > 0 else 1e6
+        if not (math.isfinite(ctrl['integral']) and math.isfinite(max_integral)):
+            ctrl['integral'] = prev_integral
+            logger.error("PID控制器 %s 积分项非有限，已回滚并放弃下发", ctrl_id)
+            return
         ctrl['integral'] = max(-max_integral, min(max_integral, ctrl['integral']))
-        i_term = ctrl['ki'] * ctrl['integral']
+        i_term = ki * ctrl['integral']
 
         # 微分项
-        d_term = ctrl['kd'] * (error - ctrl['prev_error']) / dt if dt > 0 else 0
+        d_term = kd * (error - ctrl['prev_error']) / dt if dt > 0 else 0
 
         # 输出
         output = p_term + i_term + d_term
+        if not (
+            math.isfinite(output)
+            and math.isfinite(ctrl['output_min'])
+            and math.isfinite(ctrl['output_max'])
+        ):
+            ctrl['integral'] = prev_integral
+            logger.error("PID控制器 %s 输出非有限 (%r)，已回滚积分并放弃下发", ctrl_id, output)
+            return
         output = max(ctrl['output_min'], min(ctrl['output_max'], output))
 
         ctrl['output'] = output

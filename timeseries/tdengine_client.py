@@ -94,6 +94,20 @@ class TDengineClient:
         """防SQL注入：转义字符串值"""
         return str(val).replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
 
+    @staticmethod
+    def _validate_limit(limit: Any, max_limit: int = 10000) -> int:
+        """校验 LIMIT：只接受 1..max_limit 的**真整数**，其余一律抛 ValueError。
+
+        `LIMIT {limit}` 是直接拼进 SQL 的（无法参数化），所以 `limit` 必须是
+        int —— 字符串会变成注入面（`1 UNION ALL SELECT ...`），
+        超大值会让 TDengine 全表拉取并把进程拖死，两者都必须拒绝而不是截断。
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise ValueError(f'LIMIT 必须是整数: {limit!r}')
+        if not (1 <= limit <= max_limit):
+            raise ValueError(f'LIMIT 超出范围 1..{max_limit}: {limit!r}')
+        return limit
+
     def connect(self) -> bool:
         """
         连接TDengine
@@ -512,6 +526,7 @@ class TDengineClient:
         """
         table_name = get_telemetry_table_name(device_id, register_name)
         safe_table = self._sanitize_identifier(table_name)
+        limit = self._validate_limit(limit)
 
         start_ts = start_time.strftime('%Y-%m-%d %H:%M:%S')
         end_ts = end_time.strftime('%Y-%m-%d %H:%M:%S')
@@ -593,6 +608,7 @@ class TDengineClient:
         """查询报警记录"""
         table_name = get_alarm_table_name(device_id)
         safe_table = self._sanitize_identifier(table_name)
+        limit = self._validate_limit(limit)
 
         start_ts = start_time.strftime('%Y-%m-%d %H:%M:%S')
         end_ts = end_time.strftime('%Y-%m-%d %H:%M:%S')
