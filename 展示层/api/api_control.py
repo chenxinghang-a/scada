@@ -23,7 +23,10 @@ _require_engineer = role_required('admin', 'engineer')
 
 # 幂等性：记录最近的写操作，防止重复提交
 _recent_writes: dict[str, float] = {}
-_write_lock = __import__('threading').Lock()
+_threading = __import__('threading')
+_write_lock = _threading.Lock()
+_device_locks: dict[str, object] = {}
+_in_flight_targets: dict[str, str] = {}
 IDEMPOTENCY_WINDOW_S = 2  # 2秒内的重复写入视为同一操作
 RECENT_WRITES_MAX = 1000  # 幂等性记录最大条数
 
@@ -36,6 +39,47 @@ RECENT_WRITES_MAX = 1000  # 幂等性记录最大条数
 _IN_FLIGHT = object()
 
 
+def _get_device_lock(device_id: str):
+    with _write_lock:
+        lock = _device_locks.get(device_id)
+        if lock is None:
+            lock = _threading.Lock()
+            _device_locks[device_id] = lock
+        return lock
+
+
+def _parse_write_target(write_key: str) -> tuple[str, str]:
+    parts = write_key.split(':')
+    if len(parts) >= 5 and parts[2] == 'adjust':
+        return parts[1], f"{parts[1]}:adjust:{parts[3]}"
+    if len(parts) >= 4 and parts[1] == 'coil':
+        return parts[0], f"{parts[0]}:coil:{parts[2]}"
+    if len(parts) >= 5 and parts[1] == 'endpoint':
+        return parts[0], f"{parts[0]}:endpoint:{parts[2]}"
+    if len(parts) >= 3:
+        return parts[0], f"{parts[0]}:{parts[1]}"
+    return write_key, write_key
+
+
+def _resolve_idempotency_key(write_key: str) -> tuple[str, str]:
+    _, target_key = _parse_write_target(write_key)
+    try:
+        idem_header = (request.headers.get('Idempotency-Key') or '').strip()
+    except RuntimeError:
+        idem_header = ''
+    if idem_header:
+        return f"idem:{target_key}:{idem_header}", target_key
+    return write_key, target_key
+
+
+def _invalidate_target_writes_locked(target_key: str, keep_key: str = '') -> None:
+    for k in [k for k, v in _recent_writes.items()
+              if k != keep_key and isinstance(v, float)
+              and not k.startswith('idem:')
+              and _parse_write_target(k)[1] == target_key]:
+        _recent_writes.pop(k, None)
+
+
 def _idempotency_begin(write_key: str):
     """登记幂等键。
 
@@ -43,8 +87,9 @@ def _idempotency_begin(write_key: str):
         ``None`` —— 已登记占位，调用方可以继续下发；
         否则返回**应当直接回给客户端的响应**（重复提交 409 / 命中窗口 200）。
     """
+    effective_key, target_key = _resolve_idempotency_key(write_key)
     with _write_lock:
-        last_write = _recent_writes.get(write_key)
+        last_write = _recent_writes.get(effective_key)
         # ⚠️ 必须用单调时钟：墙钟被 NTP 回拨后 `now - last_write` 变负，
         # 会永远 `< IDEMPOTENCY_WINDOW_S` —— 此后所有重试都被判成"已写入"，
         # 实际一次都没下发。
@@ -54,13 +99,23 @@ def _idempotency_begin(write_key: str):
                 'success': False,
                 'message': '相同的写入正在执行中，请勿重复提交',
             }), 409
+        active_key = _in_flight_targets.get(target_key)
+        if active_key is not None:
+            if _recent_writes.get(active_key) is _IN_FLIGHT:
+                return jsonify({
+                    'success': False,
+                    'message': '该点位正在执行其他写入，请勿并发提交',
+                }), 409
+            _in_flight_targets.pop(target_key, None)
         if isinstance(last_write, float) and now - last_write < IDEMPOTENCY_WINDOW_S:
             # 显式带 200：上面 409 那条返回的是 `(Response, 409)`，
             # 这里只返 Response 会让"同一函数的返回值有两种形态"——
             # 调用方 `return early` 虽然都能工作，但任何想读状态码的地方
             # 都得先判类型。（补测试时就是这么踩到的：解包直接 TypeError。）
             return jsonify({'success': True, 'message': '写入成功(幂等)'}), 200
-        _recent_writes[write_key] = _IN_FLIGHT
+        _invalidate_target_writes_locked(target_key, keep_key=effective_key)
+        _recent_writes[effective_key] = _IN_FLIGHT
+        _in_flight_targets[target_key] = effective_key
         if len(_recent_writes) > RECENT_WRITES_MAX:
             for k in [k for k, v in _recent_writes.items()
                       if isinstance(v, float) and now - v >= IDEMPOTENCY_WINDOW_S]:
@@ -72,11 +127,15 @@ def _idempotency_begin(write_key: str):
 
 def _idempotency_end(write_key: str, success: bool):
     """按真实结果落实幂等键：成功 → 时间戳；失败 → 撤销占位。"""
+    effective_key, target_key = _resolve_idempotency_key(write_key)
     with _write_lock:
+        if _in_flight_targets.get(target_key) == effective_key:
+            _in_flight_targets.pop(target_key, None)
         if success:
-            _recent_writes[write_key] = time.monotonic()
-        elif _recent_writes.get(write_key) is _IN_FLIGHT:
-            _recent_writes.pop(write_key, None)
+            _invalidate_target_writes_locked(target_key, keep_key=effective_key)
+            _recent_writes[effective_key] = time.monotonic()
+        elif _recent_writes.get(effective_key) is _IN_FLIGHT:
+            _recent_writes.pop(effective_key, None)
 
 
 # 寄存器地址/值范围常量
@@ -337,8 +396,9 @@ def write_register(device_id):
 
     success = False
     try:
-        result = device_control.write_with_verification(
-            device_id, address, value, operator)
+        with _get_device_lock(device_id):
+            result = device_control.write_with_verification(
+                device_id, address, value, operator)
         success = bool(result.get('success'))
         if not success:
             return jsonify(result), 403
@@ -486,9 +546,10 @@ def adjust_device(device_id):
         # round 370（BUG-052）：`/adjust` 传的是**工程值**（50.0°C），
         # 必须让安全层按 scale/offset 换算并按 data_type 决定单/双寄存器。
         # 原来按原始整数写：小数直接被拒（403），整数则写了未缩放的值。
-        result = device_control.write_with_verification(
-            device_id, address, value, operator, kind='register',
-            engineering=True) or {}
+        with _get_device_lock(device_id):
+            result = device_control.write_with_verification(
+                device_id, address, value, operator, kind='register',
+                engineering=True) or {}
         success = bool(result.get('success'))
         payload = {
             'success': success,
@@ -667,14 +728,92 @@ def write_endpoint(device_id):
     # 不匹配的 TypeError）都直穿到 app.errorhandler(500)，客户端只看到
     # `{"error": "Internal server error"}`，运维无从判断是配置错、连不上、
     # 还是代码 bug。
+    write_key = f"{device_id}:endpoint:{endpoint_name}:{method}:{value}"
+
+    def _exec_endpoint_write(fn):
+        early = _idempotency_begin(write_key)
+        if early is not None:
+            if early[1] == 409:
+                _audit_result(False, '并发或重复写入已拦截')
+            return early, None
+        ok = False
+        try:
+            with _get_device_lock(device_id):
+                try:
+                    _estop = device_control.get_estop_status()
+                except Exception as e:
+                    logger.error("下发前读取急停状态失败，拒绝端点写入: %s", e, exc_info=True)
+                    _audit_result(False, '下发前无法读取急停状态')
+                    return (jsonify({
+                        'success': False,
+                        'message': '无法读取急停状态，已拒绝写入（安全状态未知不允许下发）',
+                    }), 503), None
+                if not isinstance(_estop, dict) or 'active' not in _estop:
+                    _audit_result(False, '下发前急停状态格式不符')
+                    return (jsonify({
+                        'success': False,
+                        'message': '急停状态接口返回格式不符，已拒绝写入',
+                    }), 503), None
+                if _estop['active']:
+                    logger.warning("急停状态下拒绝端点写入: device=%s endpoint=%s operator=%s",
+                                   device_id, endpoint_name, operator)
+                    _audit_result(False, '急停状态中拒绝下发')
+                    return (jsonify({
+                        'success': False,
+                        'message': '紧急停机状态中，禁止下发端点写入（请先解除急停）',
+                    }), 403), None
+                try:
+                    _interlocks = device_control.get_interlock_status()
+                except Exception as e:
+                    logger.error("下发前读取联锁状态失败，拒绝端点写入: %s", e, exc_info=True)
+                    _audit_result(False, '下发前无法读取联锁状态')
+                    return (jsonify({
+                        'success': False,
+                        'message': '无法读取联锁状态，已拒绝写入（安全状态未知不允许下发）',
+                    }), 503), None
+                if not isinstance(_interlocks, dict):
+                    _audit_result(False, '下发前联锁状态格式不符')
+                    return (jsonify({
+                        'success': False,
+                        'message': '联锁状态接口返回格式不符，已拒绝写入',
+                    }), 503), None
+                for _rid, _rst in _interlocks.items():
+                    if not isinstance(_rst, dict) or 'triggered' not in _rst:
+                        _audit_result(False, f'联锁 {_rid} 状态不可判定')
+                        return (jsonify({
+                            'success': False,
+                            'message': f'联锁 {_rid} 状态不可判定，已拒绝写入',
+                        }), 503), None
+                    if not _rst.get('triggered') or _rst.get('bypassed'):
+                        continue
+                    _ract = _rst.get('action') or {}
+                    _rcond = _rst.get('condition') or {}
+                    if device_id in {_ract.get('device_id'), _rcond.get('device_id')}:
+                        logger.warning("联锁触发中拒绝端点写入: device=%s rule=%s operator=%s",
+                                       device_id, _rid, operator)
+                        _audit_result(False, f'联锁 {_rid} 触发中拒绝下发')
+                        return (jsonify({
+                            'success': False,
+                            'message': f'联锁 {_rid} 正在触发，禁止对该设备下发端点写入',
+                        }), 403), None
+                res = fn(endpoint_config, {'value': value})
+            ok = bool(res.get('success')) if isinstance(res, dict) else bool(res)
+            return None, res
+        finally:
+            _idempotency_end(write_key, ok)
+
     success = False
     try:
         if method == 'PUT' and hasattr(client, 'put_endpoint'):
-            result = client.put_endpoint(endpoint_config, {'value': value})
+            early, result = _exec_endpoint_write(client.put_endpoint)
+            if early is not None:
+                return early
             success = (bool(result.get('success'))
                        if isinstance(result, dict) else bool(result))
         elif method == 'POST' and hasattr(client, 'post_endpoint'):
-            result = client.post_endpoint(endpoint_config, {'value': value})
+            early, result = _exec_endpoint_write(client.post_endpoint)
+            if early is not None:
+                return early
             success = (bool(result.get('success'))
                        if isinstance(result, dict) else bool(result))
         elif hasattr(client, 'write_endpoint'):
@@ -747,9 +886,15 @@ def get_control_logs():
 # ==================== 工厂级设备控制安全API ====================
 
 @control_bp.route('/control/estop', methods=['POST'])
-@_require_auth
+@role_required('admin', 'engineer', 'operator')
 def trigger_estop():
-    """紧急停机（最高优先级，任何角色均可触发）"""
+    """紧急停机（最高优先级；viewer 只读账号不得触发）
+
+    ⚠️ 口径变更需主人裁决：原设计写的是「任何角色均可触发」，
+    tests/test_api_authorization.py 也把本端点登记在 INTENTIONAL 里。
+    这里按批D-2 收紧到 operator 及以上 —— 只读看板/参观账号误触或
+    令牌泄露即可停全厂，代价是现场最低权限终端失去了急停能力。
+    """
     data = request.get_json() or {}
     reason = data.get('reason', '操作员手动触发紧急停机')
     device_control = getattr(current_app, 'device_control', None)

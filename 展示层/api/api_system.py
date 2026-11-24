@@ -191,6 +191,38 @@ def reload_interlocks():
 
 # ==================== 系统配置API ====================
 
+#: 无论写哪个段都不允许通过本接口修改的键（批D-7）。
+#:
+#: 这些键各自有正规入口，且都有校验：
+#:   · simulation_mode —— 走 POST /api/system/simulation-mode（会看
+#:     `switch_simulation_mode()` 的真实结果；直接写盘等于「界面说切换失败、
+#:     重启却真的换了数据源」）；
+#:   · 密钥/口令类 —— 唯一真源是环境变量（见 配置/system.yaml 的注释与
+#:     .env.example），写进 YAML 会被提交进仓库。
+_FORBIDDEN_CONFIG_KEYS = {
+    'simulation_mode', 'secret_key', 'jwt_secret', 'password', 'passwd',
+    'token', 'api_key', 'auth_token', 'auth_password', 'refresh_token',
+}
+
+
+def _forbidden_config_keys(payload: Any) -> list[str]:
+    """递归找出 payload 里被禁止写入的键（大小写不敏感）。"""
+    hits: list[str] = []
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if str(k).lower() in _FORBIDDEN_CONFIG_KEYS:
+                    hits.append(str(k))
+                _walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item)
+
+    _walk(payload)
+    return sorted(set(hits))
+
+
 @system_bp.route('/config', methods=['GET'])
 @jwt_required
 def get_config():
@@ -247,31 +279,75 @@ def update_config():
     """更新系统配置"""
     from ._common import get_auth_manager
 
-    data = request.get_json()
-    if not data:
+    # 批D-7：`get_json()` 对非对象 body（数组/字符串）返回非 dict，
+    # 下一行 `data.get(...)` 会 AttributeError → 500。
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
         return api_error('请提供配置数据')
 
     config = load_yaml_config('配置/system.yaml')
+    if not isinstance(config, dict):
+        return jsonify({'success': False, 'message': '配置文件格式损坏，拒绝写入'}), 500
 
     # BUG-061：白名单原来只在 `else`（不带 section）分支生效 ——
     # 传 `{"section": "database", ...}` 就直接改数据库配置，绕过全部限制。
     # 白名单必须在**分支之前**统一判定；`data` 不是对象也不能走到 `.update()`。
     _WRITABLE = {'system', 'web', 'security'}
     section = data.get('section')
+    if section is not None and not isinstance(section, str):
+        return jsonify({'success': False, 'message': 'section 必须是字符串'}), 400
     if section and section not in _WRITABLE:
         return jsonify({'success': False, 'message': f'配置段 {section} 不允许修改'}), 400
     if section and not isinstance(data.get('data', {}), dict):
         return jsonify({'success': False, 'message': 'data 必须是对象'}), 400
-    if section and section in config and isinstance(config[section], dict):
-        config[section].update(data.get('data', {}))
-    elif section:
-        return jsonify({'success': False, 'message': f'配置段 {section} 不存在或不是字典'}), 400
+
+    # 批D-7：`security` 段（会话/密钥/口令策略）只允许 admin 写。
+    # engineer 也能改，等于把「谁能读写密钥策略」降了一级。
+    if section == 'security':
+        role = (getattr(request, 'current_user', None) or {}).get('role')
+        if role != 'admin':
+            return jsonify({
+                'success': False,
+                'message': 'security 配置段仅管理员可修改',
+            }), 403
+
+    if section:
+        payload = data.get('data', {})
     else:
         # 安全限制：只允许更新白名单中的顶层字段
-        filtered = {k: v for k, v in data.items() if k in _WRITABLE}
-        if not filtered:
+        payload = {k: v for k, v in data.items() if k in _WRITABLE}
+        if not payload:
             return jsonify({'success': False, 'message': '无有效的配置段'}), 400
-        config.update(filtered)
+
+    # 批D-7：密钥/口令/模拟开关不能从这个「通用写盘口」改。
+    bad = _forbidden_config_keys(payload)
+    if bad:
+        return jsonify({
+            'success': False,
+            'message': f'以下字段不允许通过配置接口修改: {", ".join(bad)}',
+        }), 400
+
+    if section:
+        if not isinstance(config.get(section), dict):
+            return jsonify({'success': False, 'message': f'配置段 {section} 不存在或不是字典'}), 400
+        config[section].update(payload)
+    else:
+        # 批D-7：原来 `config.update(filtered)` 是**整段替换** ——
+        # 提交 `{"web": {"port": 5001}}` 会把 web 段原有的 cors/host/debug
+        # 全部抹掉（磁盘上一份残缺配置，重启后 CORS 白名单消失、实时通道全废）。
+        # 改成按段合并；非对象的段值直接拒绝，不进 config。
+        for k, v in payload.items():
+            if not isinstance(v, dict):
+                return jsonify({
+                    'success': False,
+                    'message': f'配置段 {k} 的值必须是对象',
+                }), 400
+            if not isinstance(config.setdefault(k, {}), dict):
+                return jsonify({
+                    'success': False,
+                    'message': f'配置段 {k} 已存在且不是对象，拒绝覆盖',
+                }), 400
+            config[k].update(v)
 
     if not save_yaml_config('配置/system.yaml', config):
         return jsonify({'success': False, 'message': '配置保存失败'}), 500

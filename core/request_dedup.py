@@ -32,16 +32,37 @@ def _make_fingerprint() -> str:
     # （写入操作被静默吞掉，且返回的是 A 的结果）。
     # 这里用完整 token 的哈希，长度固定、不泄露原文。
     auth = request.headers.get('Authorization', '') or ''
+    import json
+    session_cookie = (
+        request.cookies.get('session')
+        or request.cookies.get('access_token')
+        or ''
+    )
+    user_id = str(getattr(g, 'user_id', '') or '')
+    identity = f'{auth}\x00{session_cookie}\x00{user_id}'
+    if not auth and not session_cookie and not user_id:
+        identity = request.remote_addr or ''
     parts = [
         request.method,
         request.path,
-        hashlib.sha256(auth.encode('utf-8', 'replace')).hexdigest(),
+        hashlib.sha256(request.query_string or b'').hexdigest(),
+        hashlib.sha256(identity.encode('utf-8', 'replace')).hexdigest(),
     ]
     if request.is_json:
-        import json
         body = request.get_json(silent=True)
-        if body:
-            parts.append(json.dumps(body, sort_keys=True, default=str)[:500])
+        if body is not None:
+            payload = json.dumps(body, sort_keys=True, default=str).encode('utf-8', 'replace')
+        else:
+            payload = request.get_data(cache=True) or b''
+        parts.append(hashlib.sha256(payload).hexdigest())
+    elif request.form:
+        form_data = sorted((k, request.form.getlist(k)) for k in request.form.keys())
+        payload = json.dumps(form_data, sort_keys=True, default=str).encode('utf-8', 'replace')
+        parts.append(hashlib.sha256(payload).hexdigest())
+    else:
+        raw_body = request.get_data(cache=True) or b''
+        if raw_body:
+            parts.append(hashlib.sha256(raw_body).hexdigest())
 
     raw = '|'.join(parts)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -95,8 +116,16 @@ def init_request_dedup(app: Flask):
             # 在去重窗口内发生时，第二次会被判成"重复提交"回 409，
             # 而它本来该成功（令牌已撤销 / 再撤一次也无害）。
             '/api/auth/logout',
+            '/api/devices/estop',
+            '/api/estop',
+            '/api/control/estop',
+            '/api/emergency-stop',
+            '/api/emergency_stop',
         )
-        if any(request.path.startswith(p) for p in skip_paths):
+        path_lower = request.path.lower()
+        if any(request.path.startswith(p) for p in skip_paths) or any(
+            k in path_lower for k in ('/estop', '/emergency-stop', '/emergency_stop')
+        ):
             return None
 
         fingerprint = _make_fingerprint()

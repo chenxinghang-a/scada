@@ -978,6 +978,23 @@ def delete_device(device_id):
     }), 400
 
 
+def _control_failure(detail: dict, message: str) -> tuple[int, str]:
+    """把 batch_control 的单设备失败结果映射成非 2xx（批D-4）。
+
+    原来 /start、/stop、/connect 无论底层成功与否都回 HTTP 200，
+    且丢弃 detail 里的拦截原因 —— 只看 2xx 的 MES/监控会把
+    「急停锁死、联锁阻塞、回读不一致、设备未连接」一律当成「已停机/已启动」。
+    """
+    if not isinstance(detail, dict):
+        detail = {}
+    msg = str(message or '')
+    if detail.get('blocked_by') or ('急停' in msg) or ('联锁' in msg):
+        return 409, 'estop_or_interlock'
+    if ('未连接' in msg) or ('客户端不存在' in msg):
+        return 503, 'device_unavailable'
+    return 502, 'write_failed'
+
+
 @devices_bp.route('/devices/<device_id>/connect', methods=['POST'])
 @_require_engineer
 def connect_device(device_id):
@@ -988,10 +1005,16 @@ def connect_device(device_id):
         return jsonify({'success': False, 'message': f'设备 {device_id} 不存在'}), 404
 
     result = device_manager.connect_device(device_id)
-    if result:
-        username = getattr(request, 'current_user', {}).get('username', 'system')
-        get_auth_manager().log_operation(username, 'connect_device', f'连接设备: {device_id}')
-    return jsonify({'success': result, 'message': f'设备 {device_id} 连接{"成功" if result else "失败"}'})
+    if not result:
+        # 批D-4：连接失败不能回 200 —— 调用方会当成「设备已在线」。
+        return jsonify({
+            'success': False,
+            'message': f'设备 {device_id} 连接失败',
+            'error_code': 'connect_failed',
+        }), 502
+    username = getattr(request, 'current_user', {}).get('username', 'system')
+    get_auth_manager().log_operation(username, 'connect_device', f'连接设备: {device_id}')
+    return jsonify({'success': True, 'message': f'设备 {device_id} 连接成功'})
 
 
 @devices_bp.route('/devices/<device_id>/disconnect', methods=['POST'])
@@ -1048,7 +1071,12 @@ def stop_device(device_id):
     success = bool(detail.get('success'))
     message = detail.get('message') or outcome.get('message') or (
         f'设备 {device_id} 已停止' if success else f'设备 {device_id} 停止失败')
-    return jsonify({'success': success, 'message': message})
+    if success:
+        return jsonify({'success': success, 'message': message})
+    # 批D-4：急停/联锁拦截 → 409，设备不可用 → 503，写入或回读失败 → 502
+    status, error_code = _control_failure(detail, message)
+    return jsonify({'success': False, 'message': message,
+                    'error_code': error_code}), status
 
 
 @devices_bp.route('/devices/<device_id>/start', methods=['POST'])
@@ -1076,7 +1104,12 @@ def start_device(device_id):
     success = bool(detail.get('success'))
     message = detail.get('message') or outcome.get('message') or (
         f'设备 {device_id} 已启动' if success else f'设备 {device_id} 启动失败')
-    return jsonify({'success': success, 'message': message})
+    if success:
+        return jsonify({'success': success, 'message': message})
+    # 批D-4：同 /stop，失败必须是明确非 2xx
+    status, error_code = _control_failure(detail, message)
+    return jsonify({'success': False, 'message': message,
+                    'error_code': error_code}), status
 
 
 def _start_device_collection(device_id: str) -> bool:
@@ -1442,6 +1475,7 @@ def get_device_templates():
         
         # ==================== PLC控制器类 ====================
         {'id': 'siemens_s7_1500', 'name': '西门子S7-1500 PLC', 'description': '高端PLC，支持Profinet/OPC UA', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'mechanical',
          'vendor': '西门子', 'device_model': 'S7-1516-3 PN/DP',
          'registers': [
              {'name': 'boiler_temperature', 'description': '锅炉出口温度', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': '°C'},
@@ -1451,6 +1485,7 @@ def get_device_templates():
              {'name': 'boiler_status', 'description': '锅炉状态 0=停炉/1=运行/2=故障', 'address': 8, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''}
          ]},
         {'id': 'siemens_s7_1200', 'name': '西门子S7-1200 PLC', 'description': '紧凑型PLC，适用于中小型设备', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'mechanical',
          'vendor': '西门子', 'device_model': 'S7-1214C DC/DC/DC',
          'registers': [
              {'name': 'motor_speed', 'description': '电机转速', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'RPM'},
@@ -1460,6 +1495,7 @@ def get_device_templates():
              {'name': 'run_status', 'description': '运行状态', 'address': 8, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''}
          ]},
         {'id': 'mitsubishi_fx5u', 'name': '三菱FX5U PLC', 'description': '高性能小型PLC，适用于注塑机/包装机', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'mechanical',
          'vendor': '三菱电机', 'device_model': 'FX5U-64M',
          'registers': [
              {'name': 'mold_temperature', 'description': '模具温度', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': '°C'},
@@ -1469,6 +1505,7 @@ def get_device_templates():
              {'name': 'shot_count', 'description': '注射计数', 'address': 8, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '个'}
          ]},
         {'id': 'schneider_m340', 'name': '施耐德M340 PLC', 'description': '中型PLC，适用于水处理/化工', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'mechanical',
          'vendor': '施耐德电气', 'device_model': 'BMX P34 2020',
          'registers': [
              {'name': 'inlet_flow', 'description': '进水流量', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'm³/h'},
@@ -1478,6 +1515,7 @@ def get_device_templates():
              {'name': 'turbidity', 'description': '出水浊度', 'address': 8, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'NTU'}
          ]},
         {'id': 'omron_nj', 'name': '欧姆龙NJ系列PLC', 'description': '机器自动化控制器，支持EtherCAT', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'mechanical',
          'vendor': '欧姆龙', 'device_model': 'NJ501-1300',
          'registers': [
              {'name': 'position_x', 'description': 'X轴位置', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 0.001, 'unit': 'mm'},
@@ -1487,6 +1525,7 @@ def get_device_templates():
              {'name': 'cycle_count', 'description': '循环计数', 'address': 8, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '个'}
          ]},
         {'id': 'delta_dvp', 'name': '台达DVP PLC', 'description': '经济型PLC，适用于包装/输送', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'mechanical',
          'vendor': '台达电子', 'device_model': 'DVP32EH00T3',
          'registers': [
              {'name': 'conveyor_speed', 'description': '输送带速度', 'address': 0, 'length': 1, 'data_type': 'uint16', 'scale': 0.1, 'unit': 'm/min'},
@@ -1496,6 +1535,7 @@ def get_device_templates():
              {'name': 'packing_status', 'description': '包装线状态', 'address': 4, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''}
          ]},
         {'id': 'inovance_h5u', 'name': '汇川H5U PLC', 'description': '国产高性能PLC，适用于涂装/喷涂', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'mechanical',
          'vendor': '汇川技术', 'device_model': 'H5U-3232MT',
          'registers': [
              {'name': 'spray_pressure', 'description': '喷涂压力', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': 'MPa'},
@@ -1505,6 +1545,7 @@ def get_device_templates():
              {'name': 'painted_count', 'description': '喷涂计数', 'address': 8, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': '个'}
          ]},
         {'id': 'hollysys_lk', 'name': '和利时LK PLC', 'description': '国产大型PLC，适用于化工/制药', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'mechanical',
          'vendor': '和利时', 'device_model': 'LK210',
          'registers': [
              {'name': 'distill_temperature', 'description': '蒸馏塔顶温度', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': '°C'},
@@ -1516,6 +1557,7 @@ def get_device_templates():
         
         # ==================== 变频器/驱动类 ====================
         {'id': 'inverter', 'name': '变频器', 'description': 'ABB/西门子等变频器', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'mechanical',
          'registers': [
              {'name': 'frequency', 'description': '输出频率', 'address': 0, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'Hz'},
              {'name': 'current', 'description': '输出电流', 'address': 2, 'length': 1, 'data_type': 'float32', 'scale': 0.01, 'unit': 'A'},
@@ -1595,6 +1637,7 @@ def get_device_templates():
 
         # ==================== 三菱MC协议设备 ====================
         {'id': 'fx5u_mc', 'name': '三菱FX5U PLC (MC协议)', 'description': '三菱FX5U系列PLC，SLMP/3E帧协议', 'protocol': 'mc', 'port': 5000,
+         'device_category': 'mechanical',
          'vendor': '三菱电机', 'device_model': 'FX5U-64M',
          'registers': [
              {'name': 'temperature', 'description': '模具温度', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 1.0, 'unit': '°C'},
@@ -1607,6 +1650,7 @@ def get_device_templates():
 
         # ==================== 欧姆龙FINS协议设备 ====================
         {'id': 'nj501_fins', 'name': '欧姆龙NJ501 PLC (FINS协议)', 'description': '欧姆龙NJ系列机器自动化控制器', 'protocol': 'fins', 'port': 9600,
+         'device_category': 'mechanical',
          'vendor': '欧姆龙', 'device_model': 'NJ501-1300',
          'registers': [
              {'name': 'position_x', 'description': 'X轴位置', 'address': 0, 'length': 2, 'data_type': 'float32', 'scale': 0.001, 'unit': 'mm'},
@@ -1654,6 +1698,7 @@ def get_device_templates():
 
         # ==================== 安全PLC ====================
         {'id': 'safety_plc', 'name': '安全PLC', 'description': 'Pilz PNOZ multi系列安全控制器', 'protocol': 'modbus_tcp', 'port': 502,
+         'device_category': 'safety',
          'vendor': 'Pilz', 'device_model': 'PNOZ m B1',
          'registers': [
              {'name': 'safety_input_1', 'description': '安全输入1 (急停)', 'address': 0, 'length': 1, 'data_type': 'uint16', 'scale': 1, 'unit': ''},
@@ -1734,6 +1779,15 @@ def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
         raise ValueError(f'非法 device_class: {device_class!r}')
     if data.get('electrical') is not None and not isinstance(data['electrical'], dict):
         raise ValueError('electrical 必须是对象（铭牌参数）')
+    # 批D-5：三分类是 E-STOP 的唯一依据，必须校验 ——
+    # 原来这里不校验，`device_category: "Mechanical"`（大小写错）或
+    # `null` 都能落盘；落盘后 get_device_category() 只能按关键词猜，
+    # 猜成 instrument 的机械执行机构在急停时会被**跳过**。
+    category = data.get('device_category')
+    if category is not None and category not in ('mechanical', 'instrument', 'safety'):
+        raise ValueError(
+            f'非法 device_category: {category!r}'
+            '（只允许 mechanical/instrument/safety）')
 
     if protocol in ('modbus_tcp', 'modbus_rtu'):
         for field in ('host', 'port'):
@@ -1799,7 +1853,10 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
         'name': data['name'],
         'description': data.get('description', ''),
         'protocol': protocol,
-        'device_category': data.get('device_category', 'instrument'),
+        # 批D-5：`data.get('device_category', 'instrument')` 在显式传 null 时
+        # 返回 None（默认值只在**缺键**时生效），null 会原样落盘，
+        # 后续分类退化成关键词猜测 —— 换成 `or` 保证落盘值合法。
+        'device_category': data.get('device_category') or 'instrument',
         # round 378：面向任意电气设备的元数据（可选）
         'device_class': data.get('device_class', 'other'),
         'electrical': data.get('electrical') or {},
@@ -2085,6 +2142,17 @@ def batch_add_presets():
         get_auth_manager().log_operation(
             request.current_user['username'], 'batch_add_presets',
             f"批量添加预设: {preset_ids}")
+        # 批D-6：逐条汇总「添加」本身的失败。
+        # add_preset_batch 的 success 是 `success_count > 0` —— 10 台里成功 8 台
+        # 也回 True，接口于是回 200 + success:true，前端提示"全部成功"。
+        add_failed = [r for r in result.get('results', []) if not r.get('success')]
+        if add_failed:
+            result['add_failed'] = add_failed
+            result['success'] = False
+            names = '、'.join(str(r.get('device_id') or r.get('message') or '?')[:40]
+                              for r in add_failed)
+            result['message'] = (
+                f"{result.get('message', '')}；其中 {len(add_failed)} 台**添加失败**（{names}）")
         # 启动所有成功添加的设备的采集
         # round 309：逐台收集启动结果 —— 批量添加最容易掩盖"添加成功但采集没起"
         failed = []
@@ -2099,6 +2167,9 @@ def batch_add_presets():
                 f"（{', '.join(failed)}）：配置已写入，但不会产生数据")
             result['success'] = False
             return jsonify(result), 500
+        if add_failed:
+            # 半失败（部分预设没加上）：207 明确"部分完成"，不能回 200 全成功
+            return jsonify(result), 207
         return jsonify(result)
     # round 369：整体失败（预设不存在 / 落盘失败）必须回 4xx/5xx
     return jsonify(result), 400
@@ -2126,6 +2197,15 @@ def add_all_presets():
         get_auth_manager().log_operation(
             request.current_user['username'], 'add_all_presets',
             f"添加全部预设: {result.get('message', '')}")
+        # 批D-6：同 batch_add_presets，先汇总「添加」失败的条目
+        add_failed = [r for r in result.get('results', []) if not r.get('success')]
+        if add_failed:
+            result['add_failed'] = add_failed
+            result['success'] = False
+            names = '、'.join(str(r.get('device_id') or r.get('message') or '?')[:40]
+                              for r in add_failed)
+            result['message'] = (
+                f"{result.get('message', '')}；其中 {len(add_failed)} 台**添加失败**（{names}）")
         failed = []
         for r in result.get('results', []):
             if r.get('success') and r.get('device_id'):
@@ -2138,6 +2218,9 @@ def add_all_presets():
                 f"（{', '.join(failed)}）：配置已写入，但不会产生数据")
             result['success'] = False
             return jsonify(result), 500
+        if add_failed:
+            # 半失败：207（部分完成），见 batch_add_presets 处的说明
+            return jsonify(result), 207
         return jsonify(result)
     # round 369：整体失败必须回 4xx/5xx
     return jsonify(result), 400

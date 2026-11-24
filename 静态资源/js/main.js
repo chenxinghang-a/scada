@@ -430,6 +430,60 @@ function playAlarmSound() {
 }
 
 /**
+ * 校验 /alarms/active 的响应（批D-9）
+ *
+ * 后端 500/401 时返回的是 `{"error": ...}`，没有 alarms 字段。原来直接
+ * `response.json()` 后 `data.alarms || []` —— count 变 0，报警条被隐藏，
+ * 值班员会把"接口挂了"当成"报警全清了"。
+ */
+function checkAlarmResponse(response) {
+    if (response.status === 401) {
+        try { localStorage.removeItem('auth_token'); } catch (e) { /* 隐私模式 */ }
+        if (!window.location.pathname.includes('/login')) {
+            window.location.href = '/login';
+        }
+        throw new Error('HTTP 401');
+    }
+    if (!response.ok) {
+        throw new Error('HTTP ' + response.status);
+    }
+    return response.json().then(data => {
+        if (!data || !Array.isArray(data.alarms)) {
+            throw new Error('Invalid payload');
+        }
+        return data;
+    });
+}
+
+/**
+ * 报警同步失败：保留上次成功的计数/报警条，只加"可能过期"标识（批D-9）
+ * 绝不把计数清零、绝不隐藏报警条 —— 漏报比报错危险得多。
+ */
+function markAlarmDataStale() {
+    const textEl = document.getElementById('alarm-banner-text');
+    if (textEl) {
+        // 保留上一条报警正文，只在前面加"可能过期"标识（不覆盖 = 不清零）
+        const prev = textEl.textContent || '';
+        if (!prev.startsWith('⚠ 报警同步失败')) {
+            textEl.textContent = '⚠ 报警同步失败（显示可能已过期）｜ ' + prev;
+        }
+    }
+    const banner = document.getElementById('alarm-banner');
+    if (banner) {
+        banner.style.display = 'block';
+        banner.classList.remove('alarm-banner--critical');
+        banner.classList.add('alarm-banner--warning');
+    }
+    ['active-alarms', 'alarm-count-card'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.title = '⚠ 最近一次获取失败，显示的是上次成功的值，可能已过期';
+            el.style.opacity = '0.55';
+        }
+    });
+}
+
+/**
  * 更新报警计数
  */
 function updateAlarmCount() {
@@ -437,9 +491,9 @@ function updateAlarmCount() {
     fetch(`${API_BASE}/alarms/active`, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
     })
-        .then(response => response.json())
+        .then(checkAlarmResponse)
         .then(data => {
-            const alarms = data.alarms || [];
+            const alarms = data.alarms;
             const count = alarms.length;
 
             // 导航栏计数
@@ -449,6 +503,12 @@ function updateAlarmCount() {
             // 报警卡片
             const countCard = document.getElementById('alarm-count-card');
             if (countCard) countCard.textContent = count;
+
+            // 本轮成功 → 清掉上一次失败留下的"可能过期"标识
+            ['active-alarms', 'alarm-count-card'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) { el.title = ''; el.style.opacity = ''; }
+            });
 
             // 报警条
             const banner = document.getElementById('alarm-banner');
@@ -495,7 +555,9 @@ function updateAlarmCount() {
             banner.style.display = 'block';
         })
         .catch(err => {
+            // 不清零、不隐藏报警条：只在计数与报警条上标注"可能已过期"
             console.error('updateAlarmCount fetch error:', err);
+            markAlarmDataStale();
         });
 }
 
@@ -507,9 +569,9 @@ function updateAlarmCountSilent() {
     fetch(`${API_BASE}/alarms/active`, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
     })
-        .then(response => response.json())
+        .then(checkAlarmResponse)
         .then(data => {
-            const count = data.alarms ? data.alarms.length : 0;
+            const count = data.alarms.length;
             const alarmEl = document.getElementById('active-alarms');
             if (alarmEl) {
                 alarmEl.textContent = count;
@@ -521,19 +583,11 @@ function updateAlarmCountSilent() {
             }
         })
         .catch((e) => {
-            // 原来是 `.catch(() => {})`（源码里自己写着"静默失败"）。
             // 这个函数轮询的是**活动报警数**：接口一挂，计数就停在最后一次
-            // 成功的值上 —— 界面上还显示"3 个报警"，实际可能已经是 7 个，
-            // 或者报警早就清了还显示 3。漏报比报错危险得多。
-            //
-            // 不弹 toast（每 10 秒弹一次会烦死人），但必须留痕：
-            // console 警告 + 在元素 title 上标明"显示的是旧值"。
+            // 成功的值上 —— 界面上还显示"3 个报警"，实际可能已经是 7 个。
+            // 不弹 toast（每 10 秒弹一次会烦死人），但必须留痕且**不得清零/隐藏**。
             console.warn('[alarms] 活动报警数轮询失败，当前显示的是最后一次成功的值:', e);
-            const alarmEl = document.getElementById('active-alarms');
-            if (alarmEl) {
-                alarmEl.title = '⚠ 最近一次获取失败，显示的是上次成功的值，可能已过期';
-                alarmEl.style.opacity = '0.55';
-            }
+            markAlarmDataStale();
         });
 }
 
@@ -710,19 +764,61 @@ document.addEventListener('DOMContentLoaded', function() {
     setInterval(updateAlarmCount, 5000);
 
     // 空闲超时 - 15分钟无操作自动登出 (GB/T 33008: 终端锁定)
+    //
+    // 批D-8：**不能用 confirm()**。它是同步阻塞的原生弹窗：
+    //   · 弹窗期间浏览器主线程被冻结 —— WebSocket alarm/data_update 回调、
+    //     5 秒报警轮询、playAlarmSound() 全部停摆，突发超温无声无提示；
+    //   · 无人值守时弹窗永远不会自己关，logout() 永远不执行；
+    //     路人点「确定」就能接管这个高权限会话。
+    // 改为非阻塞 DOM 提示 + 60 秒倒计时，超时强制登出。
     let idleTimer = null;
+    let graceTimer = null;
     const IDLE_TIMEOUT = 15 * 60 * 1000;  // 15 minutes
+    const IDLE_WARN_BEFORE = 60 * 1000;   // 提前 60 秒提示，到点强制登出
+
+    function hideIdleWarning() {
+        const box = document.getElementById('idle-warning');
+        if (box) box.remove();
+    }
+
+    function showIdleWarning() {
+        hideIdleWarning();
+        const box = document.createElement('div');
+        box.id = 'idle-warning';
+        box.setAttribute('role', 'alert');
+        box.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:20000;'
+            + 'max-width:320px;padding:12px 16px;border-radius:8px;'
+            + 'background:var(--level-warning-soft,#fff3cd);'
+            + 'border:1px solid var(--level-warning,#ffc107);'
+            + 'color:var(--text-primary,#000);'
+            + 'box-shadow:0 4px 12px rgba(0,0,0,.2);font-size:14px;';
+        const text = document.createElement('div');
+        text.textContent = '会话将在 60 秒后自动登出（GB/T 33008 终端锁定要求）。';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '继续工作';
+        btn.style.cssText = 'margin-top:8px;padding:4px 12px;cursor:pointer;';
+        btn.addEventListener('click', () => {
+            clearTimeout(graceTimer);
+            hideIdleWarning();
+            resetIdleTimer();
+        });
+        box.appendChild(text);
+        box.appendChild(btn);
+        if (document.body) document.body.appendChild(box);
+    }
 
     function resetIdleTimer() {
         clearTimeout(idleTimer);
+        clearTimeout(graceTimer);
+        hideIdleWarning();
         idleTimer = setTimeout(() => {
-            // Show warning first
-            if (confirm('会话即将超时，是否继续？')) {
-                resetIdleTimer();
-            } else {
+            showIdleWarning();
+            graceTimer = setTimeout(() => {
+                hideIdleWarning();
                 logout();
-            }
-        }, IDLE_TIMEOUT);
+            }, IDLE_WARN_BEFORE);
+        }, IDLE_TIMEOUT - IDLE_WARN_BEFORE);
     }
 
     // Reset on user activity
