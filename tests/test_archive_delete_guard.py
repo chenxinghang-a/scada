@@ -12,6 +12,8 @@
 
 import sqlite3
 
+import pytest
+
 from 存储层.database import _delete_older_than_chunked
 
 
@@ -47,12 +49,8 @@ class TestChunkedDeleteExtraWhere:
 
     def test_rejects_bad_identifier(self):
         conn = self._conn()
-        try:
+        with pytest.raises(ValueError):
             _delete_older_than_chunked(conn, 'src; DROP TABLE src', 'ts', '2021-01-01')
-        except ValueError:
-            pass
-        else:
-            raise AssertionError('非法表名没被拒绝')
 
 
 class TestArchiveDeleteUsesArchiveGuard:

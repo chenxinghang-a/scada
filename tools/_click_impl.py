@@ -18,6 +18,7 @@ devices 页点「添加」会弹出 modal，modal 里也有个「添加」（提
 from __future__ import annotations
 
 import os
+import sys
 
 BASE = 'http://127.0.0.1:5000'
 OUT_DIR = os.path.join('build', 'e2e', 'all_buttons')
@@ -80,12 +81,12 @@ def click_page(page, name, path, items, out_dir: str = OUT_DIR):
         # 真删/真清空不在本次验收范围 —— 要看的是确认框出现与文案。
         try:
             dialogs.append({'type': d.type, 'message': (d.message or '')[:120]})
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[warn] 读取对话框信息失败: {exc}", file=sys.stderr)
         try:
             d.dismiss()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[warn] 关闭对话框失败: {exc}", file=sys.stderr)
 
     page.on('request', _on_request)
     page.on('console', _on_console)

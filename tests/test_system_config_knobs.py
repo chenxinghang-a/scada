@@ -188,6 +188,7 @@ ALLOWED_SECTIONS: dict[str, str] = {
     "logging": "配置页 GET/PUT /api/config 的展示与保存（前端 Config.vue）",
     "performance": "core/config_manager.load_connection_pool_settings → 采集层/device_manager",
     "system": "run.py（simulation_mode）+ 配置页展示",
+    "ui": "展示层/api/api_i18n._configured_language（界面默认语言读写）",
     "web": "展示层/websocket._load_cors_origins（socket.io 白名单）",
 }
 

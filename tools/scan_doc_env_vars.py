@@ -122,6 +122,33 @@ CONST_READER_PATTERNS = (
 
 #: 文档表格里的环境变量名：``| `VAR` | ... |``
 DOC_TABLE_VAR_RE = re.compile(r"^\|\s*`([A-Z][A-Z0-9_]{2,})`\s*\|", re.M)
+_DOC_TABLE_SEP_RE = re.compile(r"^\|\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?$")
+_ENV_TABLE_HEADERS = frozenset({
+    "变量", "变量名", "环境变量", "env", "env var", "env_var", "variable", "variables", "var",
+})
+
+
+def extract_doc_table_vars(text: str) -> list[str]:
+    """仅从首列表头声明为环境变量的 Markdown 表格中提取变量名，避免把状态码/质量码文档表误判为环境变量。"""
+    lines = text.splitlines()
+    found: list[str] = []
+    in_env_table = False
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            in_env_table = False
+            continue
+        if in_env_table:
+            m = DOC_TABLE_VAR_RE.match(stripped)
+            if m:
+                found.append(m.group(1))
+            continue
+        if idx > 0 and _DOC_TABLE_SEP_RE.match(stripped):
+            prev = lines[idx - 1].strip()
+            if prev.startswith("|"):
+                first_col = prev.split("|")[1].strip().strip("`* ").lower()
+                in_env_table = first_col in _ENV_TABLE_HEADERS
+    return found
 #: 配置 YAML 里的 ``${VAR}`` / ``${VAR:-默认}`` 引用。
 CONFIG_REF_RE = re.compile(r"\$\{([A-Z][A-Z0-9_]{2,})(?::[^}]*)?\}")
 
@@ -248,8 +275,8 @@ def collect_declared(root: pathlib.Path) -> dict[str, set[str]]:
     for p in _walk(root, DOC_EXTS):
         txt = _read(p)
         rel = str(p.relative_to(root)).replace("\\", "/")
-        for m in DOC_TABLE_VAR_RE.finditer(txt):
-            add(m.group(1), rel)
+        for var in extract_doc_table_vars(txt):
+            add(var, rel)
 
     return declared
 

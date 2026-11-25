@@ -139,8 +139,9 @@ def test_add_device_registers_raw_entry(manager):
     assert ids.count('new2') == 1
 
 
-def test_remove_unknown_device_returns_false(manager):
-    assert manager.remove_device('nope') is False
+def test_remove_unknown_device_is_idempotent(manager):
+    assert manager.remove_device('nope') is True
+    assert 'nope' not in manager.devices
 
 
 def test_remove_device_rolls_back_on_save_failure(manager):

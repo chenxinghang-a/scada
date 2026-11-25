@@ -141,11 +141,22 @@ class TestApi:
         assert data['language'] == 'en-US'
         assert data['messages']['nav.dashboard'] == 'Dashboard'
 
-    def test_get_auto_by_accept_language(self, client):
+    def test_get_auto_by_accept_language(self, client, monkeypatch):
+        from 展示层.api import api_i18n
+
         # 蓝图里是 `route('/')` + `url_prefix='/api/i18n'` → 完整路径带尾斜杠；
         # 不带斜杠会 308，test_client 默认不跟随。
+        # 隔离仓库 配置/system.yaml 的 ui.language，确保只测 Accept-Language 协商分支。
+        monkeypatch.setattr(api_i18n, '_configured_language', lambda: None)
         r = client.get('/api/i18n/', headers={'Accept-Language': 'en-US,en;q=0.9'})
         assert r.get_json()['language'] == 'en-US'
+
+    def test_configured_language_overrides_accept_language(self, client, monkeypatch):
+        from 展示层.api import api_i18n
+
+        monkeypatch.setattr(api_i18n, '_configured_language', lambda: 'zh-CN')
+        r = client.get('/api/i18n/', headers={'Accept-Language': 'en-US,en;q=0.9'})
+        assert r.get_json()['language'] == 'zh-CN'
 
     def test_unknown_language_falls_back(self, client):
         """语言写错不能 404 —— 前端会因此白屏。"""

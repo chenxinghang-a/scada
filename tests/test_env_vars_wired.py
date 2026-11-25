@@ -182,6 +182,14 @@ class TestScannerDetectsSyntheticDeclarations:
         })
         assert "SYNTH_MODE" in unread
 
+    def test_non_env_doc_table_ignored(self, scanner, tmp_path):
+        """非环境变量表（如质量码表 `| 码 | 值 |`）不得被当成环境变量声明。"""
+        unread, _ = self._scan(scanner, tmp_path, {
+            "文档/质量码口径.md": "| 码 | 值 | 含义 |\n|---|---|---|\n| `UNCERTAIN_LAST_USABLE` | 64 | 最后可用值 |\n",
+            "a.py": "print('no read here')\n",
+        })
+        assert "UNCERTAIN_LAST_USABLE" not in unread
+
     def test_ci_workflow_env_detected(self, scanner, tmp_path):
         """CI 工作流里的 ``env:`` 也是声明源 —— 最容易在将来被加进来。"""
         unread, _ = self._scan(scanner, tmp_path, {

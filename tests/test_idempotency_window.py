@@ -104,9 +104,12 @@ class TestAfterFailure:
         assert 'k6' not in ac._recent_writes, '失败不该在窗口里留时间戳'
 
     def test_end_without_begin_is_harmless(self, app_ctx):
-        """没有 begin 就 end（异常路径）不该炸。"""
+        """没有 begin 就 end（异常路径）不该炸，也不该遗留占位状态。"""
+        ac._idempotency_end('never_begun_fail', success=False)
+        assert 'never_begun_fail' not in ac._recent_writes
+        assert 'never_begun_fail' not in ac._in_flight_targets
         ac._idempotency_end('never_begun', success=True)
-        ac._idempotency_end('never_begun', success=False)
+        assert 'never_begun' not in ac._in_flight_targets
 
 
 class TestClockSafety:

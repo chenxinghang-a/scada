@@ -28,7 +28,8 @@ def _font(size=14):
     for name in ('msyh.ttc', 'simhei.ttf', 'arial.ttf'):
         try:
             return ImageFont.truetype(name, size)
-        except Exception:
+        except OSError as exc:
+            print(f"[warn] 加载字体 {name} 失败: {exc}", file=sys.stderr)
             continue
     return ImageFont.load_default()
 
@@ -45,7 +46,8 @@ def main(argv=None):
         for f in files:
             try:
                 im = Image.open(f).convert('RGB')
-            except Exception:
+            except OSError as exc:
+                print(f"[warn] 读取截图 {f} 失败: {exc}", file=sys.stderr)
                 continue
             h = int(THUMB_W * im.height / im.width)
             imgs.append((os.path.basename(f), im.resize((THUMB_W, h), Image.LANCZOS), h))

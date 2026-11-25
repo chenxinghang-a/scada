@@ -346,7 +346,8 @@ class Deployer:
                 continue
             try:
                 meta = json.loads(vf.read_text(encoding='utf-8'))
-            except Exception:
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                logger.warning("读取备份元信息失败 (%s): %s", vf, exc)
                 continue
             if not isinstance(meta, dict):
                 continue
