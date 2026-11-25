@@ -47,6 +47,18 @@ BACKEND_APP_ROUTES_FILE = BACKEND_ROOT / "展示层" / "routes.py"
 
 REPORT_PATH = BACKEND_ROOT / "api-contract-report.json"
 
+
+def _portable_path(p: Path) -> str:
+    """报告里的路径以「相对用户主目录」的形式记录。
+
+    报告是提交物，不能把本机用户名写进去；折叠成 `%USERPROFILE%/...`
+    之后，任何人拿到报告都能看出仓库之间的相对布局。
+    """
+    try:
+        return "%USERPROFILE%/" + p.resolve().relative_to(Path.home()).as_posix()
+    except ValueError:
+        return p.resolve().as_posix()
+
 # axios 实例（`src/api/request.ts` 中的 default 导出）的 baseURL 已包含 `/api`。
 # 前端源码里写的路径都是相对 baseURL 的，无需再写 `/api`。
 API_BASE_PREFIX = "/api"
@@ -734,11 +746,11 @@ def build_report(contract: Contract) -> dict:
             ),
         },
         "sources": {
-            "backend_repo": str(BACKEND_ROOT),
+            "backend_repo": _portable_path(BACKEND_ROOT),
             "backend_api_dir": str(BACKEND_API_DIR.relative_to(BACKEND_ROOT)).replace("\\", "/"),
             "backend_app_routes": str(BACKEND_APP_ROUTES_FILE.relative_to(BACKEND_ROOT)).replace("\\", "/"),
-            "frontend_api_dir": str(_resolve_frontend_api_dir()),
-            "frontend_src_dir": str(_resolve_frontend_src_dir()),
+            "frontend_api_dir": _portable_path(_resolve_frontend_api_dir()),
+            "frontend_src_dir": _portable_path(_resolve_frontend_src_dir()),
             "frontend_files": sorted(
                 {ep.source_file for ep in contract.frontend}
             ),

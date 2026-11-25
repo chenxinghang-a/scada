@@ -11,7 +11,8 @@ import requests
 from pathlib import Path
 from datetime import datetime
 
-PROXY = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
+_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+PROXY = {"http": _proxy, "https": _proxy} if _proxy else None
 REPO = "chenxinghang-a/scada"
 BRANCH = "main"
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -56,7 +57,7 @@ IGNORE_FILES = {".env"}
 IGNORE_EXTS = {".pyc", ".pyo", ".db", ".sqlite3", ".log", ".bak"}
 IGNORE_PATTERNS = ["stderr", "stdout"]  # 开头匹配
 
-PROJECT_DIR = Path(r"c:\Users\cxx\WorkBuddy\Claw\industrial_scada")
+PROJECT_DIR = Path(os.environ.get("SCADA_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 
 
 def should_ignore(rel_path: str) -> bool:

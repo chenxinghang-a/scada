@@ -46,7 +46,7 @@ def fake_project():
     为什么必须绕这一圈（踩过）：`security_scan.py` 的每个扫描方法开头都有
     `if 'test' in str(py_file).lower(): continue` —— 这是个基于**整条路径字符串**
     的过滤。而 pytest 的 `tmp_path` 形如
-    `...\\pytest-of-cxx\\pytest-123\\test_security_scan_unreadable_0\\`，
+    `...\\pytest-of-<user>\\pytest-123\\test_security_scan_unreadable_0\\`，
     路径里必然含 'test'，于是**所有文件都被跳过**，测试会"假绿"
     （第一次跑就是这么翻车的：scan_error_count 恒为 0）。
     用 `tempfile.mkdtemp(prefix='scanprobe_')` 拿到干净路径。

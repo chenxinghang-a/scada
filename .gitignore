@@ -112,3 +112,6 @@ data/audit_log.jsonl
 
 # 线程栈诊断产物（tools/diag_run.py 生成）
 data/diag_traceback_*.txt
+
+# 本机环境备忘（绝对路径、私有工具、代理端口），不进 git
+DEV_LOCAL.md

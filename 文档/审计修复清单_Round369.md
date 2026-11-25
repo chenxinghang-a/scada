@@ -1,7 +1,7 @@
 # Industrial SCADA 审计缺陷修复清单（Round 369 之后）
 
 > 依据：`industrialscadacodeauditreport (1).pdf`（v1.3.1091 / Round 369 二次审计）
-> 仓库：`C:\Users\cxx\WorkBuddy\Claw\industrial_scada`
+> 仓库：`industrial_scada`
 > 改动规模：62 个文件，+2242 / -576 行（含 7 个测试/守卫同步）
 
 ## 一、P0 严重（已修）

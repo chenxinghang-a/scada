@@ -1,6 +1,6 @@
 {
-  "pythonPath": "C:\\Users\\cxx\\.workbuddy\\binaries\\python\\envs\\default\\Scripts\\python.exe",
-  "venvPath": "C:\\Users\\cxx\\.workbuddy\\binaries\\python\\envs\\default",
+  "venvPath": ".",
+  "venv": ".venv",
   "typeCheckingMode": "basic",
   "reportMissingImports": "warning",
   "reportMissingModuleSource": "none",

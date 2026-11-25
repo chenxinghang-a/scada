@@ -568,16 +568,17 @@ git push origin main
 ```
 
 - GitHub仓库: `https://github.com/chenxinghang-a/scada.git`
-- 推仓工具: `C:\Users\cxx\WorkBuddy\Claw\tools\mingit\cmd\git.exe`
-- 代理: `git config http.proxy http://127.0.0.1:7890`
+- 网络受限需要代理时，只用仓库级配置，代理地址按本机实际填写且不要提交：
+  `git config --local http.proxy http://<proxy-host>:<port>`
 
 ## Agent启动指南
 
 ### 从源码启动Agent
 
 ```bash
-# 1. 进入项目目录
-cd C:\Users\cxx\WorkBuddy\Claw\industrial_scada
+# 1. 克隆并进入项目目录（已 clone 则直接 cd scada）
+git clone https://github.com/chenxinghang-a/scada.git
+cd scada
 
 # 2. 安装依赖 (首次)
 pip install -r requirements.txt

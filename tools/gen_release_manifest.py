@@ -54,7 +54,7 @@ def _frontend_root_candidates() -> list[Path]:
     return [
         BACKEND_ROOT.parent / "scada-app",
         BACKEND_ROOT / "scada-app",
-        Path("C:/Users/cxx/scada-app"),
+        Path(os.environ.get("SCADA_APP_DIR") or Path.home() / "scada-app"),
         BACKEND_ROOT.parent.parent / "scada-app",
     ]
 

@@ -12,7 +12,7 @@ import os
 # Gemini配置 — 从环境变量读取，不再硬编码
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta/chat/completions"
-PROXY = "http://127.0.0.1:7890"
+PROXY = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
 def ask_gemini(prompt, max_tokens=8000):
     """调用Gemini API (OpenAI兼容格式)"""
@@ -32,7 +32,7 @@ def ask_gemini(prompt, max_tokens=8000):
             BASE_URL,
             headers=headers,
             json=data,
-            proxies={"http": PROXY, "https": PROXY},
+            proxies={"http": PROXY, "https": PROXY} if PROXY else None,
             timeout=120
         )
         result = r.json()

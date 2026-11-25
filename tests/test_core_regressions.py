@@ -427,7 +427,7 @@ _MARKER_HEAD = '# 接线状态：未接线（WIRED = False）'
 # 原先这里钉着 7 个 core 模块（tracing / sql_cache / query_optimizer /
 # masking_rule_engine / token_bucket_limiter / db_pool_enhanced / log_sanitizer），
 # 它们都已按 D4 决策**备份后删除**
-# （备份：`C:\Users\cxx\scada-dead-modules-backup-20261008\`，含 MANIFEST.json 与 git blob）。
+# （备份：仓库外的备份目录，含 MANIFEST.json 与 git blob）。
 # 模块不存在了，"它有没有被判为未接线"也就无从谈起 —— 集合清空。
 # 防扫描器退化的职责改由下面的**反向钉子 `_MUST_BE_WIRED`** + 模块数下限承担。
 _MUST_BE_UNWIRED: set = set()

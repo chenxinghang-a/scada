@@ -16,7 +16,7 @@
 （alarm_intelligence / data_quality / energy_optimizer / fault_prediction / production_analyzer）。
 
 那五个模块已按 D4 决策**备份后删除**
-（备份：`C:\\Users\\cxx\\scada-dead-modules-backup-20261008\\`，含 MANIFEST.json 与 git blob）。
+（备份：仓库外的备份目录，含 MANIFEST.json 与 git blob）。
 模块不存在了，「它有没有被标注为未接线」这个问题本身也就不存在 ——
 **这是本轮唯一一类"删除测试"，删的是只对已删代码有意义的断言，不是覆盖。**
 

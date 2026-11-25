@@ -1,11 +1,18 @@
 """用 OSV.dev 漏洞库审计当前 venv 的依赖（无需安装任何额外包）。"""
 import json
+import os
 import subprocess
 import sys
 import urllib.request
+from pathlib import Path
 
-PROXY = "http://127.0.0.1:10808"
-VENV_PY = r"C:/Users/cxx/WorkBuddy/Claw/industrial_scada/.venv/Scripts/python.exe"
+PROXY = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+VENV_PY = str(
+    Path(
+        os.environ.get("SCADA_VENV_PY")
+        or Path(__file__).resolve().parents[2] / ".venv" / "Scripts" / "python.exe"
+    )
+)
 
 
 def installed():
@@ -21,9 +28,10 @@ def query(pkgs):
         for n, v in pkgs
     ]
     body = json.dumps({"queries": queries}).encode()
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": PROXY, "https": PROXY})
-    )
+    handlers = []
+    if PROXY:
+        handlers.append(urllib.request.ProxyHandler({"http": PROXY, "https": PROXY}))
+    opener = urllib.request.build_opener(*handlers)
     req = urllib.request.Request(
         "https://api.osv.dev/v1/querybatch",
         data=body,

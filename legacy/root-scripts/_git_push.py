@@ -2,10 +2,12 @@
 import subprocess
 import sys
 import os
+import shutil
+from pathlib import Path
 
-os.chdir(r"c:\Users\cxx\WorkBuddy\Claw\industrial_scada")
+os.chdir(os.environ.get("SCADA_PROJECT_DIR") or str(Path(__file__).resolve().parents[2]))
 
-GIT = r"C:\Users\cxx\WorkBuddy\Claw\tools\mingit\cmd\git.exe"
+GIT = os.environ.get("GIT_EXE") or shutil.which("git") or "git"
 
 def run(args):
     result = subprocess.run([GIT] + args, capture_output=True, text=True, encoding='utf-8', errors='replace')

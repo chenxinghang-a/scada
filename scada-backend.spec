@@ -6,7 +6,7 @@
 # （磁盘上有、git 里没有），导致**新克隆的仓库无法复现后端打包**。
 # 现已在 .gitignore 里加 `!scada-backend.spec` 例外放行。
 #
-# pathex 为什么不用硬编码：原来是 'C:\Users\cxx\WorkBuddy\Claw\industrial_scada'，
+# pathex 为什么不用硬编码：原来写的是本机绝对路径（含用户名与仓库名），
 # 换机器 / 换用户名就构建失败。SPECPATH 是 PyInstaller 注入的全局变量，
 # 等于 os.path.split(SPEC)[0]（即 spec 文件所在目录）。
 # 官方文档：https://pyinstaller.org/en/stable/spec-files.html

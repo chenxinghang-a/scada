@@ -197,7 +197,7 @@ jobs:
     # 在 clean checkout 上证明后端可打包，产出 dist/scada-backend/（onedir）。
     #
     # 为什么用 scada-backend.spec 而不是 SCADA.spec / build.py：
-    #   - SCADA.spec 的 datas 硬编码了 'C:\Users\cxx\...\industrial_scada'，
+    #   - SCADA.spec 的 datas 曾硬编码本机绝对路径（含用户名与 …\industrial_scada），
     #     换机 / CI runner 上直接失效；
     #   - build.py 走的是 launcher.py onefile（SCADA.exe），面向"双击即用"，
     #     而前端 Electron 的 extraResources 期望的是 onedir 布局
