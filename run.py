@@ -49,6 +49,99 @@ logger = get_logger(__name__)
 
 # 配置Schema验证
 from core.config_validator import validate_startup_configs
+from core.safe_numeric import try_int
+
+
+def _resolve_edge_register_address(device_manager, device_control,
+                                  device_id: str, register_or_addr):
+    """把边缘决策传入的点位名或寄存器地址解析为整型寄存器地址（拒绝 bool/非整数）。"""
+    if register_or_addr is None or isinstance(register_or_addr, (bool, float)):
+        return None
+
+    if device_manager is not None:
+        try:
+            devices = (
+                device_manager.get_all_devices()
+                if hasattr(device_manager, 'get_all_devices')
+                else getattr(device_manager, 'devices', None)
+            ) or {}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("边缘决策读取设备表失败 (%s): %s", device_id, e)
+            devices = getattr(device_manager, 'devices', None) or {}
+        dev_cfg = devices.get(device_id) if isinstance(devices, dict) else None
+        if isinstance(dev_cfg, dict):
+            for reg in (dev_cfg.get('registers') or []):
+                if isinstance(reg, dict) and reg.get('name') == register_or_addr:
+                    addr = try_int(reg.get('address'))
+                    if addr is not None and not isinstance(reg.get('address'), bool):
+                        return addr
+
+    direct = try_int(register_or_addr)
+    if direct is not None:
+        return direct
+
+    resolver = getattr(device_control, '_resolve_register_address', None)
+    if callable(resolver):
+        resolved = resolver(device_id, register_or_addr)
+        if not isinstance(resolved, bool):
+            return try_int(resolved)
+    return None
+
+
+def _execute_edge_write_register(device_manager, device_control,
+                                 device_id: str, address, value) -> bool:
+    """边缘决策 write_register / PID 输出回调：走安全层并返回明确 bool 成败。
+
+    返回值契约（与 core.action_result / EdgeDecisionEngine._action_failed 对齐）：
+    只有真正下发并验证通过才返回 True；阻断/异常/待审批/回读失败一律返回 False，
+    绝不返回 None（None 在 _action_failed 里只留给无结论的报警通知）。
+    """
+    resolved_addr = _resolve_edge_register_address(
+        device_manager, device_control, device_id, address)
+    if resolved_addr is None:
+        logger.error("边缘决策写入失败: 无法解析设备 %s 寄存器 %r 的地址",
+                     device_id, address)
+        return False
+
+    try:
+        # round 370（BUG-002）：PID 输出是**工程值浮点**，
+        # 必须走 engineering=True —— 安全层内部按点位
+        # scale/offset 换算、按 data_type 决定单/双寄存器，
+        # 否则非整数输出会被"寄存器只接受整数"整条拒绝。
+        result = device_control.write_with_verification(
+            device_id, resolved_addr, value,
+            operator='edge_decision', kind='register',
+            engineering=True,
+            # round 378：标记为自动来源，由设备自主等级
+            # （manual/supervised/automatic）决定是否放行。
+            origin='auto') or {}
+    except Exception as e:      # noqa: BLE001
+        logger.error("边缘决策写入异常: %s/%s=%s — %s",
+                     device_id, address, value, e)
+        return False
+
+    if not isinstance(result, dict):
+        logger.error("边缘决策写入返回非法结果: %s/%s=%s — %r",
+                     device_id, address, value, result)
+        return False
+
+    if result.get('pending_approval'):
+        # HITL：设备处于人工在环/未授权监督模式，动作已转为
+        # 待审批提案。尚未落到现场，必须返回 False 让引擎如实记录未生效。
+        logger.info("边缘决策写入等待人工审批: %s/%s=%s (action=%s)",
+                    device_id, address, value, result.get('action_id'))
+        return False
+    if not result.get('success'):
+        logger.error("边缘决策写入失败: %s/%s=%s — %s",
+                     device_id, address, value,
+                     result.get('message') or '未知原因')
+        return False
+    if result.get('verified') is False:
+        # 写下去了但回读不一致：现场没变成期望值，
+        # 必须报出来，否则闭环会在错误的实际值上继续调节。
+        logger.warning("边缘决策写入已下发但回读不一致: %s/%s", device_id, address)
+        return False
+    return True
 
 
 def _persisted_simulation_mode():
@@ -463,8 +556,9 @@ def main():
             # 而报警层的「已触发标记 / 旁路 / 冷却 / 升级跟踪」同样按设备存。
             # （`alarm_manager.forget_device` 是 round 356 新增的）
             for _mod in (data_collector, device_control, alarm_manager,
-                         oee_calculator, energy_manager, vibration_analyzer,
-                         predictive_maintenance, spc_analyzer, tsdb_adapter):
+                         edge_decision, oee_calculator, energy_manager,
+                         vibration_analyzer, predictive_maintenance,
+                         spc_analyzer, tsdb_adapter):
                 if _mod is None:
                     continue
                 _fn = getattr(_mod, 'forget_device', None)
@@ -640,59 +734,9 @@ def main():
 
                 # 注册边缘决策PID输出回调
                 def edge_write_register(device_id, address, value):
-                    """边缘决策 PID 输出回调：**必须走安全层**。
-
-                    round 342 之前是：
-
-                        device_manager.adjust_device(device_id, str(address), float(value))
-
-                    三个问题叠在一起：
-
-                    1. **绕过安全层** —— 急停期间照写、联锁触发照写、
-                       没有量程校验、没有审计、没有回读验证。
-                       `/adjust`、`/start`、`/stop` 都在 round 341 收敛了，
-                       这是最后一条漏网的写通道。
-                    2. **参数传错** —— `adjust_device` 的第二个参数是
-                       **点位名**（它内部 `reg.get('name') == register_name`），
-                       而这里传的是 `str(address)`（"10"）。
-                       除非某个点位恰好叫 "10"，否则它永远返回
-                       `{'success': False, 'message': '寄存器 10 不存在'}`。
-                       **PID 输出从未真正写进过设备。**
-                    3. **返回值被丢掉** —— 只 `except Exception`，
-                       而失败是正常返回（不抛异常），于是全程静默：
-                       日志干净、PID 以为调了、现场没动。
-                    """
-                    try:
-                        # round 370（BUG-002）：PID 输出是**工程值浮点**，
-                        # 必须走 engineering=True —— 安全层内部按点位
-                        # scale/offset 换算、按 data_type 决定单/双寄存器，
-                        # 否则非整数输出会被"寄存器只接受整数"整条拒绝。
-                        result = device_control.write_with_verification(
-                            device_id, int(address), value,
-                            operator='edge_decision', kind='register',
-                            engineering=True,
-                            # round 378：标记为自动来源，由设备自主等级
-                            # （manual/supervised/automatic）决定是否放行。
-                            origin='auto') or {}
-                    except Exception as e:      # noqa: BLE001
-                        logger.error("边缘决策写入异常: %s/%s=%s — %s",
-                                     device_id, address, value, e)
-                        return
-
-                    if result.get('pending_approval'):
-                        # HITL：设备处于人工在环/未授权监督模式，动作已转为
-                        # 待审批提案。这不是故障，不能刷 ERROR。
-                        logger.info("边缘决策写入等待人工审批: %s/%s=%s "
-                                    "(action=%s)", device_id, address, value,
-                                    result.get('action_id'))
-                    elif not result.get('success'):
-                        logger.error("边缘决策写入失败: %s/%s=%s — %s",
-                                     device_id, address, value,
-                                     result.get('message') or '未知原因')
-                    elif result.get('verified') is False:
-                        # 写下去了但回读不一致：现场没变成期望值，
-                        # 必须报出来，否则闭环会在错误的实际值上继续调节。
-                        logger.warning("边缘决策写入已下发但回读不一致: %s/%s", device_id, address)
+                    """边缘决策 PID 输出回调：**必须走安全层**并明确返回成败 bool。"""
+                    return _execute_edge_write_register(
+                        device_manager, device_control, device_id, address, value)
 
                 edge_decision.register_action('write_register', edge_write_register)
 

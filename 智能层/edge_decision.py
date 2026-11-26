@@ -68,8 +68,14 @@ class EdgeDecisionEngine:
         # round 300：PID 单拍 dt 上限。单调时钟解决不了「进程被挂起 / 系统休眠」——
         # 那时 dt 是几十分钟，积分项一步就打满限幅。超过这个值视为这一拍不可信，
         # 重新起算而不是硬算（正常采样周期是秒级；采样周期确实更长的部署可调）。
-        self._max_pid_dt = float(self.config.get('max_pid_dt_seconds', 60.0))
-        self._max_data_age = float(self.config.get('max_data_age_seconds', 10.0))
+        _pid_dt = try_finite_float(self.config.get('max_pid_dt_seconds', 60.0))
+        self._max_pid_dt = (
+            60.0 if _pid_dt is None or _pid_dt <= 0 else float(_pid_dt)
+        )
+        _data_age = try_finite_float(self.config.get('max_data_age_seconds', 10.0))
+        self._max_data_age = (
+            10.0 if _data_age is None or _data_age < 0 else float(_data_age)
+        )
 
         # 当前数据快照
         self._data_snapshot: dict[str, float] = {}
@@ -206,21 +212,69 @@ class EdgeDecisionEngine:
                 logger.error(f"决策引擎异常: {e}", exc_info=True)
             time.sleep(1)  # 1秒决策周期
 
+    @staticmethod
+    def _finite_non_bool(value: Any) -> float | None:
+        """解析有限浮点数，并显式拒绝 bool（bool 是 int 子类）。"""
+        if isinstance(value, bool):
+            return None
+        return try_finite_float(value)
+
+    @staticmethod
+    def _is_good_quality(quality: Any) -> bool:
+        """校验数据质量码：接受数值 192 (OPC UA GOOD) 及历史单测默认字符串 'GOOD'。"""
+        if quality is None or isinstance(quality, bool):
+            return False
+        if isinstance(quality, (int, float)):
+            num = try_finite_float(quality)
+            return num is not None and num == 192.0
+        if isinstance(quality, str):
+            text = quality.strip().upper()
+            return text in ('GOOD', '192')
+        return False
+
+    @staticmethod
+    def _normalize_ts(ts: Any) -> float | None:
+        """将输入时间戳归一化到 monotonic 秒；非有限或布尔值返回 None。"""
+        if ts is None:
+            return time.monotonic()
+        if isinstance(ts, bool):
+            return None
+        if isinstance(ts, datetime):
+            try:
+                return time.monotonic() - (time.time() - ts.timestamp())
+            except (OverflowError, OSError, ValueError):
+                return None
+        ts_num = try_finite_float(ts)
+        if ts_num is None:
+            return None
+        if ts_num > 1e9:
+            return time.monotonic() - (time.time() - ts_num)
+        return ts_num
+
     def _fresh_snapshot(self) -> dict[str, float]:
         now = time.monotonic()
         fresh: dict[str, float] = {}
         dropped: list[str] = []
         with self._lock:
             for k, v in self._data_snapshot.items():
+                num_v = None if isinstance(v, bool) else try_finite_float(v)
+                if num_v is None:
+                    dropped.append(f"{k}(non_finite={v!r})")
+                    continue
                 meta = self._data_quality.get(k)
                 if meta is None:
-                    fresh[k] = v
+                    fresh[k] = num_v
                     continue
                 quality, ts = meta
-                if str(quality).upper() == 'GOOD' and (now - ts) <= self._max_data_age:
-                    fresh[k] = v
+                ts_num = None if isinstance(ts, bool) else try_finite_float(ts)
+                if ts_num is None:
+                    dropped.append(f"{k}(quality={quality},invalid_ts={ts!r})")
+                    continue
+                age = now - ts_num
+                if self._is_good_quality(quality) and -1.0 <= age <= self._max_data_age:
+                    fresh[k] = num_v
                 else:
-                    dropped.append(f"{k}(quality={quality},age={now - ts:.1f}s)")
+                    dropped.append(f"{k}(quality={quality},age={age:.1f}s)")
         if dropped:
             logger.error("数据快照剔除坏质量/过期点位（断线或采集异常）: %s", ", ".join(dropped))
         return fresh
@@ -283,27 +337,52 @@ class EdgeDecisionEngine:
 
     # ==================== 数据输入 ====================
 
-    def update_data(self, key: str, value: float, quality: str = 'GOOD', ts: float | None = None):
+    def update_data(self, key: str, value: float, quality: Any = 'GOOD', ts: float | None = None):
         """
         更新数据快照
 
         Args:
             key: 数据键，格式 "device_id:register_name"
             value: 当前值
-            quality: 数据质量码，默认 'GOOD'
+            quality: 数据质量码，默认 'GOOD'（也接受数值 192）
             ts: 单调时钟时间戳（秒），默认当前时间
         """
         # 裸 float() 只捕 TypeError/ValueError 挡不住 NaN/Inf（`float("nan")` 不抛、
         # `float("1e400")` 得到 inf 也不抛），也挡不住 int 路径的 OverflowError。
-        # 统一走项目里的 try_finite_float：解析失败与非有限值都返回 None。
+        # 统一走项目里的 try_finite_float：解析失败与非有限值都返回 None；同时拒绝 bool。
+        if isinstance(value, bool):
+            logger.error("数据快照拒绝布尔输入: key=%s, value=%r", key, value)
+            return
         numeric_value = try_finite_float(value)
         if numeric_value is None:
             logger.error("数据快照拒绝非数值/非有限输入: key=%s, value=%r", key, value)
             return
-        ts_val = time.monotonic() if ts is None else ts
+        ts_val = self._normalize_ts(ts)
+        if ts_val is None:
+            logger.error("数据快照拒绝非法时间戳: key=%s, ts=%r", key, ts)
+            return
         with self._lock:
             self._data_snapshot[key] = numeric_value
             self._data_quality[key] = (quality, ts_val)
+
+    def forget_device(self, device_id: str) -> bool:
+        """设备删除后清理该设备在边缘决策引擎中的缓存状态。"""
+        if not device_id:
+            return False
+        prefix = f"{device_id}:"
+        removed = False
+        with self._lock:
+            for container in (self._data_snapshot, self._data_quality):
+                stale_keys = [
+                    k for k in list(container.keys())
+                    if k == device_id or k.startswith(prefix)
+                ]
+                for k in stale_keys:
+                    container.pop(k, None)
+                    removed = True
+        if removed:
+            logger.info("边缘决策引擎已清理已删除设备的缓存数据: %s", device_id)
+        return removed
 
     def register_action(self, action_name: str, callback: Callable[..., Any]):
         """
@@ -453,8 +532,8 @@ class EdgeDecisionEngine:
             op = condition.get('operator', 'gt')
             threshold = condition.get('value', 0)
             _raw_value, _raw_threshold = value, threshold
-            value = try_finite_float(value)
-            threshold = try_finite_float(threshold)
+            value = self._finite_non_bool(value)
+            threshold = self._finite_non_bool(threshold)
             if value is None or threshold is None:
                 logger.warning(
                     "条件评估忽略非数值/非有限输入: key=%s, value=%r, threshold=%r",
@@ -472,7 +551,7 @@ class EdgeDecisionEngine:
             elif op == 'lte':
                 return value <= threshold
             elif op == 'between':
-                value2 = try_finite_float(condition.get('value2', threshold))
+                value2 = self._finite_non_bool(condition.get('value2', threshold))
                 if value2 is None:
                     logger.warning("条件评估忽略非数值/非有限上界: key=%s, value2=%r",
                                    key, condition.get('value2'))
@@ -518,7 +597,10 @@ class EdgeDecisionEngine:
         callback_key = (action.get('callback_name', '')
                         if action_type == 'callback' else action_type)
 
-        if not self._action_callbacks.get(callback_key):
+        with self._lock:
+            callback = self._action_callbacks.get(callback_key)
+
+        if not callback:
             log_entry['ok'] = False
             log_entry['result'] = f'失败: 未注册 {callback_key} 回调'
             with self._lock:
@@ -537,8 +619,7 @@ class EdgeDecisionEngine:
                 # DeviceControlSafety）失败时都是**返回 False 或
                 # {'success': False}**，不抛异常 —— 只看异常会把
                 # "PLC 拒写"记成 ok=True，触发计数照涨，看板上像是闭环生效了。
-                res = self._action_callbacks['write_register'](
-                    device_id, register_name, value)
+                res = callback(device_id, register_name, value)
                 if self._action_failed(res):
                     log_entry['ok'] = False
                     log_entry['result'] = (
@@ -558,7 +639,6 @@ class EdgeDecisionEngine:
 
         elif action_type == 'set_alarm':
             alarm_msg = action.get('message', f'规则 {rule_id} 触发')
-            callback = self._action_callbacks['set_alarm']
             # round 300：回调抛异常时不许再写「报警: xxx」——
             # 现场音柱没响、日志说报了警，正是 287 那一族的老毛病。
             try:
@@ -583,7 +663,6 @@ class EdgeDecisionEngine:
 
         elif action_type == 'callback':
             callback_name = action.get('callback_name', '')
-            callback = self._action_callbacks[callback_name]
             try:
                 # BUG-050：同上，回调返回 False 也算没生效。
                 res = callback(snapshot)
@@ -603,19 +682,20 @@ class EdgeDecisionEngine:
                     self._action_failures += 1
                 logger.error("回调 %s 异常: %s", callback_name, e)
 
-        # 更新规则统计
+        # 更新规则统计与决策日志（同一把锁内按 rule_type 精确查找，避免 rule/interlock 同名冲突）
         #
         # round 369：**动作没生效就不算"触发成功"**。
-        # 原来即使 log_entry['ok'] 为 False 也照常刷新 last_triggered 并累加
-        # trigger_count —— 看板上显示"已触发 N 次、最近一次刚刚"，
-        # 而现场一次都没动过。
         with self._lock:
-            target_rule = self.rules.get(rule_id) or self.interlocks.get(rule_id)
+            if rule_type == 'interlock':
+                target_rule = self.interlocks.get(rule_id)
+            elif rule_type == 'rule':
+                target_rule = self.rules.get(rule_id)
+            else:
+                target_rule = self.rules.get(rule_id) or self.interlocks.get(rule_id)
             if target_rule is not None and log_entry.get('ok', True):
                 target_rule['last_triggered'] = datetime.now().isoformat()
                 target_rule['trigger_count'] = target_rule.get('trigger_count', 0) + 1
-
-        self.decision_log.append(log_entry)
+            self.decision_log.append(log_entry)
 
         # round 300：动作没生效时不能再用 info 写一行「成功」样子的日志
         if log_entry.get('ok', True):
@@ -650,12 +730,12 @@ class EdgeDecisionEngine:
         kp = ctrl['kp']
         ki = ctrl['ki']
         kd = ctrl['kd']
-        # 同上：统一用 try_finite_float，NaN/Inf/非数值一律 None → 放弃本次下发。
-        _pv = try_finite_float(process_value)
-        _sp = try_finite_float(setpoint)
-        _kp = try_finite_float(kp)
-        _ki = try_finite_float(ki)
-        _kd = try_finite_float(kd)
+        # 同上：统一用 _finite_non_bool，NaN/Inf/布尔/非数值一律 None → 放弃本次下发。
+        _pv = self._finite_non_bool(process_value)
+        _sp = self._finite_non_bool(setpoint)
+        _kp = self._finite_non_bool(kp)
+        _ki = self._finite_non_bool(ki)
+        _kd = self._finite_non_bool(kd)
         if None in (_pv, _sp, _kp, _ki, _kd):
             logger.error(
                 "PID控制器 %s 输入或参数非数值/非有限 (pv=%r, sp=%r, kp=%r, ki=%r, kd=%r)，放弃本次计算与下发",
@@ -717,7 +797,8 @@ class EdgeDecisionEngine:
 
         # 写入输出
         output_key = ctrl['output_key']
-        callback = self._action_callbacks.get('write_register')
+        with self._lock:
+            callback = self._action_callbacks.get('write_register')
         # round 300：PID 算出了输出却没人写 —— 旧代码是 `if callback and ':' in
         # output_key:` 直接静默跳过，而 `get_rules()` 里 output 照样有值、
         # 看板上像是"正在控制"。控制量根本没下发，比不控制更危险。
@@ -735,7 +816,7 @@ class EdgeDecisionEngine:
         try:
             res = callback(device_id, register_name, output)
             # round 369：同 `_execute_action` —— 写失败是返回 False，不是抛异常
-            if res is False or (isinstance(res, dict) and res.get('success') is False):
+            if self._action_failed(res):
                 with self._lock:
                     self._action_failures += 1
                 logger.error("PID 输出写入未生效: %s = %s（底层返回 %r）",
@@ -761,7 +842,12 @@ class EdgeDecisionEngine:
 
     def get_decision_log(self, limit: int = 50) -> list[dict[str, Any]]:
         """获取决策日志"""
-        return list(self.decision_log)[-limit:]
+        if limit is not None and limit <= 0:
+            return []
+        with self._lock:
+            if limit is None:
+                return list(self.decision_log)
+            return list(self.decision_log)[-limit:]
 
     def get_data_snapshot(self) -> dict[str, float]:
         """获取当前数据快照"""
@@ -770,15 +856,16 @@ class EdgeDecisionEngine:
 
     def get_status(self) -> dict[str, Any]:
         """获取引擎状态"""
-        return {
-            'running': self._running,
-            'rules_count': len(self.rules),
-            'interlocks_count': len(self.interlocks),
-            'pid_controllers_count': len(self.pid_controllers),
-            'data_points': len(self._data_snapshot),
-            'decision_log_size': len(self.decision_log),
-            'registered_actions': list(self._action_callbacks.keys()),
-            # round 300：动作失败次数（未注册回调 / 回调抛异常）。
-            # 与 registered_actions 对照即可发现「规则配了但没人执行」。
-            'action_failures': self._action_failures,
-        }
+        with self._lock:
+            return {
+                'running': self._running,
+                'rules_count': len(self.rules),
+                'interlocks_count': len(self.interlocks),
+                'pid_controllers_count': len(self.pid_controllers),
+                'data_points': len(self._data_snapshot),
+                'decision_log_size': len(self.decision_log),
+                'registered_actions': list(self._action_callbacks.keys()),
+                # round 300：动作失败次数（未注册回调 / 回调抛异常）。
+                # 与 registered_actions 对照即可发现「规则配了但没人执行」。
+                'action_failures': self._action_failures,
+            }

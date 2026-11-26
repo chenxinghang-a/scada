@@ -279,12 +279,12 @@ class TestEstopRestoreScope:
         }}
         dc._interlock_states = {'r1': False}
 
-        def _persist(_key, _payload):
+        def _on_override(active):
             # 模拟时间窗：整体检查通过之后、逐台启动之前联锁触发
-            dc._interlock_states['r1'] = True
-            return True
+            if active is False:
+                dc._interlock_states['r1'] = True
 
-        db.set_system_state.side_effect = _persist
+        dm.set_estop_override = _on_override
 
         dc.trigger_emergency_stop('test')
         dc._interlock_states['r1'] = False     # 触发阶段不挡急停
