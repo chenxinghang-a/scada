@@ -21,7 +21,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from core.safe_numeric import try_finite_float
+from core.safe_numeric import to_int, try_finite_float
+
+
+def _format_ts_ms(timestamp: Any) -> str:
+    """校验并格式化时间戳为 TDengine 毫秒字符串。"""
+    if not isinstance(timestamp, datetime):
+        raise ValueError(f'时间戳非法，期望 datetime，收到 {type(timestamp).__name__}: {timestamp!r}')
+    return timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+
+def _safe_int_col(value: Any, name: str) -> int:
+    """将整型列转为 int；拒绝 bool、非有限值及非整数。"""
+    if isinstance(value, bool):
+        raise ValueError(f'Invalid {name}: bool {value!r} is not accepted')
+    return to_int(value, name=name)
 
 
 def _sanitize_table_name(raw: str) -> str:
@@ -80,9 +94,9 @@ class TelemetryRecord:
 
     def to_sql_values(self) -> str:
         """转换为SQL VALUES格式"""
-        ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        ts = _format_ts_ms(self.timestamp)
         return (f"('{ts}', {_sql_number(self.value)}, "
-                f"{int(self.quality)})")
+                f"{_safe_int_col(self.quality, 'quality')})")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -115,13 +129,12 @@ class AlarmRecord:
     acknowledged: bool = False  # 是否已确认
 
     def to_sql_values(self) -> str:
-        ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        ts = _format_ts_ms(self.timestamp)
         ack = 1 if self.acknowledged else 0
         # 防SQL注入：转义反斜杠、单引号、空字节
-        msg = self.message.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
-        msg = msg[:512].rstrip("\\")
-        level = self.level.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
-        alarm_type = self.alarm_type.replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
+        msg = _escape_sql_value(self.message)[:512].rstrip("\\")
+        level = _escape_sql_value(self.level)
+        alarm_type = _escape_sql_value(self.alarm_type)
         return (f"('{ts}', '{level}', '{alarm_type}', '{msg}', "
                 f"{_sql_number(self.value)}, {_sql_number(self.threshold)}, {ack})")
 
@@ -145,12 +158,12 @@ class OEERecord:
     downtime: float = 0     # 停机时间（秒）
 
     def to_sql_values(self) -> str:
-        ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        ts = _format_ts_ms(self.timestamp)
         return (f"('{ts}', {_sql_number(self.availability)}, {_sql_number(self.performance)}, "
                 f"{_sql_number(self.quality_rate)}, {_sql_number(self.oee)}, "
-                f"{int(self.total_count)}, "
-                f"{int(self.good_count)}, {_sql_number(self.run_time)}, "
-                f"{_sql_number(self.downtime)})")
+                f"{_safe_int_col(self.total_count, 'total_count')}, "
+                f"{_safe_int_col(self.good_count, 'good_count')}, "
+                f"{_sql_number(self.run_time)}, {_sql_number(self.downtime)})")
 
 
 @dataclass
@@ -169,7 +182,7 @@ class EnergyRecord:
     power_factor: float = 1.0  # 功率因数
 
     def to_sql_values(self) -> str:
-        ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        ts = _format_ts_ms(self.timestamp)
         return (f"('{ts}', {_sql_number(self.power)}, {_sql_number(self.energy)}, "
                 f"{_sql_number(self.voltage)}, {_sql_number(self.current)}, "
                 f"{_sql_number(self.power_factor)})")
@@ -191,7 +204,7 @@ class PredictiveRecord:
     trend: str = "stable"   # 趋势 (improving, stable, degrading)
 
     def to_sql_values(self) -> str:
-        ts = self.timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        ts = _format_ts_ms(self.timestamp)
         trend = _escape_sql_value(self.trend)
         return (f"('{ts}', {_sql_number(self.health_score)}, "
                 f"{_sql_number(self.failure_probability)}, "
@@ -279,8 +292,10 @@ STABLE_DEFINITIONS = {
 }
 
 
-def _escape_sql_value(val: str) -> str:
-    """防SQL注入：转义字符串值"""
+def _escape_sql_value(val: Any) -> str:
+    """防SQL注入：转义字符串值（None 按空串处理）。"""
+    if val is None:
+        return ""
     return str(val).replace("\\", "\\\\").replace("'", "\\'").replace("\x00", "")
 
 

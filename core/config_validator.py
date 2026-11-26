@@ -3,9 +3,11 @@
 防止错误配置导致系统异常
 """
 import jsonschema
+import os
 import yaml
 import logging
 import paths
+from pathlib import Path
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -24,12 +26,28 @@ DEVICE_SCHEMA = {
                     "id": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$"},
                     "name": {"type": "string", "minLength": 1, "maxLength": 100},
                     "protocol": {"type": "string", "enum": ["modbus_tcp", "modbus_rtu", "opcua", "mqtt", "rest", "s7", "iec104", "fins", "mc", "dnp3", "custom"]},
+                    "device_category": {"type": "string", "enum": ["mechanical", "instrument", "safety", "utility"]},
                     "host": {"type": "string"},
                     "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+                    "serial_port": {"type": "string"},
+                    "baudrate": {"type": "integer", "minimum": 1},
+                    "parity": {"type": "string"},
+                    "stopbits": {"type": "number"},
+                    "bytesize": {"type": "integer"},
+                    "slave_id": {"type": "integer", "minimum": 0, "maximum": 255},
                     "unit_id": {"type": "integer", "minimum": 0, "maximum": 255},
                     "byte_order": {"type": "string", "enum": ["ABCD", "BADC", "CDAB", "DCBA"]},
+                    "collection_interval": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400},
                     "poll_interval": {"type": "number", "minimum": 0.1, "maximum": 3600},
                     "enabled": {"type": "boolean"},
+                    "endpoint": {"type": "string"},
+                    "nodes": {"type": "array"},
+                    "topics": {"type": "array"},
+                    "base_url": {"type": "string"},
+                    "endpoints": {"type": "array"},
+                    "auth_type": {"type": "string"},
+                    "adapter": {"type": "object"},
+                    "write_limits": {"type": "object"},
                     # round 378：设备模型面向“任意电气设备”。
                     # `device_class` 决定标准点位角色（传感器/执行器/驱动/仪表…）；
                     # `electrical` 是铭牌参数（只做展示/校验提示，不参与协议解析）。
@@ -65,6 +83,7 @@ DEVICE_SCHEMA = {
                                 "scale": {"type": "number"},
                                 "offset": {"type": "number"},
                                 "unit": {"type": "string"},
+                                "access": {"type": "string", "enum": ["r", "ro", "w", "wo", "rw"]},
                                 "writable": {"type": "boolean"}
                             }
                         }
@@ -203,8 +222,9 @@ ALARM_SCHEMA = {
                     #    但"真实文件用哪个"由 tests/test_alarm_rationalization.py 钉住。
                     "register_name": {"type": "string"},
                     "register": {"type": "string"},
-                    "condition": {"type": "string", "enum": ["gt", "lt", "eq", "ne", "gte", "lte", "in_range", "out_of_range", "greater_than", "less_than", "equal", "not_equal", "external"]},
+                    "condition": {"type": "string", "enum": ["gt", "lt", "eq", "ne", "gte", "lte", "in_range", "out_of_range", "greater_than", "less_than", "equal", "not_equal", "greater_equal", "less_equal", "inside", "outside", "bool", "external"]},
                     "threshold": {"type": "number"},
+                    "threshold_high": {"type": "number"},
                     # 真实配置用 `level`，schema 原先写 `severity`
                     "level": {"type": "string", "enum": ["critical", "high", "medium", "low", "info", "warning"]},
                     "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info", "warning"]},
@@ -230,6 +250,23 @@ ALARM_SCHEMA = {
 SYSTEM_SCHEMA = {
     "type": "object",
     "properties": {
+        "system": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "version": {"type": "string"},
+                "description": {"type": "string"},
+                "author": {"type": "string"},
+                "simulation_mode": {"type": "boolean"},
+            },
+        },
+        "collection": {
+            "type": "object",
+            "properties": {
+                "default_interval": {"type": "number", "exclusiveMinimum": 0},
+                "max_concurrent": {"type": "integer", "minimum": 1},
+            },
+        },
         "app": {
             "type": "object",
             "properties": {
@@ -240,12 +277,34 @@ SYSTEM_SCHEMA = {
                 "port": {"type": "integer", "minimum": 1, "maximum": 65535}
             }
         },
+        "web": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string"},
+                "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "debug": {"type": "boolean"},
+                "cors": {"type": "object"},
+            },
+        },
+        "security": {"type": "object"},
+        "logging": {
+            "type": "object",
+            "properties": {
+                "level": {"type": "string"},
+                "console": {"type": "object"},
+                "file": {"type": "object"},
+            },
+        },
+        "performance": {"type": "object"},
+        "ui": {"type": "object"},
         "database": {
             "type": "object",
             "properties": {
+                "type": {"type": "string"},
                 "path": {"type": "string"},
                 "wal_mode": {"type": "boolean"},
-                "pool_size": {"type": "integer", "minimum": 1, "maximum": 100}
+                "pool_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                "retention": {"type": "object"},
             }
         },
         "mqtt": {
@@ -326,17 +385,22 @@ def validate_custom_adapters(config: dict) -> list[str]:
     return problems
 
 
+def _resolve_config_dir(config_dir: str) -> Path:
+    """解析配置目录：未设 SCADA_CONFIG_DIR 时经 paths.resolve 解析（保持 CWD 独立性与 spy 兼容）。"""
+    normalized = str(config_dir or '').replace('\\', '/').rstrip('/')
+    if os.environ.get('SCADA_CONFIG_DIR') and normalized == '配置':
+        return paths.resolve_config_file('配置/devices.yaml').parent
+    return paths.resolve(config_dir)
+
+
 def validate_all_configs(config_dir: str = "配置") -> Dict[str, tuple[bool, list[str]]]:
     """验证所有配置文件
 
-    ``config_dir`` 走 :func:`paths.resolve` 解析为绝对路径。
-    历史实现直接 ``Path("配置")``，只在「CWD 恰好是项目根」时成立 ——
-    打包后的应用（``_internal/配置/``）与从服务/计划任务启动时**一律找不到**，
-    于是启动日志里永远出现三行「配置文件不存在: 配置\\devices.yaml」，
-    把「配置真的坏了」和「路径不对」混成同一个信号，校验形同虚设。
+    ``config_dir`` 走 :func:`paths.resolve` 解析为绝对路径（若设置了
+    ``SCADA_CONFIG_DIR`` 且传入默认 ``'配置'``，则解析到隔离目录）。
     """
     results = {}
-    config_path = paths.resolve(config_dir)
+    config_path = _resolve_config_dir(config_dir)
 
     for schema_type, schema_file in [
         ("devices", "devices.yaml"),
@@ -368,7 +432,7 @@ def validate_startup_configs(config_dir: str = "配置") -> bool:
     # ISA-18.2 §9：报警合理性（为什么存在 / 后果 / 动作 / 响应时限）
     # 不算"配置非法"（不阻断启动），但必须**每次启动都报出来** ——
     # 缺这些字段的报警在审计里不成立，而现场往往就是这么漏掉的。
-    alarm_path = paths.resolve(config_dir) / 'alarms.yaml'
+    alarm_path = _resolve_config_dir(config_dir) / 'alarms.yaml'
     if alarm_path.exists():
         try:
             with open(alarm_path, 'r', encoding='utf-8') as f:

@@ -130,9 +130,12 @@ class QueryBuilder:
                 raise ValueError(
                     f'{func_name} 需要 {need} 个附加参数，实际收到 {len(extra)} 个')
             for p in extra:
-                if isinstance(p, bool) or not isinstance(p, (int, float)):
-                    raise ValueError(f'{func_name} 附加参数必须是数值: {p!r}')
-            expr = f"{func_name}({col}, " + ", ".join(repr(float(p)) for p in extra) + ")"
+                num_p = None if isinstance(p, bool) else try_finite_float(p)
+                if num_p is None:
+                    raise ValueError(f'{func_name} 附加参数必须是有限数值: {p!r}')
+            expr = f"{func_name}({col}, " + ", ".join(
+                repr(None if isinstance(p, bool) else try_finite_float(p)) for p in extra
+            ) + ")"
         else:
             if extra:
                 raise ValueError(f'{func_name} 不接受附加参数: {extra!r}')
@@ -214,10 +217,12 @@ class QueryBuilder:
             start: 开始时间
             end: 结束时间
         """
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            raise ValueError(f'时间范围参数必须是 datetime: start={start!r}, end={end!r}')
         if start > end:
             raise ValueError(f'时间范围非法: start={start} 晚于 end={end}')
-        start_ts = start.strftime('%Y-%m-%d %H:%M:%S')
-        end_ts = end.strftime('%Y-%m-%d %H:%M:%S')
+        start_ts = start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        end_ts = end.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         self._where_clauses.append(f"ts >= '{start_ts}'")
         self._where_clauses.append(f"ts <= '{end_ts}'")
         return self
@@ -229,7 +234,7 @@ class QueryBuilder:
 
     def where_value_gt(self, value: float) -> 'QueryBuilder':
         """添加值大于条件"""
-        num = try_finite_float(value)
+        num = None if isinstance(value, bool) else try_finite_float(value)
         if num is None:
             raise ValueError(f'比较值非法: {value!r}')
         self._where_clauses.append(f"value > {num}")
@@ -237,7 +242,7 @@ class QueryBuilder:
 
     def where_value_lt(self, value: float) -> 'QueryBuilder':
         """添加值小于条件"""
-        num = try_finite_float(value)
+        num = None if isinstance(value, bool) else try_finite_float(value)
         if num is None:
             raise ValueError(f'比较值非法: {value!r}')
         self._where_clauses.append(f"value < {num}")
@@ -245,7 +250,7 @@ class QueryBuilder:
 
     def where_quality(self, quality: int = 192) -> 'QueryBuilder':
         """添加数据质量条件"""
-        code = try_int(quality)
+        code = None if isinstance(quality, bool) else try_int(quality)
         if code is None:
             raise ValueError(f'质量码非法: {quality!r}')
         self._where_clauses.append(f"quality = {code}")
@@ -288,9 +293,11 @@ class QueryBuilder:
 
     def offset(self, count: int) -> 'QueryBuilder':
         """设置偏移量"""
-        self._offset = int(count)
-        if self._offset < 0:
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError(f'OFFSET 必须是整数: {count!r}')
+        if count < 0:
             raise ValueError(f'OFFSET 不能为负: {count!r}')
+        self._offset = count
         return self
 
     def interval(self, interval: str, fill: str | None = None) -> 'QueryBuilder':

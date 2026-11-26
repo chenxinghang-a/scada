@@ -15,8 +15,10 @@ TDengine客户端封装
     client = TDengineClient("localhost", 6030, use_rest=False)
 """
 
+import contextlib
 import logging
 import re
+import threading
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -71,16 +73,38 @@ class TDengineClient:
         # 原生连接（如果使用）
         self._connection = None
 
+        # 并发锁：保护原生连接、建表缓存与统计字典
+        # 支持 TDengineClient.__new__(TDengineClient) 单测骨架 via _lock_ctx。
+        self._conn_lock = threading.Lock()
+        self._tables_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
+
         # 统计信息
         self.stats: dict[str, Any] = {
             'writes': 0,
             'queries': 0,
             'errors': 0,
+            'quarantined': 0,
             'last_error': None
         }
 
         # 已创建的表缓存
         self._created_tables: set[str] = set()
+
+    def _lock_ctx(self, attr: str):
+        """获取指定锁的上下文管理器；兼容未走 __init__ 的单测桩对象。"""
+        lock = getattr(self, attr, None)
+        return lock if lock is not None else contextlib.nullcontext()
+
+    def _bump_stat(self, key: str, delta: int = 1, last_error: str | None = None) -> None:
+        with self._lock_ctx('_stats_lock'):
+            self.stats[key] = self.stats.get(key, 0) + delta
+            if last_error is not None:
+                self.stats['last_error'] = last_error
+
+    @staticmethod
+    def _is_valid_id_str(value: Any) -> bool:
+        return isinstance(value, str) and bool(value.strip()) and '\x00' not in value
 
     @staticmethod
     def _sanitize_identifier(name: str) -> str:
@@ -128,15 +152,12 @@ class TDengineClient:
         """通过REST API连接"""
         try:
             # 首次部署库还不存在：带库名的 /rest/sql/{db} 探活会失败，
-            # 建库永远走不到。探活/建库都先走不带库名的端点。
+            # 建库永远走不到。探活/建库都走不带库名的端点，且不临时篡改 self.rest_url
+            # 以免并发写入线程误用无库 URL。
             base_url = f"http://{self.host}:{self.port}/rest/sql"
-            db_url, self.rest_url = self.rest_url, base_url
-            try:
-                if not self._execute_sql("SELECT server_version()"):
-                    return False
-                self._create_database()
-            finally:
-                self.rest_url = db_url
+            if not self._execute_sql("SELECT server_version()", url=base_url):
+                return False
+            self._create_database(url=base_url)
             self.logger.info(f"TDengine REST API连接成功: {self.host}:{self.port}")
             return True
         except Exception as e:
@@ -147,13 +168,21 @@ class TDengineClient:
         """通过原生连接"""
         try:
             import taos
-            self._connection = taos.connect(
+            conn = taos.connect(
                 host=self.host,
                 port=self.port,
                 user=self.user,
                 password=self.password,
                 database=self.database
             )
+            with self._lock_ctx('_conn_lock'):
+                old = self._connection
+                self._connection = conn
+            if old is not None and old is not conn:
+                try:
+                    old.close()
+                except Exception as close_err:
+                    self.logger.debug(f"TDengine 旧连接关闭失败: {close_err}")
             self.logger.info(f"TDengine原生连接成功: {self.host}:{self.port}")
             return True
         except ImportError:
@@ -165,47 +194,56 @@ class TDengineClient:
 
     def disconnect(self):
         """断开连接"""
-        if self._connection:
+        with self._lock_ctx('_conn_lock'):
+            conn = self._connection
+            self._connection = None
+        if conn:
             try:
-                self._connection.close()
+                conn.close()
             except Exception as e:
                 # 关闭失败不影响断开语义：连接对象随后被置空丢弃
                 self.logger.debug(f"TDengine 连接关闭失败 {self.host}:{self.port}: {e}")
-            self._connection = None
 
-    def _create_database(self):
+    def _create_database(self, url: str | None = None):
         """创建数据库"""
         db_name = self._sanitize_identifier(self.database)
         sql = f"CREATE DATABASE IF NOT EXISTS {db_name} KEEP 365 DAYS 10 BLOCKS 6"
-        self._execute_sql(sql)
+        if url is None:
+            self._execute_sql(sql)
+        else:
+            self._execute_sql(sql, url=url)
         # BUG-086：不再发 `USE db`（REST 无会话，发了也不会生效）。
         # 库上下文已由 rest_url 的 `/{database}` 路径携带。
         self.logger.info(f"数据库 {self.database} 已就绪")
 
-    def _execute_sql(self, sql: str) -> dict[str, Any] | None:
+    def _execute_sql(self, sql: str, url: str | None = None) -> dict[str, Any] | None:
         """
         执行SQL语句
 
         Args:
             sql: SQL语句
+            url: 可选的 REST 端点覆盖（仅用于建库/探活，不改写 self.rest_url）
 
         Returns:
             dict[str, Any]: 查询结果
             None: 执行失败
         """
         if self.use_rest:
-            return self._execute_rest(sql)
+            if url is None:
+                return self._execute_rest(sql)
+            return self._execute_rest(sql, url=url)
         else:
             return self._execute_native(sql)
 
-    def _execute_rest(self, sql: str) -> dict[str, Any] | None:
+    def _execute_rest(self, sql: str, url: str | None = None) -> dict[str, Any] | None:
         """通过REST API执行SQL"""
         try:
             auth = (self.user, self.password)
             headers = {'Content-Type': 'text/plain'}
+            target_url = url or self.rest_url
 
             response = requests.post(
-                self.rest_url,
+                target_url,
                 data=sql.encode('utf-8'),
                 auth=auth,
                 headers=headers,
@@ -225,49 +263,52 @@ class TDengineClient:
                 if result.get('code') == 0:
                     return result
                 else:
-                    self.logger.error(f"SQL执行失败: {result.get('desc')}")
-                    self.stats['errors'] += 1
-                    self.stats['last_error'] = result.get('desc')
+                    desc = result.get('desc')
+                    self.logger.error(f"SQL执行失败: {desc}")
+                    self._bump_stat('errors', 1, last_error=desc)
                     return None
             else:
                 self.logger.error(f"HTTP错误: {response.status_code}")
-                self.stats['errors'] += 1
+                self._bump_stat('errors', 1)
                 return None
 
         except Exception as e:
             self.logger.error(f"REST API异常: {e}")
-            self.stats['errors'] += 1
-            self.stats['last_error'] = str(e)
+            self._bump_stat('errors', 1, last_error=str(e))
             return None
 
     def _execute_native(self, sql: str) -> dict[str, Any] | None:
         """通过原生连接执行SQL"""
-        if not self._connection:
-            self.logger.error("未连接")
-            return None
+        err_msg: str | None = None
+        with self._lock_ctx('_conn_lock'):
+            if not self._connection:
+                self.logger.error("未连接")
+                return None
 
-        try:
-            cursor = self._connection.cursor()
-            cursor.execute(sql)
+            try:
+                cursor = self._connection.cursor()
+                cursor.execute(sql)
 
-            if cursor.description:
-                # 查询语句
-                columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
-                return {
-                    'code': 0,
-                    'column_meta': [[col] for col in columns],
-                    'data': rows
-                }
-            else:
-                # 写入语句
-                return {'code': 0, 'rows_affected': cursor.rowcount}
+                if cursor.description:
+                    # 查询语句
+                    columns = [desc[0] for desc in cursor.description]
+                    rows = cursor.fetchall()
+                    return {
+                        'code': 0,
+                        'column_meta': [[col] for col in columns],
+                        'data': rows
+                    }
+                else:
+                    # 写入语句
+                    return {'code': 0, 'rows_affected': cursor.rowcount}
 
-        except Exception as e:
-            self.logger.error(f"原生执行异常: {e}")
-            self.stats['errors'] += 1
-            self.stats['last_error'] = str(e)
-            return None
+            except Exception as e:
+                err_msg = str(e)
+                self.logger.error(f"原生执行异常: {e}")
+
+        if err_msg is not None:
+            self._bump_stat('errors', 1, last_error=err_msg)
+        return None
 
     def init_tables(self):
         """
@@ -286,8 +327,9 @@ class TDengineClient:
 
     def _ensure_table(self, table_name: str, stable_name: str, tags: dict[str, str]):
         """确保子表存在"""
-        if table_name in self._created_tables:
-            return
+        with self._lock_ctx('_tables_lock'):
+            if table_name in self._created_tables:
+                return
 
         # Sanitize identifiers before passing to SQL generation
         safe_table = self._sanitize_identifier(table_name)
@@ -295,53 +337,73 @@ class TDengineClient:
         sql = get_create_table_sql(safe_table, safe_stable, tags)
         result = self._execute_sql(sql)
         if result:
-            self._created_tables.add(table_name)
+            with self._lock_ctx('_tables_lock'):
+                self._created_tables.add(table_name)
+
+    def _quarantine_record(self, context: str, reason: Any) -> None:
+        self.logger.error("非法时序数据已隔离丢弃（%s）: %s", context, reason)
+        self._bump_stat('errors', 1, last_error=str(reason))
+        self._bump_stat('quarantined', 1)
+
+    def _write_single_record(self, table_name: str, stable_name: str,
+                             tags: dict[str, Any], record: Any,
+                             label: str) -> bool:
+        """校验单条记录、建表并写入 TDengine；非法数据隔离并返回 False。"""
+        if not self._is_valid_id_str(getattr(record, 'device_id', None)):
+            self._quarantine_record(label, f"device_id 非法: {getattr(record, 'device_id', None)!r}")
+            return False
+        if stable_name == 'alarm_records' and not self._is_valid_id_str(getattr(record, 'alarm_id', None)):
+            self._quarantine_record(label, f"alarm_id 非法: {getattr(record, 'alarm_id', None)!r}")
+            return False
+        try:
+            safe_table = self._sanitize_identifier(table_name)
+            safe_stable = self._sanitize_identifier(stable_name)
+            # 预先校验建表 SQL 与 values，避免坏数据污染建表缓存或拼出非法 SQL
+            get_create_table_sql(safe_table, safe_stable, tags)
+            values = record.to_sql_values()
+        except (ValueError, TypeError, OverflowError, AttributeError) as e:
+            self._quarantine_record(table_name, e)
+            return False
+
+        self._ensure_table(table_name, stable_name, tags)
+        sql = f"INSERT INTO {safe_table} VALUES {values}"
+        result = self._execute_sql(sql)
+        if result:
+            self._bump_stat('writes', 1)
+            return True
+        # round 298：**失败必须能被调用方判定**。
+        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，不重复累加。
+        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
+        return False
 
     # ==================== 数据写入 ====================
 
-    def write_telemetry(self, record: TelemetryRecord):
+    def write_telemetry(self, record: TelemetryRecord) -> bool:
         """
         写入遥测数据
 
         Args:
             record: 遥测数据记录
         """
-        table_name = get_telemetry_table_name(record.device_id, record.register_name)
+        if not self._is_valid_id_str(getattr(record, 'device_id', None)) or \
+                not self._is_valid_id_str(getattr(record, 'register_name', None)):
+            self._quarantine_record(
+                'device_telemetry',
+                f"非法标识符 device_id={getattr(record, 'device_id', None)!r}, "
+                f"register_name={getattr(record, 'register_name', None)!r}",
+            )
+            return False
 
-        # 确保子表存在
-        self._ensure_table(table_name, 'device_telemetry', {
+        table_name = get_telemetry_table_name(record.device_id, record.register_name)
+        tags = {
             'device_id': record.device_id,
             'register_name': record.register_name,
             'unit': record.unit,
             'protocol': record.protocol,
             'gateway_id': record.gateway_id
-        })
-
-        # 构造INSERT语句 (sanitize table name, escape timestamp)
-        # 数值/质量码统一交给 to_sql_values 校验：NaN/Inf/字符串会让整条
-        # INSERT 变成非法 SQL（或成为注入点），必须在拼接前拦下。
-        safe_table = self._sanitize_identifier(table_name)
-        try:
-            values = record.to_sql_values()
-        except ValueError as e:
-            self.logger.error("遥测数据非法，拒绝写入（%s）: %s", table_name, e)
-            self.stats['errors'] += 1
-            return False
-        sql = f"INSERT INTO {safe_table} VALUES {values}"
-
-        result = self._execute_sql(sql)
-        if result:
-            self.stats['writes'] += 1
-            return True
-        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
-        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
-        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
-        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
-        # 没人读的 stats 里）。
-        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
-        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
-        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
-        return False
+        }
+        return self._write_single_record(
+            table_name, 'device_telemetry', tags, record, table_name)
 
     def write_telemetry_batch(self, records: list[TelemetryRecord]) -> bool:
         """
@@ -351,57 +413,56 @@ class TDengineClient:
             records: 遥测数据记录列表
 
         Returns:
-            bool: **每张表都真的写进去了**才返回 True。
-
-        round 291：原先这个方法失败时只打一行日志就 `return`（返回 None），
-        调用方 `RealtimeDataBridge._flush_buffer()` 因此把它当成成功 ——
-        计数 `records_written` 照涨、记录不回填、离线缓存与内存回退那整套兜底
-        **永远不会被触发**。TDengine 挂掉时表现为"写入一直在增长、时序库里什么都没有"。
-        判据：通道的返回值是"真的发出去了吗"，不是"我尝试过了"。
+            bool: 数据库写入通道正常返回 True；坏记录（毒丸）单条隔离丢弃，
+                  不导致整批无限回填或触发熔断；仅在数据库执行失败时返回 False。
         """
         if not records:
             return True
 
-        # 按表分组
-        table_groups: dict[str, list[TelemetryRecord]] = {}
+        # 先单条校验并按表分组，毒丸记录只隔离丢弃不阻塞整批
+        table_groups: dict[str, tuple[dict[str, Any], list[str]]] = {}
         for record in records:
-            table_name = get_telemetry_table_name(record.device_id, record.register_name)
-            if table_name not in table_groups:
-                table_groups[table_name] = []
-            table_groups[table_name].append(record)
-
-        # 批量写入每个表
-        all_ok = True
-        for table_name, table_records in table_groups.items():
-            # 确保表存在
-            first = table_records[0]
-            self._ensure_table(table_name, 'device_telemetry', {
-                'device_id': first.device_id,
-                'register_name': first.register_name,
-                'unit': first.unit,
-                'protocol': first.protocol,
-                'gateway_id': first.gateway_id
-            })
-
-            # 构造批量INSERT (sanitize table name, escape timestamps)
-            safe_table = self._sanitize_identifier(table_name)
-            values = []
-            for record in table_records:
-                try:
-                    values.append(record.to_sql_values())
-                except ValueError as e:
-                    # 单条坏数据不能连坐整批：跳过并记账，其余照常写
-                    all_ok = False
-                    self.stats['errors'] += 1
-                    self.logger.error("遥测数据非法，已跳过（%s）: %s", table_name, e)
-            if not values:
+            dev_id = getattr(record, 'device_id', None)
+            reg_name = getattr(record, 'register_name', None)
+            if not self._is_valid_id_str(dev_id) or not self._is_valid_id_str(reg_name):
+                self._quarantine_record(
+                    'device_telemetry',
+                    f"非法标识符 device_id={dev_id!r}, register_name={reg_name!r}",
+                )
+                continue
+            try:
+                table_name = get_telemetry_table_name(dev_id, reg_name)
+                safe_table = self._sanitize_identifier(table_name)
+                tags = {
+                    'device_id': dev_id,
+                    'register_name': reg_name,
+                    'unit': getattr(record, 'unit', ''),
+                    'protocol': getattr(record, 'protocol', ''),
+                    'gateway_id': getattr(record, 'gateway_id', ''),
+                }
+                get_create_table_sql(safe_table, 'device_telemetry', tags)
+                sql_val = record.to_sql_values()
+            except (ValueError, TypeError, OverflowError, AttributeError) as e:
+                self._quarantine_record(f"{dev_id}.{reg_name}", e)
                 continue
 
+            if table_name not in table_groups:
+                table_groups[table_name] = (tags, [])
+            table_groups[table_name][1].append(sql_val)
+
+        # 批量写入每个有效表
+        all_ok = True
+        for table_name, (tags, values) in table_groups.items():
+            # 确保表存在
+            self._ensure_table(table_name, 'device_telemetry', tags)
+
+            # 构造批量INSERT
+            safe_table = self._sanitize_identifier(table_name)
             sql = f"INSERT INTO {safe_table} VALUES {', '.join(values)}"
             result = self._execute_sql(sql)
 
             if result:
-                self.stats['writes'] += len(table_records)
+                self._bump_stat('writes', len(values))
             else:
                 # 任一表失败 → 整批按失败上报（调用方据此回填重试，宁可重复不可丢）
                 all_ok = False
@@ -409,102 +470,50 @@ class TDengineClient:
 
         return all_ok
 
-    def write_alarm(self, record: AlarmRecord):
+    def write_alarm(self, record: AlarmRecord) -> bool:
         """写入报警记录"""
-        table_name = get_alarm_table_name(record.device_id)
+        dev_id = getattr(record, 'device_id', None)
+        if not self._is_valid_id_str(dev_id):
+            self._quarantine_record('alarm_records', f"device_id 非法: {dev_id!r}")
+            return False
+        table_name = get_alarm_table_name(dev_id)
+        return self._write_single_record(
+            table_name,
+            'alarm_records',
+            {'device_id': dev_id, 'alarm_id': getattr(record, 'alarm_id', None)},
+            record,
+            table_name,
+        )
 
-        self._ensure_table(table_name, 'alarm_records', {
-            'device_id': record.device_id,
-            'alarm_id': record.alarm_id
-        })
-
-        safe_table = self._sanitize_identifier(table_name)
-        sql = f"INSERT INTO {safe_table} VALUES {record.to_sql_values()}"
-        result = self._execute_sql(sql)
-        if result:
-            self.stats['writes'] += 1
-            return True
-        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
-        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
-        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
-        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
-        # 没人读的 stats 里）。
-        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
-        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
-        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
-        return False
-
-    def write_oee(self, record: OEERecord):
+    def write_oee(self, record: OEERecord) -> bool:
         """写入OEE记录"""
-        table_name = get_oee_table_name(record.device_id)
+        dev_id = getattr(record, 'device_id', None)
+        if not self._is_valid_id_str(dev_id):
+            self._quarantine_record('oee_records', f"device_id 非法: {dev_id!r}")
+            return False
+        table_name = get_oee_table_name(dev_id)
+        return self._write_single_record(
+            table_name, 'oee_records', {'device_id': dev_id}, record, table_name)
 
-        self._ensure_table(table_name, 'oee_records', {
-            'device_id': record.device_id
-        })
-
-        safe_table = self._sanitize_identifier(table_name)
-        sql = f"INSERT INTO {safe_table} VALUES {record.to_sql_values()}"
-        result = self._execute_sql(sql)
-        if result:
-            self.stats['writes'] += 1
-            return True
-        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
-        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
-        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
-        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
-        # 没人读的 stats 里）。
-        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
-        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
-        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
-        return False
-
-    def write_energy(self, record: EnergyRecord):
+    def write_energy(self, record: EnergyRecord) -> bool:
         """写入能源记录"""
-        table_name = get_energy_table_name(record.device_id)
+        dev_id = getattr(record, 'device_id', None)
+        if not self._is_valid_id_str(dev_id):
+            self._quarantine_record('energy_records', f"device_id 非法: {dev_id!r}")
+            return False
+        table_name = get_energy_table_name(dev_id)
+        return self._write_single_record(
+            table_name, 'energy_records', {'device_id': dev_id}, record, table_name)
 
-        self._ensure_table(table_name, 'energy_records', {
-            'device_id': record.device_id
-        })
-
-        safe_table = self._sanitize_identifier(table_name)
-        sql = f"INSERT INTO {safe_table} VALUES {record.to_sql_values()}"
-        result = self._execute_sql(sql)
-        if result:
-            self.stats['writes'] += 1
-            return True
-        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
-        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
-        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
-        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
-        # 没人读的 stats 里）。
-        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
-        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
-        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
-        return False
-
-    def write_predictive(self, record: PredictiveRecord):
+    def write_predictive(self, record: PredictiveRecord) -> bool:
         """写入预测性维护记录"""
-        table_name = get_predictive_table_name(record.device_id)
-
-        self._ensure_table(table_name, 'predictive_records', {
-            'device_id': record.device_id
-        })
-
-        safe_table = self._sanitize_identifier(table_name)
-        sql = f"INSERT INTO {safe_table} VALUES {record.to_sql_values()}"
-        result = self._execute_sql(sql)
-        if result:
-            self.stats['writes'] += 1
-            return True
-        # round 298：**失败必须能被调用方判定**。原来这里没有 else 分支，
-        # 方法恒返回 None，于是 write_alarm/oee/energy/predictive 的调用方
-        # 一律「调用完就计数 +1」：TDengine 挂了、表里一行没有，
-        # 而 results_written 照涨、errors=0（失败只落在客户端自己那个
-        # 没人读的 stats 里）。
-        # BUG-086：`_execute_sql` 内部已经 `stats['errors'] += 1`，
-        # 这里再加一次就是**一次失败记两条**（错误率翻倍，掩盖真实故障密度）。
-        self.logger.error("写入失败（%s）: %s", table_name, sql[:120])
-        return False
+        dev_id = getattr(record, 'device_id', None)
+        if not self._is_valid_id_str(dev_id):
+            self._quarantine_record('predictive_records', f"device_id 非法: {dev_id!r}")
+            return False
+        table_name = get_predictive_table_name(dev_id)
+        return self._write_single_record(
+            table_name, 'predictive_records', {'device_id': dev_id}, record, table_name)
 
     # ==================== 数据查询 ====================
 
@@ -541,7 +550,7 @@ class TDengineClient:
 
         result = self._execute_sql(sql)
         if result and result.get('data'):
-            self.stats['queries'] += 1
+            self._bump_stat('queries', 1)
             # BUG-086：TDengine 返回的列名是 `ts`，而上层（tsdb_adapter 等）
             # 一律读 `record['timestamp']` —— 不显式映射就全是 None。
             # 聚合/能源查询早就这么传了，这里漏了。
@@ -554,11 +563,11 @@ class TDengineClient:
         table_name = get_telemetry_table_name(device_id, register_name)
         safe_table = self._sanitize_identifier(table_name)
 
-        sql = f"SELECT LAST(ts, value, quality) FROM {safe_table}"
+        sql = f"SELECT ts, value, quality FROM {safe_table} ORDER BY ts DESC LIMIT 1"
 
         result = self._execute_sql(sql)
         if result and result.get('data'):
-            self.stats['queries'] += 1
+            self._bump_stat('queries', 1)
             data = result['data'][0]
             return {
                 'timestamp': data[0],
@@ -598,7 +607,7 @@ class TDengineClient:
 
         result = self._execute_sql(sql)
         if result and result.get('data'):
-            self.stats['queries'] += 1
+            self._bump_stat('queries', 1)
             return self._format_query_result(result, 
                 columns=['timestamp', 'avg_value', 'max_value', 'min_value', 'count'])
         return []
@@ -627,7 +636,7 @@ class TDengineClient:
 
         result = self._execute_sql(sql)
         if result and result.get('data'):
-            self.stats['queries'] += 1
+            self._bump_stat('queries', 1)
             return self._format_query_result(result,
                 columns=['timestamp', 'level', 'alarm_type', 'message', 
                         'value', 'threshold', 'acknowledged'])
@@ -651,7 +660,7 @@ class TDengineClient:
 
         result = self._execute_sql(sql)
         if result and result.get('data'):
-            self.stats['queries'] += 1
+            self._bump_stat('queries', 1)
             return self._format_query_result(result,
                 columns=['timestamp', 'availability', 'performance', 'quality_rate', 'oee',
                         'total_count', 'good_count', 'run_time', 'downtime'])
@@ -680,7 +689,7 @@ class TDengineClient:
 
         result = self._execute_sql(sql)
         if result and result.get('data'):
-            self.stats['queries'] += 1
+            self._bump_stat('queries', 1)
             return self._format_query_result(result,
                 columns=['timestamp', 'avg_power', 'max_power', 'total_energy'])
         return []
@@ -708,7 +717,8 @@ class TDengineClient:
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
-        return self.stats.copy()
+        with self._lock_ctx('_stats_lock'):
+            return self.stats.copy()
 
 
 # 测试代码

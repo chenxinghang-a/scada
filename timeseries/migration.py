@@ -275,8 +275,8 @@ class SQLiteToTDengineMigrator:
                         level=row['alarm_level'],
                         alarm_type='',
                         message=row['alarm_message'] or '',
-                        value=row['actual_value'] if row['actual_value'] else 0,
-                        threshold=row['threshold'] if row['threshold'] else 0
+                        value=row['actual_value'] if row['actual_value'] is not None else 0,
+                        threshold=row['threshold'] if row['threshold'] is not None else 0
                     )
                     if self.tdengine.write_alarm(record):
                         count += 1
@@ -327,13 +327,13 @@ class SQLiteToTDengineMigrator:
                 try:
                     record = OEERecord(
                         device_id=row['device_id'],
-                        timestamp=datetime.fromisoformat(row['timestamp']),
+                        timestamp=_parse_timestamp(row['timestamp']),
                         availability=row['availability'],
                         performance=row['performance'],
                         quality_rate=row['quality_rate'],
                         oee=row['oee'],
-                        total_count=row['total_count'] if row['total_count'] else 0,
-                        good_count=row['good_count'] if row['good_count'] else 0
+                        total_count=row['total_count'] if row['total_count'] is not None else 0,
+                        good_count=row['good_count'] if row['good_count'] is not None else 0
                     )
                     if self.tdengine.write_oee(record):
                         count += 1
@@ -383,11 +383,11 @@ class SQLiteToTDengineMigrator:
                 try:
                     record = EnergyRecord(
                         device_id=row['device_id'],
-                        timestamp=datetime.fromisoformat(row['timestamp']),
+                        timestamp=_parse_timestamp(row['timestamp']),
                         power=row['power'],
                         energy=row['energy'],
-                        voltage=row['voltage'] if row['voltage'] else 0,
-                        current=row['current'] if row['current'] else 0
+                        voltage=row['voltage'] if row['voltage'] is not None else 0,
+                        current=row['current'] if row['current'] is not None else 0
                     )
                     if self.tdengine.write_energy(record):
                         count += 1
@@ -452,7 +452,8 @@ class SQLiteToTDengineMigrator:
         if executor is None:
             return None
         try:
-            count = self._extract_scalar(executor(f'SELECT COUNT(*) FROM {table}'))
+            safe_table = TDengineClient._sanitize_identifier(table)
+            count = self._extract_scalar(executor(f'SELECT COUNT(*) FROM {safe_table}'))
             return int(count) if count is not None else None
         except Exception as e:
             self.logger.debug(f"TDengine 行数查询失败({table}): {e}")

@@ -357,6 +357,7 @@ class Database:
             # 服务起不来。先补列、再建表/建索引才对。
             self._migrate_alarm_table(cursor)
             self._migrate_realtime_quality(cursor)
+            self._migrate_history_archived(cursor)
 
             # 创建实时数据表（每个设备+寄存器只保留最新一条）
             cursor.execute('''
@@ -382,6 +383,7 @@ class Database:
                     value REAL,
                     unit TEXT,
                     timestamp DATETIME NOT NULL,
+                    archived INTEGER DEFAULT 0,
                     created_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             ''')
@@ -606,6 +608,37 @@ class Database:
                 logger.warning(
                     f"迁移列 realtime_data.quality 失败，该列可能缺失: {e}")
 
+    def _migrate_history_archived(self, cursor):
+        """给 history_data 表补 ``archived`` 标记列（兼容旧数据库）。
+
+        用于区分"已进入日聚合归档表的行"与"归档窗口之后补插进来的迟到回填行"，
+        避免清理阶段仅凭日期 EXISTS 将未聚合的迟到行误删。
+        """
+        try:
+            cols = {
+                row[1]
+                for row in cursor.execute('PRAGMA table_info(history_data)').fetchall()
+            }
+            if not cols or 'archived' in cols:
+                return
+            cursor.execute('ALTER TABLE history_data ADD COLUMN archived INTEGER DEFAULT 0')
+            cursor.execute(f'''
+                UPDATE history_data SET archived = 1
+                WHERE EXISTS (
+                    SELECT 1 FROM {ARCHIVE_TABLE} a
+                    WHERE a.device_id = history_data.device_id
+                      AND a.register_name = history_data.register_name
+                      AND a.archive_date = DATE(history_data.timestamp)
+                )
+            ''')
+            logger.info("数据库迁移: 添加列 history_data.archived")
+        except Exception as e:
+            if 'duplicate column' in str(e).lower():
+                logger.debug(f"迁移列 history_data.archived 已存在，跳过: {e}")
+            else:
+                logger.warning(
+                    f"迁移列 history_data.archived 失败，该列可能缺失: {e}")
+
     def _migrate_realtime_unique(self, cursor):
         """确保 ``realtime_data`` 有 ``(device_id, register_name)`` 唯一约束。
 
@@ -681,6 +714,19 @@ class Database:
             timestamp: 时间戳
             unit: 单位
         """
+        if not isinstance(device_id, str) or not device_id or not isinstance(register_name, str) or not register_name:
+            self._inc_skipped_invalid(1)
+            logger.warning("insert_data 跳过非法标识: device=%r register=%r", device_id, register_name)
+            return
+        num_value = None if isinstance(value, bool) else try_finite_float(value)
+        if num_value is None:
+            self._inc_skipped_invalid(1)
+            logger.warning(
+                "insert_data 跳过非有限/布尔值: device=%r register=%r value=%r（类型 %s）",
+                device_id, register_name, value, type(value).__name__,
+            )
+            return
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
@@ -694,7 +740,7 @@ class Database:
 
             # round 382：单条路径原来完全不带 quality，Bad/Uncertain 会被
             # DDL 默认的 192(GOOD) 永久掩盖；批量路径早就写 quality，口径必须一致。
-            q = try_int(quality)
+            q = None if isinstance(quality, bool) else try_int(quality)
             if q is None:
                 # 非数值质量码统一收敛成 192(GOOD)：前端用 `q >= 192` 判好/坏，
                 # 字符串会让 JS 比较静默走 false（见 test_realtime_quality_persistence）。
@@ -709,12 +755,12 @@ class Database:
                     value = excluded.value, unit = excluded.unit,
                     timestamp = excluded.timestamp, quality = excluded.quality,
                     created_at = excluded.created_at
-            ''', (device_id, register_name, value, unit, timestamp, q, created_at))
+            ''', (device_id, register_name, num_value, unit, timestamp, q, created_at))
 
             cursor.execute('''
-                INSERT INTO history_data (device_id, register_name, value, unit, timestamp, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (device_id, register_name, value, unit, timestamp, created_at))
+                INSERT INTO history_data (device_id, register_name, value, unit, timestamp, archived, created_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?)
+            ''', (device_id, register_name, num_value, unit, timestamp, created_at))
 
     def _inc_skipped_invalid(self, n: int = 1) -> None:
         """累计「被落库层拒掉的非法记录数」"""
@@ -781,43 +827,34 @@ class Database:
         created_at = datetime.now()
         for d in batch:
             try:
-                # quality 为 OPC UA 质量码（int）。采集层算出的值经此落库，
-                # 前端实时数据的质量圆点才有数据源。
-                # 缺省 192 = GOOD：仅当调用方没给质量码（如老代码路径、
-                # 手工灌数）时才用它；**不要**在这里做"值不合理就降级"的猜测，
-                # 质量判定属采集层 DataQualityAssessor 的职责。
-                q = d.get('quality', 192)
-                # 兜底：允许字符串形式的数字，但显式拒掉 'BAD'/'good' 这类
-                # 非数值标记 —— 存进去只会让前端比较逻辑静默判错。
-                q = try_int(q)
+                if not isinstance(d, dict):
+                    raise TypeError(f'记录不是字典: {type(d).__name__}')
+                dev_id = d['device_id']
+                reg_name = d['register_name']
+                if not isinstance(dev_id, str) or not dev_id or not isinstance(reg_name, str) or not reg_name:
+                    raise TypeError(f'device_id/register_name 非法: {dev_id!r}, {reg_name!r}')
+
+                raw_q = d.get('quality', 192)
+                # 兜底：允许字符串形式的数字，但显式拒掉 bool 与 'BAD'/'good' 这类非数值标记
+                q = None if isinstance(raw_q, bool) else try_int(raw_q)
                 if q is None:
                     # 非数值质量码统一收敛成 192(GOOD)（前端 `q >= 192` 的 JS 比较
                     # 遇字符串会静默判坏，既有的显式契约见测试）
                     logger.warning("质量码非数值，按 GOOD(192) 落库: %r", d.get('quality'))
                     q = 192
 
-                # `value` 必须是**有限数值**。这是落库的最后一道关，也是最该把关
-                # 的地方 —— SQLite 是**弱类型**，非法值不会报错，只会静默变味：
-                #   float('nan') → 被 sqlite3 绑成 **NULL**（typeof='null'），
-                #                  读回来是 None，与「没有数据」无法区分；
-                #   float('inf') → 原样存成 real，趋势图画出无穷远点、
-                #                  AVG/MAX 统计全被污染成 inf；
-                #   'abc'        → 原样存成 **TEXT**（typeof='text'），
-                #                  SUM/AVG 遇到它按 0 处理，聚合结果静默偏小。
-                # 上游（采集层）已经修过两处，但上游永远修不完：手工灌数、
-                # 新协议客户端、导入脚本都会绕过它。落库层不校验 = 污染无底。
-                value = try_finite_float(d['value'])
+                raw_val = d['value']
+                value = None if isinstance(raw_val, bool) else try_finite_float(raw_val)
                 if value is None:
                     skipped_invalid += 1
                     logger.warning(
                         "跳过非数值记录: device=%r register=%r value=%r（类型 %s）",
-                        d.get('device_id'), d.get('register_name'),
-                        d['value'], type(d['value']).__name__,
+                        dev_id, reg_name, raw_val, type(raw_val).__name__,
                     )
                     continue
 
                 valid_rows.append((
-                    d['device_id'], d['register_name'], value,
+                    dev_id, reg_name, value,
                     d.get('unit', ''), d['timestamp'], q, created_at,
                 ))
             except (KeyError, TypeError) as e:
@@ -847,8 +884,8 @@ class Database:
 
             # history_data: 批量INSERT（created_at 在 row[6]，前 5 列之外单独取）
             cursor.executemany('''
-                INSERT INTO history_data (device_id, register_name, value, unit, timestamp, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO history_data (device_id, register_name, value, unit, timestamp, archived, created_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?)
             ''', [row[:5] + (row[6],) for row in valid_rows])
 
         return len(valid_rows)
@@ -1267,7 +1304,7 @@ class Database:
                     # acknowledged 为 NULL 的老行既不属已确认也不属未确认，必须一并命中
                     query += ' AND (acknowledged = 0 OR acknowledged IS NULL)'
 
-            query += ' ORDER BY timestamp DESC LIMIT ? OFFSET ?'
+            query += ' ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?'
             params.append(limit)
             params.append(offset)
 
@@ -1544,11 +1581,8 @@ class Database:
                 conn, 'history_data', 'timestamp',
                 history_cutoff.isoformat(sep=' '))
 
-            # 统计缓存必须失效：否则数据库状态接口最多 30 秒内
-            # 仍报删除前的行数（看板显示"清完了但行数没变"）。
-            with self._dbstats_lock:
-                self._dbstats_cache = None
-                self._dbstats_cache_at = 0.0
+            # 统计缓存必须失效：同步递增 _dbstats_gen 防止并发重算回写旧结果
+            self.invalidate_stats_cache()
 
             # realtime_data 不按时间清理，日志不要报一个恒为 0 的“实时数据清理量”
             logger.info(f"清理旧数据: 历史数据 {history_deleted} 条")
@@ -1894,9 +1928,10 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. 归档：对archive_days之前的所有数据按天聚合存入归档表（INSERT OR IGNORE 防止重复归档）
+            # 1. 归档：只聚合尚未标记 archived=1 的行；若同一天已存在日聚合（迟到回填场景），
+            # 用加权均值/min/max 增量并入并把本次源行置 archived=1，避免重复运行重复累加。
             cursor.execute(f'''
-                INSERT OR IGNORE INTO {ARCHIVE_TABLE}
+                INSERT INTO {ARCHIVE_TABLE}
                     (device_id, register_name, avg_value, min_value, max_value, sample_count, archive_date)
                 SELECT
                     device_id,
@@ -1907,29 +1942,40 @@ class Database:
                     COUNT(*) as sample_count,
                     DATE(timestamp) as archive_date
                 FROM history_data
-                WHERE timestamp < ?
+                WHERE timestamp < ? AND COALESCE(archived, 0) = 0
                 GROUP BY device_id, register_name, DATE(timestamp)
+                ON CONFLICT(device_id, register_name, archive_date) DO UPDATE SET
+                    avg_value = (
+                        COALESCE({ARCHIVE_TABLE}.avg_value, 0.0) * COALESCE({ARCHIVE_TABLE}.sample_count, 0)
+                        + COALESCE(excluded.avg_value, 0.0) * COALESCE(excluded.sample_count, 0)
+                    ) / NULLIF(COALESCE({ARCHIVE_TABLE}.sample_count, 0) + COALESCE(excluded.sample_count, 0), 0),
+                    min_value = CASE
+                        WHEN {ARCHIVE_TABLE}.min_value IS NULL THEN excluded.min_value
+                        WHEN excluded.min_value IS NULL THEN {ARCHIVE_TABLE}.min_value
+                        ELSE MIN({ARCHIVE_TABLE}.min_value, excluded.min_value)
+                    END,
+                    max_value = CASE
+                        WHEN {ARCHIVE_TABLE}.max_value IS NULL THEN excluded.max_value
+                        WHEN excluded.max_value IS NULL THEN {ARCHIVE_TABLE}.max_value
+                        ELSE MAX({ARCHIVE_TABLE}.max_value, excluded.max_value)
+                    END,
+                    sample_count = COALESCE({ARCHIVE_TABLE}.sample_count, 0) + COALESCE(excluded.sample_count, 0)
             ''', (archive_cutoff,))
 
             archived_rows = cursor.rowcount
+            if archived_rows > 0:
+                cursor.execute('''
+                    UPDATE history_data
+                    SET archived = 1
+                    WHERE timestamp < ? AND COALESCE(archived, 0) = 0
+                ''', (archive_cutoff,))
 
         # 2. 删除过期原始数据（分块提交，块间放锁 —— 不给采集写入饿死）
         with self.get_connection() as conn:
-            # ⚠️ 必须用 `delete_cutoff`，**不能**用 `archive_cutoff`。
-            # 本方法的契约是「archive_days 之前的数据归档，delete_days 之前的
-            # 数据删除」（默认 7 / 30）。原先这里写的是 archive_cutoff，
-            # 等于**原始采样只保留 7 天** —— 每天静默丢掉 23 天的明细，
-            # 只剩 history_archive 里的日均值，无法再回溯单条采样、无法做审计。
-            #
-            # round 398：**只删已经进过归档表的行**。
-            # 归档与删除分两个事务（round 352，为了不饿死采集），中间那个窗口里
-            # 如果有「迟到回填」的旧数据写进来（时间戳早于 delete_cutoff），
-            # 原语句会把它直接删掉而它从没进过归档 —— 数据永久消失且无法回溯。
-            # 加上「归档表里存在对应日聚合」这个条件后，删除只作用于已归档数据，
-            # 迟到的旧行会留在原表，等下一轮归档把它带走。
-            # 代价是 DELETE 多一个 EXISTS 子查询（走 (device_id, archive_date) 索引），
-            # 换来的是「删之前一定已归档」这条不变量。
+            # 仅删除已完成归档标记且在归档表存在对应日聚合的行，
+            # 即使窗口期间有迟到回填行（archived=0），也会留到下一轮归档并入。
             archived_only = (
+                f"COALESCE(history_data.archived, 0) = 1 AND "
                 f"EXISTS (SELECT 1 FROM {ARCHIVE_TABLE} a "
                 f"WHERE a.device_id = history_data.device_id "
                 f"AND a.register_name = history_data.register_name "
@@ -2261,6 +2307,13 @@ class Database:
             shutil.copyfile(src, staging)
             if has_wal:
                 shutil.copyfile(wal_src, str(staging) + '-wal')
+            # 先清掉目标库上残留的旧 WAL/SHM/journal，避免替换主文件后的瞬间新旧页混用
+            for suffix in ('-wal', '-shm', '-journal'):
+                stale = Path(str(target) + suffix)
+                if stale.exists():
+                    stale.unlink()
+                    logger.warning("恢复前清理了残留文件: %s", stale.name)
+
             # Windows 上偶发句柄未释放（杀毒/索引服务短暂持有），重试几次
             last_exc: Exception | None = None
             for attempt in range(5):
@@ -2286,9 +2339,7 @@ class Database:
                     target_wal.unlink()
                 os.replace(str(staging) + '-wal', str(target_wal))
 
-            # 4) 清掉残留的 WAL/SHM/**journal**：旧热日志会在下次打开时
-            # 回滚刚恢复的页，属不可逆数据损坏路径。
-            # 备份自带 -wal 时它已一并恢复，不能再删。
+            # 兜底再检查一次非备份 WAL 的残留后缀
             suffixes = (('-shm', '-journal') if has_wal
                         else ('-wal', '-shm', '-journal'))
             for suffix in suffixes:

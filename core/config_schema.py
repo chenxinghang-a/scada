@@ -16,7 +16,10 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable
+
+from core.safe_numeric import try_finite_float
 
 #: 设备协议白名单（与 DeviceManager.SUPPORTED_PROTOCOLS 保持一致）。
 DEVICE_PROTOCOLS = {
@@ -68,7 +71,7 @@ _POINT_SECTIONS = (
 
 
 def _is_number(v: Any) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _in_set(value: Any, allowed: Iterable[str]) -> bool:
@@ -168,8 +171,8 @@ def _validate_devices_into(doc: Any, errors: list[str]) -> None:
         for key in ('collection_interval', 'poll_interval'):
             if key in dev:
                 val = dev[key]
-                num = _as_int(val) if isinstance(val, str) else val
-                if not _is_number(num) or num <= 0:
+                num = None if isinstance(val, bool) else try_finite_float(val)
+                if num is None or num <= 0:
                     _err(errors, path, f'{key}={val!r} 必须为正数')
 
         registers = dev.get('registers')

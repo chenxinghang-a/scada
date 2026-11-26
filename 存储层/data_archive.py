@@ -116,7 +116,10 @@ class DataArchive:
 
         logger.info(f"开始归档 {retention_days} 天前的数据...")
 
-        cutoff_date = datetime.now() - timedelta(days=retention_days)
+        # archive_old_data 对 archive_cutoff 对齐到天边界（当天 00:00:00），此处返回口径保持一致
+        cutoff_date = (datetime.now() - timedelta(days=retention_days)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
 
         # 归档窗口与删除窗口取同一个值：本方法的契约就是"超过 retention_days
         # 的数据先归档再删除"。需要"归档 7 天前、只删 30 天前"时请直接调
@@ -171,13 +174,25 @@ class DataArchive:
         # 取到的是 None，随后 `None.timestamp()` 必抛
         # AttributeError: 'NoneType' object has no attribute 'timestamp' ——
         # 也就是说 compress_data 从来没成功返回过一帧压缩结果。
-        raw_rows = self.database.get_history_data(
-            device_id=device_id,
-            register_name=register_name,
-            start_time=start_time,
-            end_time=end_time,
-            interval='1min'  # 获取1分钟粒度的原始数据
-        )
+        raw_rows: List[Dict] = []
+        page_size = 10000
+        offset = 0
+        while True:
+            page = self.database.get_history_data(
+                device_id=device_id,
+                register_name=register_name,
+                start_time=start_time,
+                end_time=end_time,
+                interval='1min',
+                limit=page_size,
+                offset=offset,
+            )
+            if not page:
+                break
+            raw_rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
 
         # 归一化：把聚合桶映射成压缩算法认识的 {timestamp, value, unit, count}
         raw_data = self._normalize_history_rows(raw_rows)

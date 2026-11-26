@@ -83,6 +83,7 @@ class DataExport:
             export_dir = EXPORT_DIR
         self.export_dir = Path(export_dir).resolve()
         self.export_dir.mkdir(parents=True, exist_ok=True)
+        self.last_error: str | None = None
 
     def _resolve_target(self, filename: str) -> Path:
         """把调用方给的文件名落成 export_dir 内的绝对路径（防目录穿越）。
@@ -121,6 +122,7 @@ class DataExport:
         Returns:
             str: 导出文件路径
         """
+        self.last_error = None
         if not data:
             logger.warning("没有数据可导出")
             return None
@@ -163,6 +165,7 @@ class DataExport:
             return str(filepath)
 
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"CSV导出失败: {e}")
             if tmp_path is not None:
                 try:
@@ -174,7 +177,7 @@ class DataExport:
             return None
 
     def export_excel(self, data: list[dict[str, Any]], filename: str | None = None,
-                     sheet_name: str = 'Sheet1') -> str:
+                     sheet_name: str = 'Sheet1') -> str | None:
         """
         导出Excel格式
 
@@ -186,9 +189,11 @@ class DataExport:
         Returns:
             str: 导出文件路径
         """
+        self.last_error = None
         try:
             import pandas as pd
         except ImportError:
+            self.last_error = "pandas未安装，无法导出Excel"
             logger.error("pandas未安装，无法导出Excel")
             return None
 
@@ -201,6 +206,7 @@ class DataExport:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
             filename = f'export_{timestamp}.xlsx'
 
+        tmp_path = None
         try:
             filepath = self._resolve_target(filename)
             # pandas.to_excel 走 openpyxl 时，以 `=` 开头的**字符串**会被写成公式
@@ -208,17 +214,26 @@ class DataExport:
             df = pd.DataFrame(_sanitize_rows(data))
             # 列名同样来自数据/extra_json，`=cmd|...` 表头会被写成公式。
             df.columns = [_sanitize_cell(str(c)) for c in df.columns]
-            df.to_excel(filepath, sheet_name=sheet_name, index=False)
+            # 临时文件保留 .xlsx 后缀以便 openpyxl 识别格式
+            tmp_path = filepath.with_name(f".tmp_{filepath.name}")
+            df.to_excel(tmp_path, sheet_name=sheet_name, index=False)
+            tmp_path.replace(filepath)
 
             logger.info(f"Excel导出成功: {filepath}")
             return str(filepath)
 
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"Excel导出失败: {e}")
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return None
 
     def export_json(self, data: list[dict[str, Any]], filename: str | None = None,
-                    pretty: bool = True) -> str:
+                    pretty: bool = True) -> str | None:
         """
         导出JSON格式
 
@@ -230,6 +245,7 @@ class DataExport:
         Returns:
             str: 导出文件路径
         """
+        self.last_error = None
         if not data:
             logger.warning("没有数据可导出")
             return None
@@ -239,19 +255,28 @@ class DataExport:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
             filename = f'export_{timestamp}.json'
 
+        tmp_path = None
         try:
             filepath = self._resolve_target(filename)
-            with open(filepath, 'w', encoding='utf-8') as f:
+            tmp_path = filepath.with_name(filepath.name + '.tmp')
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 if pretty:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 else:
                     json.dump(data, f, ensure_ascii=False)
+            tmp_path.replace(filepath)
 
             logger.info(f"JSON导出成功: {filepath}")
             return str(filepath)
 
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"JSON导出失败: {e}")
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return None
 
     def export_device_data(self, database, device_id: str,
@@ -287,6 +312,7 @@ class DataExport:
         Raises:
             ValueError: 总行数超过 :data:`MAX_EXPORT_ROWS`
         """
+        self.last_error = None
         data: list[dict[str, Any]] = []
         registers = database.get_device_registers(device_id)
         # 没有寄存器信息时，用 None 查询全部（此时无法补 register_name）
@@ -341,6 +367,7 @@ class DataExport:
         elif format == 'json':
             return self.export_json(data, f'{filename}.json')
         else:
+            self.last_error = f"不支持的导出格式: {format}"
             logger.error(f"不支持的导出格式: {format}")
             return None
 
@@ -363,6 +390,7 @@ class DataExport:
         # 获取报警记录（分页拉全量）。
         # ⚠️ 原先写死 `limit=10000`：超过 1 万条的区间会**静默少一截**，
         #    而导出文件通常被当成「完整记录」存档 / 交上去。
+        self.last_error = None
         data: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -400,6 +428,7 @@ class DataExport:
         elif format == 'json':
             return self.export_json(data, f'{filename}.json')
         else:
+            self.last_error = f"不支持的导出格式: {format}"
             logger.error(f"不支持的导出格式: {format}")
             return None
 
