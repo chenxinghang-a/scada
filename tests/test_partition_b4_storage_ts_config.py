@@ -178,9 +178,9 @@ def test_database_late_backfill_folds_into_archive_and_cleans_wal(tmp_path):
         old_day = (datetime.now() - timedelta(days=45)).replace(hour=10, minute=0, second=0, microsecond=0)
         db.insert_data('d1', 'temp', 10.0, old_day, 'C')
         db.insert_data('d1', 'temp', 20.0, old_day + timedelta(minutes=1), 'C')
-        # 布尔与非有限数应被单条与批量通道共同拒绝
+        # 单条写入拒绝布尔值；批量通道拒绝非有限数（同时保留既有 test_db_value_validation 对 bool 遥测转 0/1 的契约）
         db.insert_data('d1', 'temp', True, old_day, 'C')
-        assert db.insert_data_batch([{'device_id': 'd1', 'register_name': 'temp', 'value': True, 'timestamp': old_day}]) == 0
+        assert db.insert_data_batch([{'device_id': 'd1', 'register_name': 'temp', 'value': float('nan'), 'timestamp': old_day}]) == 0
 
         res1 = db.archive_old_data(archive_days=7, delete_days=30)
         assert res1['archived'] == 1
