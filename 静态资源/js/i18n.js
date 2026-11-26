@@ -131,7 +131,8 @@
   };
 
   document.addEventListener('DOMContentLoaded', function () {
-    var initial = stored() || document.documentElement.getAttribute('lang') || FALLBACK;
+    // 只有用户显式选择并存进 localStorage 时才固定语言；否则传空串让 /api/i18n/ 按服务端配置与 Accept-Language 协商
+    var initial = stored() || '';
     apply(initial);
   });
 })();

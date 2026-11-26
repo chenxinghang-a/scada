@@ -528,6 +528,11 @@ function playAlarmSound(level) {
     } catch(e) { console.warn('音频播放失败:', e); }
 }
 
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function toggleSound() {
     soundEnabled = !soundEnabled;
     const btn = document.getElementById('btn-sound-toggle');
@@ -545,7 +550,16 @@ let wsSocket = null;
 
 function initAlarmWebSocket() {
     if (typeof io === 'undefined') return;
-    wsSocket = io();
+    const wsToken = localStorage.getItem('auth_token');
+    if (!wsToken) return;
+    wsSocket = io({
+        query: { token: wsToken },
+        reconnection: true,
+        reconnectionAttempts: 50,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 30000,
+        timeout: 10000,
+    });
 
     wsSocket.on('connect', () => console.log('[报警输出] WebSocket已连接'));
 
@@ -583,16 +597,17 @@ function prependBroadcastHistory(broadcast) {
     const empty = container.querySelector('.text-muted.text-center');
     if (empty) empty.remove();
     const level = broadcast.level || 'info';
+    const safeLevel = escapeHtml(level);
     const html = `
-        <div class="broadcast-item ${level}">
+        <div class="broadcast-item ${safeLevel}">
             <div class="d-flex justify-content-between align-items-center gap-2">
                 <span class="broadcast-item__meta">
-                    <span class="tag ${levelTagClass(level)}">${level}</span>
-                    <strong class="ms-1">${broadcast.area || 'all'}</strong> | ${broadcast.source || 'system'}
+                    <span class="tag ${levelTagClass(level)}">${safeLevel}</span>
+                    <strong class="ms-1">${escapeHtml(broadcast.area || 'all')}</strong> | ${escapeHtml(broadcast.source || 'system')}
                 </span>
-                <small class="text-muted mono">${new Date(broadcast.timestamp).toLocaleTimeString()}</small>
+                <small class="text-muted mono">${escapeHtml(new Date(broadcast.timestamp).toLocaleTimeString())}</small>
             </div>
-            <div class="broadcast-item__text">${broadcast.text || ''}</div>
+            <div class="broadcast-item__text">${escapeHtml(broadcast.text || '')}</div>
         </div>
     `;
     container.insertAdjacentHTML('afterbegin', html);
@@ -1097,41 +1112,44 @@ function renderRulesList(stats) {
 }
 
 async function loadRulesDetail() {
-    // 从 alarms.yaml 加载的规则通过后端API获取
-    // 目前后端没有直接的规则列表API，用已有数据展示
+    // 优先读取真实规则列表端点 /api/alarm-rules
     const container = document.getElementById('rules-detail-list');
     try {
-        const r = await fetch('/api/alarms?limit=20', { headers: getAuthHeaders() });
-        const data = await r.json();
-        const alarms = data.alarms || [];
-
-        // 从报警记录提取已知规则
-        const ruleIds = new Set();
-        const rules = [];
-        alarms.forEach(a => {
-            if (!ruleIds.has(a.alarm_id)) {
-                ruleIds.add(a.alarm_id);
-                rules.push({
-                    id: a.alarm_id,
-                    device_id: a.device_id,
-                    register_name: a.register_name,
-                    level: a.alarm_level,
-                    message: a.alarm_message,
-                    threshold: a.threshold
-                });
-            }
-        });
+        let rules = [];
+        const rRules = await fetch('/api/alarm-rules', { headers: getAuthHeaders() });
+        if (rRules.ok) {
+            const dRules = await rRules.json();
+            rules = Array.isArray(dRules.rules) ? dRules.rules : [];
+        } else {
+            const r = await fetch('/api/alarms?limit=20', { headers: getAuthHeaders() });
+            const data = await r.json();
+            const alarms = data.alarms || [];
+            const ruleIds = new Set();
+            alarms.forEach(a => {
+                if (!ruleIds.has(a.alarm_id)) {
+                    ruleIds.add(a.alarm_id);
+                    rules.push({
+                        id: a.alarm_id,
+                        device_id: a.device_id,
+                        register_name: a.register_name,
+                        level: a.alarm_level,
+                        message: a.alarm_message,
+                        threshold: a.threshold
+                    });
+                }
+            });
+        }
 
         if (rules.length === 0) {
             container.innerHTML = `
                 <div class="state-box state-box--inline">
                     <i class="bi bi-inbox state-box__icon"></i>
-                    <div class="state-box__title">暂无触发记录</div>
+                    <div class="state-box__title">暂无规则记录</div>
                 </div>`;
             return;
         }
 
-        // 配置类表格：数值列（阈值）右对齐 + 等宽
+        // 配置类表格：数值列（阈值）右对齐 + 等宽（所有外部文本均转义）
         container.innerHTML = `
             <table class="table rules-table">
                 <thead>
@@ -1146,10 +1164,10 @@ async function loadRulesDetail() {
                         <tr>
                             <td><span class="tag ${item.level === 'critical' ? 'tag--danger' : 'tag--warning'}">${item.level === 'critical' ? '严重' : '警告'}</span></td>
                             <td>
-                                <div>${item.message || item.id}</div>
-                                <div class="text-muted" style="font-size:var(--font-xs)">${item.device_id} / ${item.register_name}</div>
+                                <div>${escapeHtml(item.message || item.name || item.id)}</div>
+                                <div class="text-muted" style="font-size:var(--font-xs)">${escapeHtml(item.device_id)} / ${escapeHtml(item.register_name)}</div>
                             </td>
-                            <td class="col-num">${item.threshold}</td>
+                            <td class="col-num">${escapeHtml(item.threshold)}</td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -1229,9 +1247,24 @@ async function saveRule() {
     };
 
     try {
-        // 目前后端暂无直接的规则CRUD API，提示用户手动编辑配置文件
-        alert(`规则已构建，请将以下YAML添加到 配置/alarms.yaml 的 alarm_rules 下：\n\n${JSON.stringify(ruleConfig, null, 2)}`);
+        const origId = document.getElementById('rule-original-id').value.trim();
+        const isEdit = mode === 'edit' && !!origId;
+        const url = isEdit ? `/api/alarm-rules/${encodeURIComponent(origId)}` : '/api/alarm-rules';
+        const method = isEdit ? 'PUT' : 'POST';
+
+        const response = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(ruleConfig)
+        });
+        const result = await response.json().catch(() => null);
+        if (!response.ok || !result || !result.success) {
+            const msg = (result && (result.error || result.message)) || `HTTP ${response.status}`;
+            alert('保存失败: ' + msg);
+            return;
+        }
         bootstrap.Modal.getInstance(document.getElementById('ruleModal')).hide();
+        await loadAlarmRules();
     } catch(e) {
         alert('保存失败: ' + e.message);
     }

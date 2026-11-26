@@ -988,7 +988,7 @@ document.addEventListener('keydown', function(e) {
 
 // XSS 安全转义
 function escapeHtml(str) {
-    if (!str) return '';
+    if (str === null || str === undefined) return '';
     return String(str).replace(/[&<>"']/g, function(c) {
         return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
     });
@@ -1303,12 +1303,18 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-    // main.js socket may not be ready yet; retry briefly
+    // main.js socket may not be ready yet; retry briefly (capped to avoid infinite timer leak)
     if (window.socket) {
         attachSocketHandlers();
     } else {
+        let attempts = 0;
         const timer = setInterval(() => {
-            if (window.socket) { clearInterval(timer); attachSocketHandlers(); }
+            if (window.socket) {
+                clearInterval(timer);
+                attachSocketHandlers();
+            } else if (++attempts >= 25) {
+                clearInterval(timer);
+            }
         }, 200);
     }
 });

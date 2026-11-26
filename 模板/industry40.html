@@ -1417,6 +1417,17 @@
     }
 
     // ===== 数据导出 =====
+    function i40CsvCell(val) {
+        var s = (val === null || val === undefined) ? '' : String(val);
+        if (/^[=+\-@\t\r]/.test(s)) {
+            s = "'" + s;
+        }
+        if (/[",\r\n]/.test(s)) {
+            return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+    }
+
     function exportI40Data(type) {
         var token = localStorage.getItem('auth_token');
         var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
@@ -1426,7 +1437,10 @@
                   '/api/data/realtime?limit=10000';
 
         fetch(url, { headers: headers })
-            .then(function(r) { return r.json(); })
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
             .then(function(data) {
                 var items = data.data || data.devices || data.oee || [];
                 if (!items || (Array.isArray(items) && items.length === 0)) { alert('暂无数据'); return; }
@@ -1450,12 +1464,16 @@
                 }
 
                 var header = ['设备/指标', '参数', '值', '单位', '时间'];
-                var csv = '﻿' + [header].concat(rows).map(function(r) { return r.join(','); }).join('\n');
+                var csv = '\ufeff' + [header].concat(rows).map(function(r) {
+                    return r.map(i40CsvCell).join(',');
+                }).join('\r\n');
                 var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                var blobUrl = URL.createObjectURL(blob);
                 var a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
+                a.href = blobUrl;
                 a.download = 'industry40_' + type + '_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.csv';
                 a.click();
+                URL.revokeObjectURL(blobUrl);
             })
             .catch(function(e) { alert('导出失败: ' + e.message); });
     }
@@ -2958,7 +2976,8 @@
     function escapeHtml(s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     // 设备名太长（"灌装机1# (克朗斯Modulfill)"），节点里放不下。

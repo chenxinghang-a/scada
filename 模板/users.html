@@ -488,6 +488,19 @@
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {
             userModal = new bootstrap.Modal(document.getElementById('userModal'));
+            const tbody = document.getElementById('userTableBody');
+            if (tbody) {
+                tbody.addEventListener('click', function(e) {
+                    const btn = e.target.closest('button[data-user-action]');
+                    if (!btn) return;
+                    const action = btn.dataset.userAction;
+                    const username = btn.dataset.username;
+                    if (!username) return;
+                    if (action === 'edit') editUser(username);
+                    else if (action === 'toggle') toggleUser(username, btn.dataset.enable === 'true');
+                    else if (action === 'delete') deleteUser(username);
+                });
+            }
             checkAuth();
             loadUsers();
             loadLogs();
@@ -511,16 +524,21 @@
                 document.getElementById('currentRole').textContent = currentUser.role_name || currentUser.role;
             }
 
-            // 验证token
+            // 验证token（503 维护中不得清会话或误跳登录）
             fetch(`${API_BASE}/auth/verify`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             })
-            .then(r => r.json())
+            .then(r => {
+                if (r.status === 401) return { valid: false };
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
             .then(data => {
                 if (!data.valid) {
-                    window.location.href = '/login';
+                    logout();
                 }
-            });
+            })
+            .catch(() => {});
         }
 
         async function loadUsers() {
@@ -585,16 +603,16 @@
 
                 // 危险操作：禁用 / 删除（删除用 --color-danger + 明确确认）
                 const toggleBtn = isBuiltinAdmin ? '' : `
-                    <button class="btn btn-sm ${user.is_active ? 'btn-outline-danger' : 'btn-outline-success'}"
-                            onclick="toggleUser('${username}', ${!user.is_active})"
+                    <button type="button" class="btn btn-sm ${user.is_active ? 'btn-outline-danger' : 'btn-outline-success'}"
+                            data-user-action="toggle" data-username="${username}" data-enable="${!user.is_active}"
                             title="${user.is_active ? '禁用该用户' : '启用该用户'}">
                         <i class="bi bi-${user.is_active ? 'pause' : 'play'}"></i>
                         ${user.is_active ? '禁用' : '启用'}
                     </button>`;
 
                 const deleteBtn = (isBuiltinAdmin || isSelf) ? '' : `
-                    <button class="btn btn-sm btn-outline-danger"
-                            onclick="deleteUser('${username}')"
+                    <button type="button" class="btn btn-sm btn-outline-danger"
+                            data-user-action="delete" data-username="${username}"
                             title="删除该用户">
                         <i class="bi bi-trash"></i> 删除
                     </button>`;
@@ -623,7 +641,7 @@
                     </td>
                     <td>
                         <div class="d-flex gap-2 flex-wrap">
-                            <button class="btn btn-sm btn-outline-secondary" onclick="editUser('${username}')" title="编辑">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-user-action="edit" data-username="${username}" title="编辑">
                                 <i class="bi bi-pencil"></i> 编辑
                             </button>
                             ${toggleBtn}
@@ -707,7 +725,7 @@
             }
 
             const token = getToken();
-            const url = isEdit ? `${API_BASE}/auth/users/${editUsername}` : `${API_BASE}/auth/register`;
+            const url = isEdit ? `${API_BASE}/auth/users/${encodeURIComponent(editUsername)}` : `${API_BASE}/auth/register`;
             const method = isEdit ? 'PUT' : 'POST';
 
             try {
@@ -720,14 +738,14 @@
                     body: JSON.stringify(data)
                 });
 
-                const result = await response.json();
+                const result = await response.json().catch(() => null);
 
-                if (result.success) {
+                if (response.ok && result && result.success) {
                     userModal.hide();
                     loadUsers();
                     loadLogs();
                 } else {
-                    alert(result.message || '操作失败');
+                    alert((result && (result.error || result.message)) || `操作失败 (HTTP ${response.status})`);
                 }
             } catch (error) {
                 alert('网络错误');
@@ -746,7 +764,7 @@
 
             const token = getToken();
             try {
-                const response = await fetch(`${API_BASE}/auth/users/${username}`, {
+                const response = await fetch(`${API_BASE}/auth/users/${encodeURIComponent(username)}`, {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
@@ -755,12 +773,12 @@
                     body: JSON.stringify({ is_active: enable })
                 });
 
-                const result = await response.json();
-                if (result.success) {
+                const result = await response.json().catch(() => null);
+                if (response.ok && result && result.success) {
                     loadUsers();
                     loadLogs();
                 } else {
-                    alert(result.message || '操作失败');
+                    alert((result && (result.error || result.message)) || `操作失败 (HTTP ${response.status})`);
                 }
             } catch (error) {
                 alert('网络错误');
@@ -780,16 +798,16 @@
             }
 
             try {
-                const response = await fetch(`${API_BASE}/auth/users/${username}`, {
+                const response = await fetch(`${API_BASE}/auth/users/${encodeURIComponent(username)}`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${getToken()}` }
                 });
-                const result = await response.json();
-                if (result.success) {
+                const result = await response.json().catch(() => null);
+                if (response.ok && result && result.success) {
                     loadUsers();
                     loadLogs();
                 } else {
-                    alert(result.message || '删除失败');
+                    alert((result && (result.error || result.message)) || `删除失败 (HTTP ${response.status})`);
                 }
             } catch (error) {
                 alert('网络错误');
@@ -848,9 +866,17 @@
         }
 
         function logout() {
+            const token = getToken();
+            if (token) {
+                fetch(`${API_BASE}/auth/logout`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                }).catch(() => {});
+            }
             localStorage.removeItem('auth_token');
             localStorage.removeItem('scada_user');
             localStorage.removeItem('scada_refresh_token');
+            document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict';
             window.location.href = '/login';
         }
     </script>

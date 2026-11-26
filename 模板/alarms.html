@@ -199,6 +199,23 @@
 let _alarmDeviceNames = {};
 
 document.addEventListener('DOMContentLoaded', async function() {
+    // 报警行操作事件委托（避免内联 onclick 注入风险）
+    const alarmContainer = document.getElementById('alarm-tbody');
+    if (alarmContainer) {
+        alarmContainer.addEventListener('click', function(e) {
+            const btn = e.target.closest('button[data-alarm-action]');
+            if (!btn) return;
+            const action = btn.dataset.alarmAction;
+            const alarmId = btn.dataset.alarmId;
+            const deviceId = btn.dataset.deviceId || '';
+            const registerName = btn.dataset.registerName || '';
+            if (!alarmId) return;
+            if (action === 'ack') acknowledgeAlarm(alarmId, deviceId, registerName, btn);
+            else if (action === 'shelve') shelveAlarm(alarmId, deviceId, registerName, btn);
+            else if (action === 'unshelve') unshelveAlarm(alarmId, deviceId, registerName, btn);
+        });
+    }
+
     // 加载设备列表填充下拉框
     await loadAlarmDeviceList();
     loadAlarms();
@@ -321,10 +338,15 @@ function renderAlarmList(alarms) {
         const canPulse = (meta.bar === 'critical' || meta.bar === 'warning');
         const pulse = (!a.acknowledged && !a.shelved && canPulse) ? ` level-bar--pulse-${meta.bar}` : '';
 
+        const safeAlarmId = escapeHtml(a.alarm_id);
+        const safeDevId = escapeHtml(a.device_id || '');
+        const safeRegName = escapeHtml(a.register_name || '');
+
         const ackBtn = a.acknowledged
             ? '<span class="tag tag--success"><i class="bi bi-check-lg"></i> 已确认</span>'
-            : `<button class="btn btn-sm btn-outline-primary"
-                       onclick="acknowledgeAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}', this)">
+            : `<button type="button" class="btn btn-sm btn-outline-primary"
+                       data-alarm-action="ack" data-alarm-id="${safeAlarmId}"
+                       data-device-id="${safeDevId}" data-register-name="${safeRegName}">
                     <i class="bi bi-check2-circle me-1"></i>确认
                </button>`;
 
@@ -333,12 +355,14 @@ function renderAlarmList(alarms) {
         // 但此前**没有任何 API 端点、也没有按钮** —— 维护窗口里想屏蔽一条刷屏报警
         // 只能去改 yaml。现在补齐：旁路只静默播报，记录与统计照旧。
         const shelveBtn = a.shelved
-            ? `<button class="btn btn-sm btn-outline-secondary"
-                       onclick="unshelveAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}', this)">
+            ? `<button type="button" class="btn btn-sm btn-outline-secondary"
+                       data-alarm-action="unshelve" data-alarm-id="${safeAlarmId}"
+                       data-device-id="${safeDevId}" data-register-name="${safeRegName}">
                     <i class="bi bi-bell me-1"></i>解除旁路
                </button>`
-            : `<button class="btn btn-sm btn-outline-warning"
-                       onclick="shelveAlarm('${a.alarm_id}','${a.device_id}','${a.register_name}', this)">
+            : `<button type="button" class="btn btn-sm btn-outline-warning"
+                       data-alarm-action="shelve" data-alarm-id="${safeAlarmId}"
+                       data-device-id="${safeDevId}" data-register-name="${safeRegName}">
                     <i class="bi bi-bell-slash me-1"></i>旁路
                </button>`;
 
@@ -381,7 +405,7 @@ async function acknowledgeAlarm(alarmId, deviceId, registerName, btn) {
     }
 
     try {
-        const response = await fetch(`/api/alarms/${alarmId}/acknowledge`, {
+        const response = await fetch(`/api/alarms/${encodeURIComponent(alarmId)}/acknowledge`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({
@@ -429,7 +453,7 @@ async function shelveAlarm(alarmId, deviceId, registerName, btn) {
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>处理中';
     }
     try {
-        const response = await fetch(`/api/alarms/${alarmId}/shelve`, {
+        const response = await fetch(`/api/alarms/${encodeURIComponent(alarmId)}/shelve`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({
@@ -466,7 +490,7 @@ async function unshelveAlarm(alarmId, deviceId, registerName, btn) {
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>处理中';
     }
     try {
-        const response = await fetch(`/api/alarms/${alarmId}/unshelve`, {
+        const response = await fetch(`/api/alarms/${encodeURIComponent(alarmId)}/unshelve`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({ device_id: deviceId, register_name: registerName })

@@ -498,7 +498,7 @@ async function exportData() {
     if (!format) return;
 
     try {
-        const response = await fetch(`/api/export/device/${deviceId}`, {
+        const response = await fetch(`/api/export/device/${encodeURIComponent(deviceId)}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({
@@ -563,7 +563,8 @@ function getRegisterName(name) {
 
 function formatNumber(value, decimals = 2) {
     if (value === null || value === undefined) return '-';
-    return Number(value).toFixed(decimals);
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(decimals) : '-';
 }
 </script>
 {% endblock %}

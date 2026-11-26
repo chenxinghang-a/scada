@@ -1208,21 +1208,7 @@ _SYSTEM_YAML_REL = Path("配置") / "system.yaml"
 #: 进这张表 = 「已知且已判断过」，**不是**「允许」。
 #: 表是**双向**断言的：这里列了但已经修好 → 红（强制清理）；
 #: 没列但实际坏了 → 红（强制新增，不允许再出现隐性的）。
-KNOWN_MISSING_CONFIG_SECTIONS: dict[str, str] = {
-    "alarm_escalation": (
-        "配置页「报警升级」保存按钮。后端**有**专门的 /api/alarms/escalation/rules"
-        "（规则**列表**模型 + 真实的 AlarmEscalationManager），但前端表单是**扁平对象**，"
-        "形状不兼容 → 不是换个 URL 就完事。见 D14。"
-    ),
-    "archive": (
-        "配置页「保存归档策略」按钮。归档策略在前端是一份扁平配置，"
-        "后端没有对应配置段（归档由后台维护任务驱动）→ 需产品口径。见 D14。"
-    ),
-    "archive_trigger": (
-        "配置页「立即归档」按钮。它把一个**命令**（action=archive_now）当成配置段写，"
-        "方向就不对 —— 命令不该走配置接口。见 D14。"
-    ),
-}
+KNOWN_MISSING_CONFIG_SECTIONS: dict[str, str] = {}
 
 
 def _frontend_config_sections() -> dict[str, list[str]]:

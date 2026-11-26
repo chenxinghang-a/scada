@@ -4,7 +4,7 @@
 
 // XSS 安全转义
 function escapeHtml(str) {
-    if (!str) return '';
+    if (str === null || str === undefined) return '';
     return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
@@ -671,10 +671,18 @@ async function apiRequest(url, options = {}) {
 
     // 处理认证失败
     if (response.status === 401) {
-        localStorage.removeItem('auth_token');
+        try { localStorage.removeItem('auth_token'); } catch (e) {}
+        try { localStorage.removeItem('scada_user'); } catch (e) {}
+        try { localStorage.removeItem('scada_refresh_token'); } catch (e) {}
+        document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict';
         if (!window.location.pathname.includes('/login')) {
             window.location.href = '/login';
         }
+        return null;
+    }
+
+    if (response.status === 503) {
+        console.warn(`Service unavailable (503) for ${url}`);
         return null;
     }
 
@@ -734,7 +742,10 @@ window.logout = async function logout() {
         console.warn('登出请求失败，仍将清理本地会话:', e);
     } finally {
         try { localStorage.removeItem('auth_token'); } catch (e) { /* 隐私模式 */ }
+        try { localStorage.removeItem('scada_user'); } catch (e) { /* 隐私模式 */ }
+        try { localStorage.removeItem('scada_refresh_token'); } catch (e) { /* 隐私模式 */ }
         try { sessionStorage.clear(); } catch (e) { /* 隐私模式 */ }
+        document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict';
         if (!window.location.pathname.includes('/login')) {
             window.location.href = '/login';
         }

@@ -677,7 +677,7 @@
 <script>
 // XSS 安全转义
 function escapeHtml(str) {
-    if (!str) return '';
+    if (str === null || str === undefined) return '';
     return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
@@ -984,10 +984,10 @@ function renderPendingActions(actions) {
                         · 重复 ${a.updates || 1} 次 · 剩余 ${remaining} 分钟</div>
                 </div>
                 <div class="d-flex gap-1">
-                    <button class="btn btn-sm btn-outline-success"
-                            onclick="approvePending('${escapeHtml(a.action_id)}')">批准</button>
-                    <button class="btn btn-sm btn-outline-danger"
-                            onclick="rejectPending('${escapeHtml(a.action_id)}')">驳回</button>
+                    <button type="button" class="btn btn-sm btn-outline-success"
+                            data-pending-action="approve" data-action-id="${escapeHtml(a.action_id)}">批准</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger"
+                            data-pending-action="reject" data-action-id="${escapeHtml(a.action_id)}">驳回</button>
                 </div>
             </div>`;
     }).join('');
@@ -1310,26 +1310,36 @@ async function readRegisterValue(deviceId, address) {
 
 // 写入寄存器
 async function writeRegister(deviceId, address, value) {
+    const parsedAddr = parseInt(address, 10);
+    const parsedVal = Number(value);
+    if (!Number.isInteger(parsedAddr) || !Number.isFinite(parsedVal)) {
+        showAlert('寄存器地址或设定值无效', 'warning');
+        return;
+    }
     try {
-        const response = await fetch(`/api/devices/${deviceId}/write-register`, {
+        const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/write-register`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 ...getAuthHeaders()
             },
             body: JSON.stringify({
-                address: parseInt(address),
-                value: parseInt(value)
+                address: parsedAddr,
+                value: parsedVal
             })
         });
         
         const result = await response.json();
 
-        if (result.success) {
+        if (result.success && result.applied === false) {
+            showAlert(result.message || '写入操作已提交审批，需第二人批准后生效', 'info');
+            loadPendingActions();
+            loadControlLogs();
+        } else if (result.success) {
             showAlert(result.message, 'success');
             loadControlLogs();
             // 写入成功后自动回读
-            setTimeout(() => readRegisterValue(deviceId, address), 500);
+            setTimeout(() => readRegisterValue(deviceId, parsedAddr), 500);
         } else {
             // api_error() 用 error 字段，业务失败用 message 字段，两者都要读
             showAlert(result.error || result.message || '写入失败', 'danger');
@@ -1341,22 +1351,31 @@ async function writeRegister(deviceId, address, value) {
 
 // 写入线圈
 async function writeCoil(deviceId, address, value) {
+    const parsedAddr = parseInt(address, 10);
+    if (!Number.isInteger(parsedAddr)) {
+        showAlert('线圈地址无效', 'warning');
+        return;
+    }
     try {
-        const response = await fetch(`/api/devices/${deviceId}/write-coil`, {
+        const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/write-coil`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 ...getAuthHeaders()
             },
             body: JSON.stringify({
-                address: parseInt(address),
+                address: parsedAddr,
                 value: value
             })
         });
         
         const result = await response.json();
         
-        if (result.success) {
+        if (result.success && result.applied === false) {
+            showAlert(result.message || '线圈控制已提交审批，需第二人批准后生效', 'info');
+            loadPendingActions();
+            loadControlLogs();
+        } else if (result.success) {
             showAlert(result.message, 'success');
             loadControlLogs();
         } else {
@@ -1401,7 +1420,10 @@ async function batchControl(action) {
 
                 const result = await response.json();
 
-                if (result.success) {
+                if (result.success && result.applied === false) {
+                    showAlert(result.message || `${actionText}已提交审批，需第二人批准后生效`, 'info');
+                    loadPendingActions();
+                } else if (result.success) {
                     showAlert(`${actionText}完成: ${result.success_count}/${result.total} 成功`, 'success');
                 } else {
                     showAlert(result.message || `${actionText}失败`, 'danger');
@@ -1459,7 +1481,10 @@ async function batchControlByGroup(action) {
 
                 const result = await response.json();
 
-                if (result.success) {
+                if (result.success && result.applied === false) {
+                    showAlert(result.message || `${actionText}${groupName}已提交审批，需第二人批准后生效`, 'info');
+                    loadPendingActions();
+                } else if (result.success) {
                     showAlert(`${actionText}${groupName}完成: ${result.success_count}/${result.total} 成功`, 'success');
                 } else {
                     showAlert(result.message || `${actionText}${groupName}失败`, 'danger');
@@ -1730,10 +1755,12 @@ function renderInterlocks(rules) {
         const tagText = r.bypassed ? '已旁路' : r.triggered ? '已触发' : '已启用';
         // 旁路＝危险操作：使用危险描边按钮，明确区别于常规操作
         const actionBtn = r.bypassed
-            ? `<button class="btn btn-sm btn-outline-success" onclick="restoreInterlock('${escapeHtml(id)}')">
+            ? `<button type="button" class="btn btn-sm btn-outline-success"
+                       data-interlock-action="restore" data-rule-id="${escapeHtml(id)}">
                    <i class="bi bi-shield-check me-1"></i>恢复联锁
                </button>`
-            : `<button class="btn btn-sm btn-danger-outline-token" onclick="bypassInterlock('${escapeHtml(id)}')">
+            : `<button type="button" class="btn btn-sm btn-danger-outline-token"
+                       data-interlock-action="bypass" data-rule-id="${escapeHtml(id)}">
                    <i class="bi bi-exclamation-triangle me-1"></i>旁路（危险）
                </button>`;
         return `
@@ -1758,14 +1785,18 @@ async function bypassInterlock(ruleId) {
     const reason = prompt('旁路将暂时失效该安全联锁，请输入旁路原因（维护等）:');
     if (!reason) return;
     try {
-        const r = await fetch(`/api/control/interlocks/${ruleId}/bypass`, {
+        const r = await fetch(`/api/control/interlocks/${encodeURIComponent(ruleId)}/bypass`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({ reason })
         });
         const data = await r.json();
-        // 旁路是安全相关操作：失败必须明示（后端 200 + success:false 也要拦住）
-        if (data.success) {
+        // 旁路是安全相关操作：双人审批模式下 applied === false 表示已提交审批，不得误报"已旁路"
+        if (data.success && data.applied === false) {
+            showAlert(data.message || '联锁旁路申请已提交，需第二人批准后生效', 'info');
+            loadPendingActions();
+            loadInterlocks();
+        } else if (data.success) {
             showAlert(data.message || '联锁已旁路', 'warning');
             loadInterlocks();
         } else {
@@ -1777,7 +1808,7 @@ async function bypassInterlock(ruleId) {
 async function restoreInterlock(ruleId) {
     if (!confirm('确认恢复联锁？\n\n恢复后该安全联锁将重新生效。')) return;
     try {
-        const r = await fetch(`/api/control/interlocks/${ruleId}/restore`, {
+        const r = await fetch(`/api/control/interlocks/${encodeURIComponent(ruleId)}/restore`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
         });
@@ -1900,8 +1931,32 @@ async function loadControlSafetyStatus() {
     }
 }
 
-// 页面加载时初始化安全状态
+// 页面加载时初始化安全状态及列表事件委托
 document.addEventListener('DOMContentLoaded', function() {
+    const pendingList = document.getElementById('pending-list');
+    if (pendingList) {
+        pendingList.addEventListener('click', function(e) {
+            const btn = e.target.closest('button[data-pending-action]');
+            if (!btn) return;
+            const action = btn.dataset.pendingAction;
+            const actionId = btn.dataset.actionId;
+            if (!actionId) return;
+            if (action === 'approve') approvePending(actionId);
+            else if (action === 'reject') rejectPending(actionId);
+        });
+    }
+    const interlockList = document.getElementById('interlock-list');
+    if (interlockList) {
+        interlockList.addEventListener('click', function(e) {
+            const btn = e.target.closest('button[data-interlock-action]');
+            if (!btn) return;
+            const action = btn.dataset.interlockAction;
+            const ruleId = btn.dataset.ruleId;
+            if (!ruleId) return;
+            if (action === 'bypass') bypassInterlock(ruleId);
+            else if (action === 'restore') restoreInterlock(ruleId);
+        });
+    }
     loadControlSafetyStatus();
     // 每10秒刷新安全状态
     setInterval(loadControlSafetyStatus, 10000);

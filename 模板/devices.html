@@ -703,8 +703,25 @@ let devicesList = [];
 // 悄悄改成 5（null 表示新增设备，正常回传）。
 let editIntervalDisplayed = null;
 
-// 页面加载时获取设备列表
+// 页面加载时获取设备列表及表格操作事件委托
 document.addEventListener('DOMContentLoaded', function() {
+    const tbody = document.getElementById('devices-table-body');
+    if (tbody) {
+        tbody.addEventListener('click', function(e) {
+            const btn = e.target.closest('button[data-device-action]');
+            if (!btn) return;
+            const action = btn.dataset.deviceAction;
+            const deviceId = btn.dataset.deviceId;
+            if (!deviceId) return;
+            if (action === 'test') testDevice(deviceId);
+            else if (action === 'edit') editDevice(deviceId);
+            else if (action === 'view') viewDeviceData(deviceId);
+            else if (action === 'stop') stopDevice(deviceId);
+            else if (action === 'start') startDevice(deviceId);
+            else if (action === 'fault') showFaultInjectionModal(deviceId);
+            else if (action === 'delete') deleteDevice(deviceId);
+        });
+    }
     loadDevices();
 });
 
@@ -981,45 +998,46 @@ function renderDevicesTable(devices) {
             statusTag = 'tag--warning'; statusDot = 'status-dot--warning'; statusText = '离线';
         }
 
+        const safeId = escapeHtml(device.device_id);
         return `
         <tr>
-            <td><code class="mono">${escapeHtml(device.device_id)}</code></td>
+            <td><code class="mono">${safeId}</code></td>
             <td>
                 <div class="cell-title">${escapeHtml(device.name)}</div>
                 <div class="cell-sub">${escapeHtml(device.description) || '—'}</div>
             </td>
-            <td><span class="tag tag--neutral tag--mono">${protocol.toUpperCase()}</span></td>
-            <td><span class="addr">${getDeviceAddress(device)}</span></td>
+            <td><span class="tag tag--neutral tag--mono">${escapeHtml(protocol.toUpperCase())}</span></td>
+            <td><span class="addr">${escapeHtml(getDeviceAddress(device))}</span></td>
             <td><span class="tag ${statusTag}"><span class="status-dot ${statusDot}"></span>${statusText}</span></td>
             <td class="col-num">${getDataPointCount(device)}</td>
             <td class="text-end">
                 <div class="cell-actions">
                     <div class="action-group">
-                        <button class="btn btn-outline-secondary btn-icon" onclick="testDevice('${device.device_id}')" title="测试连接" aria-label="测试连接">
+                        <button type="button" class="btn btn-outline-secondary btn-icon" data-device-action="test" data-device-id="${safeId}" title="测试连接" aria-label="测试连接">
                             <i class="bi bi-wifi"></i>
                         </button>
-                        <button class="btn btn-outline-secondary btn-icon" onclick="editDevice('${device.device_id}')" title="编辑设备" aria-label="编辑设备">
+                        <button type="button" class="btn btn-outline-secondary btn-icon" data-device-action="edit" data-device-id="${safeId}" title="编辑设备" aria-label="编辑设备">
                             <i class="bi bi-pencil"></i>
                         </button>
-                        <button class="btn btn-outline-info btn-icon" onclick="viewDeviceData('${device.device_id}')" title="查看数据" aria-label="查看数据" style="display:none">
+                        <button type="button" class="btn btn-outline-info btn-icon" data-device-action="view" data-device-id="${safeId}" title="查看数据" aria-label="查看数据" style="display:none">
                             <i class="bi bi-graph-up"></i>
                         </button>
                     </div>
                     <div class="action-group">
                         ${isMechanical && !stopped ?
-                        `<button class="btn btn-danger-outline-token btn-icon" onclick="stopDevice('${device.device_id}')" title="停止设备（需二次确认）" aria-label="停止设备">
+                        `<button type="button" class="btn btn-danger-outline-token btn-icon" data-device-action="stop" data-device-id="${safeId}" title="停止设备（需二次确认）" aria-label="停止设备">
                             <i class="bi bi-stop-circle"></i>
                         </button>` : ''}
                         ${isMechanical && stopped ?
-                        `<button class="btn btn-outline-success btn-icon" onclick="startDevice('${device.device_id}')" title="启动设备" aria-label="启动设备">
+                        `<button type="button" class="btn btn-outline-success btn-icon" data-device-action="start" data-device-id="${safeId}" title="启动设备" aria-label="启动设备">
                             <i class="bi bi-play-circle"></i>
                         </button>` : ''}
-                        <button class="btn btn-outline-warning btn-icon" onclick="showFaultInjectionModal('${device.device_id}')" title="故障注入（测试用）" aria-label="故障注入">
+                        <button type="button" class="btn btn-outline-warning btn-icon" data-device-action="fault" data-device-id="${safeId}" title="故障注入（测试用）" aria-label="故障注入">
                             <i class="bi bi-exclamation-triangle"></i>
                         </button>
                     </div>
                     <div class="action-group action-group--danger">
-                        <button class="btn btn-danger-token btn-icon" onclick="deleteDevice('${device.device_id}')" title="删除设备（不可恢复，需二次确认）" aria-label="删除设备">
+                        <button type="button" class="btn btn-danger-token btn-icon" data-device-action="delete" data-device-id="${safeId}" title="删除设备（不可恢复，需二次确认）" aria-label="删除设备">
                             <i class="bi bi-trash"></i>
                         </button>
                     </div>
@@ -1059,6 +1077,7 @@ function showAddDeviceModal() {
     document.getElementById('mqtt-port').value = '1883';
     document.getElementById('rest-poll-interval').value = '10';
     document.getElementById('device-class').value = 'other';
+    document.getElementById('device_category').value = 'instrument';
     document.getElementById('device-autonomy').value = 'automatic';
     document.getElementById('device-power-type').value = '';
     document.getElementById('device-rated-voltage').value = '';
@@ -1090,6 +1109,7 @@ async function editDevice(deviceId) {
     document.getElementById('device-enabled').value = device.enabled !== false ? 'true' : 'false';
 
     // round 380：设备语义 / 铭牌 / 自主等级
+    document.getElementById('device_category').value = device.device_category || 'instrument';
     document.getElementById('device-class').value = device.device_class || 'other';
     document.getElementById('device-autonomy').value = device.autonomy || 'automatic';
     const electrical = device.electrical || {};
@@ -1108,11 +1128,12 @@ async function editDevice(deviceId) {
 
     if (protocol === 'modbus_tcp' || protocol === 'modbus_rtu'
             || protocol === 'mc' || protocol === 'fins') {
-        document.getElementById('device-host').value = device.host || '';
+        document.getElementById('device-host').value =
+            protocol === 'modbus_rtu' ? (device.serial_port || device.host || '') : (device.host || '');
         document.getElementById('device-port').value = device.port || 502;
         document.getElementById('device-slave-id').value = device.slave_id || 1;
         if (protocol === 'modbus_rtu') {
-            document.getElementById('device-baudrate').value = device.baudrate || 115200;
+            document.getElementById('device-baudrate').value = device.baudrate || 9600;
         }
         if (device.registers && device.registers.length > 0) {
             device.registers.forEach(reg => addRegisterRow(reg));
@@ -1435,6 +1456,7 @@ async function saveDevice() {
         name: name,
         description: document.getElementById('device-description').value.trim(),
         protocol: protocol,
+        device_category: document.getElementById('device_category').value || 'instrument',
         device_class: document.getElementById('device-class').value || 'other',
         autonomy: document.getElementById('device-autonomy').value || 'automatic',
         enabled: document.getElementById('device-enabled').value === 'true'
@@ -1459,12 +1481,15 @@ async function saveDevice() {
     if (protocol === 'modbus_tcp' || protocol === 'modbus_rtu') {
         const host = document.getElementById('device-host').value.trim();
         if (!host) { showAlert('请输入IP地址/串口', 'warning'); return; }
-        deviceConfig.host = host;
-        deviceConfig.port = parseInt(document.getElementById('device-port').value) || 502;
         deviceConfig.slave_id = parseInt(document.getElementById('device-slave-id').value) || 1;
         deviceConfig.registers = collectDataPoints('#registers-container');
         if (protocol === 'modbus_rtu') {
-            deviceConfig.baudrate = parseInt(document.getElementById('device-baudrate').value) || 115200;
+            deviceConfig.serial_port = host;
+            deviceConfig.host = host;
+            deviceConfig.baudrate = parseInt(document.getElementById('device-baudrate').value) || 9600;
+        } else {
+            deviceConfig.host = host;
+            deviceConfig.port = parseInt(document.getElementById('device-port').value) || 502;
         }
     } else if (protocol === 'opcua') {
         const endpoint = document.getElementById('opcua-endpoint').value.trim();

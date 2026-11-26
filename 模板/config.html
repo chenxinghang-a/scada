@@ -435,10 +435,8 @@
                 </div>
             </div>
             <div class="panel__footer">
-                <span class="cfg-footer-hint">采集间隔过小会增加设备通信压力，建议不低于设备响应时间。</span>
-                <button class="btn btn-primary" onclick="saveSection('collection')">
-                    <i class="bi bi-check-lg me-1"></i>保存采集设置
-                </button>
+                <span class="cfg-footer-hint">采集设置由配置文件 <code>配置/system.yaml</code> 管理，此处仅作只读展示（修改请编辑配置后重启）。</span>
+                <span class="tag tag--offline">只读</span>
             </div>
         </div>
     </div>
@@ -491,10 +489,8 @@
                 </div>
             </div>
             <div class="panel__footer">
-                <span class="cfg-footer-hint">超出保留天数的数据将被清理，请确认符合现场数据留存要求。</span>
-                <button class="btn btn-primary" onclick="saveSection('database')">
-                    <i class="bi bi-check-lg me-1"></i>保存数据库设置
-                </button>
+                <span class="cfg-footer-hint">数据库与保留策略由配置文件 <code>配置/system.yaml</code> 管理，此处仅作只读展示（修改请编辑配置后重启）。</span>
+                <span class="tag tag--offline">只读</span>
             </div>
         </div>
     </div>
@@ -870,10 +866,8 @@
                 </div>
             </div>
             <div class="panel__footer">
-                <span class="cfg-footer-hint">调试完成后请调回 INFO，避免日志文件快速增长。</span>
-                <button class="btn btn-primary" onclick="saveSection('logging')">
-                    <i class="bi bi-check-lg me-1"></i>保存日志设置
-                </button>
+                <span class="cfg-footer-hint">日志策略由配置文件 <code>配置/system.yaml</code> 管理，此处仅作只读展示（修改请编辑配置后重启）。</span>
+                <span class="tag tag--offline">只读</span>
             </div>
         </div>
     </div>
@@ -1005,6 +999,25 @@
 // ==================== 页面加载 ====================
 
 document.addEventListener('DOMContentLoaded', function() {
+    // 非可写系统段仅作只读展示，禁止页面侧编辑误导操作者
+    ['collection', 'database', 'logging'].forEach(sec => {
+        const panel = document.querySelector(`[data-cfg-section="${sec}"]`);
+        if (panel) {
+            panel.querySelectorAll('input, select, textarea').forEach(el => { el.disabled = true; });
+        }
+    });
+    const rulesTbody = document.getElementById('alarm-rules-body');
+    if (rulesTbody) {
+        rulesTbody.addEventListener('click', function(e) {
+            const btn = e.target.closest('button[data-rule-action]');
+            if (!btn) return;
+            const action = btn.dataset.ruleAction;
+            const ruleId = btn.dataset.ruleId;
+            if (!ruleId) return;
+            if (action === 'edit') editRule(ruleId);
+            else if (action === 'delete') deleteRule(ruleId);
+        });
+    }
     bindConfigDirtyTracking();
     bindSwitchStates();
     loadConfig();
@@ -1151,6 +1164,10 @@ function setVal(id, value) {
 }
 
 async function saveSection(section) {
+    if (section !== 'system') {
+        showAlert(`配置段 ${section} 仅允许只读查看，请通过 配置/system.yaml 修改`, 'warning');
+        return;
+    }
     let data = {};
 
     if (section === 'system') {
@@ -1187,48 +1204,6 @@ async function saveSection(section) {
             markSectionFailed('system');
             return;
         }
-    } else if (section === 'collection') {
-        data = {
-            section: 'collection',
-            data: {
-                default_interval: parseInt(document.getElementById('cfg-col-interval').value) || 5,
-                max_concurrent: parseInt(document.getElementById('cfg-col-concurrent').value) || 10,
-                timeout: parseInt(document.getElementById('cfg-col-timeout').value) || 10,
-                retry: {
-                    max_attempts: parseInt(document.getElementById('cfg-col-retry').value) || 3,
-                    interval_seconds: parseInt(document.getElementById('cfg-col-retry-interval').value) || 5
-                }
-            }
-        };
-    } else if (section === 'database') {
-        data = {
-            section: 'database',
-            data: {
-                retention: {
-                    raw_data_days: parseInt(document.getElementById('cfg-db-raw-days').value) || 30,
-                    compressed_data_days: parseInt(document.getElementById('cfg-db-compressed-days').value) || 365,
-                    alarm_days: parseInt(document.getElementById('cfg-db-alarm-days').value) || 90
-                },
-                compression: {
-                    enabled: document.getElementById('cfg-db-compress-enabled').value === 'true',
-                    interval_hours: parseInt(document.getElementById('cfg-db-compress-interval').value) || 24,
-                    method: document.getElementById('cfg-db-compress-method').value
-                }
-            }
-        };
-    } else if (section === 'logging') {
-        data = {
-            section: 'logging',
-            data: {
-                level: document.getElementById('cfg-log-level').value,
-                file: {
-                    enabled: true,
-                    path: 'logs/scada.log',
-                    max_size_mb: parseInt(document.getElementById('cfg-log-max-size').value) || 10,
-                    backup_count: parseInt(document.getElementById('cfg-log-backup-count').value) || 5
-                }
-            }
-        };
     }
 
     try {
@@ -1313,30 +1288,33 @@ function renderAlarmRules(rules) {
         'critical': '<span class="tag tag--danger">严重</span>'
     };
 
-    tbody.innerHTML = rules.map(r => `
+    tbody.innerHTML = rules.map(r => {
+        const safeId = escapeHtml(r.id);
+        return `
         <tr>
-            <td><span class="cfg-code">${r.id}</span></td>
-            <td>${r.name || '-'}</td>
-            <td>${r.device_id || '-'}</td>
-            <td>${r.register_name || '-'}</td>
-            <td>${condMap[r.condition] || r.condition}</td>
-            <td class="cfg-num">${r.threshold}</td>
-            <td>${levelMap[r.level] || r.level}</td>
+            <td><span class="cfg-code">${safeId}</span></td>
+            <td>${escapeHtml(r.name) || '-'}</td>
+            <td>${escapeHtml(r.device_id) || '-'}</td>
+            <td>${escapeHtml(r.register_name) || '-'}</td>
+            <td>${escapeHtml(condMap[r.condition] || r.condition)}</td>
+            <td class="cfg-num">${escapeHtml(r.threshold)}</td>
+            <td>${levelMap[r.level] || escapeHtml(r.level)}</td>
             <td><span class="tag ${r.enabled !== false ? 'tag--success' : 'tag--offline'}">${r.enabled !== false ? '启用' : '禁用'}</span></td>
             <td>
                 <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-secondary" onclick="editRule('${r.id}')" title="编辑"><i class="bi bi-pencil"></i></button>
-                    <button class="btn btn-outline-danger" onclick="deleteRule('${r.id}')" title="删除"><i class="bi bi-trash"></i></button>
+                    <button type="button" class="btn btn-outline-secondary" data-rule-action="edit" data-rule-id="${safeId}" title="编辑"><i class="bi bi-pencil"></i></button>
+                    <button type="button" class="btn btn-outline-danger" data-rule-action="delete" data-rule-id="${safeId}" title="删除"><i class="bi bi-trash"></i></button>
                 </div>
             </td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function populateDeviceSelect() {
     const select = document.getElementById('rule-device-id');
     select.innerHTML = '<option value="">选择设备</option>' +
-        devicesCache.map(d => `<option value="${d.device_id}">${d.name} (${d.device_id})</option>`).join('');
+        devicesCache.map(d => `<option value="${escapeHtml(d.device_id)}">${escapeHtml(d.name)} (${escapeHtml(d.device_id)})</option>`).join('');
     select.onchange = function() {
         const device = devicesCache.find(d => d.device_id === this.value);
         const regSelect = document.getElementById('rule-register-name');
@@ -1423,7 +1401,7 @@ async function saveRule() {
     };
 
     try {
-        const url = isEdit ? `/api/alarm-rules/${oldId}` : '/api/alarm-rules';
+        const url = isEdit ? `/api/alarm-rules/${encodeURIComponent(oldId)}` : '/api/alarm-rules';
         const method = isEdit ? 'PUT' : 'POST';
 
         const response = await fetch(url, {
@@ -1449,7 +1427,7 @@ async function deleteRule(ruleId) {
     if (!confirm(`确定要删除规则 "${ruleId}" 吗？\n\n删除后该变量将不再触发报警。`)) return;
 
     try {
-        const response = await fetch(`/api/alarm-rules/${ruleId}`, {
+        const response = await fetch(`/api/alarm-rules/${encodeURIComponent(ruleId)}`, {
             method: 'DELETE',
             headers: getAuthHeaders()
         });
@@ -1843,7 +1821,12 @@ function showAlert(message, type = 'info') {
     const alert = document.createElement('div');
     alert.className = `alert alert-${type} alert-dismissible fade show alert-floating`;
     alert.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 9999; min-width: 300px;';
-    alert.innerHTML = `${message}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>`;
+    alert.appendChild(document.createTextNode(String(message == null ? '' : message)));
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn-close';
+    closeBtn.setAttribute('data-bs-dismiss', 'alert');
+    alert.appendChild(closeBtn);
     document.body.appendChild(alert);
     setTimeout(() => { if (alert.parentNode) alert.remove(); }, 3000);
 }

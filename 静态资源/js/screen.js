@@ -11,7 +11,7 @@
 
 // ========== XSS 安全转义 ==========
 function escapeHtml(str) {
-    if (!str) return '';
+    if (str === null || str === undefined) return '';
     return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
@@ -781,8 +781,15 @@ document.addEventListener('DOMContentLoaded', () => {
         attachSocketHandlers();
         if (window.socket.connected) subscribeAllDevices(window.socket);
     } else {
+        let attempts = 0;
         const timer = setInterval(() => {
-            if (window.socket) { clearInterval(timer); attachSocketHandlers(); }
+            if (window.socket) {
+                clearInterval(timer);
+                attachSocketHandlers();
+                if (window.socket.connected) subscribeAllDevices(window.socket);
+            } else if (++attempts >= 25) {
+                clearInterval(timer);
+            }
         }, 200);
     }
 });

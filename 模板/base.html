@@ -222,15 +222,21 @@
                 return false;
             }
             
-            // 验证token
+            // 验证token（503 等后端维护状态不得清掉有效登录态）
             fetch('/api/auth/verify', {
                 headers: { 'Authorization': `Bearer ${token}` }
             })
-            .then(r => r.json())
+            .then(r => {
+                if (r.status === 401) return { valid: false };
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
             .then(data => {
                 if (!data.valid) {
                     localStorage.removeItem('auth_token');
                     localStorage.removeItem('scada_user');
+                    localStorage.removeItem('scada_refresh_token');
+                    document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict';
                     window.location.href = '/login';
                 }
             })
