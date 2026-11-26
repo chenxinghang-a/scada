@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import inspect
 import logging
 import os
 import re
@@ -306,6 +307,7 @@ class PluginAdapterClient:
         #: 插件对象串行访问：轮询线程与 `/api/control` 的写可能同时到达，
         #: 插件作者没有义务实现线程安全。
         self._plugin_lock = threading.Lock()
+        self._lifecycle_lock = threading.RLock()
 
         self.stats: dict[str, Any] = {
             'reads': 0,
@@ -327,43 +329,48 @@ class PluginAdapterClient:
                          self.device_id, self.stats['last_error'])
             return False
 
-        # 先回收旧实例，避免重复 connect 覆盖后泄漏插件的连接/线程
-        self._close_plugin()
-        try:
-            self._plugin = load_plugin(self.spec.plugin, self.spec.settings)
-            starter = getattr(self._plugin, 'start', None) \
-                or getattr(self._plugin, 'connect', None)
-            if callable(starter):
-                result = starter()
-                if result is False:
-                    raise PluginError('插件 start()/connect() 返回 False')
+        with self._lifecycle_lock:
+            if (self.connected and self._plugin is not None
+                    and self._thread is not None and self._thread.is_alive()):
+                return True
 
-            mapped = self._read_mapped()
-            with self._lock:
-                self.latest_data = mapped
-
-            self.connected = True
-            self.stats['connected_since'] = datetime.now().isoformat()
-            logger.info("插件适配器已连接: %s（插件 %s，%d 个点位）",
-                        self.device_id, self.spec.plugin, len(mapped))
-
-            if self._thread is None or not self._thread.is_alive():
-                self._stop_event.clear()
-                self._thread = threading.Thread(
-                    target=self._poll_loop,
-                    name=f'plugin-adapter-{self.device_id}',
-                    daemon=True,
-                )
-                self._thread.start()
-            return True
-
-        except Exception as exc:      # noqa: BLE001 —— 连接失败必须返回 False
-            self.stats['failed_reads'] += 1
-            self.stats['last_error'] = str(exc)
-            self.connected = False
-            logger.error("插件适配器连接失败 device=%s: %s", self.device_id, exc)
+            # 先回收旧实例，避免重复 connect 覆盖后泄漏插件的连接/线程
             self._close_plugin()
-            return False
+            try:
+                self._plugin = load_plugin(self.spec.plugin, self.spec.settings)
+                starter = getattr(self._plugin, 'start', None) \
+                    or getattr(self._plugin, 'connect', None)
+                if callable(starter):
+                    result = starter()
+                    if result is False:
+                        raise PluginError('插件 start()/connect() 返回 False')
+
+                mapped = self._read_mapped()
+                with self._lock:
+                    self.latest_data = mapped
+
+                self.connected = True
+                self.stats['connected_since'] = datetime.now().isoformat()
+                logger.info("插件适配器已连接: %s（插件 %s，%d 个点位）",
+                            self.device_id, self.spec.plugin, len(mapped))
+
+                if self._thread is None or not self._thread.is_alive():
+                    self._stop_event.clear()
+                    self._thread = threading.Thread(
+                        target=self._poll_loop,
+                        name=f'plugin-adapter-{self.device_id}',
+                        daemon=True,
+                    )
+                    self._thread.start()
+                return True
+
+            except Exception as exc:      # noqa: BLE001 —— 连接失败必须返回 False
+                self.stats['failed_reads'] += 1
+                self.stats['last_error'] = str(exc)
+                self.connected = False
+                logger.error("插件适配器连接失败 device=%s: %s", self.device_id, exc)
+                self._close_plugin()
+                return False
 
     start = connect
 
@@ -372,15 +379,22 @@ class PluginAdapterClient:
         self.disconnect()
 
     def disconnect(self):
-        self._stop_event.set()
-        thread = self._thread
-        self._thread = None
-        if thread is not None and thread.is_alive() \
-                and thread is not threading.current_thread():
-            thread.join(timeout=5)
-        self._close_plugin()
-        self.connected = False
-        logger.info("插件适配器已断开: %s", self.device_id)
+        with self._lifecycle_lock:
+            self._stop_event.set()
+            thread = self._thread
+            if thread is not None and thread.is_alive() \
+                    and thread is not threading.current_thread():
+                thread.join(timeout=5)
+                if thread.is_alive():
+                    logger.error(
+                        "插件适配器轮询线程 5s 内未退出 device=%s，保留引用避免双轮询",
+                        self.device_id)
+                    self.connected = False
+                    return
+            self._thread = None
+            self._close_plugin()
+            self.connected = False
+            logger.info("插件适配器已断开: %s", self.device_id)
 
     def _close_plugin(self):
         plugin, self._plugin = self._plugin, None
@@ -443,12 +457,27 @@ class PluginAdapterClient:
             return map_message(payload, self.spec.points, self.spec.records_path)
         return _map_flat_payload(payload, self.spec)
 
+    @staticmethod
+    def _accepts_quality_kwarg(callback: Callable[..., Any]) -> bool:
+        try:
+            sig = inspect.signature(callback)
+        except (TypeError, ValueError):
+            return False
+        for p in sig.parameters.values():
+            if p.kind == inspect.Parameter.VAR_KEYWORD or p.name == 'quality':
+                return True
+        return False
+
     def _notify(self, mapped: Mapping[str, dict[str, Any]]) -> None:
         for name, item in mapped.items():
             for callback in list(self._data_callbacks):
                 try:
-                    callback(self.device_id, name, item.get('value'),
-                             item.get('unit', ''))
+                    if self._accepts_quality_kwarg(callback):
+                        callback(self.device_id, name, item.get('value'),
+                                 item.get('unit', ''), quality=item.get('quality', 192))
+                    else:
+                        callback(self.device_id, name, item.get('value'),
+                                 item.get('unit', ''))
                 except Exception as exc:      # noqa: BLE001
                     logger.error("插件适配器回调异常 %s/%s: %s",
                                  self.device_id, name, exc)

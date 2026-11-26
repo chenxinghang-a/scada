@@ -129,9 +129,14 @@ class ByteOrderCapableDecoder:
 
     def _resolve_byte_order(self) -> ByteOrder:
         cfg = getattr(self, 'config', None) or {}
-        raw = str(cfg.get('byte_order', 'ABCD')).upper()
+        raw = cfg.get('byte_order')
+        if raw is None:
+            raw = getattr(self, 'byte_order', None)
+        if isinstance(raw, ByteOrder):
+            return raw
+        norm = str(raw or 'ABCD').upper()
         try:
-            return ByteOrder(raw)
+            return ByteOrder(norm)
         except ValueError:
             return ByteOrder.ABCD
 
@@ -172,14 +177,27 @@ class ByteOrderCapableDecoder:
 
     def decode_uint32(self, registers: list[int]) -> int:
         """解码 32 位无符号整数，支持四种字节序。"""
+        if len(registers) < 2:
+            raise ValueError("需要至少2个寄存器")
         return self._reorder_32(registers[0], registers[1]) & 0xFFFFFFFF
 
     def decode_int32(self, registers: list[int]) -> int:
         """解码 32 位有符号整数，支持四种字节序。"""
+        if len(registers) < 2:
+            raise ValueError("需要至少2个寄存器")
         raw = self._reorder_32(registers[0], registers[1])
         if raw & 0x80000000:
             return raw - 0x100000000
         return raw
+
+
+def _normalize_byte_order_str(byte_order: Any) -> str:
+    """规范化并校验编码字节序（空/None 默认 ABCD，非法串抛 ValueError）。"""
+    if hasattr(byte_order, 'value'):
+        byte_order = byte_order.value
+    if byte_order is None or byte_order == '':
+        return ByteOrder.ABCD.value
+    return ByteOrder(str(byte_order).upper()).value
 
 
 def encode_float32_registers(value: float, byte_order: str = 'ABCD') -> list[int]:
@@ -190,13 +208,16 @@ def encode_float32_registers(value: float, byte_order: str = 'ABCD') -> list[int
     硬编码 ABCD —— 对 CDAB/BADC/DCBA 的 PLC 调节浮点设定值时，
     写进去的是高低字颠倒的错误数值。编码逻辑必须与解码同源。
     """
-    raw = struct.pack('>f', float(value))
+    if isinstance(value, bool):
+        raise ValueError(f"float32 编码值不能为布尔: {value!r}")
+    num = float(value)
+    if not math.isfinite(num):
+        raise ValueError(f"float32 编码值必须为有限数: {value!r}")
+    raw = struct.pack('>f', num)
     w_hi = struct.unpack('>H', raw[0:2])[0]
     w_lo = struct.unpack('>H', raw[2:4])[0]
 
-    if hasattr(byte_order, 'value'):        # 兼容 ByteOrder 枚举
-        byte_order = byte_order.value
-    order = str(byte_order or 'ABCD').upper()
+    order = _normalize_byte_order_str(byte_order)
     if order == 'CDAB':
         return [w_lo, w_hi]
     if order == 'BADC':
@@ -219,12 +240,15 @@ def encode_float64_registers(value: float, byte_order: str = 'ABCD') -> list[int
     解码出来是一个"像样的错误值"，比直接失败更难发现。这里按解码器的
     四种重排逐一求逆，保证 `decode(encode(v)) == v`（有往返测试钉住）。
     """
-    raw = struct.pack('>d', float(value))
+    if isinstance(value, bool):
+        raise ValueError(f"float64 编码值不能为布尔: {value!r}")
+    num = float(value)
+    if not math.isfinite(num):
+        raise ValueError(f"float64 编码值必须为有限数: {value!r}")
+    raw = struct.pack('>d', num)
     w0, w1, w2, w3 = struct.unpack('>HHHH', raw)
 
-    if hasattr(byte_order, 'value'):
-        byte_order = byte_order.value
-    order = str(byte_order or 'ABCD').upper()
+    order = _normalize_byte_order_str(byte_order)
     if order == 'BADC':
         return [w1, w0, w3, w2]
     if order == 'CDAB':
@@ -237,13 +261,15 @@ def encode_float64_registers(value: float, byte_order: str = 'ABCD') -> list[int
 def encode_int32_registers(value: int, byte_order: str = 'ABCD',
                            signed: bool = True) -> list[int]:
     """按字节序把 32 位整数编码成两个寄存器（``decode_int32/uint32`` 的逆运算）。"""
+    if isinstance(value, bool):
+        raise ValueError(f"int32 编码值不能为布尔: {value!r}")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"int32 编码值必须为有限数: {value!r}")
     raw = struct.pack('>i' if signed else '>I', int(value))
     w_hi = struct.unpack('>H', raw[0:2])[0]
     w_lo = struct.unpack('>H', raw[2:4])[0]
 
-    if hasattr(byte_order, 'value'):        # 兼容 ByteOrder 枚举
-        byte_order = byte_order.value
-    order = str(byte_order or 'ABCD').upper()
+    order = _normalize_byte_order_str(byte_order)
     if order == 'CDAB':
         return [w_lo, w_hi]
     if order == 'BADC':

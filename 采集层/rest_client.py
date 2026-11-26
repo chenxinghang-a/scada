@@ -9,14 +9,18 @@ REST HTTP设备客户端模块
 - 对接第三方SCADA系统的数据接口
 """
 
+import inspect
 import json
+import math
 import time
 import logging
 import threading
 import requests
-from typing import Any, Callable
+from contextlib import nullcontext as _nullcontext
+from typing import Any, Callable, Mapping
 from datetime import datetime
 
+from core.action_result import is_failure
 from core.circuit_breaker import get_circuit_breaker, CircuitBreakerOpenError
 from core.safe_numeric import try_finite_float, try_int
 
@@ -103,6 +107,8 @@ class RESTDeviceClient:
 
         # HTTP会话（复用连接）
         self._session: requests.Session | None = None
+        self._session_lock = threading.Lock()
+        self._lifecycle_lock = threading.RLock()
 
         # 熔断器（保护外部HTTP调用）
         # round 383：读/写拆成**固定两把**。原来共用一把：轮询读连续失败把
@@ -149,106 +155,102 @@ class RESTDeviceClient:
         # round 382：重复 connect 会覆盖 Session（旧连接池永不 close）并叠加
         # 第二条轮询线程 —— 双倍频率打设备、回调重复。已连接直接复用；
         # 否则先回收上一次的线程/Session（含 connect 失败残留）。
-        if self.connected and self._thread is not None and self._thread.is_alive():
-            logger.debug("REST 设备已连接，忽略重复 connect: %s", self.device_id)
-            return True
-        self.disconnect()
+        lock = getattr(self, '_lifecycle_lock', None)
+        with (lock if lock is not None else _nullcontext()):
+            if self.connected and self._thread is not None and self._thread.is_alive():
+                logger.debug("REST 设备已连接，忽略重复 connect: %s", self.device_id)
+                return True
+            self.disconnect()
 
-        try:
-            self._session = requests.Session()
-            # round 369：**禁用系统代理**。REST 设备是现场内网/本机服务，
-            # 一旦服务器上配置了 HTTP_PROXY/HTTPS_PROXY，requests 会走
-            # `trust_env` 把采集与控制写入全部发给代理 —— 内网地址代理不可达，
-            # 表现为"所有 REST 设备同时掉线"。
-            # （与 Round 364 对 tdengine_client 的修复同口径。）
-            self._session.trust_env = False
-            self._session.proxies = {'http': None, 'https': None}
-            self._session.headers.update({'Content-Type': 'application/json'})
-            self._session.headers.update(self.custom_headers)
+            try:
+                self._session = requests.Session()
+                # round 369：**禁用系统代理**。REST 设备是现场内网/本机服务，
+                # 一旦服务器上配置了 HTTP_PROXY/HTTPS_PROXY，requests 会走
+                # `trust_env` 把采集与控制写入全部发给代理 —— 内网地址代理不可达，
+                # 表现为"所有 REST 设备同时掉线"。
+                # （与 Round 364 对 tdengine_client 的修复同口径。）
+                self._session.trust_env = False
+                self._session.proxies = {'http': None, 'https': None}
+                self._session.headers.update({'Content-Type': 'application/json'})
+                self._session.headers.update(self.custom_headers)
 
-            # 设置认证
-            self._setup_auth()
+                # 设置认证
+                self._setup_auth()
 
-            # 设置超时（connect 3s, read 5s — 工业场景下不宜太长）
-            #
-            # ⚠️ round 341：原来写的是 `self._session.timeout = (3, 5)` ——
-            # `requests.Session` **没有 timeout 属性**，这行只是给对象挂了
-            # 一个自定义属性，requests 完全不看它。结果是**所有 REST 请求
-            # 都没有超时**，对端不响应时永久阻塞：
-            # 采集线程卡死在这台设备上，该设备的采集任务再也不返回，
-            # 而日志里连「超时」都不会出现（因为根本没超时）。
-            # 必须作为 `timeout=` 参数逐个传（见下方 _request 调用）。
-            self._timeout = self._resolve_timeout()
+                self._timeout = self._resolve_timeout()
 
-            # 测试连通性（尝试第一个端点）
-            if self.endpoints:
-                first_ep = self.endpoints[0]
-                url = self.base_url.rstrip('/') + first_ep.get('path', '/')
-                method = str(first_ep.get('method', 'GET')).upper()
-                # round 370（BUG-026）：探针必须带上端点自己的参数/请求体。
-                # 原来只发裸请求：需要 `params` 的 GET 或需要 body 的 POST
-                # 一律 400/422 → `raise_for_status()` 抛错 → 整台设备判"连接失败"，
-                # 而实际用 curl 带参数访问完全正常。
-                probe_kwargs: dict[str, Any] = {}
-                if first_ep.get('params') and method in ('GET', 'DELETE'):
-                    probe_kwargs['params'] = first_ep['params']
-                # round 381：读路径的请求体键是 `body`；`write_body` 是**真正
-                # 下发的控制载荷**，拿它做探针 = 每次连接/重连都按一次按钮。
-                probe_body = first_ep.get('probe_body') or first_ep.get('body')
-                if probe_body and method in ('POST', 'PUT', 'PATCH'):
-                    probe_kwargs['json'] = probe_body
-                resp = self._session.request(
-                    method=method,
-                    url=url,
-                    timeout=getattr(self, '_timeout', (3, 5)),
-                    **probe_kwargs,
-                )
-                resp.raise_for_status()
+                # 测试连通性（尝试第一个端点）
+                if self.endpoints:
+                    first_ep = self.endpoints[0]
+                    url = self.base_url.rstrip('/') + first_ep.get('path', '/')
+                    method = str(first_ep.get('method', 'GET')).upper()
+                    probe_kwargs: dict[str, Any] = {}
+                    if first_ep.get('params') and method in ('GET', 'DELETE'):
+                        probe_kwargs['params'] = first_ep['params']
+                    probe_body = first_ep.get('probe_body') or first_ep.get('body')
+                    if probe_body and method in ('POST', 'PUT', 'PATCH'):
+                        probe_kwargs['json'] = probe_body
+                    resp = self._session.request(
+                        method=method,
+                        url=url,
+                        timeout=getattr(self, '_timeout', (3, 5)),
+                        **probe_kwargs,
+                    )
+                    resp.raise_for_status()
 
-            self.connected = True
-            self.stats['connected_since'] = datetime.now().isoformat()
-            logger.info(f"REST设备已连接: {self.base_url}")
+                self.connected = True
+                self.stats['connected_since'] = datetime.now().isoformat()
+                logger.info(f"REST设备已连接: {self.base_url}")
 
-            # 启动轮询。用 Event 而不是 sleep：断开设备时能立刻唤醒退出，
-            # 不用等满一个轮询周期。
-            self._running = True
-            self._stop_event = threading.Event()
-            self._thread = threading.Thread(target=self._poll_loop, daemon=True)
-            self._thread.start()
+                # 启动轮询。用 Event 而不是 sleep：断开设备时能立刻唤醒退出，
+                # 不用等满一个轮询周期。
+                self._running = True
+                self._stop_event = threading.Event()
+                self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+                self._thread.start()
 
-            return True
+                return True
 
-        except Exception as e:
-            logger.error(f"REST设备连接失败: {e}")
-            self.stats['last_error'] = str(e)
-            self.connected = False
-            # 探针失败时关掉本次新建的 Session，否则每次重试泄漏一个连接池
-            self._running = False
-            if self._session is not None:
-                try:
-                    self._session.close()
-                except Exception as close_exc:      # noqa: BLE001
-                    logger.debug("关闭 REST 会话失败: %s", close_exc)
-                self._session = None
-            return False
+            except Exception as e:
+                logger.error(f"REST设备连接失败: {e}")
+                self.stats['last_error'] = str(e)
+                self.connected = False
+                # 探针失败时关掉本次新建的 Session，否则每次重试泄漏一个连接池
+                self._running = False
+                if self._session is not None:
+                    try:
+                        self._session.close()
+                    except Exception as close_exc:      # noqa: BLE001
+                        logger.debug("关闭 REST 会话失败: %s", close_exc)
+                    self._session = None
+                return False
 
     def disconnect(self):
         """断开连接"""
-        self._running = False
-        stop_event = getattr(self, '_stop_event', None)
-        if stop_event is not None:
-            stop_event.set()      # 立刻唤醒 sleep 中的轮询线程
-        thread = self._thread
-        if thread and thread.is_alive():
-            # 请求超时可到几十秒，固定 join(5) 后线程往往仍在发请求；
-            # 此时 close() 会让在途请求撞上已关闭会话。
-            read_timeout = float(getattr(self, '_timeout', (3, 5))[1])
-            thread.join(timeout=max(5.0, read_timeout + 1.0))
-        if self._session is not None and (thread is None or not thread.is_alive()):
-            self._session.close()
-            self._session = None
-        self.connected = False
-        logger.info(f"REST设备已断开: {self.device_id}")
+        lock = getattr(self, '_lifecycle_lock', None)
+        with (lock if lock is not None else _nullcontext()):
+            self._running = False
+            stop_event = getattr(self, '_stop_event', None)
+            if stop_event is not None:
+                stop_event.set()      # 立刻唤醒 sleep 中的轮询线程
+            thread = self._thread
+            if thread and thread.is_alive() and thread is not threading.current_thread():
+                # 请求超时可到几十秒，固定 join(5) 后线程往往仍在发请求；
+                # 此时 close() 会让在途请求撞上已关闭会话。
+                read_timeout = float(getattr(self, '_timeout', (3, 5))[1])
+                thread.join(timeout=max(5.0, read_timeout + 1.0))
+                if thread.is_alive():
+                    logger.error(
+                        "REST 轮询线程未能在超时内退出 device=%s，保留引用避免并发关闭会话",
+                        self.device_id)
+                    self.connected = False
+                    return
+            self._thread = None
+            if self._session is not None:
+                self._session.close()
+                self._session = None
+            self.connected = False
+            logger.info(f"REST设备已断开: {self.device_id}")
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取所有端点的最新数据"""
@@ -280,15 +282,20 @@ class RESTDeviceClient:
         body = endpoint_config.get('body')
 
         # 使用熔断器保护
+        session_lock = getattr(self, '_session_lock', None)
         try:
             def _do_request():
-                resp = self._session.request(
-                    method=method,
-                    url=url,
-                    params=params if method == 'GET' else None,
-                    json=body if method in ('POST', 'PUT', 'PATCH') else None,
-                    timeout=getattr(self, '_timeout', (3, 5))
-                )
+                with (session_lock if session_lock is not None else _nullcontext()):
+                    session = self._session
+                    if session is None:
+                        raise ConnectionError('REST 会话未就绪')
+                    resp = session.request(
+                        method=method,
+                        url=url,
+                        params=params if method == 'GET' else None,
+                        json=body if method in ('POST', 'PUT', 'PATCH') else None,
+                        timeout=getattr(self, '_timeout', (3, 5))
+                    )
                 resp.raise_for_status()
                 return resp.json()
 
@@ -348,6 +355,12 @@ class RESTDeviceClient:
             self.stats['failed_requests'] = self.stats.get('failed_requests', 0) + 1
             return False
 
+        if not isinstance(value, bool) and isinstance(value, float) and not math.isfinite(value):
+            self.stats['failed_requests'] = self.stats.get('failed_requests', 0) + 1
+            self.stats['last_error'] = f'写入值不是有限数值: {value!r}'
+            logger.error("REST 拒绝非有限写入值 [%s]: %r", endpoint_config.get('path'), value)
+            return False
+
         url = self.base_url.rstrip('/') + endpoint_config.get('path', '/')
         write_method = method or endpoint_config.get('write_method', 'POST')
         # 回调式 write_body 原来在 try 之外执行：回调抛错会直接冒出 500
@@ -362,23 +375,48 @@ class RESTDeviceClient:
                          endpoint_config.get('path'), e)
             return False
 
+        session_lock = getattr(self, '_session_lock', None)
+
         def _do_write():
-            resp = self._session.request(
-                method=write_method,
-                url=url,
-                json=body,
-                timeout=getattr(self, '_timeout', (3, 5)),
-                # round 383：写操作**不跟随重定向**。原来 requests 默认跟随
-                # 301/302，POST 控制命令被 3xx 改写成 GET 发到别的地址，
-                # 设备其实没收到写入，客户端却拿到 200 判"成功"（fail-open）。
-                allow_redirects=False,
-            )
+            with (session_lock if session_lock is not None else _nullcontext()):
+                session = self._session
+                if session is None:
+                    raise ConnectionError('REST 会话未就绪')
+                resp = session.request(
+                    method=write_method,
+                    url=url,
+                    json=body,
+                    timeout=getattr(self, '_timeout', (3, 5)),
+                    # round 383：写操作**不跟随重定向**。原来 requests 默认跟随
+                    # 301/302，POST 控制命令被 3xx 改写成 GET 发到别的地址，
+                    # 设备其实没收到写入，客户端却拿到 200 判"成功"（fail-open）。
+                    allow_redirects=False,
+                )
             resp.raise_for_status()
-            return resp
+            if getattr(resp, 'status_code', None) == 204:
+                return None
+            raw_content = getattr(resp, 'content', None)
+            raw_text = getattr(resp, 'text', None)
+            if raw_content == b'' and (raw_text is None or (isinstance(raw_text, str) and not raw_text.strip())):
+                return None
+            if raw_content is None and isinstance(raw_text, str) and not raw_text.strip():
+                return None
+            try:
+                return resp.json()
+            except ValueError:
+                return None
 
         try:
             # 写路径用独立的写熔断器：读失败不能顺带把控制通道熔断
-            self._write_breaker.call(_do_write)
+            payload = self._write_breaker.call(_do_write)
+            if is_failure(payload) or (
+                isinstance(payload, Mapping) and payload.get('ok') is False
+            ):
+                self.stats['total_requests'] += 1
+                self.stats['failed_requests'] += 1
+                self.stats['last_error'] = f'对端写入返回失败: {payload!r}'
+                logger.error("REST对端写入失败: %r", payload)
+                return False
             self.stats['total_requests'] += 1
             self.stats['successful_requests'] += 1
             self.stats['writes'] = self.stats.get('writes', 0) + 1
@@ -436,8 +474,11 @@ class RESTDeviceClient:
     def _poll_loop(self):
         """轮询采集循环"""
         while self._running:
+            stop_event = getattr(self, '_stop_event', None)
             try:
                 for ep in self.endpoints:
+                    if not self._running or (stop_event is not None and stop_event.is_set()):
+                        break
                     ep_name = ep.get('name', ep.get('path', 'unknown'))
                     value = self.read_endpoint(ep)
 
@@ -475,7 +516,6 @@ class RESTDeviceClient:
 
             # round 369：阻塞式 sleep 换成 Event.wait —— disconnect() 能立刻
             # 唤醒线程退出；原来最长要等一个 poll_interval（现场可配到几十秒）。
-            stop_event = getattr(self, '_stop_event', None)
             if stop_event is not None:
                 stop_event.wait(self.poll_interval)
             else:

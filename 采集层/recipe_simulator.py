@@ -2,12 +2,15 @@
 配方/批量过程模拟器
 模拟多阶段生产过程（如注塑、发酵、化工反应）
 """
+import math
 import time
 import threading
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable
 from enum import Enum
+
+from core.safe_numeric import try_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +160,12 @@ class RecipeSimulator:
 
     def update(self, dt: float) -> Dict[str, float]:
         """更新配方状态，返回当前目标值"""
+        dt_val = try_finite_float(dt)
+        if dt_val is None or dt_val <= 0:
+            return {}
+
+        completion_cb = None
+        completed_cycle = 0
         with self._lock:
             if not self.is_running or not self.current_phase:
                 return {}
@@ -164,21 +173,25 @@ class RecipeSimulator:
             phase = self.current_phase
             # round 381：`phase_start_time` 全程由 monotonic 赋值，这里
             # 用 time.time() 相减会得到十亿量级，阶段被瞬间判定完成。
-            elapsed = time.monotonic() - self.phase_start_time
+            elapsed = max(0.0, time.monotonic() - self.phase_start_time)
 
             # 检查阶段是否完成
             if elapsed >= phase.duration:
-                self._advance_phase()
-                return self.get_current_setpoints()
+                completion_cb, completed_cycle = self._advance_phase(defer_callback=True)
+                result = self.get_current_setpoints()
+            else:
+                # 返回当前阶段的目标值（带渐变）
+                result = self._interpolate_setpoints(phase, elapsed)
 
-            # 返回当前阶段的目标值（带渐变）
-            return self._interpolate_setpoints(phase, elapsed)
+        if completion_cb is not None:
+            completion_cb(completed_cycle)
+        return result
 
-    def _advance_phase(self):
+    def _advance_phase(self, *, defer_callback: bool = False):
         """进入下一阶段"""
         self._history.append({
             'phase': self.current_phase.name,
-            'duration': time.monotonic() - self.phase_start_time,
+            'duration': max(0.0, time.monotonic() - self.phase_start_time),
             'time': time.time()
         })
         # round 374：只保留最近 HISTORY_LIMIT 条（见类属性说明）。
@@ -197,23 +210,33 @@ class RecipeSimulator:
             self._cycle_count += 1
             logger.info(f"配方 '{self.recipe.name}' 完成 (周期 #{self._cycle_count})")
             if self._completion_callback:
+                if defer_callback:
+                    return self._completion_callback, self._cycle_count
                 self._completion_callback(self._cycle_count)
         else:
             logger.info(f"配方进入阶段: {self.current_phase.name}")
+        return None, 0
 
     def _interpolate_setpoints(self, phase: PhaseConfig, elapsed: float) -> Dict[str, float]:
         """在阶段内渐变到目标值"""
-        progress = min(1.0, elapsed / max(1.0, phase.duration))
+        progress = max(0.0, min(1.0, elapsed / max(1.0, phase.duration)))
         # 使用S曲线渐变（更真实的工业过程）
         smooth_progress = 3 * progress**2 - 2 * progress**3
 
         result = {}
         for param, target in phase.setpoints.items():
+            target_f = try_finite_float(target)
+            if target_f is None or isinstance(target, bool):
+                continue
             if self.behavior_simulator and hasattr(self.behavior_simulator, f'_current_{param}'):
-                current = getattr(self.behavior_simulator, f'_current_{param}')
-                result[param] = current + (target - current) * smooth_progress
+                raw_current = getattr(self.behavior_simulator, f'_current_{param}')
+                current_f = try_finite_float(raw_current)
+                if current_f is not None and not isinstance(raw_current, bool):
+                    result[param] = current_f + (target_f - current_f) * smooth_progress
+                else:
+                    result[param] = target_f * smooth_progress
             else:
-                result[param] = target * smooth_progress
+                result[param] = target_f * smooth_progress
         return result
 
     def get_current_setpoints(self) -> Dict[str, float]:

@@ -963,7 +963,17 @@ class DeviceBehaviorSimulator:
                 round 370（BUG-088）：数据中枢先 `_decode_point()` 得到工程量，
                 又调这里按原始值再乘一次 scale —— 带缩放的点位写 50 变成 500。
         """
-        self._written_values[address] = value
+        from core.safe_numeric import try_finite_float
+        if isinstance(value, bool):
+            logger.warning("[行为模拟] %s: 忽略布尔值写寄存器 addr=%s val=%r",
+                           self.device_name, address, value)
+            return
+        finite_val = try_finite_float(value)
+        if finite_val is None:
+            logger.warning("[行为模拟] %s: 忽略非有限值写寄存器 addr=%s val=%r",
+                           self.device_name, address, value)
+            return
+        self._written_values[address] = value if isinstance(value, int) else finite_val
         
         # 查找该地址对应的寄存器名
         reg_info = self._register_address_map.get(address)
@@ -1181,6 +1191,11 @@ class DeviceBehaviorSimulator:
         """
         if not self._running:
             return {}
+        from core.safe_numeric import try_finite_float
+        dt_val = try_finite_float(dt)
+        if dt_val is None or dt_val <= 0:
+            return {}
+        dt = dt_val
 
         current_time = self._now()
         self._dt = dt  # store for fault probability calculations
@@ -1245,7 +1260,7 @@ class DeviceBehaviorSimulator:
                 data[_name] = _val
 
         # 7. 触发回调
-        for callback in self._data_callbacks:
+        for callback in list(self._data_callbacks):
             try:
                 callback(self.device_id, data)
             except Exception as e:
@@ -1739,6 +1754,10 @@ class DeviceBehaviorSimulator:
         elif self.state == DeviceState.MAINTENANCE:
             # 维护完成后恢复
             if state_duration > 600:  # 10分钟维护时间（原30分钟）
+                self.active_faults.clear()
+                self.fault_timers.clear()
+                self.active_fault = FaultType.NONE
+                self.fault_severity = 0
                 self.health.overall_score = 95  # 与四个 95 分量（权重和=1）自洽
                 self.health.mechanical_health = 95
                 self.health.electrical_health = 95

@@ -133,6 +133,7 @@ _MACHINERY_KEYWORDS = {
 
 _ESTOP_ACTIVE = False
 _ESTOP_FROZEN_VALUES: dict = {}  # key (str) -> frozen_value
+_estop_lock = threading.Lock()
 
 # Per-register status state tracking (keyed by register dict id)
 _status_states: dict[int, dict] = {}
@@ -143,15 +144,17 @@ _DEVICE_STOPPED: set[str] = set()  # device_id 集合
 
 def set_device_stopped(device_id: str, stopped: bool):
     """设置单个设备停止/启动状态"""
-    if stopped:
-        _DEVICE_STOPPED.add(device_id)
-    else:
-        _DEVICE_STOPPED.discard(device_id)
+    with _estop_lock:
+        if stopped:
+            _DEVICE_STOPPED.add(device_id)
+        else:
+            _DEVICE_STOPPED.discard(device_id)
 
 
 def is_device_stopped(device_id: str) -> bool:
     """检查设备是否被单独停止"""
-    return device_id in _DEVICE_STOPPED
+    with _estop_lock:
+        return device_id in _DEVICE_STOPPED
 
 
 #: 工艺量关键词：名字里带这些词时，**即使同时含机械类关键词也不归零**。
@@ -197,16 +200,18 @@ def _is_machinery(name: str) -> bool:
 def set_estop_state(active: bool):
     """设置紧急停机状态（由 device_manager 触发）"""
     global _ESTOP_ACTIVE
-    _ESTOP_ACTIVE = active
-    if not active:
-        _ESTOP_FROZEN_VALUES.clear()
+    with _estop_lock:
+        _ESTOP_ACTIVE = bool(active)
+        if not active:
+            _ESTOP_FROZEN_VALUES.clear()
     logger.info(f"[模拟] E-STOP 状态: {'激活' if active else '已解除'}")
 
 
 def _estop_override(name: str, value: float) -> float:
     """E-STOP 激活时，机械类寄存器值归零"""
     if _ESTOP_ACTIVE and _is_machinery(name):
-        _ESTOP_FROZEN_VALUES[name] = 0.0
+        with _estop_lock:
+            _ESTOP_FROZEN_VALUES[name] = 0.0
         return 0.0
     return value
 
@@ -881,8 +886,10 @@ class SimulatedModbusClient(ModbusClientInterface):
     def write_single_register(self, address: int, value: int, slave_id: int | None = None) -> bool:
         if not self.connected:
             return False
+        if isinstance(value, bool) or (isinstance(value, float) and not math.isfinite(value)):
+            return False
         # 存储写入值，支持回读验证
-        self._written_values[address] = value
+        self._written_values[address] = int(value)
         logger.info(f"[模拟] 设备 {self.device_name} 写入寄存器: address={address}, value={value}")
         return True
 
@@ -890,7 +897,7 @@ class SimulatedModbusClient(ModbusClientInterface):
         if not self.connected:
             return False
         # 存储写入值
-        self._written_coils[address] = value
+        self._written_coils[address] = bool(value)
         logger.info(f"[模拟] 设备 {self.device_name} 写入线圈: address={address}, value={value}")
         return True
 

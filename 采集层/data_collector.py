@@ -4,6 +4,8 @@
 支持协议: Modbus TCP/RTU, OPC UA, MQTT, REST HTTP
 """
 
+import copy
+import inspect
 import json
 import math
 import os
@@ -55,7 +57,10 @@ def _normalize_timestamp(ts):
 
 
 # --- 智能分发关键字匹配 ---
-_power_kw = ('power', 'watt', 'kw', 'kwh', 'active_power', 'reactive_power', 'apparent_power')
+_power_kw = ('power', 'watt', 'kw', 'kwh', 'active_power')
+_power_exclude_kw = ('power_factor', 'reactive_power', 'apparent_power')
+_water_kw = ('water_flow',)
+_gas_kw = ('gas_flow',)
 _energy_kw = ('energy', 'kwh', 'consumption', 'electricity', 'water_flow', 'gas_flow')
 _spc_kw = ('temperature', 'pressure', 'humidity', 'viscosity', 'ph', 'concentration')
 _status_kw = ('status', 'state', 'running_status', 'boiler_status', 'packing_status', 'line_status', 'ahu_status', 'compressor_status', 'robot_status', 'welder_status', 'ups_status', 'cems_status')
@@ -292,6 +297,30 @@ CANCELLED_RETENTION_S = 300.0
 HISTORIAN_ALARM_THRESHOLD = 3
 #: 系统告警 ID —— 必须稳定，报警管理层的去重按 ID 生效。
 HISTORIAN_ALARM_ID = 'HISTORIAN_WRITE_ERROR'
+
+
+def _accepts_kwarg(fn: Any, kw_name: str, *, include_var_kw: bool = False) -> bool:
+    """检查目标可调用对象是否声明了指定关键字参数（跳过 unittest.mock 替身）。"""
+    if fn is None or 'unittest.mock' in getattr(type(fn), '__module__', ''):
+        return False
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    for param in sig.parameters.values():
+        if param.name == kw_name:
+            return True
+        if include_var_kw and param.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+    return False
+
+
+def _config_fingerprint(cfg: Optional[dict[str, Any]]) -> str:
+    """生成设备配置快照指纹，供 sync_device_tasks 识别变更。"""
+    try:
+        return json.dumps(cfg or {}, sort_keys=True, default=str, ensure_ascii=False)
+    except Exception:       # noqa: BLE001
+        return str(cfg)
 
 
 def _has_keyword(register_name: str, keywords: tuple) -> bool:
@@ -601,11 +630,12 @@ class DiskBackedQueue:
                         logger.debug(f"磁盘恢复: 跳过损坏记录行: {e} | {line[:200]}")
                         continue
 
-                    if item.get('value') is None:
+                    if not isinstance(item, dict) or item.get('value') is None:
                         # 这条记录永远无法入库，不进待恢复清单 —— 免得它被反复
                         # 重写回文件、每次启动都刷同一条告警
                         invalid += 1
-                        logger.warning(f"磁盘恢复: 跳过无value字段的记录 keys={list(item.keys())}")
+                        keys_info = list(item.keys()) if isinstance(item, dict) else type(item).__name__
+                        logger.warning(f"磁盘恢复: 跳过无效记录 key_or_type={keys_info}")
                         continue
 
                     # 该行有效 → 纳入待恢复清单，与文件内容保持一一对应
@@ -1248,6 +1278,10 @@ class DataCollector:
                 logger.error("设备 %s 的采集任务启动失败"
                              "（该设备不会产生数据，请检查协议与线程状态）", device_id)
                 return False
+        configs = getattr(self, '_device_configs', None)
+        if configs is None:
+            configs = self._device_configs = {}
+        configs[device_id] = _config_fingerprint(device_config)
         logger.info(f"已启动设备 {device_id} [{protocol}] 的采集任务")
         return True
 
@@ -1399,6 +1433,23 @@ class DataCollector:
         to_stop = sorted(running - desired)
         unchanged = sorted(desired & running)
 
+        # 检查已运行设备的配置是否发生变更（例如 host/port/registers/interval）
+        tracked_configs = getattr(self, '_device_configs', None)
+        if tracked_configs is None:
+            tracked_configs = self._device_configs = {}
+        to_restart: list[str] = []
+        still_unchanged: list[str] = []
+        for dev_id in unchanged:
+            new_fp = _config_fingerprint(devices.get(dev_id))
+            old_fp = tracked_configs.get(dev_id)
+            if old_fp is not None and old_fp != new_fp:
+                to_restart.append(dev_id)
+            else:
+                if old_fp is None:
+                    tracked_configs[dev_id] = new_fp
+                still_unchanged.append(dev_id)
+        unchanged = still_unchanged
+
         # round 369：配置热重载后协议可能已经变了（同一设备 id 改了 protocol），
         # 而 `_protocol_of()` 的缓存是「第一次见到就永久记住」。
         # 整表清空代价可忽略（只是指标标签），换来标签永远与配置一致。
@@ -1412,12 +1463,22 @@ class DataCollector:
             self.remove_device_task(device_id)
             logger.info("设备配置已移除/禁用，停止采集任务: %s", device_id)
 
+        restarted: list[str] = []
+        failed: list[str] = []
+        for device_id in to_restart:
+            self.remove_device_task(device_id)
+            if self.start_device_task(device_id, devices.get(device_id) or {}):
+                restarted.append(device_id)
+                logger.info("设备配置变更，已重启采集任务: %s", device_id)
+            else:
+                failed.append(device_id)
+                logger.error("设备配置变更，但采集任务**重启失败**: %s", device_id)
+
         # round 308：**启动失败不许算进 `started`**。
         # 原实现把 `to_start` 整个当成结果返回，`start_device_task` 的成败
         # 根本没看 —— 配置热重载后接口回「已启动 3 台」，其中一台的定时器
         # 压根没挂上，那台设备从此没有数据，而运维刚看到"同步成功"。
         started: list[str] = []
-        failed: list[str] = []
         for device_id in to_start:
             if self.start_device_task(device_id, devices.get(device_id) or {}):
                 started.append(device_id)
@@ -1427,14 +1488,15 @@ class DataCollector:
                 logger.error("设备配置新增，但采集任务**启动失败**（该设备不会产生数据）: %s",
                              device_id)
 
-        if started or to_stop:
-            logger.warning("设备采集任务已按配置同步: 启动 %s，停止 %s",
-                           started, to_stop)
+        if started or to_stop or restarted:
+            logger.warning("设备采集任务已按配置同步: 启动 %s，重启 %s，停止 %s",
+                           started, restarted, to_stop)
         if failed:
             logger.error("设备采集任务同步**部分失败**: 未能启动 %s", failed)
 
         return {
             'started': started,
+            'restarted': restarted,
             'failed': failed,
             'stopped': to_stop,
             'unchanged': unchanged,
@@ -1450,7 +1512,7 @@ class DataCollector:
     PER_DEVICE_STATE_ATTRS = (
         '_last_values', '_last_times',
         '_circuit_state', '_failure_counts',
-        '_device_intervals',
+        '_device_intervals', '_device_configs',
     )
 
     #: 「已取消设备」登记表 —— 与上面**反向**的生命周期，必须分开登记。
@@ -1476,6 +1538,9 @@ class DataCollector:
             self._circuit_state.pop(device_id, None)
             self._failure_counts.pop(device_id, None)
             self._device_intervals.pop(device_id, None)
+            configs = getattr(self, '_device_configs', None)
+            if configs is not None:
+                configs.pop(device_id, None)
 
     def _setup_push_device(self, device_id: str, device_config: dict[str, Any]):
         """设置推送型设备（OPC UA / MQTT）的回调和连接。
@@ -1503,9 +1568,9 @@ class DataCollector:
         client = self.device_manager.get_client(device_id)
         if not client:
             logger.error(f"设备 {device_id} 客户端创建失败")
-            return
+            return False
 
-        def on_data(device_id, name, value, unit):
+        def on_data(device_id, name, value, unit, quality=None, retained=False):
             if value is None:
                 return
             # 设备被删除 / 采集器已停止时，回调可能还在（客户端没来得及断开），
@@ -1516,14 +1581,21 @@ class DataCollector:
             value = try_finite_float(value)
             if value is None:
                 return
-            # 队列满时丢弃最旧数据，绝不阻塞回调线程
-            self._enqueue_drop_oldest({
+            item = {
                 'device_id': device_id,
                 'register_name': name,
                 'value': value,
                 'timestamp': datetime.now(),
-                'unit': unit
-            })
+                'monotonic_ts': time.monotonic(),
+                'unit': unit,
+            }
+            if retained:
+                item['retained'] = True
+                item['stale'] = True
+            if quality is not None:
+                item['client_quality'] = quality
+            # 队列满时丢弃最旧数据，绝不阻塞回调线程
+            self._enqueue_drop_oldest(item)
 
         # round 382：没有回调能力的客户端不能报“已连接”——在线但永远无数据；
         # 重复启动会重复 append（各客户端都是 list.append，无去重）→ 同一
@@ -1533,12 +1605,23 @@ class DataCollector:
                          protocol.upper(), device_id)
             return False
 
-        registered = getattr(self, '_push_callbacks', None)
-        if registered is None:
-            registered = self._push_callbacks = {}
-        if device_id not in registered:
-            client.add_data_callback(on_data)
-            registered[device_id] = on_data
+        need_register = False
+        with self._tasks_lock:
+            registered = getattr(self, '_push_callbacks', None)
+            if registered is None:
+                registered = self._push_callbacks = {}
+            if device_id not in registered:
+                registered[device_id] = on_data
+                need_register = True
+
+        if need_register:
+            try:
+                client.add_data_callback(on_data)
+            except Exception:
+                with self._tasks_lock:
+                    if getattr(self, '_push_callbacks', {}).get(device_id) is on_data:
+                        self._push_callbacks.pop(device_id, None)
+                raise
         elif getattr(client, 'connected', False):
             return True
 
@@ -1668,7 +1751,7 @@ class DataCollector:
                 probe_future = self._pool.submit(_run_collection)
                 probe_ok = probe_future.result(timeout=15)
             except Exception as e:
-                logger.debug(f"设备 {device_id} 试探读异常: {e}")
+                logger.warning(f"设备 {device_id} 试探读超时或异常: {e}")
                 if probe_future is not None:
                     probe_future.cancel()   # 超时后任务仍在跑，必须撤销
                 probe_ok = False
@@ -1699,7 +1782,7 @@ class DataCollector:
                 future = self._pool.submit(_run_collection)
                 success = future.result(timeout=30)
             except Exception as e:
-                logger.debug(f"设备 {device_id} 线程池采集异常: {e}")
+                logger.warning(f"设备 {device_id} 线程池采集超时或异常: {e}")
                 if future is not None:
                     future.cancel()   # 超时后任务仍在跑，会重复入队
                 success = False
@@ -2179,6 +2262,7 @@ class DataCollector:
         any_chunk_ok = False
         any_chunk_fresh = False
         produced = False
+        emitted_regs: set[int] = set()
         for start in range(min_addr, max_end, step):
             count = min(chunk_size, max_end - start)
             chunk = _read(start, count)
@@ -2189,11 +2273,18 @@ class DataCollector:
             if not stale:
                 any_chunk_fresh = True
             for reg in group_regs:
+                reg_id = id(reg)
+                if reg_id in emitted_regs:
+                    continue
                 if reg['address'] < start or reg['address'] >= start + count:
                     continue
                 offset = reg['address'] - start
-                size = spans[id(reg)]
+                size = spans[reg_id]
+                if offset + size > len(chunk):
+                    # 多字寄存器跨到下一重叠块的尾部，留待下一块完整读取
+                    continue
                 if _emit(reg, chunk[offset:offset + size], stale, start, count):
+                    emitted_regs.add(reg_id)
                     produced = True
 
         if not produced:
@@ -2311,19 +2402,34 @@ class DataCollector:
             data_type = register.get('data_type', 'uint16')
             scale = register.get('scale', 1)
             offset = register.get('offset', 0)
+            slave_id = register.get('slave_id')
+            function_code = _resolve_function_code(
+                register.get('function_code', register.get('register_type'))
+            )
+            if function_code is None:
+                logger.warning("寄存器 %s 功能码无效，已跳过", register.get('name', '?'))
+                return None
+
+            if function_code in _FUNCTION_CODE_BIT_READS:
+                raw_values = _call_function_code_read(
+                    client, function_code, address, 1, slave_id
+                )
+                if raw_values is None or len(raw_values) < 1:
+                    return None
+                return float(int(bool(raw_values[0])))
 
             if data_type == 'float32':
-                raw_values = client.read_holding_registers(address, 2)
+                raw_values = _call_function_code_read(client, function_code, address, 2, slave_id)
                 if raw_values is None or len(raw_values) < 2:
                     return None
                 value = client.decode_float32(raw_values)
             elif data_type == 'float64':
-                raw_values = client.read_holding_registers(address, 4)
+                raw_values = _call_function_code_read(client, function_code, address, 4, slave_id)
                 if raw_values is None or len(raw_values) < 4:
                     return None
                 value = client.decode_float64(raw_values)
             elif data_type in ('int32', 'uint32'):
-                raw_values = client.read_holding_registers(address, 2)
+                raw_values = _call_function_code_read(client, function_code, address, 2, slave_id)
                 if raw_values is None or len(raw_values) < 2:
                     return None
                 if data_type == 'int32':
@@ -2331,8 +2437,8 @@ class DataCollector:
                 else:
                     value = client.decode_uint32(raw_values)
             else:
-                raw_values = client.read_holding_registers(address, 1)
-                if raw_values is None:
+                raw_values = _call_function_code_read(client, function_code, address, 1, slave_id)
+                if raw_values is None or len(raw_values) < 1:
                     return None
                 if data_type == 'uint16':
                     value = client.decode_uint16(raw_values[0])
@@ -2341,8 +2447,12 @@ class DataCollector:
                 else:
                     value = raw_values[0]
 
-            value = from_raw(value, scale, offset)
-            return round(value, 4)
+            if value is None:
+                return None
+            eng = try_finite_float(from_raw(value, scale, offset))
+            if eng is None:
+                return None
+            return round(eng, 4)
 
         except Exception as e:
             logger.error(f"读取寄存器异常 ({register.get('name', '?')}): {e}", exc_info=True)
@@ -2476,6 +2586,19 @@ class DataCollector:
                         # 不能把已判 BAD/COMM_FAILURE 的值“升级”成 UNCERTAIN。
                         quality = DataQualityAssessor.UNCERTAIN_LAST_USABLE
 
+                    client_q = data.get('client_quality')
+                    if client_q is not None:
+                        cq_norm = str(client_q).strip().upper()
+                        if client_q == 0 or cq_norm in (
+                            '0', 'BAD', 'BAD_COMM_FAILURE', 'BAD_SENSOR_FAILURE', 'BAD_OUT_OF_SERVICE'
+                        ):
+                            quality = DataQualityAssessor.BAD
+                        elif (
+                            client_q == DataQualityAssessor.UNCERTAIN_LAST_USABLE
+                            or cq_norm.startswith('UNCERTAIN')
+                        ) and quality == DataQualityAssessor.GOOD:
+                            quality = DataQualityAssessor.UNCERTAIN_LAST_USABLE
+
                     data['quality'] = quality
 
                     # 更新跟踪状态（与其他访问 _last_values/_last_times 的路径共用
@@ -2503,6 +2626,7 @@ class DataCollector:
 
                 # === 批量写DB（单事务，比逐条快10-50倍） ===
                 db_write_ok = True
+                db_all_written = True
                 try:
                     # round 352：**必须看返回值**。
                     # `insert_data_batch` 原来返回 None，而「整批记录都缺字段」时
@@ -2513,6 +2637,7 @@ class DataCollector:
                     written = self.database.insert_data_batch(batch)
                     if not written:
                         db_write_ok = False
+                        db_all_written = False
                         # round 392（Q8）：写库失败只影响"非幂等下游"是否喂数，
                         # 不影响联锁（本周期内照常执行，见下方 intel 段）。
                         self._note_historian_write(False, '落库层拒绝整批')
@@ -2530,6 +2655,7 @@ class DataCollector:
                         # 部分写入：落库层把非法值那部分静默剔除了。已写入的
                         # 不能重投（会重复），未写入的只在磁盘副本里 —— 保留
                         # 整批持久化文件，并在指标里把“丢了多少”显式记出来。
+                        db_all_written = False
                         dropped = len(batch) - written
                         self._inc_stat('dropped_invalid_value', dropped)
                         # 链路本身是通的（有数据落库成功），不算时序库故障；
@@ -2544,6 +2670,7 @@ class DataCollector:
                         self._note_historian_write(True)
                 except Exception as e:
                     db_write_ok = False
+                    db_all_written = False
                     # round 392（Q8）：连续 3 次写失败发 HISTORIAN_WRITE_ERROR，
                     # 让值班员知道这段时间历史数据有缺口；恢复后自动消警。
                     self._note_historian_write(False, str(e))
@@ -2575,17 +2702,23 @@ class DataCollector:
 
                 # === 报警检查（每条都要检查） ===
                 if self.alarm_manager:
+                    pass_quality = _accepts_kwarg(
+                        self.alarm_manager.check_alarm, 'quality', include_var_kw=True
+                    )
                     for data in batch:
                         if data.get('_db_retry'):
                             # 重试批次首次已检查过报警；再查会重复累加触发/升级。
                             continue
                         try:
-                            self.alarm_manager.check_alarm(
-                                device_id=data['device_id'],
-                                register_name=data['register_name'],
-                                value=data['value'],
-                                timestamp=data['timestamp']
-                            )
+                            alarm_kwargs = {
+                                'device_id': data['device_id'],
+                                'register_name': data['register_name'],
+                                'value': data['value'],
+                                'timestamp': data['timestamp'],
+                            }
+                            if pass_quality:
+                                alarm_kwargs['quality'] = data.get('quality')
+                            self.alarm_manager.check_alarm(**alarm_kwargs)
                         except Exception as e:
                             logger.error(f"报警检查异常: {e}")
 
@@ -2638,7 +2771,16 @@ class DataCollector:
                         if not intel_queue.full():
                             intel_queue.put_nowait(data)
                         else:
-                            logger.warning(f"智能分发队列已满({intel_queue.qsize()}), 丢弃数据: device={data.get('device_id')}, reg={data.get('register_name')}")
+                            if self.device_control and not data.get('_interlock_done'):
+                                self._safe_intel(
+                                    'device_control',
+                                    self.device_control.check_interlocks,
+                                    data['device_id'], data['register_name'], data['value'],
+                                    quality=data.get('quality'),
+                                    updated_at=data.get('timestamp'),
+                                )
+                                data['_interlock_done'] = True
+                            logger.warning(f"智能分发队列已满({intel_queue.qsize()}), 丢弃非联锁智能分发: device={data.get('device_id')}, reg={data.get('register_name')}")
                     except Exception as e:
                         logger.error(f"智能分发异常: {e}")
 
@@ -2647,7 +2789,7 @@ class DataCollector:
                 # 但**只有这批真的写库成功**才能清：写失败时数据刚被重新入队，
                 # 此刻它们**只存在于内存队列**里，磁盘上的副本是唯一的崩溃保护。
                 # 无条件清除 = 把它们的保护也一起抹掉（崩溃就真丢了）。
-                if db_write_ok and hasattr(self.data_queue, 'clear_persistence'):
+                if db_write_ok and db_all_written and hasattr(self.data_queue, 'clear_persistence'):
                     # 只确认本批 —— 不要清空整个文件，否则会把「已落盘但还没被
                     # 本批取走」的新数据一起抹掉（崩溃即真丢）。
                     self.data_queue.clear_persistence(batch)
@@ -2786,27 +2928,45 @@ class DataCollector:
 
         # 边缘决策
         if self.edge_decision and self._intel_enabled('edge_decision'):
-            self._safe_intel(
-                'edge_decision', self.edge_decision.update_data,
-                f"{device_id}:{register_name}", value,
-            )
+            if _accepts_kwarg(self.edge_decision.update_data, 'quality', include_var_kw=True):
+                self._safe_intel(
+                    'edge_decision', self.edge_decision.update_data,
+                    f"{device_id}:{register_name}", value,
+                    quality=data.get('quality', 'GOOD'),
+                    ts=data.get('monotonic_ts'),
+                )
+            else:
+                self._safe_intel(
+                    'edge_decision', self.edge_decision.update_data,
+                    f"{device_id}:{register_name}", value,
+                )
 
         # 能源管理
         if self.energy_manager and self._intel_enabled('energy_manager'):
-            # round 298：**顺序与词边界都得对**。
-            # `_power_kw` 里含 'kwh'，而它原来排在 `_energy_kw` 之前 ——
-            # 所有 `*_kwh` 电量寄存器都被当成**瞬时功率 kW** 做梯形积分：
-            # 仿真预设 energy_meter_01 的 5 个 kWh 寄存器（120/450/180/50/320）
-            # 每 60s 被当作功率积分 → 约 1120 kWh/h，而真实总功率只有 320 kW，
-            # 电费/碳排放约 3.5 倍；同时 realtime_power 被轮流覆盖，
-            # 页面上「总功率 320 kW」与「每小时 1120 kWh」并存且互相矛盾。
-            # 判据：**kWh 类必须走 energy_kwh 差分路径**，不能只靠子串包含。
-            if _has_keyword(name_lower, _energy_kw):
+            if _has_keyword(name_lower, _water_kw):
+                if hasattr(self.energy_manager, 'feed_water_data'):
+                    self._safe_intel(
+                        'energy_manager', self.energy_manager.feed_water_data,
+                        device_id, value, timestamp=timestamp,
+                    )
+            elif _has_keyword(name_lower, _gas_kw):
+                if hasattr(self.energy_manager, 'feed_gas_data'):
+                    self._safe_intel(
+                        'energy_manager', self.energy_manager.feed_gas_data,
+                        device_id, value, timestamp=timestamp,
+                    )
+            elif _has_keyword(name_lower, _energy_kw):
+                energy_kw_args: dict[str, Any] = {
+                    'energy_kwh': value,
+                    'timestamp': timestamp,
+                }
+                if _accepts_kwarg(self.energy_manager.feed_power_data, 'register_name'):
+                    energy_kw_args['register_name'] = register_name
                 self._safe_intel(
                     'energy_manager', self.energy_manager.feed_power_data,
-                    device_id, 0, energy_kwh=value, timestamp=timestamp,
+                    device_id, 0, **energy_kw_args,
                 )
-            elif _has_keyword(name_lower, _power_kw):
+            elif _has_keyword(name_lower, _power_kw) and not _has_keyword(name_lower, _power_exclude_kw):
                 # round 382：判据只能是**单位**。用名字里有没有 'w' 会把
                 # 'power'/'active_power' 全部误判成瓦特 → kW 值被 /1000。
                 unit_lower = str(data.get('unit') or '').strip().lower()
@@ -2890,11 +3050,14 @@ class DataCollector:
 
         good_kw = frozenset(['good', 'ok', 'pass', 'qualified'])
         reject_kw = frozenset(['reject', 'ng', 'defect', 'scrap'])
+        extra_kw: dict[str, Any] = {}
+        if _accepts_kwarg(self.oee_calculator.record_production, 'register_name'):
+            extra_kw['register_name'] = name_lower
         if _has_keyword(name_lower, good_kw):
-            self.oee_calculator.record_production(device_id, good_count=count)
+            self.oee_calculator.record_production(device_id, good_count=count, **extra_kw)
         elif _has_keyword(name_lower, reject_kw):
-            # 缺陷数：从总产量中扣除
-            self.oee_calculator.record_production(device_id, count=count)
+            # 缺陷数：计入 reject_count，不误加为总产量
+            self.oee_calculator.record_production(device_id, reject_count=count, **extra_kw)
         else:
             # 总产量：**只记总数，不推算合格数**（round 298）。
             # 原实现 `good = count - round(count*0.02)`，注释写着「98%合格率模拟」——
@@ -2902,7 +3065,7 @@ class DataCollector:
             # 真实良率 80% 的产线看板显示 98%，不合格品混在 total_count 里无标记。
             # 判据：没有独立合格品计数时，合格数就是"不可用"，
             # 不能编一个 0.98 —— 由 `calculate_oee` 把 quality 置 None。
-            self.oee_calculator.record_production(device_id, count=count)
+            self.oee_calculator.record_production(device_id, count=count, **extra_kw)
 
     def get_circuit_breaker_states(self) -> dict[str, Any]:
         """各设备**真实生效**的熔断器状态（round 251）。

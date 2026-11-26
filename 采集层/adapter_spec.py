@@ -51,6 +51,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from collections.abc import Mapping
@@ -466,6 +467,13 @@ def convert_value(raw: Any, point: PointSpec) -> Any:
     if point.type == 'bool':
         if isinstance(raw, bool):
             return 1.0 if raw else 0.0
+        if isinstance(raw, (int, float)):
+            if not math.isfinite(raw):
+                raise AdapterDataError(f'点位 {point.name} 的值 {raw!r} 不是有限布尔数')
+            if raw == 1:
+                return 1.0
+            if raw == 0:
+                return 0.0
         text = str(raw).strip().lower()
         if text in _TRUE_VALUES:
             return 1.0
@@ -480,7 +488,10 @@ def convert_value(raw: Any, point: PointSpec) -> Any:
     if point.type == 'auto':
         numeric = try_finite_float(raw)
         if numeric is not None:
-            return from_raw(numeric, point.scale, point.offset)
+            result = from_raw(numeric, point.scale, point.offset)
+            if not math.isfinite(result):
+                raise AdapterDataError(f'点位 {point.name} 标度变换溢出: {raw!r}')
+            return result
         if isinstance(raw, str):
             return raw
         raise AdapterDataError(
@@ -490,13 +501,19 @@ def convert_value(raw: Any, point: PointSpec) -> Any:
         number = try_int(raw)
         if number is None:
             raise AdapterDataError(f'点位 {point.name} 的值 {raw!r} 不是整数')
-        return float(round(from_raw(number, point.scale, point.offset)))
+        result = float(round(from_raw(number, point.scale, point.offset)))
+        if not math.isfinite(result):
+            raise AdapterDataError(f'点位 {point.name} 标度变换溢出: {raw!r}')
+        return result
 
     # float
     numeric = try_finite_float(raw)
     if numeric is None:
         raise AdapterDataError(f'点位 {point.name} 的值 {raw!r} 不是有限数值')
-    return from_raw(numeric, point.scale, point.offset)
+    result = from_raw(numeric, point.scale, point.offset)
+    if not math.isfinite(result):
+        raise AdapterDataError(f'点位 {point.name} 标度变换溢出: {raw!r}')
+    return result
 
 
 def _extract_records(payload: Any, records_path: str | None,

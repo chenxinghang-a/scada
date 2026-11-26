@@ -15,14 +15,17 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 import threading
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Callable
 
 import requests
 
+from core.action_result import is_failure
 from core.circuit_breaker import CircuitBreakerOpenError, get_circuit_breaker
 from core.safe_numeric import try_finite_float
 
@@ -89,12 +92,20 @@ class CustomAdapterClient:
         self._session: requests.Session | None = None
         #: requests.Session 非线程安全：轮询线程与 write_point 必须串行使用
         self._session_lock = threading.Lock()
+        self._lifecycle_lock = threading.RLock()
         self._timeout = _DEFAULT_TIMEOUT
 
+        breaker_threshold = config.get('circuit_breaker_threshold', 5)
+        breaker_timeout = config.get('circuit_breaker_timeout', 60)
         self._circuit_breaker = get_circuit_breaker(
             name=f"custom_adapter_{self.device_id}",
-            failure_threshold=config.get('circuit_breaker_threshold', 5),
-            timeout_seconds=config.get('circuit_breaker_timeout', 60),
+            failure_threshold=breaker_threshold,
+            timeout_seconds=breaker_timeout,
+        )
+        self._write_breaker = get_circuit_breaker(
+            name=f"custom_adapter_{self.device_id}_write",
+            failure_threshold=breaker_threshold,
+            timeout_seconds=breaker_timeout,
         )
 
         self.stats: dict[str, Any] = {
@@ -119,68 +130,71 @@ class CustomAdapterClient:
                          self.device_id, self.stats['last_error'])
             return False
 
-        if self.connected and self._session is not None:
-            return True
+        with self._lifecycle_lock:
+            if (self.connected and self._session is not None
+                    and self._thread is not None and self._thread.is_alive()):
+                return True
 
-        try:
-            # 重复 connect 时旧会话必须先关：否则每次重连泄漏一个连接池，
-            # 旧池里的 keep-alive 连接还挂在 Broker/网关侧。
-            self._close_session()
-            self._session = requests.Session()
-            # 现场接口在内网：不能被服务器上的 HTTP_PROXY 劫持
-            self._session.trust_env = False
-            self._session.proxies = {'http': None, 'https': None}
-            self._session.headers.update({'Content-Type': 'application/json'})
-            self._session.headers.update(dict(self.spec.request.headers))
-            self._setup_auth()
+            try:
+                # 重复 connect 时旧会话必须先关：否则每次重连泄漏一个连接池，
+                # 旧池里的 keep-alive 连接还挂在 Broker/网关侧。
+                self._close_session()
+                self._session = requests.Session()
+                # 现场接口在内网：不能被服务器上的 HTTP_PROXY 劫持
+                self._session.trust_env = False
+                self._session.proxies = {'http': None, 'https': None}
+                self._session.headers.update({'Content-Type': 'application/json'})
+                self._session.headers.update(dict(self.spec.request.headers))
+                self._setup_auth()
 
-            # 探测：既验证网络/认证，也验证 records/points 路径与真实响应匹配。
-            # 配置拼错时在这里就失败，而不是"采集成功但 0 个点"。
-            mapped = self._fetch_and_map()
-            with self._lock:
-                self.latest_data = mapped
+                # 探测：既验证网络/认证，也验证 records/points 路径与真实响应匹配。
+                # 配置拼错时在这里就失败，而不是"采集成功但 0 个点"。
+                mapped = self._fetch_and_map()
+                with self._lock:
+                    self.latest_data = mapped
 
-            self.connected = True
-            self.stats['connected_since'] = datetime.now().isoformat()
-            logger.info("自定义适配器已连接: %s（%d 个点位）",
-                        self.device_id, len(mapped))
+                self.connected = True
+                self.stats['connected_since'] = datetime.now().isoformat()
+                logger.info("自定义适配器已连接: %s（%d 个点位）",
+                            self.device_id, len(mapped))
 
-            if self._thread is None or not self._thread.is_alive():
-                self._stop_event.clear()
-                self._thread = threading.Thread(
-                    target=self._poll_loop,
-                    name=f"custom-adapter-{self.device_id}",
-                    daemon=True,
-                )
-                self._thread.start()
-            return True
+                if self._thread is None or not self._thread.is_alive():
+                    self._stop_event.clear()
+                    self._thread = threading.Thread(
+                        target=self._poll_loop,
+                        name=f"custom-adapter-{self.device_id}",
+                        daemon=True,
+                    )
+                    self._thread.start()
+                return True
 
-        except Exception as exc:      # noqa: BLE001 —— 连接失败必须返回 False
-            self.stats['failed_requests'] += 1
-            self.stats['last_error'] = str(exc)
-            self.connected = False
-            logger.error("自定义适配器连接失败 device=%s: %s", self.device_id, exc)
-            self._close_session()
-            return False
+            except Exception as exc:      # noqa: BLE001 —— 连接失败必须返回 False
+                self.stats['failed_requests'] += 1
+                self.stats['last_error'] = str(exc)
+                self.connected = False
+                logger.error("自定义适配器连接失败 device=%s: %s", self.device_id, exc)
+                self._close_session()
+                return False
 
     def disconnect(self):
         """停止轮询并关闭会话（幂等）。"""
-        self._stop_event.set()
-        thread = self._thread
-        if thread is not None and thread.is_alive() \
-                and thread is not threading.current_thread():
-            thread.join(timeout=5)
-            if thread.is_alive():
-                # 不能把引用丢掉：线程仍可能在使用 session，重连会起第二条轮询线程
-                logger.error(
-                    "自定义适配器轮询线程 5s 内未退出 device=%s，保留引用避免双轮询",
-                    self.device_id)
-                self.connected = False
-                return
-        self._thread = None
-        self._close_session()
-        self.connected = False
-        logger.info("自定义适配器已断开: %s", self.device_id)
+        with self._lifecycle_lock:
+            self._stop_event.set()
+            thread = self._thread
+            if thread is not None and thread.is_alive() \
+                    and thread is not threading.current_thread():
+                thread.join(timeout=5)
+                if thread.is_alive():
+                    # 不能把引用丢掉：线程仍可能在使用 session，重连会起第二条轮询线程
+                    logger.error(
+                        "自定义适配器轮询线程 5s 内未退出 device=%s，保留引用避免双轮询",
+                        self.device_id)
+                    self.connected = False
+                    return
+            self._thread = None
+            self._close_session()
+            self.connected = False
+            logger.info("自定义适配器已断开: %s", self.device_id)
 
     start = connect
     stop = disconnect
@@ -219,7 +233,10 @@ class CustomAdapterClient:
 
     def _fetch(self, request: RequestSpec, *,
                path_context: dict[str, Any] | None = None,
-               body_override: Any = None) -> Any:
+               body_override: Any = None,
+               expect_json: bool = True,
+               breaker: Any = None,
+               allow_redirects: bool = True) -> Any:
         """发一次请求并返回 JSON；熔断器包住整个调用。"""
         context = {'device_id': self.device_id}
         if path_context:
@@ -233,6 +250,8 @@ class CustomAdapterClient:
             kwargs: dict[str, Any] = {
                 'timeout': request.timeout or self._timeout,
             }
+            if not allow_redirects:
+                kwargs['allow_redirects'] = False
             params = _fill_obj(request.params, context)
             if params:
                 kwargs['params'] = params
@@ -247,8 +266,24 @@ class CustomAdapterClient:
             # requests.Session 不是线程安全的：轮询线程与 write_point 会并发
             # 使用同一个连接池，必须串行化（代价是写请求排在采集请求之后）。
             with self._session_lock:
-                response = self._session.request(request.method, url, **kwargs)
+                session = self._session
+                if session is None:
+                    raise AdapterDataError('HTTP 会话未就绪')
+                response = session.request(request.method, url, **kwargs)
             response.raise_for_status()
+            if not expect_json:
+                if getattr(response, 'status_code', None) == 204:
+                    return {}
+                raw_content = getattr(response, 'content', None)
+                raw_text = getattr(response, 'text', None)
+                if raw_content == b'' and (raw_text is None or (isinstance(raw_text, str) and not raw_text.strip())):
+                    return {}
+                if raw_content is None and isinstance(raw_text, str) and not raw_text.strip():
+                    return {}
+                try:
+                    return response.json()
+                except ValueError:
+                    return {}
             try:
                 return response.json()
             except ValueError as exc:
@@ -256,17 +291,33 @@ class CustomAdapterClient:
                     f'响应不是 JSON（{response.headers.get("Content-Type", "?")}）') from exc
 
         self.stats['total_requests'] += 1
-        payload = self._circuit_breaker.call(_do_request)
+        target_breaker = breaker if breaker is not None else self._circuit_breaker
+        payload = target_breaker.call(_do_request)
         self.stats['successful_requests'] += 1
         self.stats['last_request_time'] = datetime.now().isoformat()
         return payload
+
+    @staticmethod
+    def _accepts_quality_kwarg(callback: Callable[..., Any]) -> bool:
+        try:
+            sig = inspect.signature(callback)
+        except (TypeError, ValueError):
+            return False
+        for p in sig.parameters.values():
+            if p.kind == inspect.Parameter.VAR_KEYWORD or p.name == 'quality':
+                return True
+        return False
 
     def _notify(self, mapped: dict[str, dict[str, Any]]) -> None:
         for name, item in mapped.items():
             for callback in list(self._data_callbacks):
                 try:
-                    callback(self.device_id, name, item.get('value'),
-                             item.get('unit', ''))
+                    if self._accepts_quality_kwarg(callback):
+                        callback(self.device_id, name, item.get('value'),
+                                 item.get('unit', ''), quality=item.get('quality', 192))
+                    else:
+                        callback(self.device_id, name, item.get('value'),
+                                 item.get('unit', ''))
                 except Exception as exc:      # noqa: BLE001 —— 回调失败不影响采集
                     logger.error("自定义适配器回调异常 %s/%s: %s",
                                  self.device_id, name, exc)
@@ -325,7 +376,22 @@ class CustomAdapterClient:
         context = {'device_id': self.device_id, 'name': str(name), 'value': value}
         try:
             body = _fill_obj(self.spec.write.json, context)
-            self._fetch(self.spec.write, path_context=context, body_override=body)
+            payload = self._fetch(
+                self.spec.write,
+                path_context=context,
+                body_override=body,
+                expect_json=False,
+                breaker=self._write_breaker,
+                allow_redirects=False,
+            )
+            if is_failure(payload) or (
+                isinstance(payload, Mapping) and payload.get('ok') is False
+            ):
+                self.stats['failed_requests'] += 1
+                self.stats['last_error'] = f'对端写入返回失败: {payload!r}'
+                logger.error("自定义适配器对端写入失败 %s/%s=%r: %r",
+                             self.device_id, name, value, payload)
+                return False
         except Exception as exc:      # noqa: BLE001 —— 写失败必须返回 False
             self.stats['failed_requests'] += 1
             self.stats['last_error'] = str(exc)

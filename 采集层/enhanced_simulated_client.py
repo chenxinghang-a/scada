@@ -11,6 +11,7 @@
 5. 工业4.0兼容 - 生成的数据可直接用于OEE、SPC、预测性维护等
 """
 
+import math
 import time
 import struct
 import random
@@ -157,6 +158,8 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         # 缓存最新数据
         self._latest_data: Dict[str, Any] = {}
         self._data_lock = threading.Lock()
+        # 离散输入与输出线圈独立内存空间（与 SimulatedModbusClient 一致）
+        self._discrete_input_values: Dict[int, bool] = {}
 
         # 每设备独立RNG（避免30台设备故障模式相关）
         self._rng = random.Random(hash(config.get('id', '')))
@@ -356,7 +359,10 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         # 检查是否有写入的值（用于回读验证）
         written_value = self.behavior_simulator.get_written_register_value(address)
         if written_value is not None and count == 1:
-            return [written_value & 0xFFFF]
+            if not isinstance(written_value, bool):
+                num_written = try_finite_float(written_value)
+                if num_written is not None:
+                    return [int(round(num_written)) & 0xFFFF]
         
         # round 383：**逐点按宽度步进**，与上面的停机分支同口径。
         # 原来这里只编码 `address` 一个点位，其余 count-1 个字一律补 0 ——
@@ -438,8 +444,13 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         state = self.behavior_simulator.state
         default_on = state == DeviceState.RUNNING
         getter = getattr(self.behavior_simulator, 'get_written_coil_value', None)
+        is_mechanical = bool(getattr(self.behavior_simulator, 'is_mechanical_device', True))
+        estop_blocking = bool(_simulated_client._ESTOP_ACTIVE) and is_mechanical
         result: List[bool] = []
         for offset in range(count):
+            if estop_blocking:
+                result.append(False)
+                continue
             written = None
             if getter is not None:
                 try:
@@ -448,21 +459,43 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
                     written = None
             result.append(default_on if written is None else bool(written))
         return result
-    
+
+    def set_discrete_input(self, address: int, value: bool) -> None:
+        """注入离散输入状态（与输出线圈独立）。"""
+        self._discrete_input_values[int(address)] = bool(value)
+
+    def set_coil(self, address: int, value: bool) -> None:
+        """直接设置线圈状态。"""
+        self.behavior_simulator._written_coils[int(address)] = bool(value)
+
     def read_discrete_inputs(self, address: int, count: int,
                              slave_id: Optional[int] = None) -> Optional[List[bool]]:
-        """读取离散输入"""
-        return self.read_coils(address, count, slave_id)
+        """读取离散输入（只读 `_discrete_input_values`，不看输出线圈）。"""
+        if not self.connected:
+            return None
+        self.stats['total_reads'] += 1
+        self.stats['successful_reads'] += 1
+        is_mechanical = bool(getattr(self.behavior_simulator, 'is_mechanical_device', True))
+        estop_blocking = bool(_simulated_client._ESTOP_ACTIVE) and is_mechanical
+        result: List[bool] = []
+        for offset in range(count):
+            if estop_blocking:
+                result.append(False)
+            else:
+                result.append(bool(self._discrete_input_values.get(address + offset, False)))
+        return result
     
     def write_single_register(self, address: int, value: int,
                               slave_id: Optional[int] = None) -> bool:
         """写入单个寄存器 — 转发到行为模拟器影响模拟状态"""
         if not self.connected:
             return False
-        
-        logger.info(f"[增强模拟] 设备 {self.device_name} 写入寄存器: address={address}, value={value}")
+        if isinstance(value, bool) or (isinstance(value, float) and not math.isfinite(value)):
+            return False
+        int_val = int(value)
+        logger.info(f"[增强模拟] 设备 {self.device_name} 写入寄存器: address={address}, value={int_val}")
         # 转发到行为模拟器，影响设备状态和物理参数
-        self.behavior_simulator.handle_write_register(address, value)
+        self.behavior_simulator.handle_write_register(address, int_val)
         return True
     
     def write_single_coil(self, address: int, value: bool,
@@ -473,7 +506,7 @@ class EnhancedSimulatedModbusClient(ModbusClientInterface):
         
         logger.info(f"[增强模拟] 设备 {self.device_name} 写入线圈: address={address}, value={value}")
         # 转发到行为模拟器，影响设备状态
-        self.behavior_simulator.handle_write_coil(address, value)
+        self.behavior_simulator.handle_write_coil(address, bool(value))
         return True
     
     def decode_float32(self, registers: List[int]) -> float:
@@ -971,14 +1004,15 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
                 addr = self._resolve_endpoint_address(name)
                 if addr is not None:
                     # REST/OPC UA 点位写进来的是工程值
-                    if not isinstance(value, (int, float)):
+                    finite_val = None if isinstance(value, bool) else try_finite_float(value)
+                    if finite_val is None or not isinstance(value, (int, float)):
                         # 非数值不能静默按 0 写进寄存器，否则测点被错误置零
-                        logger.warning("[增强模拟] REST %s 写入非数值 %r，已拒绝写寄存器 %s",
+                        logger.warning("[增强模拟] REST %s 写入非有限数值 %r，已拒绝写寄存器 %s",
                                        method, value, name)
                     else:
                         self.behavior_simulator.handle_write_register(
                             addr,
-                            int(value),
+                            finite_val,
                             engineering=True)
 
             logger.info(f"[增强模拟] REST {method}写入成功: {path} -> {name} = {value}")
@@ -1076,11 +1110,16 @@ class EnhancedSimulatedRESTClient(PushClientInterface):
                 }
 
             # 与 write_endpoint 对齐：回写行为模拟器，否则下次数据生成会覆盖写入值
-            if isinstance(data.get('value'), (int, float)):
+            raw_put_val = data.get('value')
+            finite_put_val = (
+                None if isinstance(raw_put_val, bool)
+                else try_finite_float(raw_put_val)
+            )
+            if isinstance(raw_put_val, (int, float)) and finite_put_val is not None:
                 addr = self._resolve_endpoint_address(name)
                 if addr is not None and getattr(self, 'behavior_simulator', None):
                     self.behavior_simulator.handle_write_register(
-                        addr, int(data['value']), engineering=True)
+                        addr, finite_put_val, engineering=True)
 
             response = {
                 'success': True,
