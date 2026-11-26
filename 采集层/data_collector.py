@@ -13,6 +13,7 @@ import time
 import queue
 import logging
 import threading
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
@@ -1541,6 +1542,8 @@ class DataCollector:
             configs = getattr(self, '_device_configs', None)
             if configs is not None:
                 configs.pop(device_id, None)
+            if hasattr(self, '_push_callbacks') and self._push_callbacks is not None:
+                self._push_callbacks.pop(device_id, None)
 
     def _setup_push_device(self, device_id: str, device_config: dict[str, Any]):
         """设置推送型设备（OPC UA / MQTT）的回调和连接。
@@ -1606,7 +1609,8 @@ class DataCollector:
             return False
 
         need_register = False
-        with self._tasks_lock:
+        tasks_lock = getattr(self, '_tasks_lock', None)
+        with (tasks_lock if tasks_lock is not None else nullcontext()):
             registered = getattr(self, '_push_callbacks', None)
             if registered is None:
                 registered = self._push_callbacks = {}
@@ -1618,7 +1622,7 @@ class DataCollector:
             try:
                 client.add_data_callback(on_data)
             except Exception:
-                with self._tasks_lock:
+                with (tasks_lock if tasks_lock is not None else nullcontext()):
                     if getattr(self, '_push_callbacks', {}).get(device_id) is on_data:
                         self._push_callbacks.pop(device_id, None)
                 raise
@@ -2281,7 +2285,9 @@ class DataCollector:
                 offset = reg['address'] - start
                 size = spans[reg_id]
                 if offset + size > len(chunk):
-                    # 多字寄存器跨到下一重叠块的尾部，留待下一块完整读取
+                    # 多字寄存器合法跨越块边界等待下一重叠块；否则属于当前块响应过短且无后续块可兜底
+                    if offset + size <= count and (reg['address'] < start + step or start + step >= max_end):
+                        _emit(reg, chunk[offset:offset + size], stale, start, count)
                     continue
                 if _emit(reg, chunk[offset:offset + size], stale, start, count):
                     emitted_regs.add(reg_id)

@@ -844,7 +844,7 @@ class Database:
                     q = 192
 
                 raw_val = d['value']
-                value = None if isinstance(raw_val, bool) else try_finite_float(raw_val)
+                value = try_finite_float(d['value'])
                 if value is None:
                     skipped_invalid += 1
                     logger.warning(

@@ -9,6 +9,7 @@ import logging
 import yaml
 import socket
 import threading
+from contextlib import nullcontext
 from typing import Any
 from pathlib import Path
 
@@ -939,7 +940,8 @@ class DeviceManager:
         now = time.monotonic()
 
         # 检查缓存 + 读取配置快照
-        with self._lock:
+        lock = getattr(self, '_lock', None)
+        with (lock if lock is not None else nullcontext()):
             if device_id in self._status_cache:
                 cache_age = now - self._status_cache_time.get(device_id, 0)
                 if cache_age < self._status_cache_ttl:
@@ -1019,7 +1021,7 @@ class DeviceManager:
                 status['stats'] = dict(getattr(client, 'stats', None) or {})
 
         # 更新缓存
-        with self._lock:
+        with (lock if lock is not None else nullcontext()):
             self._status_cache[device_id] = self._copy_status(status)
             self._status_cache_time[device_id] = now
         return status

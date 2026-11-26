@@ -14,6 +14,7 @@ import shutil
 import yaml
 import time
 import threading
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict
 from datetime import datetime, timedelta
@@ -3098,7 +3099,8 @@ class AlarmManager:
                                  config_file, backup_err)
                     return False
 
-            with self._state_lock:
+            state_lock = getattr(self, '_state_lock', None)
+            with (state_lock if state_lock is not None else nullcontext()):
                 config['alarm_rules'] = list(self.rules.values())
 
             # round 256：原来 `open(..., 'w')` 先截断再 dump —— 序列化一抛异常

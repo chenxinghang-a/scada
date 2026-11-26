@@ -621,7 +621,18 @@ def app():
     # Register API blueprints
     register_api_blueprints(flask_app)
 
-    yield flask_app
+    # 隔离用例级别的幂等写表状态，避免同一设备/点位的前序用例影响后续用例
+    from 展示层.api import api_control as _ac
+    with _ac._write_lock:
+        _ac._recent_writes.clear()
+        _ac._in_flight_targets.clear()
+
+    try:
+        yield flask_app
+    finally:
+        with _ac._write_lock:
+            _ac._recent_writes.clear()
+            _ac._in_flight_targets.clear()
 
 
 @pytest.fixture

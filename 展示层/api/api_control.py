@@ -740,6 +740,8 @@ def write_endpoint(device_id):
         if early is not None:
             if early[1] == 409:
                 _audit_result(False, '并发或重复写入已拦截')
+            elif early[1] == 200:
+                _audit_result(True, '幂等窗口命中')
             return early, None
         ok = False
         try:
