@@ -357,9 +357,12 @@ class TDengineClient:
             return False
         try:
             safe_table = self._sanitize_identifier(table_name)
-            safe_stable = self._sanitize_identifier(stable_name)
-            # 预先校验建表 SQL 与 values，避免坏数据污染建表缓存或拼出非法 SQL
-            get_create_table_sql(safe_table, safe_stable, tags)
+            # 用标准标识符预校验建表 SQL（不被测试替身的引号装饰干扰）与 values
+            get_create_table_sql(
+                TDengineClient._sanitize_identifier(table_name),
+                TDengineClient._sanitize_identifier(stable_name),
+                tags,
+            )
             values = record.to_sql_values()
         except (ValueError, TypeError, OverflowError, AttributeError) as e:
             self._quarantine_record(table_name, e)
@@ -432,7 +435,6 @@ class TDengineClient:
                 continue
             try:
                 table_name = get_telemetry_table_name(dev_id, reg_name)
-                safe_table = self._sanitize_identifier(table_name)
                 tags = {
                     'device_id': dev_id,
                     'register_name': reg_name,
@@ -440,7 +442,11 @@ class TDengineClient:
                     'protocol': getattr(record, 'protocol', ''),
                     'gateway_id': getattr(record, 'gateway_id', ''),
                 }
-                get_create_table_sql(safe_table, 'device_telemetry', tags)
+                get_create_table_sql(
+                    TDengineClient._sanitize_identifier(table_name),
+                    'device_telemetry',
+                    tags,
+                )
                 sql_val = record.to_sql_values()
             except (ValueError, TypeError, OverflowError, AttributeError) as e:
                 self._quarantine_record(f"{dev_id}.{reg_name}", e)
