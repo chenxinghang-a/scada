@@ -89,8 +89,13 @@ class CSRFProtection:
             if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
                 # API请求检查CSRF token
                 if request.path.startswith('/api/'):
-                    # 登录/注册等公开端点豁免
-                    exempt_paths = ['/api/auth/login', '/api/auth/register', '/api/auth/refresh']
+                    # 登录/注册及免认证错误上报端点豁免
+                    exempt_paths = [
+                        '/api/auth/login',
+                        '/api/auth/register',
+                        '/api/auth/refresh',
+                        '/api/system/client-errors',
+                    ]
                     if request.path in exempt_paths:
                         return
 

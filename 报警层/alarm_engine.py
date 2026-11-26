@@ -89,6 +89,9 @@ def evaluate_condition(rule_config: dict, value: float, *,
     """
     condition = rule_config.get('condition')
     threshold = rule_config.get('threshold')
+    # bool 是 int 子类：数值报警条件拒绝布尔值，避免 True/False 被当成 1/0 误比较
+    if isinstance(value, bool):
+        return False
 
     # round 370（BUG-029）：**区间条件不吃 `threshold`**。
     # 它们用的是 `threshold_min` / `threshold_max`，而原来的
@@ -122,9 +125,11 @@ def evaluate_condition(rule_config: dict, value: float, *,
             return low <= value <= high
         return value < low or value > high
 
-    if threshold is None or not isinstance(threshold, (int, float)):
+    if threshold is None or isinstance(threshold, bool):
         return False
-    threshold = float(threshold)
+    threshold = try_finite_float(threshold)
+    if threshold is None:
+        return False
     db = normalize_deadband(deadband)
 
     if condition in ('greater_than', 'gt'):
@@ -142,14 +147,6 @@ def evaluate_condition(rule_config: dict, value: float, *,
         return value == threshold
     if condition in ('not_equal_to', 'not_equal', 'ne'):
         return abs(value - threshold) > db if db > 0 else value != threshold
-    if condition == 'in_range':
-        low = rule_config.get('threshold_min', threshold)
-        high = rule_config.get('threshold_max', threshold)
-        return float(low) <= value <= float(high)
-    if condition == 'out_of_range':
-        low = rule_config.get('threshold_min', threshold)
-        high = rule_config.get('threshold_max', threshold)
-        return value < float(low) or value > float(high)
     # 未知条件 → 不触发（保持旧行为，但由调用方负责记日志）
     return False
 

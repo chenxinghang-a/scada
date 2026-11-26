@@ -227,7 +227,7 @@ def export_device_data(device_id):
         from flask import send_file
         return send_file(filepath, as_attachment=True, download_name=Path(filepath).name)
     # round 369：与报警导出同口径 —— 空串 = 写盘失败（500），None = 无数据（404）
-    if filepath == '':
+    if filepath == '' or getattr(exporter, 'last_error', None):
         return jsonify({
             'success': False,
             'message': '导出文件写盘失败（请检查导出目录权限与磁盘空间）',
@@ -310,7 +310,7 @@ def export_alarms():
     # `export_csv` 成功返回路径、无数据返回 None、**写盘失败返回空串**。
     # 原来一律回 404「没有报警记录可导出」—— 磁盘满/目录只读时运维会以为
     # 是查询条件问题，反复换时间段，真实原因（磁盘故障）被掩盖。
-    if filepath == '':
+    if filepath == '' or getattr(exporter, 'last_error', None):
         return jsonify({
             'success': False,
             'message': '报警记录查询成功，但导出文件写盘失败（请检查导出目录权限与磁盘空间）',

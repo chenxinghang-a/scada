@@ -36,6 +36,20 @@ from 报警层.alarm_engine import (
 logger = logging.getLogger(__name__)
 
 
+def _is_good_quality(quality: Any) -> bool:
+    """按 OPC UA 低 8 位质量码口径判断采样是否可信（GOOD = 192 / 0xC0）。"""
+    if isinstance(quality, bool):
+        return False
+    if isinstance(quality, str):
+        text = quality.strip().upper()
+        if text == 'GOOD':
+            return True
+        parsed = try_int(text)
+        return parsed is not None and (parsed & 0xC0) == 0xC0
+    parsed = try_int(quality)
+    return parsed is not None and (parsed & 0xC0) == 0xC0
+
+
 def _safe_int(value: Any, default: int) -> int:
     """配置值转 int：非法值告警并沿用 default。
 
@@ -360,7 +374,7 @@ class AlarmManager:
             broadcast_system: 广播系统实例（BroadcastSystem，可选）
         """
         self.database = database
-        self.config_path = str(paths.resolve(config_path))
+        self.config_path = str(paths.resolve_config_file(config_path))
 
         # 报警规则
         self.rules: dict[str, dict] = {}  # rule_id -> rule_config
@@ -1259,8 +1273,10 @@ class AlarmManager:
         "设备偶发抖动"的一类。
         dict 引用赋值在 CPython 下是原子的：读者要么看到旧索引、要么看到新索引。
         """
+        with self._state_lock:
+            rules_snapshot = list(self.rules.items())
         new_index: dict[tuple, list] = {}
-        for rule_id, rule_config in list(self.rules.items()):
+        for rule_id, rule_config in rules_snapshot:
             if not rule_config.get('enabled', True):
                 continue
             key = (rule_config.get('device_id'), rule_config.get('register_name'))
@@ -1625,7 +1641,7 @@ class AlarmManager:
             logger.error(f"加载报警配置异常: {e}")
 
     def check_alarm(self, device_id: str, register_name: str,
-                    value: float, timestamp: datetime):
+                    value: float, timestamp: datetime, quality: Any = None):
         """
         检查报警（使用索引快速查找匹配规则）
 
@@ -1634,8 +1650,14 @@ class AlarmManager:
             register_name: 寄存器名称
             value: 数据值
             timestamp: 时间戳
+            quality: 可选质量码（非 GOOD 质量码按 fail-closed 跳过，不触发也不误清除已有报警）
         """
         if value is None:
+            return
+        if quality is not None and not _is_good_quality(quality):
+            logger.warning(
+                "报警检查收到非 GOOD 质量码，跳过本条（不触发也不清除已有报警）: "
+                "%s/%s quality=%r", device_id, register_name, quality)
             return
 
         # 非有限值（NaN / ±Infinity）= 「读数无效 / 不知道」，**不能当成「恢复正常」**。
@@ -3076,7 +3098,8 @@ class AlarmManager:
                                  config_file, backup_err)
                     return False
 
-            config['alarm_rules'] = list(self.rules.values())
+            with self._state_lock:
+                config['alarm_rules'] = list(self.rules.values())
 
             # round 256：原来 `open(..., 'w')` 先截断再 dump —— 序列化一抛异常
             # （规则里有不可序列化的值 / 磁盘满），文件就成 0 字节：上面刚做的

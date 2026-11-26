@@ -29,6 +29,40 @@ def _serialize_alarm_config(fn):
     return wrapper
 
 
+_SECRET_CONFIG_KEYS = {'password', 'passwd', 'secret', 'secret_key', 'access_key', 'token', 'api_key'}
+
+
+def _mask_config_secrets(obj):
+    """递归脱敏通知/广播配置中的敏感字段（非空值替换为 '***'）。"""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if str(k).lower() in _SECRET_CONFIG_KEYS and isinstance(v, str) and v:
+                out[k] = '***'
+            else:
+                out[k] = _mask_config_secrets(v)
+        return out
+    if isinstance(obj, list):
+        return [_mask_config_secrets(item) for item in obj]
+    return obj
+
+
+def _merge_masked_secrets(old_obj, new_obj):
+    """写回配置时，若某密钥字段值为 '***'，则保留原配置里的真实值。"""
+    if not isinstance(new_obj, dict):
+        return new_obj
+    old_dict = old_obj if isinstance(old_obj, dict) else {}
+    merged = {}
+    for k, v in new_obj.items():
+        if str(k).lower() in _SECRET_CONFIG_KEYS and v == '***' and k in old_dict:
+            merged[k] = old_dict[k]
+        elif isinstance(v, dict):
+            merged[k] = _merge_masked_secrets(old_dict.get(k), v)
+        else:
+            merged[k] = v
+    return merged
+
+
 def _as_bool(v, default: bool = False) -> bool:
     """配置/请求里的布尔值：`"false"`/`"off"` 不能被 `bool("false")` 当成真。"""
     if isinstance(v, bool):
@@ -327,12 +361,19 @@ def alarm_output_manual():
     if not alarm_manager.alarm_output:
         return jsonify({'success': False, 'message': '声光报警输出未启用'}), 400
 
+    raw_duration = data.get('duration', 0)
+    if isinstance(raw_duration, bool):
+        return jsonify({'success': False, 'message': 'duration 必须是有效非负数值'}), 400
+    duration = try_finite_float(raw_duration)
+    if duration is None or duration < 0 or duration > 3600:
+        return jsonify({'success': False, 'message': 'duration 必须在 0~3600 秒之间'}), 400
+
     result = alarm_manager.alarm_output.manual_control(
         red=data.get('red'),
         yellow=data.get('yellow'),
         green=data.get('green'),
         buzzer=data.get('buzzer'),
-        duration=data.get('duration', 0)
+        duration=duration
     )
     get_auth_manager().log_operation(
         request.current_user['username'], 'alarm_manual',
@@ -425,7 +466,10 @@ def get_broadcast_history():
 def get_alarm_rules():
     """获取所有报警规则"""
     config = load_yaml_config('配置/alarms.yaml')
-    return jsonify({'rules': config.get('alarm_rules', []), 'notification': config.get('notification', {})})
+    return jsonify({
+        'rules': config.get('alarm_rules', []),
+        'notification': _mask_config_secrets(config.get('notification', {})),
+    })
 
 
 @alarms_bp.route('/alarm-rules', methods=['POST'])
@@ -626,10 +670,13 @@ def update_notification():
 
     config = load_yaml_config('配置/alarms.yaml')
 
+    existing_notif = config.setdefault('notification', {})
     if 'email' in data:
-        config.setdefault('notification', {})['email'] = data['email']
+        existing_notif['email'] = _merge_masked_secrets(existing_notif.get('email'), data['email'])
+    if 'sms' in data:
+        existing_notif['sms'] = _merge_masked_secrets(existing_notif.get('sms'), data['sms'])
     if 'sound' in data:
-        config.setdefault('notification', {})['sound'] = data['sound']
+        existing_notif['sound'] = data['sound']
 
     # round 300：写盘失败就**到此为止** —— 不改运行时、不回「已保存」。
     # 这些接口原来是裸调用，返回值直接丢弃：磁盘满 / 权限不足 / 原子写失败时
@@ -777,8 +824,14 @@ def update_alarm_output_config():
                 ao.do_green = dm['green_light']
             if 'buzzer' in dm:
                 ao.do_buzzer = dm['buzzer']
-        # 断开旧连接，下次操作时重新连接
-        if hasattr(ao, '_modbus_client') and ao._modbus_client:
+        # 断开旧连接，下次操作时重新连接（I/O 锁保护，防止与后台闪烁/蜂鸣器线程并发 close）
+        io_lock = getattr(ao, '_io_lock', None)
+        if io_lock is not None:
+            with io_lock:
+                if getattr(ao, '_modbus_client', None):
+                    ao._modbus_client.close()
+                    ao._modbus_client = None
+        elif getattr(ao, '_modbus_client', None):
             ao._modbus_client.close()
             ao._modbus_client = None
 
@@ -812,7 +865,7 @@ def get_broadcast_config():
     
     return jsonify({
         'success': True,
-        'config': broadcast_cfg,
+        'config': _mask_config_secrets(broadcast_cfg),
         'runtime': runtime_status
     })
 
@@ -856,7 +909,10 @@ def update_broadcast_config():
     
     for key in ('enabled', 'mqtt', 'areas', 'default_area', 'preset_templates'):
         if key in data:
-            broadcast[key] = data[key]
+            if key == 'mqtt':
+                broadcast['mqtt'] = _merge_masked_secrets(broadcast.get('mqtt'), data['mqtt'])
+            else:
+                broadcast[key] = data[key]
 
     # round 300：写盘失败就**到此为止** —— 不改运行时、不回「已保存」。
     # 这些接口原来是裸调用，返回值直接丢弃：磁盘满 / 权限不足 / 原子写失败时

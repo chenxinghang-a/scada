@@ -84,8 +84,8 @@ _TOPO_KEY_VALUE_LIMIT = 2
 def _load_topology_skeleton() -> dict[str, Any]:
     """读厂区骨架。读不到就返回空骨架 —— 拓扑页不该因为配置缺失而 500。"""
     import yaml
-    from pathlib import Path
-    path = Path(__file__).resolve().parent.parent.parent / '配置' / 'topology.yaml'
+    import paths
+    path = paths.resolve_config_file('配置/topology.yaml')
     try:
         data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
     except (OSError, yaml.YAMLError, UnicodeDecodeError) as exc:
@@ -194,10 +194,13 @@ def _layout_line(line: dict[str, Any], devices: list[dict[str, Any]],
     # 没写 stage（或写了个不在骨架里的工序）的设备不能丢 —— 丢了就是
     # 「设备存在但图上找不到」，比放错位置更难查。挂到最后一列并标记。
     if orphan and stages:
-        # 标记出来，图上与前端才能区分"确实属于最后一道工序"与"stage 缺失/拼错"
+        # 拷贝后标记，避免直接污染 live device_manager.devices 配置对象
+        tagged_orphan = []
         for d in orphan:
-            d['stage_unknown'] = True
-        by_stage[stages[-1]].extend(orphan)
+            dc = dict(d)
+            dc['stage_unknown'] = True
+            tagged_orphan.append(dc)
+        by_stage[stages[-1]].extend(tagged_orphan)
 
     # 去掉空列后重新编号
     cols: list[tuple[str, list[dict[str, Any]]]] = [
@@ -423,7 +426,11 @@ def get_topology():
             })
 
     out_workshops: list[dict[str, Any]] = []
-    for ws_id, ws in sorted(ws_index.items(), key=lambda kv: (kv[1].get('order', 999), kv[0])):
+    def _order_key(kv):
+        order = kv[1].get('order')
+        return (999 if order is None else order, kv[0] or '')
+
+    for ws_id, ws in sorted(ws_index.items(), key=_order_key):
         if want_ws and ws_id != want_ws:
             continue
         ws_devices = [d for (w, _l), group in buckets.items() if w == ws_id for d in group]
@@ -751,13 +758,36 @@ def update_device(device_id):
     # 通用字段
     try:
         for key in ('name', 'description', 'enabled', 'collection_interval',
-                    'protocol', 'device_class', 'electrical', 'autonomy'):
+                    'protocol', 'device_class', 'device_category',
+                    'electrical', 'autonomy'):
             if key in data:
                 if key == 'collection_interval':
                     _ci = safe_int(data[key], key)
                     if not 1 <= _ci <= 3600:
                         raise ValueError('collection_interval 必须在 1~3600 秒之间')
                     device_config[key] = _ci
+                elif key == 'device_category':
+                    if data[key] not in ('mechanical', 'instrument', 'safety'):
+                        raise ValueError(
+                            f'非法 device_category: {data[key]!r}'
+                            '（只允许 mechanical/instrument/safety）')
+                    device_config[key] = data[key]
+                elif key == 'device_class':
+                    if data[key] is not None and data[key] not in (
+                            'sensor', 'actuator', 'drive', 'meter', 'plc', 'relay', 'hmi', 'other'):
+                        raise ValueError(f'非法 device_class: {data[key]!r}')
+                    device_config[key] = data[key]
+                elif key == 'autonomy':
+                    if data[key] is not None and str(data[key]).lower() not in (
+                            'manual', 'supervised', 'automatic', 'hitl', 'hotl', 'hootl'):
+                        raise ValueError(
+                            f'非法 autonomy: {data[key]!r}'
+                            '（允许 manual/supervised/automatic 或 hitl/hotl/hootl）')
+                    device_config[key] = data[key]
+                elif key == 'electrical':
+                    if data[key] is not None and not isinstance(data[key], dict):
+                        raise ValueError('electrical 必须是对象（铭牌参数）')
+                    device_config[key] = data[key]
                 elif key == 'enabled':
                     # 布尔字段：字符串 "false"/"0"/"off" 都应视为 False
                     v = data[key]
@@ -1789,11 +1819,16 @@ def _validate_protocol_fields(protocol: str, data: dict[str, Any]):
             f'非法 device_category: {category!r}'
             '（只允许 mechanical/instrument/safety）')
 
-    if protocol in ('modbus_tcp', 'modbus_rtu'):
+    if protocol == 'modbus_tcp':
         for field in ('host', 'port'):
             if field not in data:
                 raise ValueError(f'Modbus设备缺少必填字段: {field}')
         _validate_port(data['port'])
+    elif protocol == 'modbus_rtu':
+        if not (data.get('serial_port') or data.get('host')):
+            raise ValueError('Modbus RTU设备缺少必填字段: serial_port/host')
+        if 'port' in data and data['port'] is not None:
+            _validate_port(data['port'])
     elif protocol == 'opcua':
         if 'endpoint' not in data:
             raise ValueError('OPC UA设备缺少必填字段: endpoint')
@@ -1872,13 +1907,21 @@ def _build_device_config(protocol: str, data: dict[str, Any]) -> dict[str, Any]:
     if not 1 <= config['collection_interval'] <= 3600:
         raise ValueError('collection_interval 必须在 1~3600 秒之间')
 
-    if protocol in ('modbus_tcp', 'modbus_rtu'):
+    if protocol == 'modbus_tcp':
         config['host'] = data['host']
         config['port'] = safe_int(data['port'], 'port')
         config['slave_id'] = safe_int(data.get('slave_id', 1), 'slave_id')
         config['registers'] = data.get('registers', [])
-        if protocol == 'modbus_rtu':
-            config['baudrate'] = safe_int(data.get('baudrate', 115200), 'baudrate')
+    elif protocol == 'modbus_rtu':
+        serial_port = data.get('serial_port') or data.get('host', '/dev/ttyUSB0')
+        config['serial_port'] = serial_port
+        if 'host' in data:
+            config['host'] = data['host']
+        if 'port' in data and data['port'] is not None:
+            config['port'] = safe_int(data['port'], 'port')
+        config['slave_id'] = safe_int(data.get('slave_id', 1), 'slave_id')
+        config['baudrate'] = safe_int(data.get('baudrate', 9600), 'baudrate')
+        config['registers'] = data.get('registers', [])
     elif protocol == 'opcua':
         config['endpoint'] = data['endpoint']
         config['security_mode'] = data.get('security_mode', 'None')
@@ -1942,8 +1985,11 @@ def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: 
     }
     int_keys = _int_keys_map.get(protocol, ())
 
-    if protocol in ('modbus_tcp', 'modbus_rtu'):
-        fields = ('host', 'port', 'slave_id', 'registers', 'baudrate')
+    if protocol == 'modbus_tcp':
+        fields = ('host', 'port', 'slave_id', 'registers')
+    elif protocol == 'modbus_rtu':
+        fields = ('host', 'serial_port', 'port', 'slave_id', 'registers', 'baudrate',
+                  'parity', 'stopbits', 'bytesize')
     elif protocol == 'opcua':
         fields = ('endpoint', 'security_mode', 'username', 'password', 'nodes')
     elif protocol == 'mqtt':
@@ -1961,7 +2007,9 @@ def _update_protocol_fields(protocol: str, device_config: dict[str, Any], data: 
 
     for key in fields:
         if key in data:
-            if key in int_keys:
+            if key == 'port':
+                device_config[key] = _validate_port(data[key])
+            elif key in int_keys:
                 device_config[key] = safe_int(data[key], key)
             else:
                 device_config[key] = data[key]
@@ -2076,6 +2124,7 @@ def get_preset_detail(preset_id):
 
 @devices_bp.route('/devices/presets/add', methods=['POST'])
 @_require_engineer
+@_serialize_device_config
 def add_preset_device():
     """一键添加预设设备"""
     data = request.get_json(silent=True)
@@ -2121,6 +2170,7 @@ def add_preset_device():
 
 @devices_bp.route('/devices/presets/batch-add', methods=['POST'])
 @_require_engineer
+@_serialize_device_config
 def batch_add_presets():
     """批量添加预设设备"""
     data = request.get_json(silent=True)
@@ -2177,6 +2227,7 @@ def batch_add_presets():
 
 @devices_bp.route('/devices/presets/add-all', methods=['POST'])
 @_require_engineer
+@_serialize_device_config
 def add_all_presets():
     """一键添加全部预设设备"""
     initializer = _get_simulation_initializer()

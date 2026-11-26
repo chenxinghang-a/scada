@@ -131,7 +131,7 @@ def _idempotency_end(write_key: str, success: bool):
     with _write_lock:
         if _in_flight_targets.get(target_key) == effective_key:
             _in_flight_targets.pop(target_key, None)
-        if success:
+        if success and _recent_writes.get(effective_key) is _IN_FLIGHT:
             _invalidate_target_writes_locked(target_key, keep_key=effective_key)
             _recent_writes[effective_key] = time.monotonic()
         elif _recent_writes.get(effective_key) is _IN_FLIGHT:
@@ -456,8 +456,9 @@ def write_coil(device_id):
         # 实际写进了**同一地址的保持寄存器**（数据字 vs 开关位，现场是两个对象）。
         success = False
         try:
-            result = device_control.write_with_verification(
-                device_id, address, 1 if bool_val else 0, operator, kind='coil')
+            with _get_device_lock(device_id):
+                result = device_control.write_with_verification(
+                    device_id, address, 1 if bool_val else 0, operator, kind='coil')
             success = bool(result.get('success'))
             if not success:
                 return jsonify(result), 403
@@ -666,18 +667,22 @@ def write_endpoint(device_id):
                 'success': False,
                 'message': f'联锁 {_rule_id} 状态不可判定，已拒绝写入',
             }), 503
+        if 'data_trusted' in _st and _st['data_trusted'] is False and not _st.get('bypassed'):
+            logger.warning("联锁采样不可信拒绝端点写入: device=%s rule=%s operator=%s",
+                           device_id, _rule_id, operator)
+            return jsonify({
+                'success': False,
+                'message': f'联锁 {_rule_id} 采样不可信（传感器故障/超时），已拒绝下发端点写入',
+            }), 403
         if not _st.get('triggered'):
             continue
         if _st.get('bypassed'):
             continue
-        # round 333：**同时匹配 condition.device_id 与 action.device_id**。
-        # 原来只看 action.device_id —— 将来配一条
-        # `action: {type: emergency_stop}`（没有 device_id）的规则时，
-        # 它触发后该设备的端点写入仍能过。
         _act = _st.get('action') or {}
         _cond = _st.get('condition') or {}
+        _act_type = _act.get('type') or _act.get('action')
         _targets = {_act.get('device_id'), _cond.get('device_id')}
-        if device_id in _targets:
+        if device_id in _targets or _act_type == 'emergency_stop':
             logger.warning("联锁触发中拒绝端点写入: device=%s rule=%s operator=%s",
                            device_id, _rule_id, operator)
             return jsonify({
@@ -784,11 +789,18 @@ def write_endpoint(device_id):
                             'success': False,
                             'message': f'联锁 {_rid} 状态不可判定，已拒绝写入',
                         }), 503), None
+                    if 'data_trusted' in _rst and _rst['data_trusted'] is False and not _rst.get('bypassed'):
+                        _audit_result(False, f'联锁 {_rid} 采样不可信拒绝下发')
+                        return (jsonify({
+                            'success': False,
+                            'message': f'联锁 {_rid} 采样不可信（传感器故障/超时），已拒绝下发端点写入',
+                        }), 403), None
                     if not _rst.get('triggered') or _rst.get('bypassed'):
                         continue
                     _ract = _rst.get('action') or {}
                     _rcond = _rst.get('condition') or {}
-                    if device_id in {_ract.get('device_id'), _rcond.get('device_id')}:
+                    _ract_type = _ract.get('type') or _ract.get('action')
+                    if device_id in {_ract.get('device_id'), _rcond.get('device_id')} or _ract_type == 'emergency_stop':
                         logger.warning("联锁触发中拒绝端点写入: device=%s rule=%s operator=%s",
                                        device_id, _rid, operator)
                         _audit_result(False, f'联锁 {_rid} 触发中拒绝下发')
@@ -817,11 +829,6 @@ def write_endpoint(device_id):
             success = (bool(result.get('success'))
                        if isinstance(result, dict) else bool(result))
         elif hasattr(client, 'write_endpoint'):
-            # round 331：**按签名探测**，不硬编码调用形式。
-            # 内置的三个客户端现在都有 `method` 形参，但外部插件、旧实现、
-            # 或者将来新增的客户端可能只有 2 参 —— 用关键字硬传会让它们
-            # 直接 TypeError（这正是本轮修的那个「真实设备必然 500」）。
-            # 不用 try/except TypeError 猜：客户端内部的 TypeError 会被一起吞掉。
             import inspect as _inspect
             try:
                 _params = _inspect.signature(client.write_endpoint).parameters
@@ -831,10 +838,17 @@ def write_endpoint(device_id):
                            for p in _params.values()))
             except (TypeError, ValueError):
                 _accepts_method = False
-            if _accepts_method:
-                success = client.write_endpoint(endpoint_config, value, method=method)
-            else:
-                success = client.write_endpoint(endpoint_config, value)
+
+            def _call_write_endpoint(ep_cfg, _payload):
+                if _accepts_method:
+                    return client.write_endpoint(ep_cfg, value, method=method)
+                return client.write_endpoint(ep_cfg, value)
+
+            early, result = _exec_endpoint_write(_call_write_endpoint)
+            if early is not None:
+                return early
+            success = (bool(result.get('success'))
+                       if isinstance(result, dict) else bool(result))
         else:
             _audit_result(False, '客户端不支持端点写入')
             return jsonify({

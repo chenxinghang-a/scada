@@ -4,6 +4,7 @@
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -117,7 +118,12 @@ def toggle_simulation_mode():
         }), 400
 
     # 同时更新配置文件（持久化）
-    config_path = paths.resolve('配置/system.yaml')
+    # 未设 SCADA_CONFIG_DIR 时走 paths.resolve，兼容打包与测试对 paths.resolve 的重定向
+    config_path = (
+        paths.resolve_config_file('配置/system.yaml')
+        if os.environ.get('SCADA_CONFIG_DIR')
+        else paths.resolve('配置/system.yaml')
+    )
     if config_path.exists():
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f) or {}
@@ -231,7 +237,11 @@ def get_config():
     if not config:
         return api_error('配置文件不存在', 404)
     # 移除敏感字段，防止密钥泄露
-    sensitive_keys = {'secret_key', 'jwt_secret', 'password', 'token', 'api_key'}
+    sensitive_keys = {
+        'secret_key', 'jwt_secret', 'password', 'passwd', 'token', 'api_key',
+        'auth_token', 'auth_password', 'refresh_token', 'secret', 'private_key',
+        'access_key',
+    }
     def _sanitize(obj):
         if isinstance(obj, dict):
             return {k: ('***' if k.lower() in sensitive_keys else _sanitize(v))

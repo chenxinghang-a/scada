@@ -4,6 +4,7 @@
 """
 
 import jwt
+import re
 import uuid
 import hashlib
 import bcrypt
@@ -219,9 +220,11 @@ class AuthManager:
         if role not in ROLES:
             return {'success': False, 'message': f'无效角色: {role}，可选: {", ".join(ROLES.keys())}'}
 
-        # 验证用户名
-        if len(username) < 3 or len(username) > 20:
+        # 验证用户名（只允许安全标识符字符，防止拼接进 HTML 属性/onclick 触发存储型 XSS）
+        if not isinstance(username, str) or len(username) < 3 or len(username) > 20:
             return {'success': False, 'message': '用户名长度需在3-20之间'}
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+', username):
+            return {'success': False, 'message': '用户名只允许包含字母、数字、下划线、点或连字符'}
 
         # 验证密码强度（等保2.0）
         valid, msg = self._validate_password_strength(password)
@@ -264,12 +267,12 @@ class AuthManager:
         with self.database.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT * FROM users WHERE username = ? AND is_active = 1
+                SELECT * FROM users WHERE username = ?
             ''', (username,))
             user = cursor.fetchone()
 
-        if not user:
-            self._log_operation(username, 'login_failed', None, '用户不存在', ip_address)
+        if not user or _is_inactive_value(user['is_active']):
+            self._log_operation(username, 'login_failed', None, '用户不存在或已禁用', ip_address)
             return {'success': False, 'message': '用户名或密码错误'}
 
         user = dict(user)
@@ -420,7 +423,7 @@ class AuthManager:
                 ''', (payload.get('username'),))
                 user = cursor.fetchone()
 
-            if not user or not user['is_active']:
+            if not user or _is_inactive_value(user['is_active']):
                 return None
 
             # round 335：**改密后必须让旧 access 令牌失效**。
@@ -893,6 +896,8 @@ class AuthManager:
         if not safe_updates:
             return {'success': False, 'message': '没有可更新的字段'}
         updates = safe_updates
+        if 'is_active' in updates:
+            updates['is_active'] = 0 if _is_inactive_value(updates['is_active']) else 1
 
         if 'role' in updates and updates['role'] not in ROLES:
             return {'success': False, 'message': f'无效角色: {updates["role"]}'}
