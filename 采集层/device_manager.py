@@ -297,6 +297,7 @@ class DeviceManager:
         self._reconnect_thread: threading.Thread | None = None
         #: 可被 stop 立刻唤醒的等待事件（替代裸 sleep）
         self._reconnect_stop = threading.Event()
+        self._reconnect_lock = threading.RLock()
 
         # 连接池 - 复用连接，避免频繁创建/销毁
         #
@@ -727,13 +728,15 @@ class DeviceManager:
 
     def _stop_reconnect_loop(self):
         """停掉自动重连线程（不碰连接池）。模式切换与 disconnect_all 共用。"""
-        self._reconnect_running = False
-        self._reconnect_stop.set()          # 唤醒 sleep 中的旧重连线程
-        old_thread = self._reconnect_thread
+        with self._reconnect_lock:
+            self._reconnect_running = False
+            self._reconnect_stop.set()          # 唤醒 sleep 中的旧重连线程
+            old_thread = self._reconnect_thread
         if (old_thread is not None and old_thread.is_alive()
                 and old_thread is not threading.current_thread()):
             old_thread.join(timeout=2)
-        self._reconnect_thread = None
+        with self._reconnect_lock:
+            self._reconnect_thread = None
 
     def disconnect_all(self):
         """断开所有设备连接"""
@@ -757,43 +760,49 @@ class DeviceManager:
         Args:
             interval: 检查间隔秒数（默认30s）
         """
-        self._reconnect_interval = interval
-        old_thread = self._reconnect_thread
-        if old_thread is not None and old_thread.is_alive():
-            # 已有循环线程：共享同一个 _reconnect_running，直接复用，
-            # 不能再起第二条（否则同一设备会被并发 connect）。
+        with self._reconnect_lock:
+            self._reconnect_interval = interval
+            old_thread = self._reconnect_thread
+            if old_thread is not None and old_thread.is_alive():
+                # 已有循环线程：共享同一个 _reconnect_running，直接复用，
+                # 不能再起第二条（否则同一设备会被并发 connect）。
+                self._reconnect_running = True
+                return
             self._reconnect_running = True
-            return
-        self._reconnect_running = True
-        self._reconnect_stop.clear()
-        def _reconnect_loop():
-            while self._reconnect_running:
-                try:
-                    # 快照迭代：`add_device` / `remove_device` 会在别的线程里
-                    # 增删这张表，直接 `self.devices.items()` 会抛
-                    # RuntimeError（dictionary changed size during iteration）。
-                    for device_id, config in list(self.devices.items()):
-                        if not self._reconnect_running:
-                            break
-                        if not config.get('enabled', True):
-                            continue
-                        client = self.clients.get(device_id)
-                        if client and not getattr(client, 'connected', False):
-                            try:
-                                logger.info(f"自动重连设备: {device_id}")
-                                client.connect()
-                            except Exception as e:
-                                logger.warning(f"自动重连失败 {device_id}: {e}")
-                                self._reconnect_stop.wait(min(interval, 300))
-                except Exception as e:
-                    logger.error(f"重连循环异常: {e}")
-                # 用 Event.wait 而不是 sleep：disconnect_all 能立刻唤醒，
-                # 不必等满一个 interval 才退出。
-                self._reconnect_stop.wait(interval)
-        t = threading.Thread(target=_reconnect_loop, daemon=True,
-                             name='device-reconnect')
-        self._reconnect_thread = t
-        t.start()
+            self._reconnect_stop.clear()
+
+            def _reconnect_loop():
+                while self._reconnect_running:
+                    try:
+                        # 快照迭代：`add_device` / `remove_device` 会在别的线程里
+                        # 增删这张表，直接 `self.devices.items()` 会抛
+                        # RuntimeError（dictionary changed size during iteration）。
+                        with self._lock:
+                            device_items = list(self.devices.items())
+                            clients_snapshot = dict(self.clients)
+                        for device_id, config in device_items:
+                            if not self._reconnect_running:
+                                break
+                            if not config.get('enabled', True):
+                                continue
+                            client = clients_snapshot.get(device_id)
+                            if client and not getattr(client, 'connected', False):
+                                try:
+                                    logger.info(f"自动重连设备: {device_id}")
+                                    client.connect()
+                                except Exception as e:
+                                    logger.warning(f"自动重连失败 {device_id}: {e}")
+                                    self._reconnect_stop.wait(min(interval, 300))
+                    except Exception as e:
+                        logger.error(f"重连循环异常: {e}")
+                    # 用 Event.wait 而不是 sleep：disconnect_all 能立刻唤醒，
+                    # 不必等满一个 interval 才退出。
+                    self._reconnect_stop.wait(interval)
+
+            t = threading.Thread(target=_reconnect_loop, daemon=True,
+                                 name='device-reconnect')
+            self._reconnect_thread = t
+            t.start()
         logger.info(f"设备自动重连线程已启动（间隔{interval}秒）")
 
     def switch_simulation_mode(self, new_mode: bool) -> dict[str, Any]:
@@ -911,6 +920,17 @@ class DeviceManager:
             'reconnect_loop_restored': reconnect_was_running,
         }
 
+    @staticmethod
+    def _copy_status(status: dict[str, Any]) -> dict[str, Any]:
+        """拷贝设备状态及一层嵌套容器，防止调用方就地修改污染缓存。"""
+        out = dict(status)
+        for k, v in out.items():
+            if isinstance(v, dict):
+                out[k] = dict(v)
+            elif isinstance(v, list):
+                out[k] = list(v)
+        return out
+
     def get_device_status(self, device_id: str) -> dict[str, Any]:
         """获取设备状态（带5秒缓存）"""
         import time
@@ -918,14 +938,15 @@ class DeviceManager:
         # 永久有效（或永久失效），状态看板随之失真。
         now = time.monotonic()
 
-        # 检查缓存
-        if device_id in self._status_cache:
-            cache_age = now - self._status_cache_time.get(device_id, 0)
-            if cache_age < self._status_cache_ttl:
-                # 返回副本：调用方补字段不能把脏数据写回缓存、串到后续请求。
-                return dict(self._status_cache[device_id])
-
-        device_config = self.devices.get(device_id)
+        # 检查缓存 + 读取配置快照
+        with self._lock:
+            if device_id in self._status_cache:
+                cache_age = now - self._status_cache_time.get(device_id, 0)
+                if cache_age < self._status_cache_ttl:
+                    # 返回副本：调用方补字段/改写 stats 不能把脏数据写回缓存、串到后续请求。
+                    return self._copy_status(self._status_cache[device_id])
+            raw_cfg = self.devices.get(device_id)
+            device_config = dict(raw_cfg) if raw_cfg else None
 
         if not device_config:
             return {'error': '设备配置不存在'}
@@ -989,11 +1010,18 @@ class DeviceManager:
             # round 370（BUG-022）：真实客户端没有 `stopped` 属性，
             # 原来 getattr 兜底恒为 False —— 真机停机后界面仍显示"运行中"。
             status['stopped'] = _device_stopped_state(device_id, client)
-            status['stats'] = getattr(client, 'stats', {})
+            if hasattr(client, 'get_stats'):
+                try:
+                    status['stats'] = dict(client.get_stats() or {})
+                except Exception:
+                    status['stats'] = dict(getattr(client, 'stats', None) or {})
+            else:
+                status['stats'] = dict(getattr(client, 'stats', None) or {})
 
         # 更新缓存
-        self._status_cache[device_id] = status
-        self._status_cache_time[device_id] = now
+        with self._lock:
+            self._status_cache[device_id] = self._copy_status(status)
+            self._status_cache_time[device_id] = now
         return status
 
     def get_all_status(self, brief: bool = False) -> list[dict[str, Any]]:

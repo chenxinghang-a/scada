@@ -390,9 +390,9 @@ class TestFINSSendRecv:
 
     def test_send_recv_short_data(self, fins_client):
         mock_sock = MagicMock()
-        # Header: length=100
-        header = struct.pack('>III', 100, 0, 0)
-        mock_sock.recv.side_effect = [header, b'\x00' * 5]  # Not enough data
+        # FINS/TCP 16-byte header: magic + length(=8 + payload) + command + error_code
+        header = struct.pack('>4sIII', b'FINS', 8 + 100, 2, 0)
+        mock_sock.recv.side_effect = [header, b'\x00' * 5, b'']  # Not enough data
         fins_client._sock = mock_sock
 
         result = fins_client._send_recv(b'\x00' * 20)
@@ -401,9 +401,9 @@ class TestFINSSendRecv:
 
     def test_send_recv_completion_code_error(self, fins_client):
         mock_sock = MagicMock()
-        # Header + data with error completion code
+        # 16-byte FINS/TCP header + data with error completion code
         fins_data = b'\x00' * 12 + struct.pack('>H', 1) + b'\x00\x00'
-        header = struct.pack('>III', len(fins_data), 0, 0)
+        header = struct.pack('>4sIII', b'FINS', 8 + len(fins_data), 2, 0)
         mock_sock.recv.side_effect = [header, fins_data]
         fins_client._sock = mock_sock
 
@@ -415,7 +415,7 @@ class TestFINSSendRecv:
         mock_sock = MagicMock()
         payload = b'\x01\x02\x03\x04'
         fins_data = b'\x00' * 12 + struct.pack('>H', 0) + payload
-        header = struct.pack('>III', len(fins_data), 0, 0)
+        header = struct.pack('>4sIII', b'FINS', 8 + len(fins_data), 2, 0)
         mock_sock.recv.side_effect = [header, fins_data]
         fins_client._sock = mock_sock
 

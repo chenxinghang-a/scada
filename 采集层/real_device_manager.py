@@ -11,7 +11,11 @@ from typing import Any
 from pathlib import Path
 
 from .interfaces import IDeviceManager, IDeviceClient
-from .base_client import encode_float32_registers, encode_int32_registers
+from .base_client import (
+    encode_float32_registers,
+    encode_float64_registers,
+    encode_int32_registers,
+)
 from .modbus_client import ModbusClient
 from .opcua_client import OPCUAClient
 from .mqtt_client import MQTTClient
@@ -148,6 +152,8 @@ class RealDeviceManager(IDeviceManager):
         self._reconnect_running = False
         self._reconnect_interval = 30
         self._reconnect_stop_event = threading.Event()
+        self._reconnect_thread: threading.Thread | None = None
+        self._reconnect_lock = threading.RLock()
         
         # 加载设备配置。首次加载失败**必须拒绝启动** ——
         # 以 0 台设备继续跑，界面上什么设备都没有，但进程、Web、告警全在，
@@ -333,20 +339,13 @@ class RealDeviceManager(IDeviceManager):
                 logger.error("[重载] 断开已变更设备 %s 失败: %s", did, e)
             with self._lock:
                 self.clients.pop(did, None)
-            self._connection_failures.pop(did, None)
+                self._connection_failures.pop(did, None)
         if changed:
             logger.info("[重载] 配置已变更，客户端将按新配置重建: %s", changed)
 
         if added or removed:
             logger.info("[重载] 设备变更: +%s -%s", added, removed)
 
-        # round 369：**被删设备必须真正断开并通知全链路**。
-        #
-        # 原来的 removed 只用来打了一行日志：底层 TCP/串口连接不断、
-        # 客户端实例永久留在 self.clients 里，`notify_device_removed` 也从不
-        # 触发 —— 报警、OEE、能耗、振动、预测维护、SPC、安全控制、时序库
-        # 全部保留已删设备的幽灵状态（重新加同名设备会继承旧的失败计数）。
-        # 与 `DeviceManager.reload_config()`（device_manager.py:309-317）对齐。
         for did in removed:
             try:
                 self.disconnect_device(did)
@@ -354,7 +353,7 @@ class RealDeviceManager(IDeviceManager):
                 logger.error("[重载] 断开已删除设备 %s 失败: %s", did, e)
             with self._lock:
                 self.clients.pop(did, None)
-            self._connection_failures.pop(did, None)
+                self._connection_failures.pop(did, None)
             self._stopped_devices.discard(did)
             try:
                 notify_device_removed(did)
@@ -396,7 +395,9 @@ class RealDeviceManager(IDeviceManager):
 
     def _should_skip_connect(self, device_id: str) -> bool:
         """检查设备是否在退避期内，应该跳过重试"""
-        failure = self._connection_failures.get(device_id)
+        with self._lock:
+            raw = self._connection_failures.get(device_id)
+            failure = dict(raw) if raw else None
         if not failure:
             return False
         retry_count = failure.get('retry_count', 0)
@@ -413,10 +414,11 @@ class RealDeviceManager(IDeviceManager):
 
     def _record_connection_failure(self, device_id: str):
         """记录连接失败（计数+1）"""
-        failure = self._connection_failures.setdefault(device_id, {'retry_count': 0, 'last_retry': 0})
-        failure['retry_count'] += 1
-        failure['last_retry'] = time.monotonic()
-        cnt = failure['retry_count']
+        with self._lock:
+            failure = self._connection_failures.setdefault(device_id, {'retry_count': 0, 'last_retry': 0})
+            failure['retry_count'] += 1
+            failure['last_retry'] = time.monotonic()
+            cnt = failure['retry_count']
         if cnt >= self.MAX_RETRY_COUNT:
             wait = min(self.RETRY_BACKOFF_BASE * (2 ** (cnt - self.MAX_RETRY_COUNT)), self.MAX_RETRY_INTERVAL)
             logger.warning(f"[真实] 设备 {device_id} 已连续 {cnt} 次连接失败，暂停重试 {wait:.0f} 秒")
@@ -425,7 +427,8 @@ class RealDeviceManager(IDeviceManager):
 
     def _record_connection_success(self, device_id: str):
         """连接成功，重置失败计数"""
-        self._connection_failures.pop(device_id, None)
+        with self._lock:
+            self._connection_failures.pop(device_id, None)
 
     def set_estop_override(self, active: bool):
         """设置紧急停机覆盖（真实设备通过写操作控制，此处仅记录）"""
@@ -779,15 +782,11 @@ class RealDeviceManager(IDeviceManager):
         if not config:
             return {'success': False, 'message': f'设备 {device_id} 不存在'}
 
-        # NaN/Inf 必须在任何换算/取整之前拦掉：`int(nan)` 抛 ValueError，
-        # 但范围校验对 NaN 恒为 False（NaN 与任何数比较都 False），
-        # 放进去就会一路下发到 PLC。
-        try:
-            numeric_value = to_finite_float(value)
-        except ValueError as exc:
-            logger.error("[真实] 设备 %s 调节 %s 的设定值非法: %r（%s）",
-                         device_id, register_name, value, exc)
-            return {'success': False, 'message': f'设定值非法: {value!r}（{exc}）'}
+        if self._estop_active and IDeviceManager.get_device_category(config) == 'mechanical':
+            return {
+                'success': False,
+                'message': f'紧急停机生效中，拒绝调节机械设备 {device_id}',
+            }
 
         # 找到对应的寄存器配置
         registers = config.get('registers') or []
@@ -806,6 +805,25 @@ class RealDeviceManager(IDeviceManager):
         if target_reg.get('access') == 'ro':
             return {'success': False, 'message': f'寄存器 {register_name} 只读'}
 
+        data_type = target_reg.get('data_type', 'uint16')
+        dt = str(data_type).lower()
+        is_coil_type = dt in ('bool', 'boolean', 'coil')
+
+        # NaN/Inf 必须在任何换算/取整之前拦掉：`int(nan)` 抛 ValueError，
+        # 但范围校验对 NaN 恒为 False（NaN 与任何数比较都 False），
+        # 放进去就会一路下发到 PLC。
+        coil_value = False
+        numeric_value = 0.0
+        try:
+            if is_coil_type:
+                coil_value = self._coerce_coil_setpoint(value)
+            else:
+                numeric_value = to_finite_float(value)
+        except ValueError as exc:
+            logger.error("[真实] 设备 %s 调节 %s 的设定值非法: %r（%s）",
+                         device_id, register_name, value, exc)
+            return {'success': False, 'message': f'设定值非法: {value!r}（{exc}）'}
+
         client = self.get_client(device_id)
         if not client:
             return {'success': False, 'message': f'设备 {device_id} 未连接'}
@@ -814,26 +832,43 @@ class RealDeviceManager(IDeviceManager):
         if address is None:
             return {'success': False,
                     'message': f'寄存器 {register_name} 地址非法'}
-        data_type = target_reg.get('data_type', 'uint16')
-        scale = target_reg.get('scale', 1.0)
-        offset = target_reg.get('offset', 0)
-        dt = str(data_type).lower()
 
-        # 反向换算：工程值 → 原始值（round 372：统一入口）。
-        # `to_raw` 自己会拒绝非有限值与 scale=0；再兜一次结果 —— 极端的
-        # value/scale 组合（1e308 / 1e-10）会算出 inf。
-        try:
-            raw_value = to_raw(numeric_value, scale, offset)
-            raw_value = to_finite_float(raw_value, 'raw value')
-        except ValueError as exc:
-            logger.error("[真实] 设备 %s 调节 %s 换算失败: %s",
-                         device_id, register_name, exc)
-            return {'success': False, 'message': f'设定值非法: {value!r}（{exc}）'}
+        raw_value = 0.0
+        if not is_coil_type:
+            scale = target_reg.get('scale', 1.0)
+            offset = target_reg.get('offset', 0)
+            # 反向换算：工程值 → 原始值（round 372：统一入口）。
+            # `to_raw` 自己会拒绝非有限值与 scale=0；再兜一次结果 —— 极端的
+            # value/scale 组合（1e308 / 1e-10）会算出 inf。
+            try:
+                raw_value = to_raw(numeric_value, scale, offset)
+                raw_value = to_finite_float(raw_value, 'raw value')
+            except ValueError as exc:
+                logger.error("[真实] 设备 %s 调节 %s 换算失败: %s",
+                             device_id, register_name, exc)
+                return {'success': False, 'message': f'设定值非法: {value!r}（{exc}）'}
 
         # 同一台设备的启停与调参串行化：并发写会让「写 → 回读 → 改状态」
         # 交错，出现状态分裂，也会和急停抢写窗口。
         with self._device_lock(device_id):
             try:
+                if self._estop_active and IDeviceManager.get_device_category(config) == 'mechanical':
+                    return {
+                        'success': False,
+                        'message': f'紧急停机生效中，拒绝调节机械设备 {device_id}',
+                    }
+                if is_coil_type:
+                    ok, reason = self._write_and_verify(
+                        client, 'coil', address, coil_value)
+                    if not ok:
+                        logger.error("[真实] 设备 %s 调节 %s 写入/回读失败: %s",
+                                     device_id, register_name, reason)
+                        msg = (reason if reason == '写入失败'
+                               else f'{register_name} 写入后回读校验失败: {reason}')
+                        return {'success': False, 'message': msg}
+                    logger.info(f"[真实] 设备 {device_id} 调节 {register_name} = {coil_value}")
+                    return {'success': True, 'message': f'{register_name} 设置为 {coil_value}'}
+
                 byte_order = config.get('byte_order', 'ABCD')
                 if dt in ('float32', 'float', 'real'):
                     # round 369：**必须按设备 byte_order 编码**。
@@ -851,6 +886,11 @@ class RealDeviceManager(IDeviceManager):
                                 'message': (f'设定值 {value} 超出 float32 可表示范围'
                                             f'（±{_FLOAT32_MAX:.3e}）')}
                     expected_words = encode_float32_registers(
+                        float(raw_value), byte_order)
+                    success = self._write_registers_compat(
+                        client, address, expected_words)
+                elif dt == 'float64':
+                    expected_words = encode_float64_registers(
                         float(raw_value), byte_order)
                     success = self._write_registers_compat(
                         client, address, expected_words)
@@ -891,6 +931,21 @@ class RealDeviceManager(IDeviceManager):
                 return {'success': False, 'message': str(e)}
 
     @staticmethod
+    def _coerce_coil_setpoint(value: Any) -> bool:
+        """将调节值规范化为布尔线圈值；非有限值或未知文本一律拒绝。"""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return to_finite_float(value) != 0.0
+        if isinstance(value, str):
+            token = value.strip().lower()
+            if token in ('1', 'true', 'on', 'yes'):
+                return True
+            if token in ('0', 'false', 'off', 'no'):
+                return False
+        raise ValueError(f'无法解析为线圈开关值: {value!r}')
+
+    @staticmethod
     def _checked_integer(dt: str, raw_value: float, original) -> int:
         """把换算后的原始值收敛成整数并校验位宽，超范围抛 `ValueError`。
 
@@ -924,10 +979,11 @@ class RealDeviceManager(IDeviceManager):
 
     def disconnect_device(self, device_id: str):
         """断开设备连接（重置失败计数）"""
-        client = self.clients.get(device_id)
+        with self._lock:
+            client = self.clients.get(device_id)
+            self._connection_failures.pop(device_id, None)
         if client:
             client.disconnect()
-        self._connection_failures.pop(device_id, None)
 
     def connect_all(self, timeout: float = 20.0) -> dict[str, bool]:
         """
@@ -969,75 +1025,69 @@ class RealDeviceManager(IDeviceManager):
 
     def disconnect_all(self):
         """断开所有设备连接，并停止重连循环（关停语义）"""
-        self._reconnect_running = False
-        self._reconnect_stop_event.set()
-        for device_id in list(self.clients.keys()):
+        self.stop_reconnect_loop()
+        with self._lock:
+            device_ids = list(self.clients.keys())
+        for device_id in device_ids:
             self.disconnect_device(device_id)
 
     def start_reconnect_loop(self, interval: int = 30) -> None:
-        """启动断线自动重连后台循环。
-
-        周期扫描所有已加载设备，对「配置启用、客户端存在或已创建、但当前未连接」
-        的设备尝试重连（复用 ``connect_device`` 的指数退避逻辑）。成功记 INFO，
-        失败记 WARNING，异常被捕获后继续下一轮，绝不静默退出线程。
-
-        Args:
-            interval: 扫描间隔（秒），默认 30。
-        """
-        with self._lock:
-            if self._reconnect_running:
+        """启动断线自动重连后台循环。"""
+        with self._reconnect_lock:
+            old_thread = getattr(self, '_reconnect_thread', None)
+            if self._reconnect_running and old_thread is not None and old_thread.is_alive():
                 logger.debug("[真实] 重连循环已在运行，跳过重复启动")
                 return
             self._reconnect_running = True
-        self._reconnect_interval = interval
-        self._reconnect_stop_event.clear()
+            self._reconnect_interval = interval
+            self._reconnect_stop_event.clear()
 
-        def _loop() -> None:
-            while self._reconnect_running and not self._reconnect_stop_event.is_set():
-                try:
-                    # 快照迭代：`add_device` / `remove_device` 会在 API 线程里
-                    # 增删这张表；直接迭代活视图会抛
-                    # RuntimeError（dictionary changed size during iteration），
-                    # 被下面 except 吞掉 → 这一轮重连整批跳过。
-                    # （写入侧已持 `self._lock`，但这里读的是网络重连循环，
-                    #  不能为了读一次表去抢锁 —— 快照更便宜也更安全。）
-                    for device_id, cfg in list(self.devices.items()):
-                        if not self._reconnect_running or self._reconnect_stop_event.is_set():
-                            break
-                        if not cfg.get('enabled', True):
-                            continue
-                        client = self.clients.get(device_id)
-                        # 尚未创建客户端，或客户端已掉线 → 尝试重连
-                        if client is None or not getattr(client, 'connected', False):
-                            if self._should_skip_connect(device_id):
-                                logger.debug(f"[真实] 设备 {device_id} 处于退避期，跳过本次重连")
+            def _loop() -> None:
+                while self._reconnect_running and not self._reconnect_stop_event.is_set():
+                    try:
+                        with self._lock:
+                            device_items = list(self.devices.items())
+                            clients_snapshot = dict(self.clients)
+                        for device_id, cfg in device_items:
+                            if not self._reconnect_running or self._reconnect_stop_event.is_set():
+                                break
+                            if not cfg.get('enabled', True):
                                 continue
-                            try:
-                                logger.info(f"[真实] 尝试重连设备: {device_id}")
-                                ok = self.connect_device(device_id)
-                                if ok:
-                                    logger.info(f"[真实] 设备 {device_id} 重连成功")
-                                else:
-                                    logger.warning(
-                                        f"[真实] 设备 {device_id} 重连失败（将在 ~{interval}s 后重试）")
-                            except Exception as _e:
-                                logger.warning(f"[真实] 设备 {device_id} 重连异常: {_e}")
-                except Exception as _e:
-                    logger.error(f"[真实] 重连循环内部异常: {_e}", exc_info=True)
-                # 等待间隔；若期间被 stop 则提前唤醒退出
-                self._reconnect_stop_event.wait(self._reconnect_interval)
+                            client = clients_snapshot.get(device_id)
+                            if client is None or not getattr(client, 'connected', False):
+                                if self._should_skip_connect(device_id):
+                                    logger.debug(f"[真实] 设备 {device_id} 处于退避期，跳过本次重连")
+                                    continue
+                                try:
+                                    logger.info(f"[真实] 尝试重连设备: {device_id}")
+                                    ok = self.connect_device(device_id)
+                                    if ok:
+                                        logger.info(f"[真实] 设备 {device_id} 重连成功")
+                                    else:
+                                        logger.warning(
+                                            f"[真实] 设备 {device_id} 重连失败（将在 ~{interval}s 后重试）")
+                                except Exception as _e:
+                                    logger.warning(f"[真实] 设备 {device_id} 重连异常: {_e}")
+                    except Exception as _e:
+                        logger.error(f"[真实] 重连循环内部异常: {_e}", exc_info=True)
+                    self._reconnect_stop_event.wait(self._reconnect_interval)
 
-        t = threading.Thread(target=_loop, daemon=True, name="reconnect-loop")
-        t.start()
+            t = threading.Thread(target=_loop, daemon=True, name="reconnect-loop")
+            self._reconnect_thread = t
+            t.start()
         logger.info(f"[真实] 断线自动重连循环已启动（间隔 {interval}s）")
 
     def stop_reconnect_loop(self) -> None:
-        """停止断线自动重连循环（关停路径调用）。
-
-        与 ``disconnect_all()`` 等价地清除运行状态并通过 Event 唤醒等待中的线程。
-        """
-        self._reconnect_running = False
-        self._reconnect_stop_event.set()
+        """停止断线自动重连循环（关停路径调用）。"""
+        with self._reconnect_lock:
+            self._reconnect_running = False
+            self._reconnect_stop_event.set()
+            thread = getattr(self, '_reconnect_thread', None)
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=2)
+        with self._reconnect_lock:
+            if thread is None or not thread.is_alive():
+                self._reconnect_thread = None
         logger.info("[真实] 断线自动重连循环已停止")
 
     def get_device_status(self, device_id: str) -> dict[str, Any]:

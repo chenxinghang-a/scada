@@ -5,7 +5,9 @@ OPC UA客户端模块
 """
 
 import asyncio
+import inspect
 import logging
+import math
 import threading
 import time
 from typing import Any, Callable
@@ -78,6 +80,7 @@ class OPCUAClient:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._running = False
+        self._lifecycle_lock = threading.RLock()
 
         # 统计
         self.stats: dict[str, Any] = {
@@ -92,7 +95,20 @@ class OPCUAClient:
 
     def add_data_callback(self, callback: Callable[..., Any]):
         """添加数据回调函数"""
-        self._data_callbacks.append(callback)
+        with self._data_lock:
+            self._data_callbacks.append(callback)
+
+    def get_stats(self) -> dict[str, Any]:
+        """获取客户端统计信息（与其他协议客户端接口统一）"""
+        with self._data_lock:
+            stats_copy = dict(self.stats)
+        return {
+            'device_id': self.device_id,
+            'device_name': self.device_name,
+            'endpoint': self.endpoint,
+            'connected': self.connected,
+            **stats_copy,
+        }
 
     def connect(self) -> bool:
         """
@@ -101,54 +117,59 @@ class OPCUAClient:
         Returns:
             bool: 是否成功启动
         """
-        if self._running:
-            if self._thread is not None and self._thread.is_alive():
-                # 只有真正连上才算成功；仍在退避重连时如实回 False，
-                # 否则上层会把“连不上”当在线，latest_data 却一直为空。
-                logger.warning("OPC UA 仍在连接/重连中（connected=%s）", self.connected)
-                return self.connected
-            logger.warning("OPC UA 连接线程已退出但 _running 残留，复位后重启")
-            self._running = False
+        with self._lifecycle_lock:
+            if self._running:
+                if self._thread is not None and self._thread.is_alive():
+                    # 只有真正连上才算成功；仍在退避重连时如实回 False，
+                    # 否则上层会把“连不上”当在线，latest_data 却一直为空。
+                    logger.warning("OPC UA 仍在连接/重连中（connected=%s）", self.connected)
+                    return self.connected
+                logger.warning("OPC UA 连接线程已退出但 _running 残留，复位后重启")
+                self._running = False
 
-        self._running = True
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._thread.start()
+            self._running = True
+            thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._thread = thread
+            thread.start()
 
-        # 等待连接完成
-        for _ in range(30):  # 最多等3秒
-            if self.connected:
-                return True
-            if not self._running:
-                return False
-            time.sleep(0.1)
+            # 等待连接完成
+            for _ in range(30):  # 最多等3秒
+                if self.connected:
+                    return True
+                if not self._running or not thread.is_alive():
+                    break
+                time.sleep(0.1)
 
-        logger.warning("OPC UA连接超时（3s 内未连上），回收后台连接线程")
-        # 不回收的话：调用方拿到 False，而后台线程还在无限重连，
-        # 下次 connect() 又会起一条 —— 线程和 socket 越积越多。
-        self.disconnect()
-        return False
+            logger.warning("OPC UA连接超时（3s 内未连上），回收后台连接线程")
+            # 不回收的话：调用方拿到 False，而后台线程还在无限重连，
+            # 下次 connect() 又会起一条 —— 线程和 socket 越积越多。
+            self.disconnect()
+            return False
 
     def disconnect(self):
         """断开连接（幂等；事件循环可能尚未建立或已关闭）"""
-        self._running = False
-        loop = self._loop
-        if loop is not None:
-            try:
-                if loop.is_running():
-                    # `is_running()` 与调度之间循环可能关闭 → 必须兜 RuntimeError
-                    asyncio.run_coroutine_threadsafe(self._cleanup(), loop)
-            except RuntimeError as e:
-                logger.debug("OPC UA 事件循环已关闭，跳过异步清理: %s", e)
-            except Exception as e:      # noqa: BLE001 —— 清理失败不该阻断断开
-                logger.warning("OPC UA 异步清理调度失败: %s", e)
-        thread = self._thread
-        if thread is not None and thread.is_alive() \
-                and thread is not threading.current_thread():
-            thread.join(timeout=5)
-            if thread.is_alive():
-                logger.warning("OPC UA 连接线程 5s 内未退出（connected 置 False）")
-        self.connected = False
-        logger.info("OPC UA客户端已断开")
+        with self._lifecycle_lock:
+            self._running = False
+            loop = self._loop
+            if loop is not None:
+                try:
+                    if loop.is_running():
+                        # `is_running()` 与调度之间循环可能关闭 → 必须兜 RuntimeError
+                        asyncio.run_coroutine_threadsafe(self._cleanup(), loop)
+                except RuntimeError as e:
+                    logger.debug("OPC UA 事件循环已关闭，跳过异步清理: %s", e)
+                except Exception as e:      # noqa: BLE001 —— 清理失败不该阻断断开
+                    logger.warning("OPC UA 异步清理调度失败: %s", e)
+            thread = self._thread
+            if thread is not None and thread.is_alive() \
+                    and thread is not threading.current_thread():
+                thread.join(timeout=5)
+                if thread.is_alive():
+                    logger.warning("OPC UA 连接线程 5s 内未退出（connected 置 False）")
+            if thread is None or not thread.is_alive():
+                self._thread = None
+            self.connected = False
+            logger.info("OPC UA客户端已断开")
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取所有节点的最新数据（round 370：持锁快照）"""
@@ -259,6 +280,7 @@ class OPCUAClient:
                         "已配置: %s",
                         self.endpoint, len(self.node_configs),
                         [n.get('node_id') for n in self.node_configs])
+                    raise ConnectionError("OPC UA 节点订阅全部失败，清理连接并退避重连")
                 else:
                     # 节点列表为空或全部订上：清掉上一次的失败标志
                     self.connected = True
@@ -350,12 +372,15 @@ class OPCUAClient:
             src_ts = getattr(dv, 'SourceTimestamp', None)
             bad = bool(getattr(status, 'is_bad', lambda: False)())
             unc = bool(getattr(status, 'is_uncertain', lambda: False)())
+            if isinstance(val, float) and not math.isfinite(val):
+                bad = True
+            quality_str = 'bad' if bad else ('uncertain' if unc else 'good')
             entry = {
                 'value': val,
                 'unit': node_unit,
                 'timestamp': (src_ts.isoformat() if src_ts
                               else datetime.now().isoformat()),
-                'quality': 'bad' if bad else ('uncertain' if unc else 'good'),
+                'quality': quality_str,
                 'node_id': node_id_str
             }
             # 0512：stats 由 asyncua 回调线程自增、主线程读取，`+=` 是读-改-写，
@@ -369,7 +394,16 @@ class OPCUAClient:
                 callbacks = list(self._data_callbacks)
             for callback in callbacks:
                 try:
-                    callback(self.device_id, node_name, val, node_unit)
+                    accepts_q = False
+                    try:
+                        sig = inspect.signature(callback)
+                        accepts_q = 'quality' in sig.parameters
+                    except (TypeError, ValueError):
+                        accepts_q = False
+                    if accepts_q:
+                        callback(self.device_id, node_name, val, node_unit, quality=quality_str)
+                    else:
+                        callback(self.device_id, node_name, val, node_unit)
                 except Exception as e:
                     logger.error(f"数据回调异常: {e}")
 

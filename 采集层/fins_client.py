@@ -15,6 +15,7 @@
 依赖：无（纯socket实现）
 """
 
+import math
 import struct
 import socket
 import logging
@@ -107,6 +108,7 @@ class FINSClient(ByteOrderCapableDecoder):
         self._sock = None
         self.connected = False
         self._lock = threading.Lock()
+        self._sid_lock = threading.Lock()
         self._sid = 0  # 服务ID（每次请求递增）
 
         # FINS节点地址
@@ -125,6 +127,8 @@ class FINSClient(ByteOrderCapableDecoder):
 
     def connect(self) -> bool:
         """建立FINS/TCP连接"""
+        if self._sock is not None:
+            self.disconnect()
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._sock.settimeout(self.timeout)
@@ -143,6 +147,12 @@ class FINSClient(ByteOrderCapableDecoder):
         except Exception as e:
             logger.error(f"[FINS] 设备 {self.device_name} 连接失败: {e}")
             self.stats['last_error'] = str(e)
+            if self._sock is not None:
+                try:
+                    self._sock.close()
+                except Exception as close_err:
+                    logger.debug(f"[FINS] 连接失败后关闭 socket 失败: {close_err}")
+                self._sock = None
             self.connected = False
             return False
 
@@ -204,8 +214,13 @@ class FINSClient(ByteOrderCapableDecoder):
 
     def _next_sid(self) -> int:
         """获取下一个服务ID"""
-        self._sid = (self._sid + 1) % 256
-        return self._sid
+        sid_lock = getattr(self, '_sid_lock', None)
+        if sid_lock is None:
+            self._sid = (self._sid + 1) % 256
+            return self._sid
+        with sid_lock:
+            self._sid = (self._sid + 1) % 256
+            return self._sid
 
     def _build_fins_frame(self, command: int, data: bytes) -> bytes:
         """构建FINS/TCP帧"""
@@ -239,30 +254,42 @@ class FINSClient(ByteOrderCapableDecoder):
         """发送FINS请求并接收响应"""
         with self._lock:
             try:
-                self._sock.send(frame)
+                self._sock.sendall(frame) if hasattr(self._sock, 'sendall') else self._sock.send(frame)
 
-                # 接收FINS/TCP头（12字节）
-                header = self._sock.recv(12)
-                if len(header) < 12:
-                    logger.error("[FINS] 响应头不完整")
+                # FINS/TCP 响应头为 16 字节：magic(4B='FINS') + length(4B) + command(4B) + error_code(4B)
+                # 其中 length = 8（command+error_code）+ FINS 数据段长度
+                header = b''
+                while len(header) < 16:
+                    chunk = self._sock.recv(16 - len(header))
+                    if not isinstance(chunk, (bytes, bytearray)) or not chunk:
+                        break
+                    header += bytes(chunk)
+                if len(header) < 16:
+                    logger.error("[FINS] 响应头不完整（收到 %d/16 字节）", len(header))
                     return None
 
-                length = struct.unpack('>I', header[0:4])[0]
+                magic, length, _tcp_cmd, tcp_error = struct.unpack('>4sIII', header)
+                if magic != b'FINS' or tcp_error != 0 or length < 8:
+                    logger.error(
+                        "[FINS] 响应头异常: magic=%r, length=%s, tcp_error=%s",
+                        magic, length, tcp_error)
+                    self.connected = False
+                    return None
 
-                # 接收FINS数据
+                expected_payload_len = length - 8
                 fins_data = b''
-                remaining = length
+                remaining = expected_payload_len
                 while remaining > 0:
                     chunk = self._sock.recv(remaining)
-                    if not chunk:
+                    if not isinstance(chunk, (bytes, bytearray)) or not chunk:
                         break
-                    fins_data += chunk
+                    fins_data += bytes(chunk)
                     remaining -= len(chunk)
 
-                # 解析FINS响应
-                # [ICF(1)] [RSV(1)] [GCT(1)] [DNA(1)] [DA1(1)] [DA2(1)]
-                # [SNA(1)] [SA1(1)] [SA2(1)] [SID(1)] [命令码(2)] [完成码(2)] [数据(N)]
-                if len(fins_data) < 14:
+                if len(fins_data) != expected_payload_len or len(fins_data) < 14:
+                    logger.error("[FINS] 响应数据不完整: 预期 %d 字节, 实收 %d 字节",
+                                 expected_payload_len, len(fins_data))
+                    self.connected = False
                     return None
 
                 # 检查完成码
@@ -396,10 +423,10 @@ class FINSClient(ByteOrderCapableDecoder):
 
     def read_input_registers(self, address: int, count: int,
                              slave_id: int | None = None) -> list[int] | None:
-        """读取输入寄存器（仍映射到字区域）。"""
+        """读取输入寄存器（映射到 input_word_area 或默认字区域）。"""
         if not self.connected:
             return None
-        word_area = self.config.get('word_area', 'D')
+        word_area = self.config.get('input_word_area') or self.config.get('word_area', 'D')
         return self.read_words(word_area, address, count)
 
     def read_coils(self, address: int, count: int,
@@ -415,10 +442,14 @@ class FINSClient(ByteOrderCapableDecoder):
 
     def read_discrete_inputs(self, address: int, count: int,
                              slave_id: int | None = None) -> list[bool] | None:
-        """读取离散输入（映射到位区域）。"""
+        """读取离散输入（映射到 di_area/discrete_bit_area 或默认位区域）。"""
         if not self.connected:
             return None
-        bit_area = self.config.get('bit_area', 'CIO')
+        bit_area = (
+            self.config.get('di_area')
+            or self.config.get('discrete_bit_area')
+            or self.config.get('bit_area', 'CIO')
+        )
         return self.read_bits(bit_area, address, 0, count)
 
     # ---- 写兼容面（round 369）----
@@ -433,6 +464,8 @@ class FINSClient(ByteOrderCapableDecoder):
                               verify: bool = False) -> bool:
         """写入单个保持寄存器（映射到字区域，默认 D）。"""
         if not self.connected:
+            return False
+        if isinstance(value, bool) or (isinstance(value, float) and not math.isfinite(value)):
             return False
         word_area = self.config.get('word_area', 'D')
         ok = self.write_single_word(word_area, address, int(value))
@@ -454,6 +487,8 @@ class FINSClient(ByteOrderCapableDecoder):
         浮点/32 位整数设定值全部写不进去。
         """
         if not self.connected or not values:
+            return False
+        if any(isinstance(v, bool) or (isinstance(v, float) and not math.isfinite(v)) for v in values):
             return False
         word_area = self.config.get('word_area', 'D')
         words = [int(v) & 0xFFFF for v in values]

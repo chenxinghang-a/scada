@@ -60,7 +60,7 @@ class SimulatedDeviceManager(IDeviceManager):
     - 可以独立运行，无需切换模式
     """
 
-    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest', 'mc', 'fins']
+    SUPPORTED_PROTOCOLS = ['modbus_tcp', 'modbus_rtu', 'opcua', 'mqtt', 'rest', 'mc', 'fins', 'custom']
 
     def __init__(self, config_path: str | None = None,
                  live_protocol: bool = False):
@@ -354,6 +354,13 @@ class SimulatedDeviceManager(IDeviceManager):
         elif protocol == 'fins':
             # 欧姆龙FINS协议使用Modbus模拟客户端（寄存器结构兼容）
             return EnhancedSimulatedModbusClient(config)
+        elif protocol == 'custom':
+            from .adapter_spec import adapter_transport
+            if adapter_transport(config) == 'plugin':
+                from .plugin_adapter import PluginAdapterClient
+                return PluginAdapterClient(config)
+            from .custom_adapter import CustomAdapterClient
+            return CustomAdapterClient(config)
         else:
             logger.error(f"不支持的协议类型: {protocol}")
             return None
@@ -559,6 +566,9 @@ class SimulatedDeviceManager(IDeviceManager):
         config = self.devices.get(device_id)
         if not config:
             return {'success': False, 'message': f'设备 {device_id} 不存在'}
+
+        if _simulated_client._ESTOP_ACTIVE and IDeviceManager.get_device_category(config) == 'mechanical':
+            return {'success': False, 'message': f'紧急停机生效中，拒绝调节机械设备 {device_id}'}
 
         # 验证寄存器存在（`registers: null` 是合法 YAML，直接迭代会 TypeError）
         registers = config.get('registers') or []
@@ -920,6 +930,10 @@ class SimulatedDeviceManager(IDeviceManager):
                 return False
 
             logger.info(f"[模拟] 移除设备: {device_id}")
+            try:
+                set_device_stopped(device_id, False)
+            except Exception as e:      # noqa: BLE001
+                logger.debug("[模拟] 清理设备 %s 的停机标志失败: %s", device_id, e)
             # 按设备的写锁一起回收（同 real_device_manager，round 388 的
             # 设备状态清理闸门要求 device_id 键控容器必须有删除点）。
             with self._device_locks_guard:

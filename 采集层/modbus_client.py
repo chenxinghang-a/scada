@@ -229,7 +229,9 @@ class ModbusClient:
         with self._stats_lock:
             self.stats[key] = self.stats.get(key, 0) + 1
 
-    def get_cache_age(self, address: int, count: int) -> float | None:
+    def get_cache_age(self, address: int, count: int, *,
+                      function_code: int | None = None,
+                      slave_id: int | None = None) -> float | None:
         """
         查询指定寄存器缓存值的年龄（秒）
 
@@ -242,7 +244,19 @@ class ModbusClient:
         Returns:
             float: 缓存年龄（秒）；该 (address, count) 从未成功读取过时返回 None
         """
-        cached_at = self._last_good_at.get((address, count))
+        stats_lock = getattr(self, '_stats_lock', None)
+        with (stats_lock if stats_lock is not None else __import__('contextlib').nullcontext()):
+            if function_code is not None:
+                slave = slave_id if slave_id is not None else getattr(self, 'slave_id', 1)
+                cached_at = self._last_good_at.get((function_code, slave, address, count))
+            else:
+                cached_at = self._last_good_at.get((address, count))
+                if cached_at is None:
+                    matches = [
+                        ts for k, ts in self._last_good_at.items()
+                        if isinstance(k, tuple) and len(k) == 4 and k[2] == address and k[3] == count
+                    ]
+                    cached_at = max(matches) if matches else None
         if cached_at is None:
             return None
         # round 369：与 `_mark_read_fresh` 同基准 —— 必须用单调时钟。
@@ -284,7 +298,7 @@ class ModbusClient:
           - 以 WARNING 级别记录日志，并带上缓存年龄秒数。
 
         Args:
-            cache_key: (address, count) 缓存键
+            cache_key: 缓存键
             address: 起始地址
             count: 读取数量
             reason: 失败原因（写入日志，便于定位）
@@ -292,29 +306,38 @@ class ModbusClient:
         Returns:
             list[int]: 陈旧缓存值；无缓存时返回 None
         """
-        cached = self._last_good_values.get(cache_key)
+        with self._stats_lock:
+            cached = self._last_good_values.get(cache_key)
+            if cached is None and isinstance(cache_key, tuple) and len(cache_key) == 4:
+                cached = self._last_good_values.get((address, count))
 
-        if cached is None:
-            with self._stats_lock:
+            if cached is None:
                 self.last_read_source = 'none'
                 self.last_read_ok = False
+                cached_copy = None
+            else:
+                cached_copy = list(cached)
+                cached_at = self._last_good_at.get(cache_key)
+                if cached_at is None and isinstance(cache_key, tuple) and len(cache_key) == 4:
+                    cached_at = self._last_good_at.get((address, count))
+                age = max(0.0, time.monotonic() - cached_at) if cached_at is not None else 0.0
+                self.last_read_source = 'cache'
+                self.last_read_ok = False
+
+        if cached_copy is None:
             logger.warning(
                 f"设备 {self.device_name} 读取失败，无缓存可用 "
                 f"({address},{count}) — {reason}"
             )
             return None
 
-        age = self.get_cache_age(address, count) or 0.0
         self._inc_stat('stale_reads')
-        with self._stats_lock:
-            self.last_read_source = 'cache'
-            self.last_read_ok = False
         logger.warning(
             f"设备 {self.device_name} 读取失败，返回 {age:.1f}s 前的陈旧缓存值 "
             f"({address},{count}) — {reason}"
         )
         # 返回副本（同上：调用方修改不得影响缓存）
-        return list(cached)
+        return cached_copy
 
     def _raw_to_engineering(self, address: int, raw_value: int) -> float:
         """将原始寄存器值转换为工程值（用于安全验证）"""
@@ -593,7 +616,8 @@ class ModbusClient:
             except Exception as e:
                 # socket 可能已经坏了，关闭失败无副作用；连接对象随后被置空丢弃
                 logger.debug(f"设备 {self.device_name} Modbus 连接关闭失败: {e}")
-            self.connected = False
+            self.client = None
+        self.connected = False
 
     def read_holding_registers(self, address: int, count: int,
                                slave_id: int | None = None) -> list[int] | None:
@@ -619,7 +643,8 @@ class ModbusClient:
             应据此降低数据质量码（例如 OPC UA ``UNCERTAIN_LAST_USABLE``）
             或触发告警，而不是当作正常数据使用。
         """
-        cache_key = (address, count)
+        default_slave = slave_id if isinstance(slave_id, int) and not isinstance(slave_id, bool) else getattr(self, 'slave_id', 1)
+        cache_key = (3, default_slave, address, count)
 
         # GB/T 19582 地址范围校验
         try:
@@ -646,6 +671,7 @@ class ModbusClient:
                 self.last_read_source = 'none'
                 self.last_read_ok = False
             return None
+        cache_key = (3, slave, address, count)
         self._inc_stat('total_reads')
 
         try:
@@ -741,7 +767,8 @@ class ModbusClient:
             应据此降低数据质量码（例如 OPC UA ``UNCERTAIN_LAST_USABLE``）
             或触发告警，而不是当作正常数据使用。
         """
-        cache_key = (address, count)
+        default_slave = slave_id if isinstance(slave_id, int) and not isinstance(slave_id, bool) else getattr(self, 'slave_id', 1)
+        cache_key = (4, default_slave, address, count)
 
         # GB/T 19582 地址范围校验
         try:
@@ -776,6 +803,7 @@ class ModbusClient:
             return self._fallback_to_cache(
                 cache_key, address, count, '从站地址非法'
             )
+        cache_key = (4, slave, address, count)
         self._inc_stat('total_reads')
 
         try:
@@ -876,8 +904,12 @@ class ModbusClient:
                     self._log_operation('read_coils', address, count, False, str(result))
                     return None
 
+                bits = getattr(result, 'bits', None) or []
+                if len(bits) < count:
+                    self._log_operation('read_coils', address, count, False, '线圈响应长度不足')
+                    return None
                 self._log_operation('read_coils', address, count, True)
-                return result.bits[:count]
+                return [bool(b) for b in bits[:count]]
 
         except Exception as e:
             logger.error(f"读取线圈异常: {e}")
@@ -924,8 +956,12 @@ class ModbusClient:
                     self._log_operation('read_discrete_inputs', address, count, False, str(result))
                     return None
 
+                bits = getattr(result, 'bits', None) or []
+                if len(bits) < count:
+                    self._log_operation('read_discrete_inputs', address, count, False, '离散输入响应长度不足')
+                    return None
                 self._log_operation('read_discrete_inputs', address, count, True)
-                return result.bits[:count]
+                return [bool(b) for b in bits[:count]]
 
         except Exception as e:
             logger.error(f"读取离散输入异常: {e}")
@@ -1004,6 +1040,11 @@ class ModbusClient:
         Returns:
             bool: 写入是否成功
         """
+        if isinstance(value, bool) or (isinstance(value, float) and not math.isfinite(value)):
+            logger.error(f"写入寄存器值非法: {value!r}")
+            self._log_operation('write_single_register', address, 1, False, f'非法值: {value!r}')
+            return False
+
         # GB/T 19582 地址范围校验
         try:
             self.validate_address_range(address, 1, 'holding_register')
@@ -1013,7 +1054,12 @@ class ModbusClient:
             return False
 
         # GB/T 19582 + GB/T 35718 + GB/T 15969 写入安全验证
-        eng_value = self._raw_to_engineering(address, value)
+        try:
+            eng_value = self._raw_to_engineering(address, value)
+        except (TypeError, ValueError) as e:
+            logger.error(f"写入寄存器工程值换算失败: {e}")
+            self._log_operation('write_single_register', address, 1, False, str(e))
+            return False
         allowed, reason = self._write_safety.validate_write(address, eng_value)
         if not allowed:
             logger.warning(f"[写入安全] 设备 {self.device_name}: 写入被阻止 — {reason}")
@@ -1061,15 +1107,17 @@ class ModbusClient:
                     # 于是「写入后回读超时 + 缓存里恰好存着同一个值」会被判成
                     # 验证通过 —— 设备根本没写进去，系统却报"写入成功且已校验"。
                     # 实测复现：回读抛异常、缓存预置 [42]、写入 42 → 返回 True。
-                    if self.last_read_source != 'fresh':
+                    with self._stats_lock:
+                        read_src = self.last_read_source
+                    if read_src != 'fresh':
                         logger.warning(
                             f"写入验证失败: addr={address}, 写入={value}, "
-                            f"回读不是新鲜数据（source={self.last_read_source}）— "
+                            f"回读不是新鲜数据（source={read_src}）— "
                             f"无法确认设备是否真的写进去了")
                         self._inc_stat('failed_writes')
                         self._log_operation(
                             'write_single_register', address, 1, False,
-                            f'回读非新鲜数据(source={self.last_read_source})')
+                            f'回读非新鲜数据(source={read_src})')
                         return False
                     if read_back and read_back[0] == value:
                         logger.debug(f"写入验证通过: addr={address}, value={value}")
@@ -1198,7 +1246,16 @@ class ModbusClient:
 
         # GB/T 19582 + GB/T 35718 写入安全验证（逐寄存器检查）
         for i, val in enumerate(values):
-            eng_val = self._raw_to_engineering(address + i, val)
+            if isinstance(val, bool) or (isinstance(val, float) and not math.isfinite(val)):
+                logger.error(f"批量写入寄存器值非法: {val!r}")
+                self._log_operation('write_multiple_registers', address, count, False, f'非法值: {val!r}')
+                return False
+            try:
+                eng_val = self._raw_to_engineering(address + i, val)
+            except (TypeError, ValueError) as e:
+                logger.error(f"批量写入寄存器工程值换算失败: {e}")
+                self._log_operation('write_multiple_registers', address, count, False, str(e))
+                return False
             allowed, reason = self._write_safety.validate_write(address + i, eng_val)
             if not allowed:
                 logger.warning(f"[写入安全] 设备 {self.device_name}: 批量写入被阻止 — {reason}")

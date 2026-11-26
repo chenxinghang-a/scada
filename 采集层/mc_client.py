@@ -18,6 +18,7 @@
 依赖：无（纯socket实现）
 """
 
+import math
 import struct
 import socket
 import logging
@@ -113,6 +114,8 @@ class MCClient(ByteOrderCapableDecoder):
 
     def connect(self) -> bool:
         """建立TCP连接"""
+        if self._sock is not None:
+            self.disconnect()
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._sock.settimeout(self.timer)
@@ -123,6 +126,12 @@ class MCClient(ByteOrderCapableDecoder):
         except Exception as e:
             logger.error(f"[MC] 设备 {self.device_name} 连接失败: {e}")
             self.stats['last_error'] = str(e)
+            if self._sock is not None:
+                try:
+                    self._sock.close()
+                except Exception as close_err:
+                    logger.debug(f"[MC] 连接失败后关闭 socket 失败: {close_err}")
+                self._sock = None
             self.connected = False
             return False
 
@@ -423,13 +432,13 @@ class MCClient(ByteOrderCapableDecoder):
         data = self._pack_device_spec(device_code, addr)
         data += struct.pack('<H', count)
 
-        # 打包位值
+        # 打包位值（MC 3E 二进制位写与读同口径：首点占高半字节 0x10，次点占低半字节 0x01）
         for i in range(0, count, 2):
             byte_val = 0
             if i < count and values[i]:
-                byte_val |= 0x01
-            if i + 1 < count and values[i + 1]:
                 byte_val |= 0x10
+            if i + 1 < count and values[i + 1]:
+                byte_val |= 0x01
             data += struct.pack('B', byte_val)
 
         frame = self._build_3e_frame(0x1401, SUBCMD_BIT_WRITE, data)
@@ -478,10 +487,10 @@ class MCClient(ByteOrderCapableDecoder):
 
     def read_input_registers(self, address: int, count: int,
                              slave_id: int | None = None) -> list[int] | None:
-        """读取输入寄存器（仍映射到字设备区）。"""
+        """读取输入寄存器（映射到输入字区或默认 word_area）。"""
         if not self.connected:
             return None
-        word_area = self.config.get('word_area', 'D')
+        word_area = self.config.get('input_word_area') or self.config.get('word_area', 'D')
         return self.read_words(word_area, address, count)
 
     def read_coils(self, address: int, count: int,
@@ -494,10 +503,14 @@ class MCClient(ByteOrderCapableDecoder):
 
     def read_discrete_inputs(self, address: int, count: int,
                              slave_id: int | None = None) -> list[bool] | None:
-        """读取离散输入（映射到位设备区）。"""
+        """读取离散输入（映射到 di_area/discrete_bit_area 或默认 bit_area）。"""
         if not self.connected:
             return None
-        bit_area = self.config.get('bit_area', 'M')
+        bit_area = (
+            self.config.get('di_area')
+            or self.config.get('discrete_bit_area')
+            or self.config.get('bit_area', 'M')
+        )
         return self.read_bits(bit_area, address, count)
 
     # ---- 写兼容面（round 369）----
@@ -510,6 +523,8 @@ class MCClient(ByteOrderCapableDecoder):
                               verify: bool = False) -> bool:
         """写入单个保持寄存器（映射到字设备区，默认 D）。"""
         if not self.connected:
+            return False
+        if isinstance(value, bool) or (isinstance(value, float) and not math.isfinite(value)):
             return False
         word_area = self.config.get('word_area', 'D')
         ok = self.write_single_word(word_area, address, int(value))
@@ -530,6 +545,8 @@ class MCClient(ByteOrderCapableDecoder):
         调用即抛 NotImplementedError，32 位/浮点设定值全部写不进去。
         """
         if not self.connected or not values:
+            return False
+        if any(isinstance(v, bool) or (isinstance(v, float) and not math.isfinite(v)) for v in values):
             return False
         word_area = self.config.get('word_area', 'D')
         words = [int(v) & 0xFFFF for v in values]

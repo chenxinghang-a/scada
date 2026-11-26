@@ -3,10 +3,12 @@ MQTT数据采集模块
 实现MQTT协议的数据采集功能
 """
 
+import inspect
 import json
 import ssl
 import logging
 import threading
+from contextlib import nullcontext as _nullcontext
 from typing import Any, Callable
 from datetime import datetime
 from core.safe_numeric import to_finite_float, try_finite_float
@@ -192,6 +194,7 @@ class MQTTClient:
         # 连接状态
         self.connected = False
         self._lock = threading.Lock()
+        self._tls_configured = False
 
         # 统计信息
         self.stats: dict[str, Any] = {
@@ -206,7 +209,9 @@ class MQTTClient:
 
     def add_data_callback(self, callback: Callable[..., Any]):
         """添加数据回调函数（签名: callback(device_id, name, value, unit)）"""
-        self._data_callbacks.append(callback)
+        lock = getattr(self, '_lock', None)
+        with (lock if lock is not None else _nullcontext()):
+            self._data_callbacks.append(callback)
 
     def connect(self) -> bool:
         """
@@ -219,8 +224,8 @@ class MQTTClient:
             bool: connect()调用是否成功（不代表MQTT握手完成）
         """
         try:
-            # TLS/SSL配置
-            if self.tls_enabled:
+            # TLS/SSL配置（paho-mqtt 只允许配置一次，重连不得重复 tls_set_context）
+            if self.tls_enabled and not getattr(self, '_tls_configured', False):
                 tls_context = ssl.create_default_context()
 
                 if self.ca_cert:
@@ -230,12 +235,6 @@ class MQTTClient:
                         # 0482：ca_cert 非法/不可读时不能让整个 connect 失败，
                         # 回退到 create_default_context() 已装载的系统根证书校验
                         logger.warning(f"MQTT CA 证书加载失败，回退系统根证书: {e}")
-                # round 353：**没填 ca_cert ≠ 可以不校验证书**。
-                # `create_default_context()` 默认就用系统根证书校验；
-                # 原来 else 分支直接关掉主机名校验并设 CERT_NONE，
-                # 于是「标准 CA 签发的证书、只是没额外指定 ca_cert」这种
-                # 最常见的情况变成完全不校验 —— 中间人可截获全部采集报文。
-                # 要放宽只能用 `tls_insecure`（下面那条，会告警）。
 
                 if self.client_cert and self.client_key:
                     tls_context.load_cert_chain(self.client_cert, self.client_key)
@@ -248,22 +247,17 @@ class MQTTClient:
                     tls_context.verify_mode = ssl.CERT_NONE
 
                 self.client.tls_set_context(tls_context)
+                self._tls_configured = True
                 logger.info("MQTT TLS已启用")
 
-            # 把 device_config 里的 topics 登记进订阅表。
-            #
-            # **这里必须登记，否则配了 topics 也永远收不到数据。**
-            # paho 的 connect() 只发起 TCP 连接，真正的 MQTT 握手在 loop_start()
-            # 的后台线程里完成，所以此刻 self.connected 仍是 False —— 直接调用
-            # subscribe() 只会把主题记进 _subscriptions 而不发送 SUBSCRIBE。
-            # 真正的订阅动作发生在 _on_connect 回调里（它按 _subscriptions 补发）。
-            # 原实现两处都没做：DataCollector._setup_push_device 只调用
-            # add_data_callback() + connect()，从没调用过 subscribe()，
-            # 于是 MQTT 设备"连上了但零数据"，且没有任何报错。
             self._register_configured_topics()
 
             logger.info(f"正在连接MQTT Broker: {self.broker_host}:{self.broker_port}")
-            self.client.connect(self.broker_host, self.broker_port, keepalive=60)
+            rc = self.client.connect(self.broker_host, self.broker_port, keepalive=60)
+            if isinstance(rc, int) and not isinstance(rc, bool) and rc != 0:
+                self.stats['last_error'] = f"MQTT connect 返回错误码: {rc}"
+                logger.error("MQTT连接返回错误码 %s (%s:%s)", rc, self.broker_host, self.broker_port)
+                return False
             self.client.loop_start()
             return True
         except Exception as e:
@@ -334,8 +328,10 @@ class MQTTClient:
 
     def unsubscribe(self, topic: str):
         """取消订阅"""
-        if topic in self._subscriptions:
-            del self._subscriptions[topic]
+        lock = getattr(self, '_lock', None)
+        with (lock if lock is not None else _nullcontext()):
+            if topic in self._subscriptions:
+                del self._subscriptions[topic]
 
         if self.connected:
             self.client.unsubscribe(topic)
@@ -348,7 +344,7 @@ class MQTTClient:
             return False
 
         try:
-            message = json.dumps(payload, ensure_ascii=False)
+            message = json.dumps(payload, ensure_ascii=False, allow_nan=False)
             result = self.client.publish(topic, message, qos=qos)
             return result.rc == mqtt.MQTT_ERR_SUCCESS
         except Exception as e:
@@ -357,13 +353,16 @@ class MQTTClient:
 
     def get_latest_data(self) -> dict[str, dict[str, Any]]:
         """获取最新数据缓存（round 370：持锁快照）"""
-        with self._lock:
+        lock = getattr(self, '_lock', None)
+        with (lock if lock is not None else _nullcontext()):
             return dict(self.latest_data)
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息（与其他协议客户端接口统一）"""
-        with self._lock:
+        lock = getattr(self, '_lock', None)
+        with (lock if lock is not None else _nullcontext()):
             subscriptions = list(self._subscriptions.keys())
+            stats_copy = dict(self.stats)
         return {
             'device_id': self.device_id,
             'device_name': self.device_name,
@@ -371,19 +370,21 @@ class MQTTClient:
             'broker': f'{self.broker_host}:{self.broker_port}',
             'client_id': self.client_id,
             'subscriptions': subscriptions,
-            **self.stats
+            **stats_copy
         }
 
     def get_status(self) -> dict[str, Any]:
         """获取客户端状态"""
-        with self._lock:
+        lock = getattr(self, '_lock', None)
+        with (lock if lock is not None else _nullcontext()):
             subscriptions = list(self._subscriptions.keys())
+            stats_copy = self.stats.copy()
         return {
             'connected': self.connected,
             'broker': f'{self.broker_host}:{self.broker_port}',
             'client_id': self.client_id,
             'subscriptions': subscriptions,
-            'stats': self.stats.copy()
+            'stats': stats_copy
         }
 
     # ---- paho-mqtt 回调 ----
@@ -435,25 +436,18 @@ class MQTTClient:
 
     def _on_message(self, client, userdata, msg):
         """消息接收回调"""
+        lock = getattr(self, '_lock', None)
         try:
-            self.stats['messages_received'] += 1
-            self.stats['last_message_time'] = datetime.now().isoformat()
+            retain = bool(getattr(msg, 'retain', False))
+            with (lock if lock is not None else _nullcontext()):
+                self.stats['messages_received'] += 1
+                self.stats['last_message_time'] = datetime.now().isoformat()
+                if retain:
+                    self.stats.setdefault('retained_messages', 0)
+                    self.stats['retained_messages'] += 1
 
             topic = msg.topic
-            payload = msg.payload.decode('utf-8')
-
-            # ⚠️ round 342：**retained 消息不是"刚发生的事件"**。
-            #
-            # MQTT Broker 会把每个 topic 的**最后一条**带 retain 标志的消息
-            # 存下来，新订阅者一连上就立刻收到 —— 那可能是几天前的值。
-            # 原实现不看 `msg.retain`，还给这类消息打 `now()` 的时间戳，
-            # 于是几天前的旧值以「刚更新 / GOOD 质量码」入库，
-            # 并参与报警判定与联锁计算。
-            # 这里把标记透传下去，由 `_collect_from_cache` 降级为 stale。
-            retain = bool(getattr(msg, 'retain', False))
-            if retain:
-                self.stats.setdefault('retained_messages', 0)
-                self.stats['retained_messages'] += 1
+            payload = msg.payload.decode('utf-8', errors='replace')
 
             try:
                 data = json.loads(payload)
@@ -461,14 +455,16 @@ class MQTTClient:
                     # 标量/数组 JSON 不对象报文，退回原始值解析（如 "12.5"）
                     self._process_raw_message(topic, payload, retain=retain)
                 else:
-                    self.stats['messages_parsed'] += 1
+                    with (lock if lock is not None else _nullcontext()):
+                        self.stats['messages_parsed'] += 1
                     self._process_message(topic, data, retain=retain)
             except json.JSONDecodeError:
                 self._process_raw_message(topic, payload, retain=retain)
 
         except Exception as e:
             logger.error(f"处理MQTT消息失败: {e}")
-            self.stats['parse_errors'] += 1
+            with (lock if lock is not None else _nullcontext()):
+                self.stats['parse_errors'] += 1
 
     def _on_subscribe(self, client, userdata, mid, granted_qos):
         """订阅成功回调"""
@@ -712,17 +708,22 @@ class MQTTClient:
             'retained': bool(retain),
         }
         lock = getattr(self, '_lock', None)
-        if lock is None:            # 兼容 `__new__` 构造的测试替身
+        with (lock if lock is not None else _nullcontext()):
             self.latest_data[register_name] = payload
-        else:
-            with lock:
-                self.latest_data[register_name] = payload
-
-        with self._lock:
             callbacks = list(self._data_callbacks)
         for callback in callbacks:
             try:
-                callback(device_id, register_name, value, unit)
+                extra_kw: dict[str, Any] = {}
+                try:
+                    sig = inspect.signature(callback)
+                    param_names = set(sig.parameters.keys())
+                    if 'retained' in param_names:
+                        extra_kw['retained'] = bool(retain)
+                    elif 'retain' in param_names:
+                        extra_kw['retain'] = bool(retain)
+                except (TypeError, ValueError):
+                    pass
+                callback(device_id, register_name, value, unit, **extra_kw)
             except Exception as e:
                 logger.error(f"数据回调执行失败: {e}")
 
