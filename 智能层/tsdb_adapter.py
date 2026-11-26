@@ -15,12 +15,13 @@ TDengine(遥测) → 适配器 → OEE/预测性维护/SPC/能源
 TDengine(结果表) ← 适配器 ←
 """
 
+import contextlib
 import logging
 import threading
 import time
 from datetime import datetime, timedelta
 
-from core.safe_numeric import try_finite_float
+from core.safe_numeric import try_finite_float, try_int
 from typing import Any
 
 try:
@@ -248,19 +249,15 @@ class TSDBAdapter:
             value = record.get('value')
             timestamp_str = record.get('timestamp')
 
-            if value is None:
+            num_val = None if isinstance(value, bool) else try_finite_float(value)
+            if num_val is None:
                 continue
 
-            # 解析时间戳
+            # 解析时间戳，并将带时区时间（如 Z/+00:00）转为本地无时区 datetime，避免与 datetime.now() 相减报 TypeError
             if isinstance(timestamp_str, str):
                 try:
                     timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                 except Exception as e:
-                    # 解析失败**不能**用 now() 顶替 —— 那等于把这条历史数据的
-                    # 时间改写成「现在」。这些时间戳是要喂给 SPC 控制图和预测性
-                    # 维护的：几天前的采样被当成刚发生，趋势判断、控制图基线、
-                    # 故障预测会全部失真，而且**不会报任何错**。
-                    # 宁可丢掉这一条（并留下日志），也不污染模型的时间轴。
                     logger.warning(
                         "tsdb_adapter: 时间戳无法解析，跳过该条 "
                         "(device=%s, register=%s, ts=%r): %s",
@@ -269,8 +266,6 @@ class TSDBAdapter:
             elif isinstance(timestamp_str, datetime):
                 timestamp = timestamp_str
             else:
-                # 数字 epoch/None/其它类型不许静默改写 now()，否则历史采样
-                # 被当成刚发生，SPC/预测维护/计费全部失真。
                 logger.warning(
                     "tsdb_adapter: 时间戳类型不支持，跳过该条 "
                     "(device=%s, register=%s, ts=%r, type=%s)",
@@ -278,54 +273,70 @@ class TSDBAdapter:
                     type(timestamp_str).__name__)
                 continue
 
-            # 预测性维护 — 喂入所有数值数据
+            if timestamp.tzinfo is not None:
+                timestamp = timestamp.astimezone().replace(tzinfo=None)
+
+            # 预测性维护 — 喂入所有有限数值数据
             if self.predictive_maintenance:
                 self.predictive_maintenance.feed_data(
-                    device_id, register_name, float(value), timestamp
+                    device_id, register_name, num_val, timestamp
                 )
+
+            reg_lower = register_name.lower()
 
             # SPC — 质量相关数据
             if self.spc_analyzer:
                 spc_keywords = ['temperature', 'pressure', 'ph', 'quality', 'dimension',
                                 'voltage', 'current', 'speed', 'flow', 'level',
                                 'humidity', 'torque', 'frequency', 'thickness']
-                if any(kw in register_name.lower() for kw in spc_keywords):
-                    self.spc_analyzer.feed_data(device_id, register_name, float(value))
+                if any(kw in reg_lower for kw in spc_keywords):
+                    self.spc_analyzer.feed_data(device_id, register_name, num_val)
 
-            # 能源管理 — 电力数据
+            # 能源管理 — 先分辨累积电量、水/气流量，再匹配有功功率（排除功率因数/无功/视在功率）
             if self.energy_manager:
-                if 'power' in register_name.lower() or 'watt' in register_name.lower():
-                    self.energy_manager.feed_power_data(
-                        device_id, float(value), timestamp=timestamp
+                if 'water_flow' in reg_lower:
+                    self.energy_manager.feed_water_data(
+                        device_id, num_val, timestamp=timestamp
                     )
-                elif 'energy' in register_name.lower() or 'kwh' in register_name.lower():
+                elif 'gas_flow' in reg_lower:
+                    self.energy_manager.feed_gas_data(
+                        device_id, num_val, timestamp=timestamp
+                    )
+                elif 'energy' in reg_lower or 'kwh' in reg_lower:
                     self.energy_manager.feed_power_data(
-                        device_id, 0, energy_kwh=float(value), timestamp=timestamp
+                        device_id, 0, energy_kwh=num_val, timestamp=timestamp,
+                        register_name=register_name,
+                    )
+                elif (
+                    ('power' in reg_lower or 'watt' in reg_lower)
+                    and 'power_factor' not in reg_lower
+                    and 'reactive_power' not in reg_lower
+                    and 'apparent_power' not in reg_lower
+                ):
+                    self.energy_manager.feed_power_data(
+                        device_id, num_val, timestamp=timestamp
                     )
 
             # OEE — 设备状态和产量
             if self.oee_calculator:
                 if register_name == 'running_status':
                     status_map = {0: 'stopped', 1: 'running', 2: 'fault', 3: 'idle'}
-                    status = status_map.get(int(float(value)))
+                    status = status_map.get(int(round(num_val)))
                     if status is None:
-                        # 未知状态码不能兜底成 running，否则停机/故障设备
-                        # 被计为运行，OEE 可用率虚高。
                         logger.warning(
                             "tsdb_adapter: 未知 running_status 值，本条不记录状态 "
                             "(device=%s, value=%r)", device_id, value)
                         continue
                     self.oee_calculator.update_device_state(device_id, status)
                 elif register_name in ('product_count', 'good_count', 'total_count'):
-                    if register_name == 'product_count':
-                        self.oee_calculator.record_production(device_id, count=int(float(value)))
-                    elif register_name == 'good_count':
-                        self.oee_calculator.record_production(device_id, good_count=int(float(value)))
-                    elif register_name == 'total_count':
-                        # BUG-049：白名单里有 total_count，内层却只有两支 ——
-                        # 只有 total_count 寄存器的设备，OEE 产量恒为 0。
-                        # 口径与 data_collector 一致：total_count 就是 `count`。
-                        self.oee_calculator.record_production(device_id, count=int(float(value)))
+                    int_val = try_int(int(round(num_val)))
+                    if int_val is not None:
+                        if register_name == 'product_count':
+                            self.oee_calculator.record_production(device_id, count=int_val)
+                        elif register_name == 'good_count':
+                            self.oee_calculator.record_production(device_id, good_count=int_val)
+                        elif register_name == 'total_count':
+                            self.oee_calculator.record_production(device_id, count=int_val)
 
     def _write_results(self):
         """将智能层计算结果写回TDengine"""
@@ -455,13 +466,26 @@ class TSDBAdapter:
             with self._lock:
                 device_ids = list(self._registered_devices)
             for device_id in device_ids:
-                power_data = self.energy_manager.realtime_power.get(device_id)
+                em = self.energy_manager
+                em_lock = getattr(em, '_lock', None)
+                lock_ctx = (
+                    em_lock
+                    if em_lock is not None and type(em_lock).__module__ == '_thread'
+                    else contextlib.nullcontext()
+                )
+                with lock_ctx:
+                    rp = getattr(em, 'realtime_power', None)
+                    ea = getattr(em, 'energy_accumulated', None)
+                    raw_pd = rp.get(device_id) if hasattr(rp, 'get') else None
+                    power_data = dict(raw_pd) if isinstance(raw_pd, dict) else None
+                    raw_acc = ea.get(device_id, {}) if hasattr(ea, 'get') else {}
+                    energy_val = raw_acc.get('energy_kwh', 0) if hasattr(raw_acc, 'get') else 0
                 if power_data:
                     record = EnergyRecord(
                         device_id=device_id,
                         timestamp=datetime.now(),
                         power=power_data.get('power_kw', 0),
-                        energy=self.energy_manager.energy_accumulated.get(device_id, {}).get('energy_kwh', 0),
+                        energy=energy_val,
                         voltage=power_data.get('voltage', 0),
                         current=power_data.get('current', 0),
                         power_factor=power_data.get('power_factor', 1.0)
@@ -540,6 +564,7 @@ class RealtimeDataBridge:
             from timeseries.data_models import TelemetryRecord
         self._buffer: list[Any] = []
         self._buffer_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
         self._batch_size = 100
         self._flush_interval = 5.0
 
@@ -615,12 +640,24 @@ class RealtimeDataBridge:
         except ImportError:
             from timeseries.data_models import TelemetryRecord
 
+        if isinstance(value, bool):
+            self.logger.warning("RealtimeDataBridge 拒绝布尔值: %s/%s=%r", device_id, register_name, value)
+            return
+        num_val = try_finite_float(value)
+        if num_val is None:
+            self.logger.warning("RealtimeDataBridge 拒绝非有限值: %s/%s=%r", device_id, register_name, value)
+            return
+        q = 192 if isinstance(quality, bool) else (try_int(quality) if try_int(quality) is not None else 192)
+        ts = timestamp or datetime.now()
+        if isinstance(ts, datetime) and ts.tzinfo is not None:
+            ts = ts.astimezone().replace(tzinfo=None)
+
         record = TelemetryRecord(
             device_id=device_id,
             register_name=register_name,
-            timestamp=timestamp or datetime.now(),
-            value=float(value),
-            quality=quality,
+            timestamp=ts,
+            value=num_val,
+            quality=q,
             unit=unit,
             protocol=protocol,
             gateway_id=gateway_id
@@ -628,10 +665,12 @@ class RealtimeDataBridge:
 
         with self._buffer_lock:
             self._buffer.append(record)
+            should_flush = len(self._buffer) >= self._batch_size
+        with self._stats_lock:
             self.stats['records_received'] += 1
 
         # 检查是否需要刷新
-        if len(self._buffer) >= self._batch_size:
+        if should_flush:
             self._flush_buffer()
 
     def _flush_loop(self):
@@ -643,27 +682,24 @@ class RealtimeDataBridge:
                     self._flush_buffer()
             except Exception as e:
                 self.logger.error(f"刷新异常: {e}")
-                self.stats['errors'] += 1
+                with self._stats_lock:
+                    self.stats['errors'] += 1
 
     def _requeue_to_memory(self, records) -> None:
-        """把写失败的记录放回内存缓冲（**带上限**，溢出丢最旧并计数 + 告警）。
-
-        这是「没有可用离线缓存」时的兜底路径（生产实际走的就是这条 ——
-        `offline_buffer` 在本仓库没有实现，`run.py` 也没注入）。
-        """
+        """把写失败的记录放回内存缓冲（**带上限**，溢出丢最旧并计数 + 告警）。"""
         dropped = 0
         with self._buffer_lock:
-            self._buffer.extend(records)
-            overflow = len(self._buffer) - self._max_buffer_size
+            combined = list(records) + self._buffer
+            overflow = len(combined) - self._max_buffer_size
             if overflow > 0:
-                # 丢最旧：与采集队列 _enqueue_drop_oldest 同一策略
-                del self._buffer[:overflow]
+                del combined[:overflow]
                 dropped = overflow
-                self.stats['dropped_buffer_full'] += overflow
+            self._buffer = combined
 
         if dropped:
-            total = self.stats['dropped_buffer_full']
-            # 首次 + 每跨过 1000 条各报一次，避免长时间断线把日志刷爆
+            with self._stats_lock:
+                self.stats['dropped_buffer_full'] += dropped
+                total = self.stats['dropped_buffer_full']
             if total == dropped or (total - dropped) // 1000 != total // 1000:
                 self.logger.error(
                     "内存回退缓冲已达上限 %d，丢弃最旧 %d 条（累计 %d 条）—— "
@@ -673,24 +709,29 @@ class RealtimeDataBridge:
 
     def _circuit_open(self) -> bool:
         """熔断是否处于打开状态（冷却期内不发起写）。"""
-        return self._clock() < self._circuit_open_until
+        with self._stats_lock:
+            return self._clock() < self._circuit_open_until
 
     def _on_write_failed(self, records, error: str) -> None:
         """统一处理一次写失败：计数、熔断判定、回填重试。"""
-        self.stats['errors'] += 1
-        self.stats['records_requeued'] += len(records)
-        self._last_write_error = error
-        self._fail_streak += 1
+        opened_now = False
+        with self._stats_lock:
+            self.stats['errors'] += 1
+            self.stats['records_requeued'] += len(records)
+            self._last_write_error = error
+            self._fail_streak += 1
+            streak = self._fail_streak
+            if self._fail_streak >= self.CIRCUIT_FAIL_THRESHOLD and self._clock() >= self._circuit_open_until:
+                self._circuit_open_until = self._clock() + self.CIRCUIT_COOLDOWN_S
+                opened_now = True
 
-        if self._fail_streak >= self.CIRCUIT_FAIL_THRESHOLD and not self._circuit_open():
-            self._circuit_open_until = self._clock() + self.CIRCUIT_COOLDOWN_S
+        if opened_now:
             self.logger.error(
                 "TDengine 连续写失败 %d 次 → 熔断 %.0fs（期间不发起写，数据留在内存缓冲，"
                 "不丢弃；最后错误：%s）",
-                self._fail_streak, self.CIRCUIT_COOLDOWN_S, error,
+                streak, self.CIRCUIT_COOLDOWN_S, error,
             )
 
-        # 优先写入离线缓存，否则放回内存缓冲（带上限）
         if self.offline_buffer:
             try:
                 serialized = [{
@@ -726,11 +767,6 @@ class RealtimeDataBridge:
             return
 
         try:
-            # round 291：判据是**返回值**，不是"没抛异常"。
-            # `write_telemetry_batch` 原先失败时只打日志并返回 None，
-            # 这里却无条件 +len(records) → TDengine 挂掉时 `records_written`
-            # 照涨、记录不回填，整条兜底链路（离线缓存/内存回退/溢出告警）
-            # 永远不会被触发 = 时序库静默丢数据。
             ok = self.tdengine.write_telemetry_batch(records)
         except Exception as e:
             self.logger.error(f"写入TDengine失败: {e}")
@@ -738,29 +774,31 @@ class RealtimeDataBridge:
             return
 
         if ok:
-            self.stats['records_written'] += len(records)
-            self._fail_streak = 0
-            self._circuit_open_until = float('-inf')
-            self._last_write_error = None
+            with self._stats_lock:
+                self.stats['records_written'] += len(records)
+                self._fail_streak = 0
+                self._circuit_open_until = float('-inf')
+                self._last_write_error = None
             self.logger.debug(f"写入 {len(records)} 条数据到TDengine")
         else:
-            # 返回假值（False/None）= 没真的写进去。宁可按失败回填重试（可能重复），
-            # 也不能当成功记账（必丢）。
             self.logger.error("写入TDengine失败: 客户端返回失败（未真正写入）")
             self._on_write_failed(records, 'write_telemetry_batch 返回失败')
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
-        stats = self.stats.copy()
-        stats['running'] = self._running
-        stats['buffer_size'] = len(self._buffer)
-        # 熔断与失败链必须可观测：只增不减/只算不报的东西，运维看不见（round 291）。
-        stats['fail_streak'] = self._fail_streak
-        stats['circuit_open'] = self._circuit_open()
-        remaining = self._circuit_open_until - self._clock()
-        stats['circuit_remaining_seconds'] = round(max(0.0, remaining), 3)
-        if self._last_write_error:
-            stats['last_write_error'] = self._last_write_error
+        with self._buffer_lock:
+            buf_size = len(self._buffer)
+        with self._stats_lock:
+            stats = self.stats.copy()
+            stats['running'] = self._running
+            stats['buffer_size'] = buf_size
+            stats['fail_streak'] = self._fail_streak
+            now = self._clock()
+            stats['circuit_open'] = now < self._circuit_open_until
+            remaining = self._circuit_open_until - now
+            stats['circuit_remaining_seconds'] = round(max(0.0, remaining), 3)
+            if self._last_write_error:
+                stats['last_write_error'] = self._last_write_error
         return stats
 
 

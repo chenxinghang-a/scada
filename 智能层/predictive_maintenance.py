@@ -143,16 +143,23 @@ class PredictiveMaintenance:
         # 原来只挡 None：一个 NaN 混进滑动窗口后，后续 100 次回归计算
         # 全部变成 NaN（健康分恒为 NaN，看板显示"--"且永不恢复）。
         # 与 SPCAnalyzer / VibrationAnalyzer 的入口守卫保持同一口径。
+        if isinstance(value, bool):
+            return
         value = try_finite_float(value)
         if value is None:
             return
         key = f"{device_id}:{register_name}"
-        ts = timestamp or datetime.now()
-        if isinstance(ts, str):
+        if timestamp is None or isinstance(timestamp, bool):
+            ts = datetime.now()
+        elif isinstance(timestamp, datetime):
+            ts = timestamp
+        elif isinstance(timestamp, str):
             try:
-                ts = datetime.fromisoformat(ts)
+                ts = datetime.fromisoformat(timestamp)
             except (ValueError, TypeError):
                 ts = datetime.now()
+        else:
+            ts = datetime.now()
 
         with self._lock:
             self.data_windows[key].append({
@@ -217,9 +224,11 @@ class PredictiveMaintenance:
                     device_id, register_name, window, trend
                 )
 
-                # 缓存结果
+                # 缓存结果（先确认设备点位未被 forget_device 删除，避免幽灵复活）
                 score_key = f"{device_id}:{register_name}"
                 with self._lock:
+                    if key not in self.data_windows:
+                        continue
                     self.health_scores[score_key] = {
                         'device_id': device_id,
                         'register_name': register_name,
@@ -622,9 +631,27 @@ class PredictiveMaintenance:
 
     def set_threshold(self, key: str, upper: float | None = None, lower: float | None = None):
         """设置设备阈值（用于故障预测）"""
-        self.thresholds[key] = {}
+        upper_v: float | None = None
+        lower_v: float | None = None
         if upper is not None:
-            self.thresholds[key]['upper'] = upper
+            if isinstance(upper, bool):
+                raise ValueError(f'upper 阈值不能为 bool: {upper!r}')
+            upper_v = try_finite_float(upper)
+            if upper_v is None:
+                raise ValueError(f'upper 阈值必须为有限数: {upper!r}')
         if lower is not None:
-            self.thresholds[key]['lower'] = lower
-        logger.info(f"设置阈值 {key}: upper={upper}, lower={lower}")
+            if isinstance(lower, bool):
+                raise ValueError(f'lower 阈值不能为 bool: {lower!r}')
+            lower_v = try_finite_float(lower)
+            if lower_v is None:
+                raise ValueError(f'lower 阈值必须为有限数: {lower!r}')
+        if upper_v is not None and lower_v is not None and upper_v <= lower_v:
+            raise ValueError(f'upper({upper_v}) 必须大于 lower({lower_v})')
+
+        with self._lock:
+            self.thresholds[key] = {}
+            if upper_v is not None:
+                self.thresholds[key]['upper'] = upper_v
+            if lower_v is not None:
+                self.thresholds[key]['lower'] = lower_v
+        logger.info(f"设置阈值 {key}: upper={upper_v}, lower={lower_v}")

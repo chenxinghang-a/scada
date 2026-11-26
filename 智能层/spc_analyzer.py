@@ -138,9 +138,12 @@ class SPCAnalyzer:
         num = None if isinstance(value, bool) else try_finite_float(value)
         if num is None:
             now = time.time()
-            last = self._nonfinite_warn_at.get(key, 0.0)
-            if now - last >= 60.0:  # 同一 key 每分钟只记一条，避免污染源刷爆日志
-                self._nonfinite_warn_at[key] = now
+            with self._lock:
+                last = self._nonfinite_warn_at.get(key, 0.0)
+                should_log = (now - last >= 60.0)
+                if should_log:
+                    self._nonfinite_warn_at[key] = now
+            if should_log:
                 logger.warning(
                     "SPC 拒绝非有限测量值 %s=%r（register=%s），本次不入缓冲",
                     device_id, value, register_name,
@@ -184,18 +187,21 @@ class SPCAnalyzer:
         if usl_v is not None and lsl_v is not None and usl_v <= lsl_v:
             raise ValueError(f'Invalid spec limits: usl({usl_v}) 必须大于 lsl({lsl_v})')
 
-        self.spec_limits[key] = {
-            'usl': usl_v,
-            'lsl': lsl_v,
-            'target': target_v,
-        }
+        with self._lock:
+            self.spec_limits[key] = {
+                'usl': usl_v,
+                'lsl': lsl_v,
+                'target': target_v,
+            }
         logger.info(f"SPC规格限设置 {key}: USL={usl_v}, LSL={lsl_v}, Target={target_v}")
 
     @staticmethod
     def _spec_value(value: float | None, name: str) -> float | None:
-        """规格限入参归一化：None 原样返回，非有限值抛 ValueError。"""
+        """规格限入参归一化：None 原样返回，bool 或非有限值抛 ValueError。"""
         if value is None:
             return None
+        if isinstance(value, bool):
+            raise ValueError(f'Invalid {name}: bool {value!r} is not accepted')
         num = try_finite_float(value)
         if num is None:
             raise ValueError(f'Invalid {name}: must be a finite number (收到 {value!r})')
@@ -560,23 +566,24 @@ class SPCAnalyzer:
         Cpk < 1.00: 不合格
         """
         key = f"{device_id}:{register_name}"
-        spec = self.spec_limits.get(key)
+        with self._lock:
+            raw_spec = self.spec_limits.get(key)
+            spec = dict(raw_spec) if isinstance(raw_spec, dict) else None
+            cl_data = dict(self.control_limits.get(key, {}))
 
         if not spec or spec.get('usl') is None or spec.get('lsl') is None:
             return None
 
-        # 清单 046：`config['spec_limits']` 是**配置直读**的（YAML 的 `.nan`/`.inf`
-        # 是规范内字面量），不经过 set_spec_limits 的校验。这里再收一次口，
-        # 否则 usl-lsl 为 NaN → Cp/Cpk/PPM 全部 NaN 并原样写进看板。
-        usl = try_finite_float(spec['usl'])
-        lsl = try_finite_float(spec['lsl'])
+        raw_usl, raw_lsl, raw_target = spec['usl'], spec['lsl'], spec.get('target')
+        usl = None if isinstance(raw_usl, bool) else try_finite_float(raw_usl)
+        lsl = None if isinstance(raw_lsl, bool) else try_finite_float(raw_lsl)
         if usl is None or lsl is None or usl <= lsl:
             logger.warning("SPC 规格限非法，跳过过程能力计算: %s (USL=%r, LSL=%r)",
                            key, spec.get('usl'), spec.get('lsl'))
             return None
 
         # `target` 允许缺省；缺省（或旧版本写入的 None）时按 (USL+LSL)/2 兜底。
-        target = try_finite_float(spec.get('target'))
+        target = None if isinstance(raw_target, bool) else try_finite_float(raw_target)
         if target is None:
             target = (usl + lsl) / 2
 
@@ -593,10 +600,6 @@ class SPCAnalyzer:
         sigma_total = math.sqrt(variance) if variance > 0 else 0
 
         # 组内标准差（从控制图获取）
-        # 清单 046：X̄-S 图现在会写入 control_limits，这里必须一并识别 ——
-        # 否则 n>10 只能走 S 图时永远命中不到 'r_chart'，σ_within 退化成
-        # σ_total，Cp/Cpk 与 Pp/Ppk 变成同一组数（能力被系统性高估）。
-        cl_data = self.control_limits.get(key, {})
         if 'r_chart' in cl_data:
             r_bar = try_finite_float(cl_data['r_chart'].get('cl'))
             d2_table = {2: 1.128, 3: 1.693, 4: 2.059, 5: 2.326,

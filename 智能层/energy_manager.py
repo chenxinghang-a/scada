@@ -30,7 +30,7 @@ from collections import defaultdict
 import yaml
 import paths
 
-from core.safe_numeric import to_finite_float
+from core.safe_numeric import to_finite_float, try_finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -541,11 +541,21 @@ class EnergyManager:
         #   漏了这一个；当时的判据是"按 device_id 存储的容器"，这里正是。）
         # round 369：持锁清理（采集/统计线程同时在读写这几个容器）
         with self._lock:
+            prefix = f'{device_id}:'
             for container in (self.realtime_power, self._last_energy_reading,
                               self.energy_baseline, self.energy_accumulated,
                               self._pending_rollover):
                 if device_id in container:
                     container.pop(device_id, None)
+                    removed = True
+                for comp_k in [k for k in list(container)
+                               if isinstance(k, str) and k.startswith(prefix)]:
+                    container.pop(comp_k, None)
+                    removed = True
+            for suffix in ('_water', '_gas'):
+                k_sub = f'{device_id}{suffix}'
+                if k_sub in self.realtime_power:
+                    self.realtime_power.pop(k_sub, None)
                     removed = True
         if removed:
             logger.info("能耗管理器已清理已删除设备的状态: %s", device_id)
@@ -591,37 +601,30 @@ class EnergyManager:
         建基线，午夜前后那一段用电量就永久丢了（每台表每天丢一段）。
         """
         today = self._today()
-        if today == self._window_date:
-            return False
         with self._lock:
+            if today == self._window_date:
+                return False
+            prev_date = self._window_date
             self.energy_accumulated.clear()
             self.shift_records.clear()
+            self._window_date = today
         logger.warning(
             "能耗累计已跨日重置：%s → %s（电表读数基线保留，跨日增量计入新一天）",
-            self._window_date, today)
-        self._window_date = today
+            prev_date, today)
         self._persist_accumulated(force=True)
         return True
 
     def _persist_accumulated(self, force: bool = False) -> bool:
-        """把累计量与电表基线落库（节流）。返回是否真的写了（round 320）。
-
-        没有 `system_state` 能力的 database（老库 / 测试里的 MagicMock）时直接跳过 ——
-        能耗统计是**附加能力**，不能因为它让采集链路报错。
-        """
+        """把累计量与电表基线落库（节流）。返回是否真的写了（round 320）。"""
         db = getattr(self, 'database', None)
         if db is None or not hasattr(db, 'set_system_state'):
             return False
 
         now_mono = time.monotonic()
-        # ⚠️ 初值必须是 `-inf` 而不是 `0`：`monotonic()` 在 Windows 上是
-        # "开机以来的秒数"，开机不足 30 秒的机器上 `now - 0 < 30` 成立，
-        # 首帧落库会被静默吞掉（CI runner 每次都是全新开机）。
-        if not force and (now_mono - self._last_persist_mono) < self.PERSIST_INTERVAL_S:
-            return False
-        self._last_persist_mono = now_mono
-
         with self._lock:
+            if not force and (now_mono - self._last_persist_mono) < self.PERSIST_INTERVAL_S:
+                return False
+            self._last_persist_mono = now_mono
             payload = {
                 'date': self._window_date.isoformat(),
                 'devices': {did: {k: acc.get(k, 0) for k in self.ACCUM_FIELDS}
@@ -654,9 +657,13 @@ class EnergyManager:
 
         readings = data.get('last_readings')
         if isinstance(readings, dict):
-            for did, value in readings.items():
-                if isinstance(value, (int, float)):
-                    self._last_energy_reading[did] = float(value)
+            with self._lock:
+                for did, value in readings.items():
+                    if isinstance(value, bool):
+                        continue
+                    fval = try_finite_float(value)
+                    if fval is not None and fval >= 0:
+                        self._last_energy_reading[did] = fval
 
         stored_date = data.get('date')
         today_iso = self._today().isoformat()
@@ -672,15 +679,19 @@ class EnergyManager:
         if not isinstance(devices, dict):
             return 0
         restored = 0
-        for did, acc in devices.items():
-            if not isinstance(acc, dict):
-                continue
-            target = self.energy_accumulated[did]      # defaultdict 自动建条目
-            for field in self.ACCUM_FIELDS:
-                value = acc.get(field, 0)
-                if isinstance(value, (int, float)):
-                    target[field] = float(value)
-            restored += 1
+        with self._lock:
+            for did, acc in devices.items():
+                if not isinstance(acc, dict):
+                    continue
+                target = self.energy_accumulated[did]      # defaultdict 自动建条目
+                for field in self.ACCUM_FIELDS:
+                    value = acc.get(field, 0)
+                    if isinstance(value, bool):
+                        continue
+                    fval = try_finite_float(value)
+                    if fval is not None and fval >= 0:
+                        target[field] = fval
+                restored += 1
         if restored:
             logger.warning(
                 "已从数据库恢复 %d 台设备的**今日**能耗累计（重启不再归零）",
@@ -688,7 +699,8 @@ class EnergyManager:
         return restored
 
     def feed_power_data(self, device_id: str, power_kw: float,
-                         energy_kwh: float | None = None, timestamp: datetime | None = None):
+                         energy_kwh: float | None = None, timestamp: datetime | None = None,
+                         register_name: str | None = None):
         """
         喂入电力数据
 
@@ -702,67 +714,84 @@ class EnergyManager:
             power_kw: 实时功率 (kW)
             energy_kwh: 累积电量读数 (kWh)，可选
             timestamp: 时间戳
+            register_name: 可选点位名，存在时将多路累计电量表基线按点位隔离
         """
+        if isinstance(power_kw, bool):
+            logger.warning("能源管理拒绝布尔功率值: %s=%r", device_id, power_kw)
+            return
+        p_val = try_finite_float(power_kw)
+        if p_val is None or p_val < 0:
+            logger.warning("能源管理拒绝非法/负功率: %s=%r", device_id, power_kw)
+            return
+
+        e_val: float | None = None
+        if energy_kwh is not None:
+            if isinstance(energy_kwh, bool):
+                logger.warning("能源管理拒绝布尔电量读数: %s=%r", device_id, energy_kwh)
+                return
+            e_val = try_finite_float(energy_kwh)
+            if e_val is None or e_val < 0:
+                logger.warning("能源管理拒绝非法/负电量读数: %s=%r", device_id, energy_kwh)
+                return
+
         now = timestamp or datetime.now()
+        if isinstance(now, datetime) and now.tzinfo is not None:
+            now = now.astimezone().replace(tzinfo=None)
         self._rollover_if_new_day()
 
+        reading_key = f'{device_id}:{register_name}' if register_name else device_id
         with self._lock:
-            if energy_kwh is not None:
+            if e_val is not None:
                 # 累积电量路径：增量 = 本次读数 - 上次读数
-                last_reading = self._last_energy_reading.get(device_id)
+                last_reading = self._last_energy_reading.get(reading_key)
                 if last_reading is None:
-                    self._last_energy_reading[device_id] = energy_kwh
-                    logger.debug(f"电量基线建立: {device_id} = {energy_kwh}kWh")
-                elif energy_kwh >= last_reading:
-                    # 正常递增：累加，并清掉回退候选计数
-                    self._pending_rollover.pop(device_id, None)
-                    self._last_energy_reading[device_id] = energy_kwh
-                    delta_kwh = energy_kwh - last_reading
+                    self._last_energy_reading[reading_key] = e_val
+                    logger.debug(f"电量基线建立: {reading_key} = {e_val}kWh")
+                elif e_val >= last_reading:
+                    self._pending_rollover.pop(reading_key, None)
+                    self._last_energy_reading[reading_key] = e_val
+                    delta_kwh = e_val - last_reading
                     tariff_type = self._get_tariff_type(now.hour)
                     self.energy_accumulated[device_id]['energy_kwh'] += delta_kwh
                     self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
                 else:
-                    # 读数回退：单帧跌落（丢包读成 0）与真换表/回绕要分开。
-                    # 只有连续 `_ROLLOVER_CONFIRM_FRAMES` 帧都低于旧基线才改写基线；
-                    # 否则保留旧基线不动 —— 这样下一帧读数恢复正常时增量仍然正确。
-                    pending = self._pending_rollover.get(device_id, 0) + 1
+                    pending = self._pending_rollover.get(reading_key, 0) + 1
                     if pending >= _ROLLOVER_CONFIRM_FRAMES:
-                        self._pending_rollover.pop(device_id, None)
-                        self._last_energy_reading[device_id] = energy_kwh
+                        self._pending_rollover.pop(reading_key, None)
+                        self._last_energy_reading[reading_key] = e_val
                         logger.warning(
                             f"电量读数持续回退（已连续 {pending} 帧），判定为换表/回绕，"
-                            f"基线重置: {device_id} {last_reading}kWh -> {energy_kwh}kWh，本次不累加"
+                            f"基线重置: {reading_key} {last_reading}kWh -> {e_val}kWh，本次不累加"
                         )
                     else:
-                        self._pending_rollover[device_id] = pending
+                        self._pending_rollover[reading_key] = pending
                         logger.warning(
-                            f"电量读数回退（疑似单帧跌落，已忽略并保留基线）: {device_id} "
-                            f"{last_reading}kWh -> {energy_kwh}kWh ({pending}/{_ROLLOVER_CONFIRM_FRAMES})"
+                            f"电量读数回退（疑似单帧跌落，已忽略并保留基线）: {reading_key} "
+                            f"{last_reading}kWh -> {e_val}kWh ({pending}/{_ROLLOVER_CONFIRM_FRAMES})"
                         )
 
-            # 实时功率路径：energy_kwh 单独上报（power_kw=0）时不覆盖功率读数
-            if energy_kwh is None or power_kw > 0:
+            # 实时功率路径：energy_kwh 单独上报（power_kw=0）时不覆盖功率读数；时间戳倒序时不覆盖新帧
+            if e_val is None or p_val > 0:
                 old = self.realtime_power.get(device_id, {})
-                old_power = old.get('power_kw', 0)
+                old_ts = old.get('timestamp')
+                if old_ts is not None and now < old_ts:
+                    logger.warning(
+                        "实时功率时间戳倒序，跳过过期帧: %s (%s < %s)",
+                        device_id, now, old_ts,
+                    )
+                else:
+                    old_power = old.get('power_kw', 0)
+                    self.realtime_power[device_id] = {
+                        'power_kw': p_val,
+                        'timestamp': now,
+                    }
 
-                self.realtime_power[device_id] = {
-                    'power_kw': power_kw,
-                    'timestamp': now,
-                }
-
-                # 梯形积分：增量 = (P0 + P1) / 2 × Δt
-                if old_power > 0 and 'timestamp' in old:
-                    dt_hours = (now - old['timestamp']).total_seconds() / 3600
-                    if dt_hours > 0:
-                        avg_power = (old_power + power_kw) / 2
-                        delta_kwh = avg_power * dt_hours
-                        # round 320：**同一次调用里既有累积读数又有功率时，只按累积读数算**。
-                        # 两者是同一个物理量的两个通道，都加就是重复计 ——
-                        # 实测：读数 1000→1250（真实 250 kWh），同时给 50/52 kW，
-                        # 结果累计成 301 kWh（多算 51）。
-                        # 累积读数是**精确值**，功率积分是**近似值**，有精确值时不该再叠加近似值。
-                        # 功率仍要更新 `realtime_power`（"总功率"看板靠它）。
-                        if energy_kwh is None:
+                    # 梯形积分：增量 = (P0 + P1) / 2 × Δt
+                    if old_power > 0 and old_ts is not None:
+                        dt_hours = (now - old_ts).total_seconds() / 3600
+                        if dt_hours > 0 and e_val is None:
+                            avg_power = (old_power + p_val) / 2
+                            delta_kwh = avg_power * dt_hours
                             tariff_type = self._get_tariff_type(now.hour)
                             self.energy_accumulated[device_id]['energy_kwh'] += delta_kwh
                             self.energy_accumulated[device_id][f'{tariff_type}_kwh'] += delta_kwh
@@ -771,50 +800,64 @@ class EnergyManager:
 
     def feed_water_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
         """
-        喂入水表数据
-
-        瞬时流量(m³/h) × Δt(h) 得到用量增量。Δt 必须为正：
-        时间戳倒序（乱序数据/时钟回拨）时 dt <= 0，若直接相乘会**负累加**
-        （把已统计的用水量抹掉），因此这里与电力路径一致地做 dt 保护。
+        喂入水表数据（Δt 保护 + 非有限/负值过滤）
         """
+        if isinstance(flow_m3h, bool):
+            return
+        flow = try_finite_float(flow_m3h)
+        if flow is None or flow < 0:
+            return
         now = timestamp or datetime.now()
+        if isinstance(now, datetime) and now.tzinfo is not None:
+            now = now.astimezone().replace(tzinfo=None)
         self._rollover_if_new_day()
         with self._lock:
             old = self.realtime_power.get(f"{device_id}_water", {})
-            if old and 'timestamp' in old:
-                dt_hours = (now - old['timestamp']).total_seconds() / 3600
-                if dt_hours > 0:
-                    self.energy_accumulated[device_id]['water_m3'] += flow_m3h * dt_hours
-                else:
-                    logger.warning(
-                        "水表时间戳非递增: %s Δt=%.3fh，本次不累加（避免负增量）",
-                        device_id, dt_hours,
-                    )
-            self.realtime_power[f"{device_id}_water"] = {
-                'flow_m3h': flow_m3h,
-                'timestamp': now,
-            }
+            old_ts = old.get('timestamp')
+            if old_ts is not None and now < old_ts:
+                logger.warning(
+                    "水表时间戳非递增: %s Δt=%.3fh，本次不累加（避免负增量）",
+                    device_id, (now - old_ts).total_seconds() / 3600,
+                )
+            else:
+                if old_ts is not None:
+                    dt_hours = (now - old_ts).total_seconds() / 3600
+                    if dt_hours > 0:
+                        self.energy_accumulated[device_id]['water_m3'] += flow * dt_hours
+                self.realtime_power[f"{device_id}_water"] = {
+                    'flow_m3h': flow,
+                    'timestamp': now,
+                }
         self._persist_accumulated()
 
     def feed_gas_data(self, device_id: str, flow_m3h: float, timestamp: datetime | None = None):
-        """喂入气表数据（Δt 保护同 feed_water_data，避免乱序数据导致负累加）"""
+        """喂入气表数据（Δt 保护 + 非有限/负值过滤）"""
+        if isinstance(flow_m3h, bool):
+            return
+        flow = try_finite_float(flow_m3h)
+        if flow is None or flow < 0:
+            return
         now = timestamp or datetime.now()
+        if isinstance(now, datetime) and now.tzinfo is not None:
+            now = now.astimezone().replace(tzinfo=None)
         self._rollover_if_new_day()
         with self._lock:
             old = self.realtime_power.get(f"{device_id}_gas", {})
-            if old and 'timestamp' in old:
-                dt_hours = (now - old['timestamp']).total_seconds() / 3600
-                if dt_hours > 0:
-                    self.energy_accumulated[device_id]['gas_m3'] += flow_m3h * dt_hours
-                else:
-                    logger.warning(
-                        "气表时间戳非递增: %s Δt=%.3fh，本次不累加（避免负增量）",
-                        device_id, dt_hours,
-                    )
-            self.realtime_power[f"{device_id}_gas"] = {
-                'flow_m3h': flow_m3h,
-                'timestamp': now,
-            }
+            old_ts = old.get('timestamp')
+            if old_ts is not None and now < old_ts:
+                logger.warning(
+                    "气表时间戳非递增: %s Δt=%.3fh，本次不累加（避免负增量）",
+                    device_id, (now - old_ts).total_seconds() / 3600,
+                )
+            else:
+                if old_ts is not None:
+                    dt_hours = (now - old_ts).total_seconds() / 3600
+                    if dt_hours > 0:
+                        self.energy_accumulated[device_id]['gas_m3'] += flow * dt_hours
+                self.realtime_power[f"{device_id}_gas"] = {
+                    'flow_m3h': flow,
+                    'timestamp': now,
+                }
         self._persist_accumulated()
 
     def set_baseline(self, device_id: str, daily_kwh: float):
@@ -838,8 +881,8 @@ class EnergyManager:
         """获取实时功率"""
         with self._lock:
             if device_id:
-                return self.realtime_power.get(device_id, {})
-            return dict(self.realtime_power)
+                return dict(self.realtime_power.get(device_id, {}))
+            return {k: dict(v) for k, v in self.realtime_power.items()}
 
     def get_total_power(self) -> float:
         """获取全厂总功率 (kW)"""
@@ -851,41 +894,26 @@ class EnergyManager:
             return round(total, 2)
 
     def get_energy_summary(self, device_id: str | None = None) -> dict[str, Any]:
-        """
-        获取能耗汇总
-
-        Returns:
-            {
-                'total_energy_kwh': float,
-                'peak_kwh': float,
-                'flat_kwh': float,
-                'valley_kwh': float,
-                'electricity_cost': float,  # 电费(元)
-                'carbon_emission_kg': float,  # 碳排放(kg)
-                'water_m3': float,
-                'gas_m3': float,
-                'tariff_rates': dict,  # 当前电价
-            }
-        """
+        """获取能耗汇总"""
         self._rollover_if_new_day()      # round 320：读之前先确保窗口是"今天"
         with self._lock:
             if device_id:
                 data = dict(self.energy_accumulated.get(device_id, {}))
             else:
-                # 汇总所有设备
                 data = {'energy_kwh': 0, 'peak_kwh': 0, 'flat_kwh': 0,
                         'valley_kwh': 0, 'water_m3': 0, 'gas_m3': 0, 'steam_ton': 0}
                 for d in self.energy_accumulated.values():
                     for k in data:
                         data[k] += d.get(k, 0)
+            tariff_snap = dict(self.tariff)
+            carbon_factor = self.carbon_factor
+            window_date_iso = self._window_date.isoformat()
 
-        # 计算电费
-        cost = (data.get('peak_kwh', 0) * self.tariff['peak'] +
-                data.get('flat_kwh', 0) * self.tariff['flat'] +
-                data.get('valley_kwh', 0) * self.tariff['valley'])
+        cost = (data.get('peak_kwh', 0) * tariff_snap['peak'] +
+                data.get('flat_kwh', 0) * tariff_snap['flat'] +
+                data.get('valley_kwh', 0) * tariff_snap['valley'])
 
-        # 碳排放
-        carbon = data.get('energy_kwh', 0) * self.carbon_factor
+        carbon = data.get('energy_kwh', 0) * carbon_factor
 
         return {
             'total_energy_kwh': round(data.get('energy_kwh', 0), 2),
@@ -896,44 +924,40 @@ class EnergyManager:
             'carbon_emission_kg': round(carbon, 2),
             'water_m3': round(data.get('water_m3', 0), 2),
             'gas_m3': round(data.get('gas_m3', 0), 2),
-            'tariff_rates': dict(self.tariff),
-            # round 320：把口径写进返回值 —— 这个数是「今天」的，不是"自启动以来"。
-            # 不写清楚，前端标"总能耗"就会被理解成累计总量。
+            'tariff_rates': tariff_snap,
             'window': 'today',
-            'window_date': self._window_date.isoformat(),
+            'window_date': window_date_iso,
         }
 
     def get_energy_cost_breakdown(self) -> dict[str, Any]:
         """获取电费分时明细"""
-        # BUG-048：读之前必须先切日。原来只有 `feed_*` 与 `get_energy_summary`
-        # 会 rollover，这里直接读 → 采集中断/停线跨日后，本接口返回**昨天**的
-        # 分时合计，与「能耗汇总（今日）」两个接口的数字互相矛盾。
         self._rollover_if_new_day()
         with self._lock:
             peak_total = sum(d.get('peak_kwh', 0) for d in self.energy_accumulated.values())
             flat_total = sum(d.get('flat_kwh', 0) for d in self.energy_accumulated.values())
             valley_total = sum(d.get('valley_kwh', 0) for d in self.energy_accumulated.values())
+            tariff_snap = dict(self.tariff)
 
         return {
             'peak': {
                 'kwh': round(peak_total, 2),
-                'rate': self.tariff['peak'],
-                'cost': round(peak_total * self.tariff['peak'], 2),
+                'rate': tariff_snap['peak'],
+                'cost': round(peak_total * tariff_snap['peak'], 2),
             },
             'flat': {
                 'kwh': round(flat_total, 2),
-                'rate': self.tariff['flat'],
-                'cost': round(flat_total * self.tariff['flat'], 2),
+                'rate': tariff_snap['flat'],
+                'cost': round(flat_total * tariff_snap['flat'], 2),
             },
             'valley': {
                 'kwh': round(valley_total, 2),
-                'rate': self.tariff['valley'],
-                'cost': round(valley_total * self.tariff['valley'], 2),
+                'rate': tariff_snap['valley'],
+                'cost': round(valley_total * tariff_snap['valley'], 2),
             },
             'total_cost': round(
-                peak_total * self.tariff['peak'] +
-                flat_total * self.tariff['flat'] +
-                valley_total * self.tariff['valley'], 2
+                peak_total * tariff_snap['peak'] +
+                flat_total * tariff_snap['flat'] +
+                valley_total * tariff_snap['valley'], 2
             ),
         }
 
@@ -941,12 +965,14 @@ class EnergyManager:
         """获取碳排放数据"""
         summary = self.get_energy_summary()
         energy_mwh = summary['total_energy_kwh'] / 1000
+        with self._lock:
+            factor = self.carbon_factor
 
         return {
             'total_emission_kg': summary['carbon_emission_kg'],
             'total_emission_ton': round(summary['carbon_emission_kg'] / 1000, 4),
             'energy_mwh': round(energy_mwh, 4),
-            'factor_kg_per_kwh': self.carbon_factor,
+            'factor_kg_per_kwh': factor,
             'equivalent_trees': round(summary['carbon_emission_kg'] / 21.77, 1),
         }
 
@@ -960,7 +986,9 @@ class EnergyManager:
         Returns:
             碳排放量 (kgCO2)
         """
-        return energy_kwh * self.carbon_factor
+        with self._lock:
+            factor = self.carbon_factor
+        return energy_kwh * factor
 
     def get_energy_efficiency(self, production_count: int = 0,
                                 production_value: float = 0) -> dict[str, Any]:

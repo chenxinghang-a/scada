@@ -284,18 +284,20 @@ class VibrationAnalyzer:
             with self._lock:
                 self._update_score(device_id)
                 score = self._scores.get(device_id)
-
-            if not score:
-                continue
-            rms = score['rms']
-            if rms >= self._alarm_threshold and device_id not in self._alerted:
-                self._alerted.add(device_id)
+                if not score:
+                    continue
+                rms = score['rms']
+                triggered = False
+                if rms >= self._alarm_threshold and device_id not in self._alerted:
+                    self._alerted.add(device_id)
+                    triggered = True
+                elif rms < self._warning_threshold:
+                    self._alerted.discard(device_id)
+            if triggered:
                 logger.error(
                     "振动超标告警: %s RMS=%.2fmm/s (阈值 %.2f) 等级=%s",
                     device_id, rms, self._alarm_threshold, score['zone'],
                 )
-            elif rms < self._warning_threshold:
-                self._alerted.discard(device_id)
         return device_ids
 
     def feed_data(self, device_id: str, register_name: str,
@@ -328,10 +330,18 @@ class VibrationAnalyzer:
             logger.warning("振动分析拒绝非有限测量值: %s/%s=%r", device_id, register_name, value)
             return
 
-        if timestamp is None:
-            timestamp = datetime.now()
-
-        ts = timestamp.timestamp() if hasattr(timestamp, 'timestamp') else float(timestamp)
+        if timestamp is None or isinstance(timestamp, bool):
+            ts = datetime.now().timestamp()
+        elif isinstance(timestamp, datetime):
+            ts = timestamp.timestamp()
+        elif isinstance(timestamp, str):
+            try:
+                ts = datetime.fromisoformat(timestamp).timestamp()
+            except (ValueError, TypeError):
+                ts = datetime.now().timestamp()
+        else:
+            ts_num = try_finite_float(timestamp)
+            ts = ts_num if ts_num is not None else datetime.now().timestamp()
 
         rate = self._validate_sample_rate(sample_rate)
 
@@ -567,6 +577,13 @@ class VibrationAnalyzer:
             - 频谱不可用（采样率未知）：'diagnosis' 明确说明判定已跳过，不做假判断
             - 无数据：None
         """
+        if isinstance(rpm, bool):
+            return None
+        rpm_val = try_finite_float(rpm)
+        if rpm_val is None or rpm_val <= 0:
+            logger.warning("轴承故障判定跳过（设备 %s）: 非法转速 rpm=%r", device_id, rpm)
+            return None
+
         spectrum = self.get_spectrum(device_id)
         if not spectrum:
             return None
@@ -576,7 +593,7 @@ class VibrationAnalyzer:
             logger.warning("轴承故障判定跳过（设备 %s）: %s", device_id, spectrum.get('reason'))
             return {
                 'device_id': device_id,
-                'rpm': rpm,
+                'rpm': rpm_val,
                 'available': False,
                 'reason': spectrum.get('reason'),
                 'bearing_faults': {},
@@ -586,7 +603,7 @@ class VibrationAnalyzer:
             }
 
         # 转速频率（Hz）
-        shaft_freq = rpm / 60.0
+        shaft_freq = rpm_val / 60.0
 
         fft_data = spectrum['spectrum']
         frequencies = fft_data.get('frequencies', [])
@@ -627,7 +644,7 @@ class VibrationAnalyzer:
 
         return {
             'device_id': device_id,
-            'rpm': rpm,
+            'rpm': rpm_val,
             'shaft_frequency_hz': round(shaft_freq, 2),
             'bearing_faults': fault_results,
             'fault_count': fault_count,

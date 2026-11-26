@@ -22,6 +22,8 @@ from datetime import datetime, timedelta
 from typing import Any
 from collections import defaultdict
 
+from core.safe_numeric import try_finite_float, try_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,8 +135,8 @@ class OEECalculator:
             old_status = old_state.get('status')
             old_since = old_state.get('since', now)
 
-            # 计算上一个状态的持续时间
-            duration = (now - old_since).total_seconds()
+            # 计算上一个状态的持续时间（防止 NTP 时钟回拨出现负值）
+            duration = max(0.0, (now - old_since).total_seconds())
 
             # 更新状态时间统计
             sd = self.shift_data[device_id]
@@ -179,11 +181,20 @@ class OEECalculator:
                 if device_id in container:
                     container.pop(device_id, None)
                     removed = True
+            prefix = f'{device_id}:'
+            for k in [key for key in list(self._last_production)
+                      if (isinstance(key, tuple) and len(key) >= 1 and key[0] == device_id)
+                      or (isinstance(key, str) and key.startswith(prefix))]:
+                self._last_production.pop(k, None)
+                removed = True
         if removed:
             logger.info("OEE 已清理已删除设备的状态: %s", device_id)
         return removed
 
-    def record_production(self, device_id: str, count: int | None = None, good_count: int | None = None):
+    def record_production(self, device_id: str, count: int | None = None,
+                          good_count: int | None = None,
+                          reject_count: int | None = None,
+                          register_name: str | None = None):
         """
         记录产量（支持绝对值和增量两种模式）
 
@@ -191,31 +202,58 @@ class OEECalculator:
             device_id: 设备ID
             count: 总产量（绝对值，自动计算增量）
             good_count: 合格品数（绝对值，自动计算增量）
+            reject_count: 不良品/废品计数（与 total_count 分开建基线，不混入总产量）
+            register_name: 可选点位名，用于多产量寄存器按点位隔离基线
         """
+        def _valid_nonneg(val: Any, label: str) -> int | None:
+            if val is None:
+                return None
+            if isinstance(val, bool):
+                logger.warning("OEE %s 拒绝布尔值: %s=%r", label, device_id, val)
+                return None
+            fval = try_finite_float(val)
+            if fval is None or fval < 0:
+                logger.warning("OEE %s 拒绝非法/负值: %s=%r", label, device_id, val)
+                return None
+            ival = try_int(int(round(fval)))
+            return ival
+
         with self._lock:
             sd = self.shift_data[device_id]
-            # 确保_last_production中存在该设备的记录，且包含count和good两个键
-            if device_id not in self._last_production:
-                self._last_production[device_id] = {'count': 0, 'good': 0}
-            last = self._last_production[device_id]
+            prod_key = f'{device_id}:{register_name}' if register_name else device_id
+            if prod_key not in self._last_production:
+                self._last_production[prod_key] = {'count': 0, 'good': 0, 'reject': 0}
+            last = self._last_production[prod_key]
 
             if count is not None:
-                # 计算增量（处理计数器归零的情况）
-                delta = count - last.get('count', 0)
-                if delta < 0:
-                    delta = count  # 计数器归零
-                sd['total_count'] += max(0, delta)
-                self._last_production[device_id]['count'] = count
+                c_val = _valid_nonneg(count, 'count')
+                if c_val is not None:
+                    delta = c_val - last.get('count', 0)
+                    if delta < 0:
+                        delta = c_val  # 计数器归零
+                    sd['total_count'] += max(0, delta)
+                    last['count'] = c_val
 
             if good_count is not None:
-                delta = good_count - last.get('good', 0)
-                if delta < 0:
-                    delta = good_count
-                sd['good_count'] += max(0, delta)
-                self._last_production[device_id]['good'] = good_count
+                g_val = _valid_nonneg(good_count, 'good_count')
+                if g_val is not None:
+                    delta = g_val - last.get('good', 0)
+                    if delta < 0:
+                        delta = g_val
+                    sd['good_count'] += max(0, delta)
+                    last['good'] = g_val
+
+            if reject_count is not None:
+                r_val = _valid_nonneg(reject_count, 'reject_count')
+                if r_val is not None:
+                    delta = r_val - last.get('reject', 0)
+                    if delta < 0:
+                        delta = r_val
+                    sd['reject_count'] = sd.get('reject_count', 0) + max(0, delta)
+                    last['reject'] = r_val
 
             # 如果没有传入任何参数，默认+1
-            if count is None and good_count is None:
+            if count is None and good_count is None and reject_count is None:
                 sd['total_count'] += 1
                 sd['good_count'] += 1
 
@@ -227,11 +265,16 @@ class OEECalculator:
             device_id: 设备ID
             rate: 件/小时
         """
+        if isinstance(rate, bool):
+            raise ValueError(f'theoretical rate 不能为 bool: {rate!r}')
+        rate_val = try_finite_float(rate)
+        if rate_val is None or rate_val < 0:
+            raise ValueError(f'theoretical rate 必须为非负有限数: {rate!r}')
         with self._lock:
-            self.theoretical_rates[device_id] = rate
+            self.theoretical_rates[device_id] = rate_val
             # 理想节拍时间 = 3600 / rate (秒/件)
-            if rate > 0:
-                self.shift_data[device_id]['ideal_cycle_time'] = 3600.0 / rate
+            if rate_val > 0:
+                self.shift_data[device_id]['ideal_cycle_time'] = 3600.0 / rate_val
 
     def start_shift(self, device_id: str, planned_hours: float = 8.0):
         """
@@ -241,35 +284,29 @@ class OEECalculator:
             device_id: 设备ID
             planned_hours: 计划生产时间(小时)
         """
+        if isinstance(planned_hours, bool):
+            raise ValueError(f'planned_hours 不能为 bool: {planned_hours!r}')
+        hours_val = try_finite_float(planned_hours)
+        if hours_val is None or hours_val < 0:
+            raise ValueError(f'planned_hours 必须为非负有限数: {planned_hours!r}')
         with self._lock:
-            # round 369：先取旧数据再覆盖 —— 原写法在字典**已被替换之后**
-            # 才去读 `self.shift_data[device_id].get('ideal_cycle_time')`，
-            # 读到的永远是刚建的新字典（ideal_cycle_time 恒为 0），
-            # 新班次的理想节拍被清零，OEE 性能率直接失真。
             old = self.shift_data.get(device_id) or {}
             now = datetime.now()
             self.shift_data[device_id] = {
                 'shift_start': now,
-                'planned_production_time': planned_hours * 3600,
+                'planned_production_time': hours_val * 3600,
                 'actual_run_time': 0,
                 'downtime': 0,
                 'total_count': 0,
                 'good_count': 0,
-                # round 370（BUG-047）：首班次必须落 **60.0**（与 defaultdict
-                # 工厂里的默认值一致）。原来 `old.get(..., 0)`：设备第一次
-                # start_shift 时 old 是空 dict → 理想节拍 0 → 性能率 0 → OEE 恒 0%，
-                # 大屏上所有设备开场都是 0，没人知道是"没设节拍"还是"真停机"。
+                'reject_count': 0,
                 'ideal_cycle_time': (old.get('ideal_cycle_time')
                                      or 60.0),
             }
-            # round 369：**必须同步重置 `since`**。
-            # 否则新班次第一次 update_device_state 会把「上一班次自上次状态
-            # 变化以来的全部时长」一次性累加进新班次的运行/停机时间，
-            # 新班次一开班可用率就超过 100%。
             state = self.device_states.get(device_id)
             if state is not None:
                 state['since'] = now
-            logger.info(f"设备 {device_id} 新班次开始，计划生产 {planned_hours} 小时")
+            logger.info(f"设备 {device_id} 新班次开始，计划生产 {hours_val} 小时")
 
     # ==================== OEE计算核心 ====================
 
@@ -305,7 +342,7 @@ class OEECalculator:
             extra_time = 0
 
             if current_state.get('status') == 'running':
-                extra_time = (now - current_state.get('since', now)).total_seconds()
+                extra_time = max(0.0, (now - current_state.get('since', now)).total_seconds())
 
             actual_run = sd['actual_run_time'] + extra_time
             planned = sd['planned_production_time']
@@ -325,19 +362,16 @@ class OEECalculator:
             else:
                 performance = 0
 
-            # 质量率
-            good_count = sd['good_count']
-            quality = (good_count / total_count) if total_count > 0 else 1.0
+            # 质量率（封顶 1.0；若仅记录了 reject_count 且无独立合格数时用于扣除计算）
+            raw_good = sd['good_count']
+            reject_cnt = sd.get('reject_count', 0)
+            eff_good = max(0, total_count - reject_cnt) if (raw_good == 0 and reject_cnt > 0 and total_count > 0) else raw_good
+            quality = min(1.0, max(0.0, eff_good / total_count)) if total_count > 0 else 1.0
+            defect_count = max(reject_cnt, max(0, total_count - eff_good)) if total_count > 0 else reject_cnt
 
             # OEE
             oee = availability * performance * quality
 
-            # 六大损失分析
-            # ⚠️ 必须把**上面算好的 actual_run**（含当前正在跑的这段时间）传进去。
-            # 原来 _calculate_losses 自己取 `sd['actual_run_time']`（只含已结算的部分），
-            # 于是同一份响应里 `performance` 用了一个运行时长、`性能损失_秒` 用了另一个：
-            # 设备连续跑着没切换状态时 `actual_run_time` 一直是 0，
-            # 性能损失恒为 0，而 performance 已经很低 —— 两个数字互相矛盾。
             losses = self._calculate_losses(
                 device_id, sd, availability, performance, quality, actual_run)
 
@@ -348,8 +382,8 @@ class OEECalculator:
                 'actual_run_time': round(actual_run, 1),
                 'downtime': round(sd['downtime'], 1),
                 'total_count': total_count,
-                'good_count': good_count,
-                'defect_count': total_count - good_count,
+                'good_count': eff_good,
+                'defect_count': defect_count,
                 'availability': round(availability, 4),
                 'performance': round(performance, 4),
                 'quality': round(quality, 4),
