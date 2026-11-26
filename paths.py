@@ -131,6 +131,16 @@ def resolve(p) -> Path:
     path = Path(p)
     if path.is_absolute():
         return path
+    rel_text = str(p).replace('\\', '/')
+    for prefix, env_var in (('配置', 'SCADA_CONFIG_DIR'),
+                            ('data', 'SCADA_DATA_DIR'),
+                            ('logs', 'SCADA_LOG_DIR')):
+        if rel_text == prefix or rel_text.startswith(prefix + '/'):
+            if os.environ.get(env_var):
+                base = _env_path(env_var, BASE_DIR / prefix)
+                rest = rel_text[len(prefix):].lstrip('/')
+                return (base / rest) if rest else base
+            break
     return BASE_DIR / path
 
 # 数据库路径（按模式区分）
@@ -167,6 +177,8 @@ def get_db_path(mode: str = 'simulated') -> str:
     if mode not in DB_PATHS:
         raise ValueError(
             f"未知库模式: {mode!r}，可选: {', '.join(sorted(DB_PATHS))}")
+    if os.environ.get('SCADA_DATA_DIR'):
+        return str(_env_path('SCADA_DATA_DIR', DATA_DIR) / DB_PATHS[mode].name)
     return str(DB_PATHS[mode])
 
 
@@ -213,6 +225,8 @@ def describe_db_choice(mode: str | None = None) -> str:
 
 def get_config_path(filename: str) -> str:
     """获取配置文件路径"""
+    if os.environ.get('SCADA_CONFIG_DIR'):
+        return str(_env_path('SCADA_CONFIG_DIR', CONFIG_DIR) / filename)
     return str(CONFIG_DIR / filename)
 
 

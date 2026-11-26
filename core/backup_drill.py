@@ -53,7 +53,8 @@ def get_last_result() -> dict | None:
 
 def find_latest_backup(backup_dir: str | Path) -> Path | None:
     """在备份目录里找最新的 `.db` 文件（按修改时间）。"""
-    directory = Path(backup_dir)
+    import paths
+    directory = paths.resolve(backup_dir)
     if not directory.is_dir():
         return None
     candidates = [p for p in directory.glob('*.db') if p.is_file()]

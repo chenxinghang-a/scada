@@ -106,10 +106,11 @@ class RequestQueue:
             with self._tasks_lock:
                 self._tasks[task_id]['status'] = TaskStatus.FAILED
                 self._tasks[task_id]['error'] = '队列已满，请稍后重试'
-            self._enqueue_failures += 1
+                self._enqueue_failures += 1
+                failures = self._enqueue_failures
             logger.warning(
                 "任务入队失败(%s): task=%s 队列已满(累计 %d 次): %s",
-                self.name, task_id, self._enqueue_failures, e)
+                self.name, task_id, failures, e)
             return task_id
 
         logger.info("任务已入队: %s/%s (队列长度=%d)", self.name, task_id, self._queue.qsize())
@@ -141,7 +142,8 @@ class RequestQueue:
     def get_status(self, task_id: str) -> Optional[dict]:
         """获取任务状态"""
         with self._tasks_lock:
-            return self._tasks.get(task_id)
+            task = self._tasks.get(task_id)
+            return dict(task) if task is not None else None
 
     def get_stats(self) -> dict:
         """获取队列统计"""

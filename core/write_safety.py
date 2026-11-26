@@ -267,10 +267,16 @@ class WriteSafetyValidator:
         """
         self.write_count += 1
 
-        # 0. 非有限值（NaN / ±Infinity）一律拒绝 —— 见下方第 3 步的说明：
-        #    `NaN < min` 与 `NaN > max` 都是 False，量程校验判不出它。
+        # 0. 布尔及非有限值（NaN / ±Infinity / 非法文本）一律拒绝 —— 见下方第 3 步的说明：
+        #    `NaN < min` 与 `NaN > max` 都是 False，量程校验判不出它；
+        #    同时必须接住转换后的 float（避免数字字符串在后续 `<`/`>` 比较抛 TypeError）。
+        if isinstance(value, bool):
+            self.blocked_count += 1
+            reason = f'写入值 {value!r} 为布尔型，不能作为寄存器数值，拒绝写入'
+            logger.warning(f"[写入安全] {self.device_name}: 写入被拒绝 — {reason}, user={user}")
+            return False, reason
         try:
-            to_finite_float(value, 'value')
+            value = to_finite_float(value, 'value')
         except ValueError:
             self.blocked_count += 1
             reason = f'写入值 {value!r} 不是有限数值（NaN/Infinity）或无法解析，拒绝写入'

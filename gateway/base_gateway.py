@@ -97,6 +97,8 @@ class BaseGateway(ABC):
         self.connected_devices: dict[str, bool] = {}
         self._poll_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._last_reconnect_attempt: dict[str, float] = {}
+        self._reconnect_attempts: dict[str, int] = {}
 
         # 统计信息
         self.stats: dict[str, Any] = {
@@ -536,6 +538,34 @@ class BaseGateway(ABC):
         topic = MQTTTopics.get_alarm_topic(level)
         return self._publish(topic, alarm.to_json(), f'报警({device_id}/{level})')
 
+    def _maybe_reconnect_device(self, device_id: str) -> None:
+        """按退避间隔在轮询循环中重连离线设备（若子类提供 reconnect_device）。"""
+        reconnect_fn = getattr(self, 'reconnect_device', None)
+        if not callable(reconnect_fn):
+            return
+        max_attempts = getattr(self, 'max_reconnect_attempts', 0) or 0
+        attempts_map = getattr(self, '_reconnect_attempts', None)
+        last_map = getattr(self, '_last_reconnect_attempt', None)
+        if attempts_map is None:
+            attempts_map = self._reconnect_attempts = {}
+        if last_map is None:
+            last_map = self._last_reconnect_attempt = {}
+        attempts = attempts_map.get(device_id, 0)
+        if max_attempts > 0 and attempts >= max_attempts:
+            return
+        now_mono = time.monotonic()
+        last_try = last_map.get(device_id)
+        interval = max(0.0, float(getattr(self, 'reconnect_interval', 10.0) or 0.0))
+        if last_try is not None and (now_mono - last_try) < interval:
+            return
+        last_map[device_id] = now_mono
+        attempts_map[device_id] = attempts + 1
+        try:
+            if reconnect_fn(device_id):
+                attempts_map[device_id] = 0
+        except Exception as e:
+            self.logger.warning(f"设备 {device_id} 自动重连失败: {e}")
+
     def _poll_loop(self):
         """数据轮询循环"""
         self.logger.info(f"开始数据轮询，间隔: {self.poll_interval}秒")
@@ -570,6 +600,9 @@ class BaseGateway(ABC):
 
                             # 更新设备状态
                             self.connected_devices[device_id] = True
+                            attempts_map = getattr(self, '_reconnect_attempts', None)
+                            if attempts_map is not None:
+                                attempts_map[device_id] = 0
                             self.publish_status(device_id, True, "running")
 
                             # 调用数据回调
@@ -580,6 +613,7 @@ class BaseGateway(ABC):
                             self.connected_devices[device_id] = False
                             self.publish_status(device_id, False, "fault", 
                                               error_code=1, error_message="数据读取失败")
+                            self._maybe_reconnect_device(device_id)
 
                     except Exception as e:
                         self.logger.error(f"设备 {device_id} 处理异常: {e}")

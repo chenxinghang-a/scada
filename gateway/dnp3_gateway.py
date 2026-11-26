@@ -82,6 +82,7 @@ DNP3广泛用于北美电力/水务/燃气公用事业的SCADA系统，是IEC 60
 遇到未实现的编码会**明确报错并计数**，不会静默给出错误值。
 """
 
+from contextlib import nullcontext as _nullcontext
 import socket
 import struct
 import threading
@@ -591,7 +592,8 @@ class DNP3Client:
 
         self.socket: socket.socket | None = None
         self.connected = False
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._data_lock = threading.RLock()
         # round 370（BUG-079）：键是 **(group, index)**，不是裸 index。
         # 遥信 ("bi", 0) 与遥测 ("ai", 0) 在 DNP3 里是完全不同的对象，
         # 用裸 index 做键会让它们互相覆盖 —— 定时上报一来，模拟量里就混进开关量。
@@ -620,6 +622,8 @@ class DNP3Client:
 
     def connect(self) -> bool:
         """连接DNP3设备"""
+        if self.socket is not None:
+            self.disconnect()
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(self.timeout)
@@ -638,6 +642,12 @@ class DNP3Client:
             return True
         except Exception as e:
             self.logger.error(f"连接失败: {e}")
+            if self.socket is not None:
+                try:
+                    self.socket.close()
+                except Exception as close_err:
+                    self.logger.debug("连接失败后关闭socket失败: %s", close_err)
+                self.socket = None
             self.connected = False
             return False
 
@@ -705,9 +715,9 @@ class DNP3Client:
                         "控制命令无回执：从站 %.1fs 内未确认（index=%s, value=%s）",
                         self.control_timeout, index, value)
                     return False
-                if self._operate_status not in (0, None):
+                if self._operate_status != 0:
                     self.logger.error(
-                        "控制命令被从站拒绝：CROB 状态=0x%02X（index=%s, value=%s）",
+                        "控制命令未被从站确认/被拒绝：CROB 状态=%r（index=%s, value=%s）",
                         self._operate_status, index, value)
                     return False
                 self.logger.info(f"发送控制命令: index={index}, value={value}")
@@ -803,14 +813,16 @@ class DNP3Client:
                     self.logger.warning(
                         "丢弃无法解析的 DNP3 响应（累计 %d 个）：%s", n, parse_error)
                 return
-            for obj in objects:
-                self._last_data[(obj['group'], obj['index'])] = {
-                    'value': obj['value'],
-                    'quality': obj['quality'],
-                    'group': obj['group'],
-                    'index': obj['index'],
-                    'time': time.time(),
-                }
+            data_lock = getattr(self, '_data_lock', None)
+            with (data_lock if data_lock is not None else _nullcontext()):
+                for obj in objects:
+                    self._last_data[(obj['group'], obj['index'])] = {
+                        'value': obj['value'],
+                        'quality': obj['quality'],
+                        'group': obj['group'],
+                        'index': obj['index'],
+                        'time': time.time(),
+                    }
 
     @staticmethod
     def _extract_operate_status(app_data: bytes) -> int | None:
@@ -827,7 +839,9 @@ class DNP3Client:
 
     def read_data(self) -> dict[int, dict]:
         """获取最新数据快照"""
-        return dict(self._last_data)
+        data_lock = getattr(self, '_data_lock', None)
+        with (data_lock if data_lock is not None else _nullcontext()):
+            return {k: dict(v) for k, v in self._last_data.items()}
 
 
 # ──────────────────────────────────────────────
@@ -1016,7 +1030,11 @@ class DNP3Gateway(BaseGateway):
             group = info.get('group', DNP3ObjectGroup.AI)
             index = info.get('index', key[1] if isinstance(key, tuple) else key)
             register_name = reverse_map.get((group, index), f"obj_{index}")
-            result[register_name] = float(info['value'])
+            val = try_finite_float(info.get('value'))
+            if val is None:
+                self._note_read_failure(device_id, register_name, "值缺失或非有限数值")
+                continue
+            result[register_name] = val
 
         return result if result else None
 

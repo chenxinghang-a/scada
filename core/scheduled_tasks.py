@@ -257,44 +257,39 @@ class TaskManager:
         而永远不再启动它）。
         """
         with self._lock:
-            # round 369：**拒绝重叠执行**。
-            # 原来 run_now() 与周期触发撞在一起时，第二个线程读到的
-            # prev_status 是第一个线程刚设的 'running'，结束时又把它还原成
-            # 'running' —— pending 任务永远无法被 start_all() 启动，
-            # 界面永久显示"运行中"。
+            # round 369：**拒绝重叠执行**；同时 `executing` 与调度生命周期 `status`
+            # 正交，不再把 `pending`/`stopped` 任务的 `status` 临时改写为 `'running'`，
+            # 否则 `run_now()` 期间 `start()`/`start_all()` 会误以为调度线程已在运行。
             if task.executing:
                 logger.warning("任务 %s 正在执行中，跳过本次重复触发", task.name)
                 return False
-            prev_status = task.status
             task.executing = True
-            task.status = 'running'
+            task.last_run = time.time()      # 对外展示仍用可读的墙钟时间戳
         # 时长用单调时钟：NTP 校时会让墙钟差值为负，统计出"负耗时"
         start_mono = time.monotonic()
-        task.last_run = time.time()      # 对外展示仍用可读的墙钟时间戳
 
         try:
             task.func()
-            task.run_count += 1
-            task.last_error = None
-            task.last_exec_status = 'success'
-            logger.debug("任务执行完成: %s (%.1fs)", task.name,
-                         time.monotonic() - start_mono)
+            duration = time.monotonic() - start_mono
+            with self._lock:
+                task.run_count += 1
+                task.last_error = None
+                task.last_exec_status = 'success'
+                task.last_duration = duration
+            logger.debug("任务执行完成: %s (%.1fs)", task.name, duration)
+            return True
         except Exception as e:
-            task.error_count += 1
-            task.last_error = str(e)
-            task.last_exec_status = 'failed'
+            duration = time.monotonic() - start_mono
+            with self._lock:
+                task.error_count += 1
+                task.last_error = str(e)
+                task.last_exec_status = 'failed'
+                task.last_duration = duration
             logger.error("任务执行失败: %s - %s", task.name, e)
+            return False
         finally:
-            task.last_duration = time.monotonic() - start_mono
             with self._lock:
                 task.executing = False
-                # 执行期间被 stop()/pause() 时以新状态为准；否则回到执行前的调度状态
-                if task._stop_event.is_set():
-                    task.status = 'stopped'
-                elif not task._pause_event.is_set():
-                    task.status = 'paused'
-                else:
-                    task.status = prev_status
 
 
 # 全局实例

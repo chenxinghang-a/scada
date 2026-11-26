@@ -16,6 +16,7 @@
 - python-snap7 (pip install python-snap7)
 """
 
+import math
 import time
 import struct
 import logging
@@ -23,6 +24,7 @@ import threading
 from typing import Any
 from datetime import datetime
 
+from core.safe_numeric import try_finite_float
 from .base_gateway import BaseGateway
 from .thing_model import (
     DeviceTelemetry, ThingModelConverter,
@@ -93,7 +95,7 @@ class S7Gateway(BaseGateway):
         self._clients: dict[str, Any] = {}
         #: 每设备的布尔写入锁：读-改-写必须原子，否则两个 API 线程写
         #: 同一字节的不同位会互相覆盖（后写者把前者置的位清掉）。
-        self._write_locks: dict[str, threading.Lock] = {}
+        self._write_locks: dict[str, threading.RLock] = {}
 
         # 寄存器配置缓存
         self._register_configs: dict[str, list[dict[str, Any]]] = {}
@@ -316,6 +318,12 @@ class S7Gateway(BaseGateway):
             except Exception as e:
                 # 重连前关闭旧连接失败：旧连接可能残留，但不影响新连接建立
                 self.logger.warning("重连前关闭旧连接失败 device=%s: %s", device_id, e)
+            destroy = getattr(old_client, 'destroy', None)
+            if callable(destroy):
+                try:
+                    destroy()
+                except Exception as e:
+                    self.logger.warning("释放S7旧客户端失败 device=%s: %s", device_id, e)
 
         # 创建新连接
         try:
@@ -333,7 +341,7 @@ class S7Gateway(BaseGateway):
 
     def write_register(self, device_id: str, db_number: int, offset: int,
                        value: float, data_type: str = 'real',
-                       bit_offset: int = 0) -> bool:
+                       bit_offset: int = 0, verify: bool = False) -> bool:
         """
         写入S7寄存器（用于设备控制）
 
@@ -343,6 +351,8 @@ class S7Gateway(BaseGateway):
             offset: 偏移地址
             value: 写入值
             data_type: 数据类型
+            bit_offset: 布尔位偏移 (0-7)
+            verify: 是否写后回读校验
         """
         client = self._clients.get(device_id)
         if not client:
@@ -351,43 +361,66 @@ class S7Gateway(BaseGateway):
         try:
             # 根据数据类型准备数据
             if data_type == 'real':
+                if isinstance(value, bool):
+                    return False
+                num = try_finite_float(value)
+                if num is None or abs(num) > 3.4028234663852886e+38:
+                    self.logger.error("S7 real 写入值非法或超出 float32 范围: %r", value)
+                    return False
                 data = bytearray(4)
-                set_real(data, 0, value)
-            elif data_type == 'int':
-                data = bytearray(2)
-                set_int(data, 0, int(value))
-            elif data_type == 'dint':
-                data = bytearray(4)
-                set_dint(data, 0, int(value))
-            elif data_type == 'word':
-                data = bytearray(2)
-                set_word(data, 0, int(value))
-            elif data_type == 'byte':
-                data = bytearray(1)
-                set_byte(data, 0, int(value))
+                set_real(data, 0, float(num))
+                expected_val: float = float(num)
+            elif data_type in ('int', 'dint', 'word', 'byte'):
+                if isinstance(value, bool):
+                    return False
+                num = try_finite_float(value)
+                if num is None:
+                    self.logger.error("S7 %s 写入值非有限数值: %r", data_type, value)
+                    return False
+                int_val = int(round(num))
+                bounds = {
+                    'int': (-32768, 32767, 2, set_int),
+                    'dint': (-2147483648, 2147483647, 4, set_dint),
+                    'word': (0, 65535, 2, set_word),
+                    'byte': (0, 255, 1, set_byte),
+                }
+                low, high, size, encoder = bounds[data_type]
+                if not low <= int_val <= high:
+                    self.logger.error("S7 %s 写入值 %d 超出范围 [%d, %d]",
+                                      data_type, int_val, low, high)
+                    return False
+                data = bytearray(size)
+                encoder(data, 0, int_val)
+                expected_val = float(int_val)
             elif data_type in ('bool', 'boolean'):
-                # round 369：`_read_register` 支持 bool，`write_register` 却漏了
-                # 这个分支 —— S7 DB 块的布尔量（启动位/阀门位）根本写不进去。
-                #
-                # BUG-084：**必须读-改-写**。构造全零 bytearray 再整字节 db_write，
-                # 会把同字节另外 7 个布尔位一起清零 —— 写一个阀门位 =
-                # 悄悄关掉同一字节里的 7 个设备。
-                # round 381：db_read→db_write 之间必须持锁。两个线程同时写
-                # 同一字节的不同位会各自读到旧字节，后写者覆盖前者。
-                # 兼容 `__new__` 构造的实例（测试/反序列化）：缺属性时按需建
+                if isinstance(bit_offset, bool) or not isinstance(bit_offset, int) or not 0 <= bit_offset <= 7:
+                    self.logger.error("S7 bool 位偏移非法: %r（必须为 0..7）", bit_offset)
+                    return False
+                if isinstance(value, float) and not math.isfinite(value):
+                    self.logger.error("S7 bool 写入值非有限数值: %r", value)
+                    return False
+                bool_val = bool(value)
                 locks = getattr(self, '_write_locks', None)
                 if locks is None:
                     locks = self._write_locks = {}
-                with locks.setdefault(device_id, threading.Lock()):
+                with locks.setdefault(device_id, threading.RLock()):
                     data = bytearray(client.db_read(db_number, offset, 1))
-                    set_bool(data, 0, bit_offset, bool(value))
+                    set_bool(data, 0, bit_offset, bool_val)
                     client.db_write(db_number, offset, data)
+                    if verify:
+                        rb = self._read_register(client, db_number, offset, 'bool', bit_offset=bit_offset)
+                        if rb is None or bool(rb) != bool_val:
+                            return False
                 return True
             else:
                 self.logger.error(f"不支持的S7写入类型: {data_type}")
                 return False
 
             client.db_write(db_number, offset, data)
+            if verify:
+                rb = self._read_register(client, db_number, offset, data_type, bit_offset=bit_offset)
+                if rb is None or abs(float(rb) - expected_val) > 1e-4:
+                    return False
             return True
 
         except Exception as e:

@@ -211,8 +211,9 @@ def setup_logging(
     # 应用日志文件（JSON格式）
     # round 266：`logging.file.enabled=false` 时不再写文件（容器里只收 stdout 的场景）
     if not enable_file:
+        _install_stdlib_logging_bridge(log_level)
         logger.info("日志文件输出已关闭（logging.file.enabled=false）")
-        return
+        return logger
 
     logger.add(
         str(log_path / "scada_{time:YYYY-MM-DD}.log"),

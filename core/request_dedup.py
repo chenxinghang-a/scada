@@ -36,6 +36,7 @@ def _make_fingerprint() -> str:
     session_cookie = (
         request.cookies.get('session')
         or request.cookies.get('access_token')
+        or request.cookies.get('token')
         or ''
     )
     user_id = str(getattr(g, 'user_id', '') or '')

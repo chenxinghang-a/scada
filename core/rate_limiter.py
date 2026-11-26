@@ -75,6 +75,17 @@ def create_limiter(app):
     # rate_limit_login / control / export 这些装饰器一被使用就 AttributeError。
     set_limiter(limiter)
 
+    # 紧急停机操作不得被速率限制拦截（等保/工控安全优先级）
+    @limiter.request_filter
+    def _exempt_estop_requests() -> bool:
+        from flask import request
+        endpoint = getattr(request, 'endpoint', None) or ''
+        path = (getattr(request, 'path', None) or '').rstrip('/')
+        return (
+            endpoint in {'api_control.trigger_estop', 'api_control.emergency_stop'}
+            or path in {'/api/control/estop', '/api/devices/estop', '/api/emergency-stop'}
+        )
+
     if enabled:
         logger.info(f"API速率限制已启用: {RATE_LIMIT_CONFIG['default']}")
     else:

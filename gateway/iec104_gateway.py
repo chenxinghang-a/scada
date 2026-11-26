@@ -12,6 +12,8 @@ IEC 60870-5-104 (DL/T 634.5104) 协议网关
 - 自动重连、回调支持
 """
 
+from contextlib import nullcontext as _nullcontext
+import math
 import socket
 import struct
 import threading
@@ -274,10 +276,18 @@ class IEC104ASDU:
             type_id, 1, COT.ACTIVATION, 0, common_addr,
             ioa_lo, ioa_mid, ioa_hi)
 
-        if type_id == TypeID.C_SE_NC_1:            # 设定命令-短浮点
-            return header + struct.pack('<fB', value, qual)
+        if type_id == TypeID.C_SE_NC_1:            # 设定命令-短浮点（拒绝 NaN/Inf/超 float32 范围）
+            num = try_finite_float(value)
+            if num is None or abs(num) > 3.4028234663852886e+38:
+                logger.error(f"设定值非法或超出 float32 范围: {value!r}")
+                return b''
+            return header + struct.pack('<fB', float(num), qual)
         if type_id == TypeID.C_SC_NA_1:            # 单命令
-            return header + struct.pack('<B', int(value) & 0x01)
+            num = try_finite_float(value)
+            if num is None:
+                logger.error(f"遥控设定值非法: {value!r}")
+                return b''
+            return header + struct.pack('<B', int(num) & 0x01)
         return header + struct.pack('<B', 0x14)    # 总召唤：QOI = 20 (全体)
 
 
@@ -310,17 +320,21 @@ class IEC104Client:
         #: 协议级统计（round 369：坏帧必须可观测，否则噪声/错帧永远查不出来）
         self.stats: dict[str, int] = {'bad_frames': 0}
 
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._data_lock = threading.RLock()
         self._recv_buffer = b''
         self._last_data: dict[int, dict] = {}   # ioa -> {value, quality, type_id, time}
         self._callbacks: list = []
         self._running = False
         self._recv_thread: threading.Thread | None = None
+        self.data_max_age = 15.0
 
     # ── 连接管理 ──────────────────────────────
 
     def connect(self) -> bool:
         """连接IEC 104服务器"""
+        if self.socket is not None:
+            self.disconnect()
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(self.timeout)
@@ -513,17 +527,21 @@ class IEC104Client:
         if not parsed or not parsed.get('info_objects'):
             return
 
+        data_lock = getattr(self, '_data_lock', None)
+        with (data_lock if data_lock is not None else _nullcontext()):
+            for obj in parsed['info_objects']:
+                ioa = obj['ioa']
+                self._last_data[ioa] = {
+                    'value': obj['value'],
+                    'quality': obj.get('quality', 0),
+                    'type_id': parsed['type_id'],
+                    'time': time.time()
+                }
+            callbacks = list(self._callbacks)
         for obj in parsed['info_objects']:
-            ioa = obj['ioa']
-            self._last_data[ioa] = {
-                'value': obj['value'],
-                'quality': obj.get('quality', 0),
-                'type_id': parsed['type_id'],
-                'time': time.time()
-            }
-            for cb in self._callbacks:
+            for cb in callbacks:
                 try:
-                    cb(ioa, obj['value'], parsed)
+                    cb(obj['ioa'], obj['value'], parsed)
                 except Exception as e:
                     self.logger.error(f"回调错误: {e}")
 
@@ -531,7 +549,9 @@ class IEC104Client:
 
     def read_data(self) -> dict[int, dict]:
         """获取最新数据快照"""
-        return dict(self._last_data)
+        data_lock = getattr(self, '_data_lock', None)
+        with (data_lock if data_lock is not None else _nullcontext()):
+            return {k: dict(v) for k, v in self._last_data.items()}
 
     def send_command(self, ioa: int, value: float,
                      type_id: int = TypeID.C_SE_NC_1) -> bool:
@@ -679,11 +699,40 @@ class IEC104Gateway(BaseGateway):
             self._note_read_failure(device_id, "*", "client.read_data() 返回空")
             return None
 
+        now = time.time()
+        max_age = float(getattr(client, 'data_max_age', 15.0) or 15.0)
+        stale_points = []
+        for ioa, info in data.items():
+            if 'time' in info and info.get('time') is not None:
+                fresh_at = try_finite_float(info.get('time'))
+                if fresh_at is None or (now - fresh_at) > max_age:
+                    stale_points.append(ioa)
+        if stale_points and len(stale_points) == len(data):
+            self._note_read_failure(
+                device_id, "*",
+                f"缓存数据过期：{len(stale_points)} 个点超过 {max_age:.0f}s 未刷新")
+            return None
+
         reverse_map = self._reverse_ioa_maps.get(device_id, {})
         result: dict[str, float] = {}
 
         for ioa, info in data.items():
             register_name = reverse_map.get(ioa, f"ioa_{ioa}")
+            if ioa in stale_points:
+                self._note_read_failure(device_id, register_name, "点位数据过期")
+                continue
+            q = info.get('quality', 0)
+            if isinstance(q, bool) or not isinstance(q, int):
+                q_int = 0x80
+            else:
+                q_int = q
+            if (q_int & 0xF0) != 0:
+                self.logger.warning(
+                    "IEC104 点位质量标志异常(quality=0x%02X)，已跳过 device=%s register=%s ioa=%s",
+                    q_int, device_id, register_name, ioa)
+                self._note_read_failure(
+                    device_id, register_name, f"点位质量异常(quality=0x{q_int:02X})")
+                continue
             # 单个坏点（value 缺失/None/非数字）不能让整台设备的读取崩掉：
             # 跳过该点并记账，其余点位照常返回。
             try:

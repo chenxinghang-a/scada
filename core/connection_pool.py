@@ -105,6 +105,7 @@ class ConnectionPool:
             target=self._cleanup_loop, daemon=True, name=f"pool-{name}"
         )
         self._running = True
+        self._stop_event = threading.Event()
         self._cleanup_thread.start()
 
     def validate_config(self) -> List[str]:
@@ -326,8 +327,9 @@ class ConnectionPool:
         静默退出 —— 此后连接永不回收：空闲连接堆积、`max_size` 被占满，
         新请求只能等超时。异常必须在循环内兜住，下一轮照常。
         """
-        while self._running:
-            time.sleep(60)
+        while self._running and not self._stop_event.is_set():
+            if self._stop_event.wait(60) or not self._running:
+                break
             try:
                 self._cleanup_once()
             except Exception as e:      # noqa: BLE001 —— 一轮失败不能停掉回收
@@ -343,24 +345,27 @@ class ConnectionPool:
                        if not conn.in_use]
 
         # 检查：在锁外执行健康检查（可能涉及网络IO）
-        expired = []
+        expired: list[tuple[str, PooledConnection, bool]] = []
         for key, conn in snapshot:
             if now - conn.last_used > self._max_idle_time:
-                expired.append(key)
+                expired.append((key, conn, False))
             elif now - conn.created_at > self._max_lifetime:
-                expired.append(key)
+                expired.append((key, conn, False))
             elif not conn.healthy:
-                expired.append(key)
+                expired.append((key, conn, False))
             elif self._health_check and not self._health_check(conn.client):
-                conn.healthy = False
-                expired.append(key)
+                expired.append((key, conn, True))
 
-        # 删除：在锁内执行
+        # 删除：在锁内执行（按对象身份校验，避免删掉同 key 重建的新连接）
         if expired:
             with self._lock:
-                for key in expired:
-                    if key in self._pool and not self._pool[key].in_use:
-                        self._destroy_connection(key, self._pool[key])
+                for key, conn, mark_unhealthy in expired:
+                    if self._pool.get(key) is not conn:
+                        continue
+                    if mark_unhealthy:
+                        conn.healthy = False
+                    if not conn.in_use:
+                        self._destroy_connection(key, conn)
 
         # 自动扩缩容检查
         if self._auto_scale:
@@ -451,6 +456,7 @@ class ConnectionPool:
     def shutdown(self) -> None:
         """关闭连接池，销毁所有连接"""
         self._running = False
+        self._stop_event.set()
         # 等待清理线程退出
         if self._cleanup_thread and self._cleanup_thread.is_alive():
             self._cleanup_thread.join(timeout=5)

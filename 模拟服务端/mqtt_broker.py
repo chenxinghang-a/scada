@@ -28,6 +28,7 @@ DISCONNECT，QoS 0/1，通配符，retained。
 
 from __future__ import annotations
 
+from contextlib import nullcontext as _nullcontext
 import itertools
 import json
 import logging
@@ -138,6 +139,7 @@ class _ClientSession:
         self.clean_session = True
         self.clean_disconnect = False
         self._send_lock = threading.Lock()
+        self._sub_lock = threading.RLock()
 
     def send(self, data: bytes) -> bool:
         with self._send_lock:
@@ -327,18 +329,20 @@ class _BrokerTCPHandler(socketserver.BaseRequestHandler):
         granted: list[int] = []
         new_filters: list[tuple[str, int]] = []
         try:
-            while pos < len(body):
-                topic_filter, pos = _read_utf8(body, pos)
-                if pos >= len(body):
-                    raise ValueError('SUBSCRIBE 缺少 QoS 字节')
-                requested = body[pos] & 0x03
-                pos += 1
-                qos = min(requested, 1)  # 本 broker 最高 QoS 1
-                if requested > 1:
-                    logger.debug("订阅 %s 请求 QoS%d，按 QoS%d 授权", topic_filter, requested, qos)
-                session.subscriptions[topic_filter] = qos
-                granted.append(qos)
-                new_filters.append((topic_filter, qos))
+            sub_lock = getattr(session, '_sub_lock', None)
+            with (sub_lock if sub_lock is not None else _nullcontext()):
+                while pos < len(body):
+                    topic_filter, pos = _read_utf8(body, pos)
+                    if pos >= len(body):
+                        raise ValueError('SUBSCRIBE 缺少 QoS 字节')
+                    requested = body[pos] & 0x03
+                    pos += 1
+                    qos = min(requested, 1)  # 本 broker 最高 QoS 1
+                    if requested > 1:
+                        logger.debug("订阅 %s 请求 QoS%d，按 QoS%d 授权", topic_filter, requested, qos)
+                    session.subscriptions[topic_filter] = qos
+                    granted.append(qos)
+                    new_filters.append((topic_filter, qos))
         except (ValueError, IndexError, struct.error) as exc:
             logger.warning("MQTT SUBSCRIBE 报文非法（%s），已丢弃: %s",
                            exc, self.client_address)
@@ -360,9 +364,11 @@ class _BrokerTCPHandler(socketserver.BaseRequestHandler):
         pid = struct.unpack('>H', body[:2])[0]
         pos = 2
         try:
-            while pos < len(body):
-                topic_filter, pos = _read_utf8(body, pos)
-                session.subscriptions.pop(topic_filter, None)
+            sub_lock = getattr(session, '_sub_lock', None)
+            with (sub_lock if sub_lock is not None else _nullcontext()):
+                while pos < len(body):
+                    topic_filter, pos = _read_utf8(body, pos)
+                    session.subscriptions.pop(topic_filter, None)
         except (ValueError, IndexError, struct.error) as exc:
             logger.warning("MQTT UNSUBSCRIBE 报文非法（%s），已丢弃: %s",
                            exc, self.client_address)
@@ -549,7 +555,10 @@ class MqttSimBroker:
     @staticmethod
     def _match_qos(session: _ClientSession, topic: str) -> int | None:
         best: int | None = None
-        for topic_filter, qos in session.subscriptions.items():
+        sub_lock = getattr(session, '_sub_lock', None)
+        with (sub_lock if sub_lock is not None else _nullcontext()):
+            items = list(session.subscriptions.items())
+        for topic_filter, qos in items:
             if topic_matches(topic_filter, topic):
                 best = qos if best is None else max(best, qos)
         return best
